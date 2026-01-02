@@ -1,7 +1,8 @@
 import 'dart:io';
 
 import 'package:a_fish_in_sea/finances/bloc/expenses_cubit.dart';
-import 'package:a_fish_in_sea/transaction_history/view/transaction_history_page.dart';
+import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
+import 'package:a_fish_in_sea/finances/view/transaction_history_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
@@ -13,24 +14,30 @@ import 'package:path_provider/path_provider.dart';
 
 import 'package:flutter/foundation.dart';
 
-
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   HydratedStorage.build(
     storageDirectory: kIsWeb
         ? HydratedStorage.webStorageDirectory
         : await getApplicationDocumentsDirectory(),
   );
 
-  HydratedBloc.storage = await HydratedStorage.build(storageDirectory: Directory("/storage"));
+  HydratedBloc.storage = await HydratedStorage.build(
+    storageDirectory: Directory("/storage"),
+  );
 
   runApp(
-    MultiBlocProvider(providers: [
-        BlocProvider<NavigationCubit>(create: (context) => NavigationCubit(),),
+    MultiBlocProvider(
+      providers: [
+        BlocProvider<NavigationCubit>(create: (context) => NavigationCubit()),
         BlocProvider<ExpensesCubit>(create: (context) => ExpensesCubit()),
-      ], child: const AFishInTheSeaApp())
+        BlocProvider<TransactionsCubit>(
+          create: (context) => TransactionsCubit(),
+        ),
+      ],
+      child: const AFishInTheSeaApp(),
+    ),
   );
 }
 
@@ -39,18 +46,22 @@ class AFishInTheSeaApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ThemeData theme = ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: const Color.fromARGB(255, 122, 195, 230)));
+    final ThemeData theme = ThemeData(
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: const Color.fromARGB(255, 122, 195, 230),
+      ),
+    );
     return MaterialApp(
       theme: theme,
-      home:BlocBuilder<NavigationCubit, int>(
+      home: BlocBuilder<NavigationCubit, int>(
         builder: (context, currentPageIndex) {
-          // final navCubit = context.read<NavigationCubit>();
+          context.read<TransactionsCubit>().importCsv();
           return [
-              HomePage(),
-              CalendarPage(),
-              TransactionHistoryPage(theme: theme),
-              FinancesPage(theme: theme),
-            ][currentPageIndex];
+            HomePage(),
+            CalendarPage(),
+            TransactionHistoryPage(theme: theme),
+            FinancesPage(theme: theme),
+          ][currentPageIndex];
         },
       ),
     );

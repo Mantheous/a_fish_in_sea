@@ -1,3 +1,6 @@
+import 'package:intl/intl.dart';
+
+
 class Transaction {
   //int id;
   double amount;
@@ -5,7 +8,7 @@ class Transaction {
   String description;
   ExpenseCatagory type;
 
-  //static int _nextId = 0;
+  static final formatter = DateFormat('MM/dd/yy');
 
   // This class esentially is just made from parsing through the csv file.
   // It needs to be stored seperately because I need to assosiate them to a specific expense
@@ -18,20 +21,46 @@ class Transaction {
     this.type = ExpenseCatagory.unclasified,
   });
 
-  factory Transaction.fromJson(Map<String, dynamic> json) => Transaction(
-    //id: json["id"] as double,
-    amount: json["amount"] as double,
-    date: json["date"] = DateTime.parse(["date"] as String),
-    description: json["description"] as String,
-    type: ExpenseCatagory.values.firstWhere((e) => e.name == json["type"])
-  );
+  factory Transaction.fromCSVRow(List<dynamic> row){
+    if (row[3] == "Debit") {
+      row[4] = -row[4];
+    }
+
+    return Transaction(
+      amount: row[4].toDouble(), 
+      date: formatter.parse(row[2]), 
+      description: row[1],
+    );
+  } 
+
+  factory Transaction.fromJson(Map<String, dynamic> json) {
+    return Transaction(
+      //id: json["id"] as double,
+      amount: json["amount"] as double,
+      date: json["date"] = formatter.parse(json["date"] as String),
+      description: json["description"] as String,
+      type: ExpenseCatagory.values.firstWhere((e) => e.name == json["type"])
+    );
+  }
 
   Map<String, dynamic> toJson() => {
     "amount": amount,
-    "date": date.toIso8601String(),
+    "date": formatter.format(date),
     "description": description,
     "type": type.name,
   };
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true; // same instance
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is Transaction &&
+        other.amount == amount &&
+        other.date == date &&
+        other.description == description &&
+        other.type == type;
+  }
 }
 
 enum ExpenseCatagory {
