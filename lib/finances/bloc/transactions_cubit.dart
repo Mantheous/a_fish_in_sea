@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/finances/model/expense_catagory_and_tier.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:csv/csv.dart';
 import 'package:flutter/services.dart';
@@ -20,11 +21,16 @@ class TransactionsCubit extends HydratedCubit<List<Transaction>> {
     return bigList;
   }
 
+  // TODO Handle Duplicates
   Future<void> importCsv() async {
     final csvString = await rootBundle.loadString(
       'lib/data/2025-10-11_AshtonChecking...9371.csv',
     );
     final bigList = CsvToListConverter(eol: '\n').convert(csvString);
+    // final withoutHeader = bigList.skip(1);
+    // final newEntries = withoutHeader
+    //     .map((row) => Transaction.fromCSVRow(row))
+    //     .where((tx) => tx.isSameTransaction(other))
     emit(bigList.skip(1).map((r) => Transaction.fromCSVRow(r)).toList());
   }
 
@@ -35,24 +41,6 @@ class TransactionsCubit extends HydratedCubit<List<Transaction>> {
     transaction.type = newType;
     emit(List.from(state));
   }
-
-  // TODO Handle Duplicates
-  // Future<void> importCsv(File file) async {
-  //   final incoming = await readTransactionsFromCsv(file);
-
-  //   final existingIds = state.transactions.map((t) => t.id).toSet();
-
-  //   final newTransactions = incoming
-  //       .where((t) => !existingIds.contains(t.id))
-  //       .toList();
-
-  //   if (newTransactions.isEmpty) return;
-
-  //   emit(TransactionState([
-  //     ...state.transactions,
-  //     ...newTransactions,
-  //   ]));
-  // }
 
   @override
   List<Transaction>? fromJson(Map<String, dynamic> json) {

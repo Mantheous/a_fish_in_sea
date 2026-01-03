@@ -51,11 +51,11 @@ class AFishInTheSeaApp extends StatelessWidget {
         seedColor: const Color.fromARGB(255, 122, 195, 230),
       ),
     );
+    context.read<TransactionsCubit>().importCsv();
     return MaterialApp(
       theme: theme,
       home: BlocBuilder<NavigationCubit, int>(
         builder: (context, currentPageIndex) {
-          context.read<TransactionsCubit>().importCsv();
           return [
             HomePage(),
             CalendarPage(),

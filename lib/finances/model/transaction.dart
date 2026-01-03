@@ -1,5 +1,5 @@
+import 'package:a_fish_in_sea/finances/model/expense_catagory_and_tier.dart';
 import 'package:intl/intl.dart';
-
 
 class Transaction {
   //int id;
@@ -21,17 +21,17 @@ class Transaction {
     this.type = ExpenseCatagory.unclasified,
   });
 
-  factory Transaction.fromCSVRow(List<dynamic> row){
+  factory Transaction.fromCSVRow(List<dynamic> row) {
     if (row[3] == "Debit") {
       row[4] = -row[4];
     }
 
     return Transaction(
-      amount: row[4].toDouble(), 
-      date: formatter.parse(row[2]), 
+      amount: row[4].toDouble(),
+      date: formatter.parse(row[2]),
       description: row[1],
     );
-  } 
+  }
 
   factory Transaction.fromJson(Map<String, dynamic> json) {
     return Transaction(
@@ -39,7 +39,7 @@ class Transaction {
       amount: json["amount"] as double,
       date: json["date"] = formatter.parse(json["date"] as String),
       description: json["description"] as String,
-      type: ExpenseCatagory.values.firstWhere((e) => e.name == json["type"])
+      type: ExpenseCatagory.values.firstWhere((e) => e.name == json["type"]),
     );
   }
 
@@ -61,25 +61,10 @@ class Transaction {
         other.description == description &&
         other.type == type;
   }
-}
 
-enum ExpenseCatagory {
-  unclasified,
-  food,
-  housing,
-  transportation,
-  tuition,
-  entertainment,
-  tithing,
-  savings,
-  miscellaneous,
-}
-
-enum ExpenseTimeTier {
-  day,
-  week,
-  month,
-  quarter,
-  year,
-  decade,
+  bool isSameTransaction(Transaction other) {
+    return other.amount == amount &&
+        other.date == date &&
+        other.description == description;
+  }
 }

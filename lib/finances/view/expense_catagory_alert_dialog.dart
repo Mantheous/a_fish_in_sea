@@ -1,4 +1,5 @@
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
+import 'package:a_fish_in_sea/finances/model/expense_catagory_and_tier.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
