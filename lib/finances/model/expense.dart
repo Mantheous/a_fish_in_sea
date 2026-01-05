@@ -2,12 +2,12 @@ import 'package:a_fish_in_sea/finances/model/expense_catagory_and_tier.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 
 class Expense {
-  String name;
-  double maxAmount;
-  double current;
-  DateTime? dueDate;
-  ExpenseCatagory type;
-  List<Transaction>? transactions;
+  final String name;
+  final double maxAmount;
+  final double current;
+  final DateTime? dueDate;
+  final ExpenseCategory type;
+  final List<Transaction>? transactions;
 
   // I need to finish implementing the toJson and fromJson methods for this class
   // Then I need to set up a UI to view each expense
@@ -17,7 +17,7 @@ class Expense {
     required this.maxAmount,
     this.current = 0,
     this.dueDate,
-    this.type = ExpenseCatagory.unclasified,
+    this.type = ExpenseCategory.unclasified,
     this.transactions,
   });
 
@@ -28,11 +28,19 @@ class Expense {
     dueDate: json["dueDate"] != null
         ? DateTime.parse(json["dueDate"] as String)
         : null,
-    type: ExpenseCatagory.values.firstWhere((e) => e.name == json["type"]),
+    type: ExpenseCategory.values.firstWhere((e) => e.name == json["type"]),
     transactions: (json["transactions"] as List<dynamic>?)
         ?.map((t) => Transaction.fromJson(t as Map<String, dynamic>))
         .toList(),
   );
+
+  const Expense.empty()
+    : name = '',
+      maxAmount = 0,
+      current = 0,
+      dueDate = null,
+      type = ExpenseCategory.unclasified,
+      transactions = null;
 
   Map<String, dynamic> toJson() => {
     "name": name,

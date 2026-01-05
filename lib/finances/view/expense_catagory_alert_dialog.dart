@@ -16,8 +16,8 @@ class ExpenseCatagoryAlertDialog extends StatelessWidget {
           title: const Text('Select expense type'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
-            children: ExpenseCatagory.values.map((type) {
-              return RadioListTile<ExpenseCatagory>(
+            children: ExpenseCategory.values.map((type) {
+              return RadioListTile<ExpenseCategory>(
                 title: Text(type.name.toUpperCase()),
                 value: type,
                 groupValue: transaction.type,

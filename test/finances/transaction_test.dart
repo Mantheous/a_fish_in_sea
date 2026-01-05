@@ -12,7 +12,7 @@ void main() {
     expect(tx.date, DateTime(2025, 10, 11));
     expect(tx.description, contains('Description'));
     expect(tx.amount, equals(-13.41));
-    expect(tx.type, ExpenseCatagory.unclasified);
+    expect(tx.type, ExpenseCategory.unclasified);
   });
 
   test('Transaction toJson/fromJson roundtrip', () {
@@ -20,7 +20,7 @@ void main() {
       amount: 10,
       date: DateTime(2025, 10, 11),
       description: "Test Transaction",
-      type: ExpenseCatagory.food,
+      type: ExpenseCategory.food,
     );
     final json = original.toJson();
     final restored = Transaction.fromJson(json);

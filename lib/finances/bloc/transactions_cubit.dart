@@ -36,7 +36,7 @@ class TransactionsCubit extends HydratedCubit<List<Transaction>> {
 
   void changeTransactionExpenseType(
     Transaction transaction,
-    ExpenseCatagory newType,
+    ExpenseCategory newType,
   ) {
     transaction.type = newType;
     emit(List.from(state));

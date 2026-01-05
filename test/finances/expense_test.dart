@@ -10,7 +10,7 @@ void main() {
           name: 'Groceries',
           maxAmount: 500.0,
           current: 150.50,
-          type: ExpenseCatagory.food,
+          type: ExpenseCategory.food,
         );
 
         final json = original.toJson();
@@ -31,7 +31,7 @@ void main() {
           maxAmount: 1500.0,
           current: 0.0,
           dueDate: dueDate,
-          type: ExpenseCatagory.housing,
+          type: ExpenseCategory.housing,
         );
 
         final json = original.toJson();
@@ -51,7 +51,7 @@ void main() {
           maxAmount: 200.0,
           current: 75.25,
           dueDate: dueDate,
-          type: ExpenseCatagory.housing,
+          type: ExpenseCategory.housing,
         );
 
         final json = original.toJson();
@@ -61,7 +61,7 @@ void main() {
         expect(restored.maxAmount, equals(200.0));
         expect(restored.current, equals(75.25));
         expect(restored.dueDate, isNotNull);
-        expect(restored.type, equals(ExpenseCatagory.housing));
+        expect(restored.type, equals(ExpenseCategory.housing));
       });
 
       test('handles zero and negative values', () {
@@ -69,7 +69,7 @@ void main() {
           name: 'Test',
           maxAmount: 0.0,
           current: 0.0,
-          type: ExpenseCatagory.unclasified,
+          type: ExpenseCategory.unclasified,
         );
 
         final json = original.toJson();
@@ -97,12 +97,12 @@ void main() {
 
       test('handles different expense categories', () {
         final categories = [
-          ExpenseCatagory.food,
-          ExpenseCatagory.housing,
-          ExpenseCatagory.transportation,
-          ExpenseCatagory.tuition,
-          ExpenseCatagory.entertainment,
-          ExpenseCatagory.unclasified,
+          ExpenseCategory.food,
+          ExpenseCategory.housing,
+          ExpenseCategory.transportation,
+          ExpenseCategory.tuition,
+          ExpenseCategory.entertainment,
+          ExpenseCategory.unclasified,
         ];
 
         for (final category in categories) {
@@ -145,7 +145,7 @@ void main() {
         final restored = Expense.fromJson(json);
 
         expect(restored.current, equals(0.0)); // default value
-        expect(restored.type, equals(ExpenseCatagory.unclasified)); // default
+        expect(restored.type, equals(ExpenseCategory.unclasified)); // default
         expect(restored.dueDate, isNull); // default
       });
 
@@ -154,7 +154,7 @@ void main() {
           name: 'JSON Structure Test',
           maxAmount: 250.0,
           current: 100.0,
-          type: ExpenseCatagory.entertainment,
+          type: ExpenseCategory.entertainment,
         );
 
         final json = expense.toJson();

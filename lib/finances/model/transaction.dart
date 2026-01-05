@@ -6,7 +6,7 @@ class Transaction {
   double amount;
   DateTime date;
   String description;
-  ExpenseCatagory type;
+  ExpenseCategory type;
 
   static final formatter = DateFormat('MM/dd/yy');
 
@@ -18,7 +18,7 @@ class Transaction {
     required this.amount,
     required this.date,
     required this.description,
-    this.type = ExpenseCatagory.unclasified,
+    this.type = ExpenseCategory.unclasified,
   });
 
   factory Transaction.fromCSVRow(List<dynamic> row) {
@@ -39,7 +39,7 @@ class Transaction {
       amount: json["amount"] as double,
       date: json["date"] = formatter.parse(json["date"] as String),
       description: json["description"] as String,
-      type: ExpenseCatagory.values.firstWhere((e) => e.name == json["type"]),
+      type: ExpenseCategory.values.firstWhere((e) => e.name == json["type"]),
     );
   }
 

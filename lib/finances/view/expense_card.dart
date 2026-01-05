@@ -1,4 +1,5 @@
 import 'package:a_fish_in_sea/finances/model/expense.dart';
+import 'package:a_fish_in_sea/finances/view/modify_expense_menu.dart';
 import 'package:flutter/material.dart';
 
 class ExpenseCard extends StatelessWidget {
@@ -19,7 +20,12 @@ class ExpenseCard extends StatelessWidget {
         child: InkWell(
           splashColor: Colors.blue.withAlpha(30),
           onTap: () {
-            // Handle tap event
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => ModifyExpenseMenu(expense: expense),
+              ),
+            );
           },
           child: Row(
             children: [

@@ -1,4 +1,4 @@
-enum ExpenseCatagory {
+enum ExpenseCategory {
   unclasified,
   food,
   housing,

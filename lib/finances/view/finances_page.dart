@@ -1,6 +1,7 @@
 import 'package:a_fish_in_sea/finances/bloc/expenses_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:a_fish_in_sea/finances/view/expense_card.dart';
+import 'package:a_fish_in_sea/finances/view/modify_expense_menu.dart';
 import 'package:a_fish_in_sea/navigation/view/navigation_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -35,9 +36,14 @@ class FinancesPage extends StatelessWidget {
               padding: const EdgeInsets.all(8.0),
               child: FloatingActionButton(
                 child: const Icon(Icons.add),
-                onPressed: () => context.read<ExpensesCubit>().addExpense(
-                  Expense(name: 'New Expense', maxAmount: 100.0),
-                ),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const ModifyExpenseMenu(),
+                    ),
+                  );
+                },
               ),
             ),
           ),
