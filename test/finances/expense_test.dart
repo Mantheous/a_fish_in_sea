@@ -209,5 +209,17 @@ void main() {
         expect(restored.name, equals(original.name));
       });
     });
+
+    group('Getters', () {
+      test('typeCapitalized returns the capitalized expense type', () {
+        // TODO: Implement test
+      });
+    });
+
+    group('Constructors', () {
+      test('empty constructor creates an empty expense', () {
+        // TODO: Implement test
+      });
+    });
   });
 }
