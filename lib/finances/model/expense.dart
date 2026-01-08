@@ -7,6 +7,8 @@ class Expense {
   final double current;
   final DateTime? dueDate;
   final ExpenseCategory type;
+  String get typeCapitalized =>
+      type.name[0].toUpperCase() + type.name.substring(1);
   final List<Transaction>? transactions;
 
   // I need to finish implementing the toJson and fromJson methods for this class
@@ -51,5 +53,3 @@ class Expense {
     "transactions": transactions?.map((t) => t.toJson()).toList(),
   };
 }
-
-enum ExpenseTimeTier { day, week, month, quarter, year, decade }

@@ -29,18 +29,25 @@ class ExpenseCard extends StatelessWidget {
           },
           child: Row(
             children: [
-              Column(
-                children: [
-                  Text(expense.name),
-                  Text(expense.type.name),
-                  if (expense.dueDate != null)
-                    Text(
-                      'Due: ${expense.dueDate!.month}/${expense.dueDate!.day}/${expense.dueDate!.year}',
-                    ),
-                ],
+              Padding(
+                padding: EdgeInsets.all(20.0),
+                child: Column(
+                  children: [
+                    Text(expense.name, style: const TextStyle(fontSize: 20)),
+                    Text(expense.typeCapitalized),
+                    if (expense.dueDate != null)
+                      Text(
+                        'Due: ${expense.dueDate!.month}/${expense.dueDate!.day}/${expense.dueDate!.year}',
+                      ),
+                  ],
+                ),
               ),
-              Text(
-                '${expense.current.toStringAsFixed(2)} / ${expense.maxAmount.toStringAsFixed(2)}',
+              Spacer(),
+              Padding(
+                padding: EdgeInsets.all(20.0),
+                child: Text(
+                  '${expense.current.toStringAsFixed(2)} / ${expense.maxAmount.toStringAsFixed(2)}',
+                ),
               ),
             ],
           ),
