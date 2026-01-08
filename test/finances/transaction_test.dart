@@ -26,4 +26,54 @@ void main() {
     final restored = Transaction.fromJson(json);
     expect(restored, equals(original));
   });
+
+  group('isSameTransaction', () {
+    test('returns true for transactions with the same amount, date, and description', () {
+      // TODO: Implement test
+    });
+
+    test('returns false if the amount is different', () {
+      // TODO: Implement test
+    });
+
+    test('returns false if the date is different', () {
+      // TODO: Implement test
+    });
+
+    test('returns false if the description is different', () {
+      // TODO: Implement test
+    });
+
+    test('returns true even if the type is different', () {
+      // TODO: Implement test
+    });
+  });
+
+  group('Equality Operator (==)', () {
+    test('returns true for two identical transactions', () {
+      // TODO: Implement test
+    });
+
+    test('returns false if any field is different', () {
+      // TODO: Implement test
+    });
+  });
+
+  group('CSV Parsing Edge Cases', () {
+    test('handles credit transactions correctly', () {
+      // TODO: Implement test
+    });
+
+    test('handles leading/trailing whitespace in description', () {
+      // TODO: Implement test
+    });
+
+    test('handles amounts with dollar signs or commas', () {
+      // TODO: Implement test
+    });
+
+    test('handles different date formats', () {
+      // TODO: Implement test
+    });
+  });
 }
