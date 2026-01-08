@@ -7,7 +7,8 @@ class Expense {
   final double current;
   final DateTime? dueDate;
   final ExpenseCategory type;
-  final ExpenseTimeTier timeTier;
+  String get typeCapitalized =>
+      type.name[0].toUpperCase() + type.name.substring(1);
   final List<Transaction>? transactions;
 
   // I need to finish implementing the toJson and fromJson methods for this class
