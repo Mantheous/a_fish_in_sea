@@ -7,6 +7,7 @@ class Expense {
   final double current;
   final DateTime? dueDate;
   final ExpenseCategory type;
+  final ExpenseTimeTier timeTier;
   final List<Transaction>? transactions;
 
   // I need to finish implementing the toJson and fromJson methods for this class
@@ -18,6 +19,7 @@ class Expense {
     this.current = 0,
     this.dueDate,
     this.type = ExpenseCategory.unclasified,
+    this.timeTier = ExpenseTimeTier.month,
     this.transactions,
   });
 
@@ -29,6 +31,8 @@ class Expense {
         ? DateTime.parse(json["dueDate"] as String)
         : null,
     type: ExpenseCategory.values.firstWhere((e) => e.name == json["type"]),
+    timeTier: ExpenseTimeTier.values
+        .firstWhere((e) => e.name == json["timeTier"]),
     transactions: (json["transactions"] as List<dynamic>?)
         ?.map((t) => Transaction.fromJson(t as Map<String, dynamic>))
         .toList(),
@@ -40,6 +44,7 @@ class Expense {
       current = 0,
       dueDate = null,
       type = ExpenseCategory.unclasified,
+      timeTier = ExpenseTimeTier.month,
       transactions = null;
 
   Map<String, dynamic> toJson() => {
@@ -48,8 +53,7 @@ class Expense {
     "current": current,
     "dueDate": dueDate?.toIso8601String(),
     "type": type.name,
+    "timeTier": timeTier.name,
     "transactions": transactions?.map((t) => t.toJson()).toList(),
   };
 }
-
-enum ExpenseTimeTier { day, week, month, quarter, year, decade }

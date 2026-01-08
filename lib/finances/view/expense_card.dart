@@ -34,8 +34,13 @@ class ExpenseCard extends StatelessWidget {
                   Text(expense.name),
                   Text(expense.type.name),
                   if (expense.dueDate != null)
-                    Text(
-                      'Due: ${expense.dueDate!.month}/${expense.dueDate!.day}/${expense.dueDate!.year}',
+                    Row(
+                      children: [
+                        Text(
+                          'Due: ${expense.dueDate!.month}/${expense.dueDate!.day}/${expense.dueDate!.year}',
+                        ),
+                        Text(expense.timeTier.name),
+                      ],
                     ),
                 ],
               ),

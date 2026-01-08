@@ -16,6 +16,7 @@ class ModifyExpenseMenu extends StatefulWidget {
 class _ModifyExpenseMenuState extends State<ModifyExpenseMenu> {
   late ExpenseCategory _selectedCategory;
   late DateTime _selectedDate;
+  late ExpenseTimeTier _selectedTimeTier;
 
   late TextEditingController _nameController;
   late TextEditingController _amountController;
@@ -28,6 +29,7 @@ class _ModifyExpenseMenuState extends State<ModifyExpenseMenu> {
       _amountController = TextEditingController();
       _selectedDate = DateTime.now();
       _selectedCategory = ExpenseCategory.unclasified;
+      _selectedTimeTier = ExpenseTimeTier.month;
     } else {
       _nameController = TextEditingController(text: widget.expense!.name);
       _amountController = TextEditingController(
@@ -35,6 +37,7 @@ class _ModifyExpenseMenuState extends State<ModifyExpenseMenu> {
       );
       _selectedDate = widget.expense!.dueDate ?? DateTime.now();
       _selectedCategory = widget.expense!.type;
+      _selectedTimeTier = widget.expense!.timeTier;
     }
   }
 
@@ -97,6 +100,23 @@ class _ModifyExpenseMenuState extends State<ModifyExpenseMenu> {
                 // 4. Wrap in setState to update UI
                 setState(() {
                   _selectedCategory = value!;
+                });
+              },
+            ),
+            DropdownButton<ExpenseTimeTier>(
+              isExpanded: true,
+              hint: const Text('Select time tier'),
+              value: _selectedTimeTier,
+              items: ExpenseTimeTier.values.map((tier) {
+                return DropdownMenuItem(
+                  value: tier,
+                  child: Text(tier.name.toUpperCase()),
+                );
+              }).toList(),
+              onChanged: (value) {
+                // 4. Wrap in setState to update UI
+                setState(() {
+                  _selectedTimeTier = value!;
                 });
               },
             ),
