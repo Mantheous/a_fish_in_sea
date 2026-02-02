@@ -33,7 +33,7 @@ Future<void> main() async {
         BlocProvider<NavigationCubit>(create: (context) => NavigationCubit()),
         BlocProvider<ExpensesCubit>(create: (context) => ExpensesCubit()),
         BlocProvider<TransactionsCubit>(
-          create: (context) => TransactionsCubit(),
+          create: (context) => TransactionsCubit(context.read<ExpensesCubit>()),
         ),
       ],
       child: const AFishInTheSeaApp(),

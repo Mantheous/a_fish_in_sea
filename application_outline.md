@@ -1,0 +1,9 @@
+In the Finaces section:
+
+- Recived real data from capital one app
+- Assign purchases to budget sections
+- Set finacial goals
+  - Goal has
+    - Due date
+    - Ammount
+    - Plan

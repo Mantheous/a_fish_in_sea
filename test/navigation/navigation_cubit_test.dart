@@ -4,11 +4,14 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   group('NavigationCubit', () {
     test('initial state is 0', () {
-      // TODO: Implement test
+      final navigationCubit = NavigationCubit();
+      expect(navigationCubit.state, equals(0));
     });
 
     test('setPage emits the correct page index', () {
-      // TODO: Implement test
+      final navigationCubit = NavigationCubit();
+      navigationCubit.setPage(2);
+      expect(navigationCubit.state, equals(2));
     });
   });
 }

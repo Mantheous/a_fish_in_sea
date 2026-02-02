@@ -1,4 +1,4 @@
-import 'package:a_fish_in_sea/finances/model/expense_catagory_and_tier.dart';
+import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:intl/intl.dart';
 
 class Transaction {
@@ -6,7 +6,7 @@ class Transaction {
   double amount;
   DateTime date;
   String description;
-  ExpenseCategory type;
+  Expense? assignedExpense;
 
   static final formatter = DateFormat('MM/dd/yy');
 
@@ -18,7 +18,7 @@ class Transaction {
     required this.amount,
     required this.date,
     required this.description,
-    this.type = ExpenseCategory.unclasified,
+    this.assignedExpense,
   });
 
   factory Transaction.fromCSVRow(List<dynamic> row) {
@@ -36,10 +36,12 @@ class Transaction {
   factory Transaction.fromJson(Map<String, dynamic> json) {
     return Transaction(
       //id: json["id"] as double,
-      amount: json["amount"] as double,
+      amount: json["amount"].toDouble(),
       date: json["date"] = formatter.parse(json["date"] as String),
       description: json["description"] as String,
-      type: ExpenseCategory.values.firstWhere((e) => e.name == json["type"]),
+      assignedExpense: (json["assignedExpense"] != null)
+          ? Expense.fromJson(json["assignedExpense"] as Map<String, dynamic>)
+          : null,
     );
   }
 
@@ -47,7 +49,7 @@ class Transaction {
     "amount": amount,
     "date": formatter.format(date),
     "description": description,
-    "type": type.name,
+    "assignedExpense": assignedExpense?.toJson(),
   };
 
   @override
@@ -59,7 +61,7 @@ class Transaction {
         other.amount == amount &&
         other.date == date &&
         other.description == description &&
-        other.type == type;
+        other.assignedExpense == assignedExpense;
   }
 
   bool isSameTransaction(Transaction other) {

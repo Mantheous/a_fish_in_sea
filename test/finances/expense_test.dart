@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:a_fish_in_sea/finances/model/expense_catagory_and_tier.dart';
+import 'package:a_fish_in_sea/finances/model/transaction.dart';
 
 void main() {
   group('Expense', () {
@@ -9,7 +10,6 @@ void main() {
         final original = Expense(
           name: 'Groceries',
           maxAmount: 500.0,
-          current: 150.50,
           type: ExpenseCategory.food,
         );
 
@@ -21,7 +21,7 @@ void main() {
         expect(restored.current, equals(original.current));
         expect(restored.type, equals(original.type));
         expect(restored.dueDate, isNull);
-        expect(restored.transactions, isNull);
+        expect(restored.transactions, []);
       });
 
       test('expense with due date', () {
@@ -29,7 +29,6 @@ void main() {
         final original = Expense(
           name: 'Rent',
           maxAmount: 1500.0,
-          current: 0.0,
           dueDate: dueDate,
           type: ExpenseCategory.housing,
         );
@@ -49,9 +48,15 @@ void main() {
         final original = Expense(
           name: 'Utilities',
           maxAmount: 200.0,
-          current: 75.25,
           dueDate: dueDate,
           type: ExpenseCategory.housing,
+          transactions: [
+            Transaction(
+              amount: 75.25,
+              date: DateTime(2025, 6, 15),
+              description: 'u1',
+            ),
+          ],
         );
 
         final json = original.toJson();
@@ -62,13 +67,13 @@ void main() {
         expect(restored.current, equals(75.25));
         expect(restored.dueDate, isNotNull);
         expect(restored.type, equals(ExpenseCategory.housing));
+        expect(restored.transactions.length, equals(1));
       });
 
       test('handles zero and negative values', () {
         final original = Expense(
           name: 'Test',
           maxAmount: 0.0,
-          current: 0.0,
           type: ExpenseCategory.unclasified,
         );
 
@@ -83,10 +88,12 @@ void main() {
         final json = {
           "name": "Test Expense",
           "maxAmount": 100, // int instead of double
-          "current": 50, // int instead of double
           "dueDate": null,
           "type": "food",
-          "transactions": null,
+          "timeTier": "month",
+          "transactions": [
+            {"amount": 50, "date": "01/01/25", "description": "t"},
+          ],
         };
 
         final expense = Expense.fromJson(json);
@@ -123,21 +130,6 @@ void main() {
         }
       });
 
-      test('dueDate null handling in JSON', () {
-        final json = {
-          "name": "No Due Date",
-          "maxAmount": 100.0,
-          "current": 0.0,
-          "dueDate": null,
-          "type": "food",
-          "transactions": null,
-        };
-
-        final expense = Expense.fromJson(json);
-
-        expect(expense.dueDate, isNull);
-      });
-
       test('default values applied correctly', () {
         final original = Expense(name: 'Defaults Test', maxAmount: 500.0);
 
@@ -153,8 +145,14 @@ void main() {
         final expense = Expense(
           name: 'JSON Structure Test',
           maxAmount: 250.0,
-          current: 100.0,
           type: ExpenseCategory.entertainment,
+          transactions: [
+            Transaction(
+              amount: 100.0,
+              date: DateTime(2025, 1, 2),
+              description: 'j1',
+            ),
+          ],
         );
 
         final json = expense.toJson();
@@ -173,7 +171,13 @@ void main() {
         final original = Expense(
           name: 'Large Amount',
           maxAmount: 999999999.99,
-          current: 123456789.45,
+          transactions: [
+            Transaction(
+              amount: 123456789.45,
+              date: DateTime(2025, 7, 1),
+              description: 'l1',
+            ),
+          ],
         );
 
         final json = original.toJson();
@@ -187,7 +191,13 @@ void main() {
         final original = Expense(
           name: 'Small Amount',
           maxAmount: 0.01,
-          current: 0.001,
+          transactions: [
+            Transaction(
+              amount: 0.001,
+              date: DateTime(2025, 1, 3),
+              description: 's1',
+            ),
+          ],
         );
 
         final json = original.toJson();

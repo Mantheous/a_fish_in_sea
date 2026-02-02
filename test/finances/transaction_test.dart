@@ -1,4 +1,4 @@
-import 'package:a_fish_in_sea/finances/model/expense_catagory_and_tier.dart';
+import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 
@@ -12,7 +12,7 @@ void main() {
     expect(tx.date, DateTime(2025, 10, 11));
     expect(tx.description, contains('Description'));
     expect(tx.amount, equals(-13.41));
-    expect(tx.type, ExpenseCategory.unclasified);
+    expect(tx.assignedExpense, null);
   });
 
   test('Transaction toJson/fromJson roundtrip', () {
@@ -20,7 +20,7 @@ void main() {
       amount: 10,
       date: DateTime(2025, 10, 11),
       description: "Test Transaction",
-      type: ExpenseCategory.food,
+      assignedExpense: Expense(name: "Test Expense", maxAmount: 100),
     );
     final json = original.toJson();
     final restored = Transaction.fromJson(json);

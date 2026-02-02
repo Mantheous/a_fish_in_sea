@@ -1,5 +1,5 @@
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
-import 'package:a_fish_in_sea/finances/view/expense_catagory_alert_dialog.dart';
+import 'package:a_fish_in_sea/finances/view/transaction_expense_select_bottom_sheet.dart';
 import 'package:a_fish_in_sea/navigation/view/navigation_bar.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:flutter/material.dart';
@@ -38,14 +38,20 @@ class TransactionHistoryPage extends StatelessWidget {
                           DataCell(
                             FloatingActionButton(
                               onPressed: () {
-                                showDialog(
+                                showModalBottomSheet(
                                   context: context,
-                                  builder: (_) => ExpenseCatagoryAlertDialog(
-                                    transaction: transaction,
-                                  ),
+                                  isScrollControlled: true,
+                                  builder: (_) =>
+                                      TransactionExpenseSelectBottomSheet(
+                                        transaction: transaction,
+                                      ),
                                 );
                               },
-                              child: Text(transaction.type.name.toUpperCase()),
+                              child: Icon(
+                                transaction.assignedExpense == null
+                                    ? Icons.question_mark
+                                    : Icons.done_all_outlined,
+                              ),
                             ),
                           ),
                           DataCell(

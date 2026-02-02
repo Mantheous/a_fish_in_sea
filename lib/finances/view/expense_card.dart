@@ -39,9 +39,8 @@ class ExpenseCard extends StatelessWidget {
                       Row(
                         children: [
                           Text(
-                            'Due: ${expense.dueDate!.month}/${expense.dueDate!.day}/${expense.dueDate!.year}',
+                            'Due ${expense.timeTier.name} of: ${expense.dueDate!.month}/${expense.dueDate!.day}/${expense.dueDate!.year}',
                           ),
-                          Text(expense.timeTier.name),
                         ],
                       ),
                   ],
@@ -51,7 +50,7 @@ class ExpenseCard extends StatelessWidget {
               Padding(
                 padding: EdgeInsets.all(20.0),
                 child: Text(
-                  '${expense.current.toStringAsFixed(2)} / ${expense.maxAmount.toStringAsFixed(2)}',
+                  '${(-expense.current).toStringAsFixed(2)} / ${expense.maxAmount.toStringAsFixed(2)}',
                 ),
               ),
             ],
