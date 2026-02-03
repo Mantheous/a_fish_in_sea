@@ -2,7 +2,7 @@ import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:intl/intl.dart';
 
 class Transaction {
-  //int id;
+  int id;
   double amount;
   DateTime date;
   String description;
@@ -19,7 +19,7 @@ class Transaction {
     required this.date,
     required this.description,
     this.assignedExpense,
-  });
+  }) : id = '$amount$date$description'.hashCode;
 
   factory Transaction.fromCSVRow(List<dynamic> row) {
     if (row[3] == "Debit") {

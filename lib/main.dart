@@ -51,7 +51,9 @@ class AFishInTheSeaApp extends StatelessWidget {
         seedColor: const Color.fromARGB(255, 122, 195, 230),
       ),
     );
-    context.read<TransactionsCubit>().importCsv();
+    context.read<TransactionsCubit>().importCsv(
+      'lib/data/2025-10-11_AshtonChecking...9371.csv',
+    );
     return MaterialApp(
       theme: theme,
       home: BlocBuilder<NavigationCubit, int>(

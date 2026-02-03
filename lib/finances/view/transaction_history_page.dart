@@ -4,6 +4,8 @@ import 'package:a_fish_in_sea/navigation/view/navigation_bar.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:file_picker/file_picker.dart';
+import 'dart:io';
 
 class TransactionHistoryPage extends StatelessWidget {
   final ThemeData theme;
@@ -12,12 +14,35 @@ class TransactionHistoryPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        title: const Text("Transactions"),
+        actions: [
+          FloatingActionButton(
+            child: const Icon(Icons.add),
+            onPressed: () async {
+              FilePickerResult? result = await FilePicker.platform.pickFiles();
+
+              if (result != null) {
+                context.read<TransactionsCubit>().importCsv(
+                  result.files.single.path!,
+                );
+                //File file = File(result.files.single.path!);
+              } else {
+                // User canceled the picker
+              }
+            },
+          ),
+        ],
+      ),
       bottomNavigationBar: NavBar(),
       body: Center(
         child: AspectRatio(
           aspectRatio: 0.5,
           child: BlocBuilder<TransactionsCubit, List<Transaction>>(
-            builder: (context, transactions) {
+            builder: (context, state) {
+              final transactions = context
+                  .read<TransactionsCubit>()
+                  .loadedTransactions;
               if (transactions.isEmpty) {
                 return const Center(child: Text('No transactions available'));
               } else {

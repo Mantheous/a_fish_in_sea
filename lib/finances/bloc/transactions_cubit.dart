@@ -12,29 +12,41 @@ import 'package:hydrated_bloc/hydrated_bloc.dart';
 
 class TransactionsCubit extends HydratedCubit<List<Transaction>> {
   final ExpensesCubit expensesCubit;
+  List<int> loadedTransactionIds = const [];
+  bool showAllTransactions = false;
 
   TransactionsCubit(this.expensesCubit) : super([]);
 
-  Future<List<List<dynamic>>> loadData() async {
-    final csvString = await rootBundle.loadString(
-      'lib/data/2025-10-11_AshtonChecking...9371.csv',
-    );
-    final bigList = CsvToListConverter().convert(csvString);
+  // Future<List<List<dynamic>>> loadData() async {
+  //   final csvString = await rootBundle.loadString(
+  //     'lib/data/2025-10-11_AshtonChecking...9371.csv',
+  //   );
+  //   final bigList = CsvToListConverter().convert(csvString);
 
-    return bigList;
-  }
+  //   return bigList;
+  // }
 
   // TODO Handle Duplicates
-  Future<void> importCsv() async {
-    final csvString = await rootBundle.loadString(
-      'lib/data/2025-10-11_AshtonChecking...9371.csv',
-    );
+  Future<void> importCsv(String path) async {
+    final csvString = await rootBundle.loadString(path);
     final bigList = CsvToListConverter(eol: '\n').convert(csvString);
     // final withoutHeader = bigList.skip(1);
     // final newEntries = withoutHeader
     //     .map((row) => Transaction.fromCSVRow(row))
     //     .where((tx) => tx.isSameTransaction(other))
-    emit(bigList.skip(1).map((r) => Transaction.fromCSVRow(r)).toList());
+    List<Transaction> newState = bigList
+        .skip(1)
+        .map((r) => Transaction.fromCSVRow(r))
+        .toList();
+    emit(newState);
+    loadedTransactionIds = newState.map((t) => t.id).toList();
+  }
+
+  List<Transaction> get loadedTransactions {
+    if (showAllTransactions) {
+      return state;
+    }
+    return state.where((t) => loadedTransactionIds.contains(t.id)).toList();
   }
 
   void setExpense(Transaction transaction, Expense expense) {
