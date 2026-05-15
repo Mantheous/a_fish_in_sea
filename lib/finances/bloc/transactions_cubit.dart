@@ -1,9 +1,13 @@
+import 'dart:convert';
+
 import 'package:a_fish_in_sea/finances/bloc/expenses_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:csv/csv.dart';
 import 'package:flutter/services.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
+import 'package:file_picker/file_picker.dart';
+import 'dart:io';
 
 // TODO Before production this needs to be switched over a better solution
 // I should use Plaid API to get the data dirrectly from the bank.
@@ -13,35 +17,48 @@ import 'package:hydrated_bloc/hydrated_bloc.dart';
 class TransactionsCubit extends HydratedCubit<List<Transaction>> {
   final ExpensesCubit expensesCubit;
   List<int> loadedTransactionIds = const [];
-  bool showAllTransactions = false;
+  bool showAllTransactions = true;
 
   TransactionsCubit(this.expensesCubit) : super([]);
 
-  // Future<List<List<dynamic>>> loadData() async {
-  //   final csvString = await rootBundle.loadString(
-  //     'lib/data/2025-10-11_AshtonChecking...9371.csv',
-  //   );
-  //   final bigList = CsvToListConverter().convert(csvString);
+  void pickNewCSV() async {
+    FilePickerResult? result = await FilePicker.platform.pickFiles();
 
-  //   return bigList;
-  // }
+    if (result != null) {
+      //importCsv(result.files.single.path!);
+      final file = File(result.files.single.path!).openRead();
+      final fields = await file
+          .transform(utf8.decoder)
+          .transform(CsvToListConverter())
+          .toList();
+      final loadedIds = state.map((t) => t.id).toList();
+      List<Transaction> newState = fields
+          .skip(1)
+          .map((r) => Transaction.fromCSVRow(r))
+          .where((t) => !loadedIds.contains(t.id))
+          .toList();
+      emit(newState);
+      loadedTransactionIds = newState.map((t) => t.id).toList();
+    } else {
+      // User canceled the picker
+    }
+  }
 
-  // TODO Handle Duplicates
+  // Depreciated
   Future<void> importCsv(String path) async {
     final csvString = await rootBundle.loadString(path);
     final bigList = CsvToListConverter(eol: '\n').convert(csvString);
-    // final withoutHeader = bigList.skip(1);
-    // final newEntries = withoutHeader
-    //     .map((row) => Transaction.fromCSVRow(row))
-    //     .where((tx) => tx.isSameTransaction(other))
+    final loadedIds = state.map((t) => t.id).toList();
     List<Transaction> newState = bigList
         .skip(1)
         .map((r) => Transaction.fromCSVRow(r))
+        .where((t) => !loadedIds.contains(t.id))
         .toList();
     emit(newState);
     loadedTransactionIds = newState.map((t) => t.id).toList();
   }
 
+  // So that we can look at the current CSV file or all of the transactions
   List<Transaction> get loadedTransactions {
     if (showAllTransactions) {
       return state;

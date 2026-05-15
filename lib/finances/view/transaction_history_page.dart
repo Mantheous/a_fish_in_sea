@@ -4,8 +4,6 @@ import 'package:a_fish_in_sea/navigation/view/navigation_bar.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:file_picker/file_picker.dart';
-import 'dart:io';
 
 class TransactionHistoryPage extends StatelessWidget {
   final ThemeData theme;
@@ -19,17 +17,8 @@ class TransactionHistoryPage extends StatelessWidget {
         actions: [
           FloatingActionButton(
             child: const Icon(Icons.add),
-            onPressed: () async {
-              FilePickerResult? result = await FilePicker.platform.pickFiles();
-
-              if (result != null) {
-                context.read<TransactionsCubit>().importCsv(
-                  result.files.single.path!,
-                );
-                //File file = File(result.files.single.path!);
-              } else {
-                // User canceled the picker
-              }
+            onPressed: () {
+              context.read<TransactionsCubit>().pickNewCSV();
             },
           ),
         ],
