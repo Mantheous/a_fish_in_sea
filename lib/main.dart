@@ -1,70 +1,79 @@
-import 'dart:io';
-
-import 'package:a_fish_in_sea/finances/bloc/expenses_cubit.dart';
+import 'package:a_fish_in_sea/finances/bloc/budget_cubit.dart';
+import 'package:a_fish_in_sea/finances/bloc/expense_cubit.dart';
+import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
+import 'package:a_fish_in_sea/finances/bloc/recurring_rules_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
-import 'package:a_fish_in_sea/finances/view/transaction_history_page.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
+import 'package:a_fish_in_sea/finances/view/plaid_link_page.dart';
+import 'package:a_fish_in_sea/finances/view/rules_and_budgets_page.dart';
+import 'package:a_fish_in_sea/finances/view/waterfall_ledger_page.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/home_page.dart';
-import 'package:a_fish_in_sea/navigation/view/calendar_page.dart';
-import 'package:a_fish_in_sea/finances/view/finances_page.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:path_provider/path_provider.dart';
 
-import 'package:flutter/foundation.dart';
-
-Future<void> main() async {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  HydratedStorage.build(
-    storageDirectory: kIsWeb
-        ? HydratedStorage.webStorageDirectory
-        : await getApplicationDocumentsDirectory(),
-  );
-
   HydratedBloc.storage = await HydratedStorage.build(
-    storageDirectory: Directory("/storage"),
+    storageDirectory: await getApplicationDocumentsDirectory(),
   );
-
-  runApp(
-    MultiBlocProvider(
-      providers: [
-        BlocProvider<NavigationCubit>(create: (context) => NavigationCubit()),
-        BlocProvider<ExpensesCubit>(create: (context) => ExpensesCubit()),
-        BlocProvider<TransactionsCubit>(
-          create: (context) => TransactionsCubit(context.read<ExpensesCubit>()),
-        ),
-      ],
-      child: const AFishInTheSeaApp(),
-    ),
-  );
+  runApp(const MyApp());
 }
 
-class AFishInTheSeaApp extends StatelessWidget {
-  const AFishInTheSeaApp({super.key});
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final ThemeData theme = ThemeData(
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color.fromARGB(255, 122, 195, 230),
-      ),
-    );
-    context.read<TransactionsCubit>().importCsv(
-      'lib/data/2025-10-11_AshtonChecking...9371.csv',
-    );
-    return MaterialApp(
-      theme: theme,
-      home: BlocBuilder<NavigationCubit, int>(
-        builder: (context, currentPageIndex) {
-          return [
-            HomePage(),
-            CalendarPage(),
-            TransactionHistoryPage(theme: theme),
-            FinancesPage(theme: theme),
-          ][currentPageIndex];
-        },
+    return MultiBlocProvider(
+      providers: [
+        BlocProvider(create: (_) => NavigationCubit()),
+        BlocProvider(create: (_) => RecurringRulesCubit()),
+        BlocProvider(create: (_) => BudgetCubit()),
+        BlocProvider(create: (_) => ExpenseCubit()),
+        BlocProvider(create: (_) => TransactionsCubit()),
+        BlocProvider(create: (_) => PlaidCubit()),
+        BlocProvider(
+          create: (context) => WaterfallCubit(
+            recurringRulesCubit: context.read<RecurringRulesCubit>(),
+            budgetCubit: context.read<BudgetCubit>(),
+            expenseCubit: context.read<ExpenseCubit>(),
+            transactionsCubit: context.read<TransactionsCubit>(),
+            plaidCubit: context.read<PlaidCubit>(),
+          ),
+        ),
+      ],
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'Waterfall Ledger',
+        theme: ThemeData(
+          colorSchemeSeed: Colors.teal,
+          useMaterial3: true,
+          brightness: Brightness.light,
+        ),
+        darkTheme: ThemeData(
+          colorSchemeSeed: Colors.teal,
+          useMaterial3: true,
+          brightness: Brightness.dark,
+        ),
+        home: BlocBuilder<NavigationCubit, int>(
+          builder: (context, page) {
+            switch (page) {
+              case 0:
+                return const HomePage();
+              case 1:
+                return const WaterfallLedgerPage();
+              case 2:
+                return const RulesAndBudgetsPage();
+              case 3:
+                return const PlaidLinkPage();
+              default:
+                return const HomePage();
+            }
+          },
+        ),
       ),
     );
   }

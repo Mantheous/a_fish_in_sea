@@ -1,97 +1,217 @@
-import 'package:a_fish_in_sea/finances/model/expense_catagory_and_tier.dart';
-import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:equatable/equatable.dart';
 
+/// Whether an expense has been fulfilled or is still pending.
+enum ExpenseStatus {
+  /// A future projection — not yet due.
+  projected,
+
+  /// The expense period has arrived but no transaction matched yet.
+  due,
+
+  /// Linked to a real transaction; fully settled.
+  paid,
+}
+
+/// The core expense model with Unity prefab-style inheritance.
+///
+/// An expense can optionally inherit field values from a parent expense
+/// (e.g. a recurring rule generates a "template" expense, and each
+/// occurrence is a child that inherits name, amount, category, etc.).
+///
+/// Individual fields can be **overridden** on a child without breaking
+/// inheritance on other fields.  When linked to a real Plaid transaction,
+/// the expense becomes **concrete** and severs all inheritance.
 class Expense extends Equatable {
+  final String id;
   final String name;
-  final double maxAmount;
-  final DateTime? dueDate;
-  final ExpenseCategory type;
-  final ExpenseTimeTier timeTier;
-  final List<Transaction> transactions;
-  final bool fixed;
+  final double amount; // negative = spending, positive = income
+  final DateTime date;
+  final String? category;
+  final String? notes;
 
-  String get typeCapitalized =>
-      type.name[0].toUpperCase() + type.name.substring(1);
+  // ── Prefab inheritance ──────────────────────────────────────────────
 
-  double get current {
-    if (transactions.isEmpty) return 0.0;
-    return transactions.fold(0.0, (sum, t) => sum + t.amount);
-  }
+  /// ID of the parent expense this was cloned from (null = root).
+  final String? parentExpenseId;
 
-  bool get paid {
-    return current >= maxAmount;
-  }
+  /// ID of the recurring rule that generated this expense (if any).
+  final String? sourceRuleId;
+
+  /// The set of field names that have been explicitly overridden on this
+  /// instance and should NOT inherit from the parent.
+  final Set<String> overriddenFields;
+
+  // ── Concrete state ──────────────────────────────────────────────────
+
+  /// When non-null, this expense is linked to a real Plaid transaction
+  /// and all inheritance is severed.
+  final String? linkedTransactionId;
+
+  /// Convenience getter — true when linked to a real transaction.
+  bool get isConcrete => linkedTransactionId != null;
+
+  final ExpenseStatus status;
 
   const Expense({
+    required this.id,
     required this.name,
-    required this.maxAmount,
-    this.dueDate,
-    this.type = ExpenseCategory.unclasified,
-    this.timeTier = ExpenseTimeTier.month,
-    this.transactions = const [],
-    this.fixed = true,
+    required this.amount,
+    required this.date,
+    this.category,
+    this.notes,
+    this.parentExpenseId,
+    this.sourceRuleId,
+    this.overriddenFields = const {},
+    this.linkedTransactionId,
+    this.status = ExpenseStatus.projected,
   });
 
+  // ── Copy / mutation helpers ─────────────────────────────────────────
+
   Expense copyWith({
+    String? id,
     String? name,
-    double? maxAmount,
-    DateTime? dueDate,
-    ExpenseCategory? type,
-    ExpenseTimeTier? timeTier,
-    List<Transaction>? transactions,
+    double? amount,
+    DateTime? date,
+    String? category,
+    String? notes,
+    String? parentExpenseId,
+    String? sourceRuleId,
+    Set<String>? overriddenFields,
+    String? linkedTransactionId,
+    bool clearLinkedTransaction = false,
+    ExpenseStatus? status,
   }) {
     return Expense(
+      id: id ?? this.id,
       name: name ?? this.name,
-      maxAmount: maxAmount ?? this.maxAmount,
-      dueDate: dueDate ?? this.dueDate,
-      type: type ?? this.type,
-      timeTier: timeTier ?? this.timeTier,
-      transactions: transactions ?? this.transactions,
+      amount: amount ?? this.amount,
+      date: date ?? this.date,
+      category: category ?? this.category,
+      notes: notes ?? this.notes,
+      parentExpenseId: parentExpenseId ?? this.parentExpenseId,
+      sourceRuleId: sourceRuleId ?? this.sourceRuleId,
+      overriddenFields: overriddenFields ?? this.overriddenFields,
+      linkedTransactionId:
+          clearLinkedTransaction ? null : (linkedTransactionId ?? this.linkedTransactionId),
+      status: status ?? this.status,
     );
   }
 
-  factory Expense.fromJson(Map<String, dynamic> json) => Expense(
-    name: json["name"] as String,
-    maxAmount: (json["maxAmount"] as num).toDouble(),
-    dueDate: json["dueDate"] != null
-        ? DateTime.parse(json["dueDate"] as String)
-        : null,
-    type: ExpenseCategory.values.firstWhere((e) => e.name == json["type"]),
-    timeTier: ExpenseTimeTier.values.firstWhere(
-      (e) => e.name == json["timeTier"],
-    ),
-    transactions: (json["transactions"] as List<dynamic>?)!
-        .map((t) => Transaction.fromJson(t as Map<String, dynamic>))
-        .toList(),
-  );
+  /// Mark a single field as overridden with a new value.
+  /// Returns a new [Expense] with the field updated and tracked.
+  Expense overrideField(String fieldName, dynamic value) {
+    final newOverrides = {...overriddenFields, fieldName};
+    switch (fieldName) {
+      case 'name':
+        return copyWith(name: value as String, overriddenFields: newOverrides);
+      case 'amount':
+        return copyWith(amount: value as double, overriddenFields: newOverrides);
+      case 'date':
+        return copyWith(date: value as DateTime, overriddenFields: newOverrides);
+      case 'category':
+        return copyWith(category: value as String?, overriddenFields: newOverrides);
+      case 'notes':
+        return copyWith(notes: value as String?, overriddenFields: newOverrides);
+      default:
+        return copyWith(overriddenFields: newOverrides);
+    }
+  }
 
-  const Expense.empty()
-    : name = '',
-      maxAmount = 0,
-      dueDate = null,
-      type = ExpenseCategory.unclasified,
-      timeTier = ExpenseTimeTier.month,
-      transactions = const [],
-      fixed = true;
+  /// Revert a field override so it re-inherits from the parent.
+  /// The actual value resolution happens in the cubit (which has
+  /// access to the parent expense).
+  Expense revertField(String fieldName) {
+    final newOverrides = {...overriddenFields}..remove(fieldName);
+    return copyWith(overriddenFields: newOverrides);
+  }
+
+  /// Sever all inheritance by linking to a real transaction.
+  Expense makeConcrete(String transactionId) {
+    return copyWith(
+      linkedTransactionId: transactionId,
+      status: ExpenseStatus.paid,
+      // All fields become "owned" — overriddenFields becomes irrelevant
+      overriddenFields: {'name', 'amount', 'date', 'category', 'notes'},
+    );
+  }
+
+  /// Split this expense into two: one for [splitAmount] and one for the
+  /// remainder.  Returns `[reduced, remainder]`.
+  ///
+  /// The original expense keeps its ID with a reduced amount; the
+  /// remainder gets a new ID.
+  List<Expense> subdivide(double splitAmount) {
+    final remainder = amount.abs() - splitAmount.abs();
+    final isNeg = amount < 0;
+
+    final reduced = copyWith(
+      amount: isNeg ? -splitAmount.abs() : splitAmount.abs(),
+      overriddenFields: {...overriddenFields, 'amount'},
+    );
+
+    final leftover = Expense(
+      id: '${id}_rem_${DateTime.now().millisecondsSinceEpoch}',
+      name: '$name (remainder)',
+      amount: isNeg ? -remainder.abs() : remainder.abs(),
+      date: date,
+      category: category,
+      parentExpenseId: parentExpenseId,
+      sourceRuleId: sourceRuleId,
+      status: status,
+    );
+
+    return [reduced, leftover];
+  }
+
+  // ── Serialization ───────────────────────────────────────────────────
+
+  factory Expense.fromJson(Map<String, dynamic> json) {
+    return Expense(
+      id: json['id'] as String,
+      name: json['name'] as String,
+      amount: (json['amount'] as num).toDouble(),
+      date: DateTime.parse(json['date'] as String),
+      category: json['category'] as String?,
+      notes: json['notes'] as String?,
+      parentExpenseId: json['parentExpenseId'] as String?,
+      sourceRuleId: json['sourceRuleId'] as String?,
+      overriddenFields:
+          (json['overriddenFields'] as List<dynamic>?)?.cast<String>().toSet() ?? {},
+      linkedTransactionId: json['linkedTransactionId'] as String?,
+      status: ExpenseStatus.values.firstWhere(
+        (e) => e.name == json['status'],
+        orElse: () => ExpenseStatus.projected,
+      ),
+    );
+  }
 
   Map<String, dynamic> toJson() => {
-    "name": name,
-    "maxAmount": maxAmount,
-    "current": current,
-    "dueDate": dueDate?.toIso8601String(),
-    "type": type.name,
-    "timeTier": timeTier.name,
-    "transactions": transactions.map((t) => t.toJson()).toList(),
-  };
+        'id': id,
+        'name': name,
+        'amount': amount,
+        'date': date.toIso8601String(),
+        'category': category,
+        'notes': notes,
+        'parentExpenseId': parentExpenseId,
+        'sourceRuleId': sourceRuleId,
+        'overriddenFields': overriddenFields.toList(),
+        'linkedTransactionId': linkedTransactionId,
+        'status': status.name,
+      };
 
   @override
   List<Object?> get props => [
-    name,
-    maxAmount,
-    dueDate,
-    type,
-    timeTier,
-    transactions,
-  ];
+        id,
+        name,
+        amount,
+        date,
+        category,
+        notes,
+        parentExpenseId,
+        sourceRuleId,
+        overriddenFields,
+        linkedTransactionId,
+        status,
+      ];
 }

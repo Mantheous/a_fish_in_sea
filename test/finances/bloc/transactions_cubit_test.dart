@@ -1,87 +1,141 @@
-// import 'package:a_fish_in_sea/finances/bloc/expenses_cubit.dart';
-// import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
-// import 'package:a_fish_in_sea/finances/model/expense_catagory_and_tier.dart';
-// import 'package:a_fish_in_sea/finances/model/transaction.dart';
-// import 'package:flutter_test/flutter_test.dart';
-// import 'package:hydrated_bloc/hydrated_bloc.dart';
-// import 'package:mocktail/mocktail.dart';
+import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
+import 'package:a_fish_in_sea/finances/model/transaction.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:hydrated_bloc/hydrated_bloc.dart';
+import 'package:mocktail/mocktail.dart';
 
-// class MockStorage extends Mock implements Storage {}
+class MockStorage extends Mock implements Storage {}
 
-// void main() {
-//   late Storage storage;
-//   late ExpensesCubit expensesCubit;
+void main() {
+  late Storage storage;
 
-//   setUp(() {
-//     storage = MockStorage();
+  setUp(() {
+    storage = MockStorage();
+    when(() => storage.read(any())).thenReturn(null);
+    when(() => storage.write(any(), any())).thenAnswer((_) async {});
+    when(() => storage.delete(any())).thenAnswer((_) async {});
+    when(() => storage.clear()).thenAnswer((_) async {});
+    HydratedBloc.storage = storage;
+  });
 
-//     // Setup standard mock behavior
-//     when(() => storage.read(any())).thenReturn(null);
-//     when(() => storage.write(any(), any())).thenAnswer((_) async {});
+  group('TransactionsCubit', () {
+    test('initial state is an empty list', () {
+      final cubit = TransactionsCubit();
+      expect(cubit.state, equals([]));
+    });
 
-//     // Use HydratedBloc here
-//     HydratedBloc.storage = storage;
-//     expensesCubit = ExpensesCubit();
-//   });
+    test('syncFromPlaid adds new transactions', () {
+      final cubit = TransactionsCubit();
+      final transactions = [
+        Transaction(
+          id: 'txn_1',
+          accountId: 'acc_1',
+          amount: -50.0,
+          date: DateTime(2025, 10, 1),
+          name: 'Grocery Store',
+        ),
+        Transaction(
+          id: 'txn_2',
+          accountId: 'acc_1',
+          amount: -25.0,
+          date: DateTime(2025, 10, 2),
+          name: 'Gas Station',
+        ),
+      ];
 
-//   group('TransactionsCubit', () {
-//     test('initial state is an empty list', () {
-//       final transactionsCubit = TransactionsCubit(expensesCubit);
-//       expect(transactionsCubit.state, equals([]));
-//     });
+      cubit.syncFromPlaid(transactions);
+      expect(cubit.state.length, 2);
+      expect(cubit.state[0].name, 'Grocery Store');
+    });
 
-//     group('importCsv', () {
-//       test('loads and parses CSV data correctly', () {
-//         // This function needs some major modifications first
+    test('syncFromPlaid deduplicates by ID', () {
+      final cubit = TransactionsCubit();
+      final tx = Transaction(
+        id: 'txn_1',
+        accountId: 'acc_1',
+        amount: -50.0,
+        date: DateTime(2025, 10, 1),
+        name: 'Grocery Store',
+      );
 
-//         // final transactionsCubit = TransactionsCubit(expensesCubit);
-//         // await transactionsCubit.importCsv();
-//         // expect(transactionsCubit.state.isNotEmpty, isTrue);
-//         // expect(transactionsCubit.state.first, isA<Transaction>());
-//       });
+      cubit.syncFromPlaid([tx]);
+      cubit.syncFromPlaid([tx]); // same ID again
+      expect(cubit.state.length, 1);
+    });
 
-//       test('handles errors when the CSV file is not found or malformed', () {
-//         // TODO: Implement test
-//       });
+    test('assignExpense sets the assignedExpenseId', () {
+      final cubit = TransactionsCubit();
+      cubit.syncFromPlaid([
+        Transaction(
+          id: 'txn_1',
+          accountId: 'acc_1',
+          amount: -50.0,
+          date: DateTime(2025, 10, 1),
+          name: 'Test',
+        ),
+      ]);
 
-//       test('does not add duplicate transactions', () {
-//         // TODO: Implement test
-//       });
-//     });
+      cubit.assignExpense('txn_1', 'exp_99');
+      expect(cubit.state.first.assignedExpenseId, 'exp_99');
+      expect(cubit.state.first.isAssigned, true);
+    });
 
-//     test('changeTransactionExpenseType updates the type of a transaction', () {
-//       // TODO: Implement test
-//     });
+    test('clearAssignment removes the expense assignment', () {
+      final cubit = TransactionsCubit();
+      cubit.syncFromPlaid([
+        Transaction(
+          id: 'txn_1',
+          accountId: 'acc_1',
+          amount: -50.0,
+          date: DateTime(2025, 10, 1),
+          name: 'Test',
+          assignedExpenseId: 'exp_99',
+        ),
+      ]);
 
-//     group('Serialization', () {
-//       test('toJson/fromJson roundtrip', () {
-//         final transactionsCubit = TransactionsCubit(expensesCubit);
-//         final transaction1 = Transaction(
-//           date: DateTime.now(),
-//           amount: 100.0,
-//           description: 'Test',
-//         );
-//         final transaction2 = Transaction(
-//           date: DateTime.now(),
-//           amount: 200.0,
-//           description: 'Test2',
-//         );
-//         // transactionsCubit.addTransaction(transaction1); // Functions that probably will never exist
-//         // transactionsCubit.addTransaction(transaction2);
+      cubit.clearAssignment('txn_1');
+      expect(cubit.state.first.isAssigned, false);
+    });
 
-//         final json = transactionsCubit.toJson(transactionsCubit.state);
-//         final restoredState = transactionsCubit.fromJson(json!);
+    test('unassignedTransactions filters correctly', () {
+      final cubit = TransactionsCubit();
+      cubit.syncFromPlaid([
+        Transaction(
+          id: 'txn_1',
+          accountId: 'acc_1',
+          amount: -50.0,
+          date: DateTime(2025, 10, 1),
+          name: 'Unassigned',
+        ),
+        Transaction(
+          id: 'txn_2',
+          accountId: 'acc_1',
+          amount: -25.0,
+          date: DateTime(2025, 10, 2),
+          name: 'Assigned',
+          assignedExpenseId: 'exp_1',
+        ),
+      ]);
 
-//         expect(restoredState, equals([transaction1, transaction2]));
-//       });
+      expect(cubit.unassignedTransactions.length, 1);
+      expect(cubit.unassignedTransactions.first.name, 'Unassigned');
+    });
 
-//       test('fromJson handles empty or invalid data', () {
-//         // TODO: Implement test
-//       });
+    test('toJson/fromJson roundtrip', () {
+      final cubit = TransactionsCubit();
+      final tx = Transaction(
+        id: 'txn_1',
+        accountId: 'acc_1',
+        amount: -50.0,
+        date: DateTime(2025, 10, 1),
+        name: 'Test',
+      );
+      cubit.syncFromPlaid([tx]);
 
-//       test('toJson handles an empty list of transactions', () {
-//         // TODO: Implement test
-//       });
-//     });
-//   });
-// }
+      final json = cubit.toJson(cubit.state);
+      final restored = cubit.fromJson(json!);
+      expect(restored?.length, 1);
+      expect(restored?.first.id, 'txn_1');
+    });
+  });
+}

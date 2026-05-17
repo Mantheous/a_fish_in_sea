@@ -20,21 +20,19 @@ class NavBar extends StatelessWidget {
             label: 'Home',
           ),
           NavigationDestination(
-            icon: Icon(Icons.calendar_month),
-            label: 'Calendar',
+            icon: Icon(Icons.waterfall_chart),
+            label: 'Waterfall',
           ),
           NavigationDestination(
-            icon: Icon(Icons.insert_chart_outlined),
-            label: 'Transaction History',
+            icon: Icon(Icons.tune),
+            label: 'Rules & Budgets',
           ),
           NavigationDestination(
-            icon: Icon(Icons.monetization_on_outlined),
-            label: 'Goals',
+            icon: Icon(Icons.account_balance),
+            label: 'Bank',
           ),
         ],
       );
     });
-    
   }
-
 }

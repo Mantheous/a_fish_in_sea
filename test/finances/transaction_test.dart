@@ -1,79 +1,74 @@
-import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 
 void main() {
-  test('Transaction.fromCSVRow parses a normal CSV row', () {
-    final csvRow = [9371, "Description", "10/11/25", "Debit", 13.41, 567.52];
+  test('Transaction.fromPlaid parses a Plaid JSON response', () {
+    final plaidJson = {
+      'transaction_id': 'txn_123',
+      'account_id': 'acc_456',
+      'amount': 13.41,
+      'date': '2025-10-11',
+      'name': 'Grocery Store',
+      'category': ['Food and Drink', 'Groceries'],
+      'pending': false,
+    };
 
-    final tx = Transaction.fromCSVRow(csvRow);
+    final tx = Transaction.fromPlaid(plaidJson);
 
-    // Replace these assertions with your Transaction fields
+    expect(tx.id, 'txn_123');
+    expect(tx.accountId, 'acc_456');
+    expect(tx.amount, -13.41); // Plaid positive = debit, we flip
     expect(tx.date, DateTime(2025, 10, 11));
-    expect(tx.description, contains('Description'));
-    expect(tx.amount, equals(-13.41));
-    expect(tx.assignedExpense, null);
+    expect(tx.name, 'Grocery Store');
+    expect(tx.category, 'Food and Drink > Groceries');
+    expect(tx.pending, false);
+    expect(tx.isAssigned, false);
   });
 
   test('Transaction toJson/fromJson roundtrip', () {
     final original = Transaction(
-      amount: 10,
+      id: 'txn_123',
+      accountId: 'acc_456',
+      amount: -10.00,
       date: DateTime(2025, 10, 11),
-      description: "Test Transaction",
-      assignedExpense: Expense(name: "Test Expense", maxAmount: 100),
+      name: 'Test Transaction',
+      category: 'Food',
     );
     final json = original.toJson();
     final restored = Transaction.fromJson(json);
     expect(restored, equals(original));
   });
 
-  group('isSameTransaction', () {
-    test('returns true for transactions with the same amount, date, and description', () {
-      // TODO: Implement test
-    });
+  test('Transaction assignment', () {
+    final tx = Transaction(
+      id: 'txn_123',
+      accountId: 'acc_456',
+      amount: -10.00,
+      date: DateTime(2025, 10, 11),
+      name: 'Test',
+    );
 
-    test('returns false if the amount is different', () {
-      // TODO: Implement test
-    });
+    expect(tx.isAssigned, false);
 
-    test('returns false if the date is different', () {
-      // TODO: Implement test
-    });
+    final assigned = tx.copyWith(assignedExpenseId: 'exp_789');
+    expect(assigned.isAssigned, true);
+    expect(assigned.assignedExpenseId, 'exp_789');
 
-    test('returns false if the description is different', () {
-      // TODO: Implement test
-    });
-
-    test('returns true even if the type is different', () {
-      // TODO: Implement test
-    });
+    final cleared = assigned.copyWith(clearAssignment: true);
+    expect(cleared.isAssigned, false);
   });
 
-  group('Equality Operator (==)', () {
-    test('returns true for two identical transactions', () {
-      // TODO: Implement test
-    });
+  test('Transaction.fromPlaid handles income (negative Plaid amount)', () {
+    final plaidJson = {
+      'transaction_id': 'txn_income',
+      'account_id': 'acc_456',
+      'amount': -1000.00, // Plaid negative = credit/income
+      'date': '2025-10-15',
+      'name': 'Payroll',
+      'pending': false,
+    };
 
-    test('returns false if any field is different', () {
-      // TODO: Implement test
-    });
-  });
-
-  group('CSV Parsing Edge Cases', () {
-    test('handles credit transactions correctly', () {
-      // TODO: Implement test
-    });
-
-    test('handles leading/trailing whitespace in description', () {
-      // TODO: Implement test
-    });
-
-    test('handles amounts with dollar signs or commas', () {
-      // TODO: Implement test
-    });
-
-    test('handles different date formats', () {
-      // TODO: Implement test
-    });
+    final tx = Transaction.fromPlaid(plaidJson);
+    expect(tx.amount, 1000.00); // Income should be positive
   });
 }
