@@ -33,7 +33,7 @@ end
 # Unset irrelevant variables.
 deactivate nondestructive
 
-set -gx VIRTUAL_ENV /home/mantheous/LongTerm/Repos/a_fish_in_sea/server/quickstart/python/.venv
+set -gx VIRTUAL_ENV /home/mantheous/Repos/a_fish_in_sea/server/python/.venv
 
 set -gx _OLD_VIRTUAL_PATH $PATH
 set -gx PATH "$VIRTUAL_ENV/"bin $PATH
