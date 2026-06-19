@@ -5,16 +5,24 @@
             "name": "Python: Plaid Server",
             "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/server/quickstart/python/server.py",
+            "program": "${workspaceFolder}/server/python/server.py",
             "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}/server/quickstart/python",
-            "envFile": "${workspaceFolder}/server/quickstart/python/.env",
-            "python": "${workspaceFolder}/server/quickstart/python/.venv/bin/python"
+            "cwd": "${workspaceFolder}/server/python",
+            "envFile": "${workspaceFolder}/server/python/.env",
+            "python": "${workspaceFolder}/server/python/.venv/bin/python"
         },
         {
             "name": "Flutter",
             "request": "launch",
             "type": "dart"
+        },
+        {
+            "name": "Flutter (remote Plaid server)",
+            "request": "launch",
+            "type": "dart",
+            "toolArgs": [
+                "--dart-define=PLAID_SERVER_URL=http://100.111.106.47:8000"
+            ]
         }
     ],
     "compounds": [

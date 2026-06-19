@@ -238,18 +238,46 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
     });
 
     // 5. Compute running balance and time-until labels
-    double balance = state.startingBalance;
-    final rows = <LedgerEntry>[];
+    final rows = List<LedgerEntry>.filled(
+      allEntries.length,
+      LedgerEntry(
+        sourceId: '',
+        name: '',
+        amount: 0,
+        date: DateTime(2000),
+        type: EntryType.expense,
+      ),
+    );
 
-    for (final entry in allEntries) {
-      balance += entry.amount;
-      rows.add(entry.copyWith(
-        runningBalance: balance,
-        timeUntilLabel: _computeTimeUntilLabel(entry.date, today),
-      ));
+    // Find the last confirmed entry index
+    int lastConfirmedIndex = -1;
+    for (int i = 0; i < allEntries.length; i++) {
+      if (allEntries[i].status == EntryStatus.confirmed) {
+        lastConfirmedIndex = i;
+      }
     }
 
-    emit(state.copyWith(rows: rows));
+    // A. Confirmed entries: work backward from today's balance (startingBalance)
+    double confirmedBalance = state.startingBalance;
+    for (int i = lastConfirmedIndex; i >= 0; i--) {
+      rows[i] = allEntries[i].copyWith(
+        runningBalance: confirmedBalance,
+        timeUntilLabel: _computeTimeUntilLabel(allEntries[i].date, today),
+      );
+      confirmedBalance -= allEntries[i].amount;
+    }
+
+    // B. Projected / pending / due entries: work forward from today's balance (startingBalance)
+    double projectedBalance = state.startingBalance;
+    for (int i = lastConfirmedIndex + 1; i < allEntries.length; i++) {
+      projectedBalance += allEntries[i].amount;
+      rows[i] = allEntries[i].copyWith(
+        runningBalance: projectedBalance,
+        timeUntilLabel: _computeTimeUntilLabel(allEntries[i].date, today),
+      );
+    }
+
+    emit(state.copyWith(rows: rows.reversed.toList()));
   }
 
   // ──────────────────────────────────────────────────────────────────

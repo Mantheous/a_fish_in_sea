@@ -165,6 +165,11 @@ def _require_access_token():
     return uid, token, None
 
 
+@app.route('/api/health', methods=['GET'])
+def health():
+    return jsonify({'status': 'ok'})
+
+
 @app.route('/api/info', methods=['POST'])
 def info():
     uid, err = _user_id_from_request()
@@ -297,7 +302,8 @@ def create_link_token():
             products=products,
             client_name="Plaid Quickstart",
             country_codes=list(map(lambda x: CountryCode(x), PLAID_COUNTRY_CODES)),
-            language='en'
+            language='en',
+            android_package_name='com.example.a_fish_in_sea'
         )
     else:
         # Stable per-install id from the Flutter app (supports multiple dev users).
@@ -307,6 +313,7 @@ def create_link_token():
             client_name="Plaid Quickstart",
             country_codes=list(map(lambda x: CountryCode(x), PLAID_COUNTRY_CODES)),
             language='en',
+            android_package_name='com.example.a_fish_in_sea',
             user=LinkTokenCreateRequestUser(
                 client_user_id=client_user_id
             )

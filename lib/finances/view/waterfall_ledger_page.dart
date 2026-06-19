@@ -16,11 +16,45 @@ import 'package:intl/intl.dart';
 /// Displays the chronological cascade of confirmed and projected entries
 /// with running balance, time-until labels, and a granularity selector
 /// analogous to Google Calendar's week/month view toggle.
-class WaterfallLedgerPage extends StatelessWidget {
+class WaterfallLedgerPage extends StatefulWidget {
   const WaterfallLedgerPage({super.key});
+
+  @override
+  State<WaterfallLedgerPage> createState() => _WaterfallLedgerPageState();
+}
+
+class _WaterfallLedgerPageState extends State<WaterfallLedgerPage> {
+  final ScrollController _scrollController = ScrollController();
+  bool _hasScrolledToPresent = false;
 
   static final _dateFormat = DateFormat('M/d/yy');
   static final _currencyFormat = NumberFormat.currency(symbol: '\$');
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _scrollToPresent(List<LedgerEntry> rows) {
+    if (_hasScrolledToPresent || rows.isEmpty) return;
+
+    final presentIndex = rows.indexWhere((e) => e.status == EntryStatus.confirmed);
+    if (presentIndex == -1) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+      
+      final rowHeight = 56.0; // Estimated row height
+      double targetOffset = (presentIndex * rowHeight) - 200.0;
+      targetOffset = targetOffset.clamp(0.0, _scrollController.position.maxScrollExtent);
+      
+      _scrollController.jumpTo(targetOffset);
+      setState(() {
+        _hasScrolledToPresent = true;
+      });
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -31,7 +65,13 @@ class WaterfallLedgerPage extends StatelessWidget {
       bottomNavigationBar: const NavBar(),
       body: BlocBuilder<WaterfallCubit, WaterfallState>(
         builder: (context, state) {
+          // Scroll to the present if we haven't already
+          if (!_hasScrolledToPresent && state.rows.isNotEmpty) {
+            _scrollToPresent(state.rows);
+          }
+
           return CustomScrollView(
+            controller: _scrollController,
             slivers: [
               // ── Header ──
               SliverAppBar(
@@ -103,7 +143,7 @@ class WaterfallLedgerPage extends StatelessWidget {
                                       ),
                                       Text(
                                         _currencyFormat.format(
-                                            state.rows.last.runningBalance),
+                                            state.rows.first.runningBalance),
                                         style: theme.textTheme.headlineSmall
                                             ?.copyWith(
                                           color: colorScheme.onPrimary,

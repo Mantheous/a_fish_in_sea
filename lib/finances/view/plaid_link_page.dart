@@ -273,7 +273,11 @@ class _PlaidLinkPageState extends State<PlaidLinkPage> {
                   textAlign: TextAlign.center),
               const SizedBox(height: 8),
               Text(
-                'Make sure the Plaid server is running (see launch config "Flutter & Plaid Server").',
+                'Server: ${context.read<PlaidCubit>().serverUrl}\n\n'
+                'Start it in a terminal:\n'
+                '  cd server/python && ./start.sh\n\n'
+                'Or use the Run and Debug launch config '
+                '"Flutter & Plaid Server".',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
@@ -307,6 +311,14 @@ class _PlaidLinkPageState extends State<PlaidLinkPage> {
                 showDesktopHint
                     ? 'On desktop, use sandbox quick connect. On mobile or web, Plaid Link lets you sign in to a test bank.'
                     : 'Link your bank account to import transactions and track your balance. In sandbox mode, use Plaid test credentials.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Server: ${context.read<PlaidCubit>().serverUrl}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
