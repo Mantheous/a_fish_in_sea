@@ -8,6 +8,7 @@ import 'package:a_fish_in_sea/finances/view/plaid_link_page.dart';
 import 'package:a_fish_in_sea/finances/view/rules_and_budgets_page.dart';
 import 'package:a_fish_in_sea/finances/view/waterfall_ledger_page.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
+import 'package:a_fish_in_sea/navigation/view/calendar_page.dart';
 import 'package:a_fish_in_sea/navigation/view/home_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -69,6 +70,8 @@ class MyApp extends StatelessWidget {
                 return const RulesAndBudgetsPage();
               case 3:
                 return const PlaidLinkPage();
+              case 4:
+                return const CalendarPage();
               default:
                 return const HomePage();
             }

@@ -31,6 +31,11 @@ class NavBar extends StatelessWidget {
             icon: Icon(Icons.account_balance),
             label: 'Bank',
           ),
+          NavigationDestination(
+            selectedIcon: Icon(Icons.calendar_month),
+            icon: Icon(Icons.calendar_month_outlined),
+            label: 'Calendar',
+          ),
         ],
       );
     });
