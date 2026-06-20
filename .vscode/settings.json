@@ -1,3 +1,10 @@
 {
-    "cmake.sourceDirectory": "/home/mantheous/Documents/Coding Projects/GitHub/AFishInSea/a_fish_in_sea/linux"
+  "cmake.sourceDirectory": "/home/mantheous/LongTerm/Repos/a_fish_in_sea/linux",
+  "python-envs.pythonProjects": [
+    {
+      "path": "server/python",
+      "envManager": "ms-python.python:venv",
+      "packageManager": "ms-python.python:pip"
+    }
+  ]
 }

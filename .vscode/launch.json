@@ -1,0 +1,26 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Plaid Server",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/server/quickstart/python/server.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/server/quickstart/python",
+            "envFile": "${workspaceFolder}/server/quickstart/python/.env",
+            "python": "${workspaceFolder}/server/quickstart/python/.venv/bin/python"
+        },
+        {
+            "name": "Flutter",
+            "request": "launch",
+            "type": "dart"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Flutter & Plaid Server",
+            "configurations": ["Python: Plaid Server", "Flutter"]
+        }
+    ]
+}
