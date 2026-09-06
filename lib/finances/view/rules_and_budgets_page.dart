@@ -13,7 +13,9 @@ import 'package:intl/intl.dart';
 
 /// Management page with two tabs: Recurring Rules and Budget Templates.
 class RulesAndBudgetsPage extends StatelessWidget {
-  const RulesAndBudgetsPage({super.key});
+  const RulesAndBudgetsPage({super.key, this.showBottomNav = true});
+
+  final bool showBottomNav;
 
   static final _currFmt = NumberFormat.currency(symbol: '\$');
 
@@ -22,7 +24,7 @@ class RulesAndBudgetsPage extends StatelessWidget {
     return DefaultTabController(
       length: 2,
       child: Scaffold(
-        bottomNavigationBar: const NavBar(),
+        bottomNavigationBar: showBottomNav ? const NavBar() : null,
         appBar: AppBar(
           title: const Text('Rules & Budgets'),
           bottom: const TabBar(tabs: [

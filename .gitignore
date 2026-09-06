@@ -49,3 +49,6 @@ app.*.map.json
 
 # Per-dev Plaid sandbox tokens (local server only)
 server/quickstart/python/.plaid_users.json
+# Per-dev server token stores (local only)
+server/python/.plaid_users.json
+server/python/.google_users.json

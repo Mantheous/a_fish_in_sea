@@ -1,0 +1,20 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "dart": {
+      "type": "local",
+      "command": [
+        "/home/mantheous/flutter/bin/dart",
+        "mcp-server",
+        "--flutter-sdk",
+        "/home/mantheous/flutter",
+        "--disable",
+        "create_project",
+        "--disable",
+        "flutter_driver"
+      ],
+      "enabled": true,
+      "timeout": 15000
+    }
+  }
+}

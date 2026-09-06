@@ -4,8 +4,12 @@ import os
 import datetime as dt
 import json
 import time
+import urllib.parse
 from datetime import date, timedelta
 import uuid
+
+import requests
+from flask import send_from_directory
 
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
@@ -66,6 +70,25 @@ from plaid.model.sandbox_public_token_create_request import SandboxPublicTokenCr
 from plaid.api import plaid_api
 
 from user_store import UserStore
+from google_calendar import (
+    GoogleAuthError,
+    create_event,
+    default_sync_window,
+    delete_event,
+    enrich_events_with_colors,
+    event_body,
+    exchange_code,
+    get_event,
+    get_valid_access_token,
+    google_auth_url,
+    google_credentials,
+    google_disconnect,
+    google_redirect_uri,
+    google_status,
+    list_calendars,
+    list_events,
+    update_event,
+)
 
 load_dotenv()
 
@@ -140,9 +163,11 @@ user_id = None
 
 def _user_id_from_request():
     """Return (user_id, error_response) — error_response is None on success."""
-    uid = request.headers.get(USER_ID_HEADER)
+    uid = request.headers.get('X-App-User-Id') or request.headers.get(
+        'X-Plaid-User-Id'
+    )
     if not uid:
-        return None, (jsonify({'error': {'message': 'Missing X-Plaid-User-Id header'}}), 400)
+        return None, (jsonify({'error': {'message': 'Missing user id header'}}), 400)
     return uid, None
 
 
@@ -163,6 +188,11 @@ def _require_access_token():
     if err:
         return None, None, err
     return uid, token, None
+
+
+@app.route('/api/health', methods=['GET'])
+def health():
+    return jsonify({'status': 'ok'})
 
 
 @app.route('/api/info', methods=['POST'])
@@ -293,46 +323,48 @@ def create_link_token():
 
     if is_cra and user_id and not user_token:
         # For user_id, don't include user field
-        request = LinkTokenCreateRequest(
-            products=products,
-            client_name="Plaid Quickstart",
-            country_codes=list(map(lambda x: CountryCode(x), PLAID_COUNTRY_CODES)),
-            language='en'
-        )
-    else:
-        # Stable per-install id from the Flutter app (supports multiple dev users).
-        client_user_id = request.headers.get(USER_ID_HEADER) or str(time.time())
-        request = LinkTokenCreateRequest(
+        plaid_request = LinkTokenCreateRequest(
             products=products,
             client_name="Plaid Quickstart",
             country_codes=list(map(lambda x: CountryCode(x), PLAID_COUNTRY_CODES)),
             language='en',
+            android_package_name='com.example.a_fish_in_sea'
+        )
+    else:
+        # Stable per-install id from the Flutter app (supports multiple dev users).
+        client_user_id = request.headers.get(USER_ID_HEADER) or str(time.time())
+        plaid_request = LinkTokenCreateRequest(
+            products=products,
+            client_name="Plaid Quickstart",
+            country_codes=list(map(lambda x: CountryCode(x), PLAID_COUNTRY_CODES)),
+            language='en',
+            android_package_name='com.example.a_fish_in_sea',
             user=LinkTokenCreateRequestUser(
                 client_user_id=client_user_id
             )
         )
 
     if PLAID_REDIRECT_URI!=None:
-        request['redirect_uri']=PLAID_REDIRECT_URI
+        plaid_request['redirect_uri']=PLAID_REDIRECT_URI
     if Products('statements') in products:
         statements=LinkTokenCreateRequestStatements(
             end_date=date.today(),
             start_date=date.today()-timedelta(days=30)
         )
-        request['statements']=statements
+        plaid_request['statements']=statements
 
     if is_cra:
         # Use user_token if available, otherwise use user_id
         if user_token:
-            request['user_token'] = user_token
+            plaid_request['user_token'] = user_token
         elif user_id:
-            request['user_id'] = user_id
-        request['consumer_report_permissible_purpose'] = ConsumerReportPermissiblePurpose('ACCOUNT_REVIEW_CREDIT')
-        request['cra_options'] = LinkTokenCreateRequestCraOptions(
+            plaid_request['user_id'] = user_id
+        plaid_request['consumer_report_permissible_purpose'] = ConsumerReportPermissiblePurpose('ACCOUNT_REVIEW_CREDIT')
+        plaid_request['cra_options'] = LinkTokenCreateRequestCraOptions(
             days_requested=60
         )
     # create link token
-    response = client.link_token_create(request)
+    response = client.link_token_create(plaid_request)
     return jsonify(response.to_dict())
 
 # Create a user token which can be used for Plaid Check, Income, or Multi-Item link flows
@@ -909,6 +941,264 @@ def link_exit_error():
     print('[Link Exit Error (frontend)]')
     pretty_print_response(data)
     return jsonify({'status': 'logged'})
+
+
+@app.route('/api/ical', methods=['GET'])
+def api_ical():
+    url = request.args.get('url')
+    if not url:
+        return jsonify({'error': 'Missing url parameter'}), 400
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ('http', 'https'):
+        return jsonify({'error': 'Only http(s) feeds are supported'}), 400
+    try:
+        upstream = requests.get(url, timeout=30)
+        upstream.raise_for_status()
+    except requests.RequestException as e:
+        return jsonify({'error': f'Feed fetch failed: {e}'}), 502
+    return app.response_class(upstream.content, mimetype='text/calendar')
+
+
+# ── Google Calendar (OAuth + read-only sync) ─────────────────────────────
+
+def _google_redirect_uri_from_request():
+    return google_redirect_uri() or (
+        request.host_url.rstrip('/') + '/api/google/callback'
+    )
+
+
+@app.route('/api/google/auth_url', methods=['GET'])
+def google_auth_url_route():
+    uid, err = _user_id_from_request()
+    if err:
+        return err
+    try:
+        google_credentials()
+    except GoogleAuthError as e:
+        return jsonify({'error': str(e)}), 500
+    redirect_uri = _google_redirect_uri_from_request()
+    return jsonify({
+        'url': google_auth_url(redirect_uri),
+        'redirect_uri': redirect_uri,
+    })
+
+
+@app.route('/api/google/callback', methods=['GET'])
+def google_callback():
+    error = request.args.get('error')
+    if error:
+        return f'Google authorization failed: {error}', 400
+    code = request.args.get('code')
+    if not code:
+        return 'Missing code in Google callback', 400
+    redirect_uri = _google_redirect_uri_from_request()
+    try:
+        exchange_code(code, redirect_uri)
+    except GoogleAuthError as e:
+        return f'Google connect failed: {e}', 500
+    return (
+        '<!doctype html><html><head><meta charset="utf-8">'
+        '<title>Google connected</title></head>'
+        '<body style="font-family:sans-serif;text-align:center;'
+        'padding-top:4rem"><h2>Google Calendar connected</h2>'
+        '<p>You can close this window and return to the app.</p>'
+        '</body></html>'
+    )
+
+
+@app.route('/api/google/status', methods=['GET'])
+def google_status_route():
+    uid, err = _user_id_from_request()
+    if err:
+        return err
+    return jsonify(google_status())
+
+
+@app.route('/api/google/disconnect', methods=['POST'])
+def google_disconnect_route():
+    uid, err = _user_id_from_request()
+    if err:
+        return err
+    google_disconnect()
+    return jsonify({'status': 'disconnected'})
+
+
+@app.route('/api/google/calendars', methods=['GET'])
+def google_calendars_route():
+    uid, err = _user_id_from_request()
+    if err:
+        return err
+    try:
+        token = get_valid_access_token()
+        return jsonify({'calendars': list_calendars(token)})
+    except GoogleAuthError as e:
+        return jsonify({'error': str(e)}), 502
+
+
+@app.route('/api/google/events', methods=['GET'])
+def google_events_route():
+    uid, err = _user_id_from_request()
+    if err:
+        return err
+    calendar_id = request.args.get('calendarId')
+    if not calendar_id:
+        return jsonify({'error': 'Missing calendarId parameter'}), 400
+    time_min = request.args.get('timeMin')
+    time_max = request.args.get('timeMax')
+    if not time_min or not time_max:
+        default_min, default_max = default_sync_window()
+        time_min = time_min or default_min
+        time_max = time_max or default_max
+    try:
+        token = get_valid_access_token()
+        events = list_events(token, calendar_id, time_min, time_max)
+        calendar_colors = enrich_events_with_colors(token, calendar_id, events)
+    except GoogleAuthError as e:
+        return jsonify({'error': str(e)}), 502
+    return jsonify({'events': events, 'calendar': calendar_colors})
+
+
+def _google_write_payload(required=()):
+    data = request.get_json(silent=True) or {}
+    missing = [key for key in required if not data.get(key)]
+    if missing:
+        return None, (
+            jsonify({'error': f"Missing fields: {', '.join(missing)}"}),
+            400,
+        )
+    return data, None
+
+
+def _google_error_response(e):
+    status = 502
+    payload = {'error': str(e)}
+    if isinstance(e, GoogleAuthError) and e.status in (403, 404):
+        status = e.status
+        payload['needsReconnect'] = e.status == 403
+    return jsonify(payload), status
+
+
+def _google_recurrence(data):
+    recurrence = data.get('recurrence')
+    if recurrence is None:
+        return None
+    if isinstance(recurrence, list):
+        return [str(r) for r in recurrence]
+    return None
+
+
+@app.route('/api/google/events/one', methods=['GET'])
+def google_get_event_route():
+    uid, err = _user_id_from_request()
+    if err:
+        return err
+    calendar_id = request.args.get('calendarId')
+    event_id = request.args.get('eventId')
+    if not calendar_id or not event_id:
+        return jsonify({'error': 'Missing calendarId or eventId'}), 400
+    try:
+        token = get_valid_access_token()
+        event = get_event(token, calendar_id, event_id)
+    except GoogleAuthError as e:
+        return _google_error_response(e)
+    if event is None:
+        return jsonify({'error': 'Event not found'}), 404
+    return jsonify({'event': event})
+
+
+@app.route('/api/google/events', methods=['POST'])
+def google_create_event_route():
+    uid, err = _user_id_from_request()
+    if err:
+        return err
+    data, merr = _google_write_payload(required=('calendarId',))
+    if merr:
+        return merr
+    try:
+        token = get_valid_access_token()
+        event = create_event(
+            token,
+            data['calendarId'],
+            event_body(
+                data.get('summary'),
+                data.get('description'),
+                data.get('location'),
+                data.get('start'),
+                data.get('end'),
+                bool(data.get('allDay')),
+                _google_recurrence(data),
+            ),
+        )
+    except GoogleAuthError as e:
+        return _google_error_response(e)
+    return jsonify({'event': event})
+
+
+@app.route('/api/google/events', methods=['PATCH'])
+def google_update_event_route():
+    uid, err = _user_id_from_request()
+    if err:
+        return err
+    data, merr = _google_write_payload(
+        required=('calendarId', 'eventId')
+    )
+    if merr:
+        return merr
+    try:
+        token = get_valid_access_token()
+        event = update_event(
+            token,
+            data['calendarId'],
+            data['eventId'],
+            event_body(
+                data.get('summary'),
+                data.get('description'),
+                data.get('location'),
+                data.get('start'),
+                data.get('end'),
+                bool(data.get('allDay')),
+                _google_recurrence(data),
+            ),
+        )
+    except GoogleAuthError as e:
+        return _google_error_response(e)
+    return jsonify({'event': event})
+
+
+@app.route('/api/google/events', methods=['DELETE'])
+def google_delete_event_route():
+    uid, err = _user_id_from_request()
+    if err:
+        return err
+    data, merr = _google_write_payload(
+        required=('calendarId', 'eventId')
+    )
+    if merr:
+        return merr
+    try:
+        token = get_valid_access_token()
+        delete_event(token, data['calendarId'], data['eventId'])
+    except GoogleAuthError as e:
+        return _google_error_response(e)
+    return jsonify({'deleted': True})
+
+
+WEB_BUILD_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'build', 'web'))
+
+
+@app.route('/', methods=['GET'])
+def serve_web_index():
+    if not os.path.isfile(os.path.join(WEB_BUILD_DIR, 'index.html')):
+        return jsonify({'error': 'Web build not found; run flutter build web'}), 404
+    return send_from_directory(WEB_BUILD_DIR, 'index.html')
+
+
+@app.route('/<path:path>', methods=['GET'])
+def serve_web_static(path):
+    if not os.path.isfile(os.path.join(WEB_BUILD_DIR, path)):
+        return send_from_directory(WEB_BUILD_DIR, 'index.html')
+    return send_from_directory(WEB_BUILD_DIR, path)
 
 
 @app.errorhandler(plaid.ApiException)

@@ -1,10 +1,9 @@
 import 'package:bloc/bloc.dart';
 
-/// Simple Cubit that holds the current page index for navigation.
-class NavigationCubit extends Cubit<int> {
-  NavigationCubit([super.initialIndex = 0]);
-  // var history = [Page.home];
-  /// Set the current page index.
-  void setPage(int page) => emit(page);
-  // TODO implement page history navigation
+enum PlannerPage { home, calendar, tasks, finances, settings }
+
+class NavigationCubit extends Cubit<PlannerPage> {
+  NavigationCubit() : super(PlannerPage.home);
+
+  void setPage(PlannerPage page) => emit(page);
 }

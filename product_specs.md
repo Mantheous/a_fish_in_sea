@@ -1,5 +1,39 @@
 # Planning App
 
+## Homework & Planner
+The app is a one-stop planner for school, life, and missionary work. It is not just a homework viewer — the plan is that everything (classes, events, tasks, goals, money) lives in one customizable system.
+
+### Classes & iCal Feeds
+Each class is a feed: a name, an iCal link, a source type, and a color. Feeds are managed from the "Classes & calendars" section on the Settings page (gear in the bottom navigation), with a shortcut to the same manager as a sheet from the Calendar and Tasks pages. Feeds can be added, edited, colored, paused (sync off), or removed. Removing a feed removes its events from the calendar and its imported tasks, and the whole cascade is a single undoable change.
+
+Canvas exports a single user-level iCal link that contains every class (Canvas web → Calendar → Calendar Feed). Add it once; the app splits it into per-course groups by parsing the `[COURSE CODE]` suffix Canvas appends to every title (e.g. `Exit Quiz [STAT 230-002]`). Each course gets a deterministic palette color on the calendar and in the Homework tab. Only Canvas assignment events (UID `event-assignment-*`) become tasks, so class sessions stay calendar-only. Learning Suite is per-class: add each course's calendar separately (course → Calendar → subscribe/export).
+
+Sync fetches the iCal file, parses VEVENTs (and VTODOs), and upserts them into the calendar keyed by feed + iCal UID so re-syncs never duplicate. A feed has a "create tasks" toggle: on for homework feeds (assignments become tasks), off for class-schedule feeds (events only, no task spam). Sync runs automatically on app start (throttled to at most every 15 minutes) and can be forced from the refresh buttons. Per-feed sync status (last sync time / error) is shown in the manager.
+
+Recurrence rules from feeds are mapped to the app's canonical rule format when possible (daily / weekly BYDAY / monthly / yearly, with COUNT or UNTIL). Exotic rules fall back to a single occurrence at DTSTART.
+
+### Google Calendar
+Google calendars sync through the Python server with a full OAuth flow (read-only `calendar.readonly` scope). The one-time "Connect Google" flow (in the classes manager: Settings page or the sheet from Calendar/Tasks) opens the Google consent page; the server exchanges the code and stores the refresh token (single-user, global). After connecting, pick which calendars to pull — each becomes a Google feed (events only, no tasks, no recurrence rules needed because the server expands recurring events with `singleEvents=true` into a −30/+180 day window). Sync goes through the same `/api/google/events` server endpoint from every platform, so no CORS or browser OAuth is needed in the app.
+
+Note: Google only allows `http://localhost` redirect URIs over HTTP, so the one-time connect must happen from a registered host (by default `http://localhost:<server port>` on the machine running the server). Sync itself works from any origin afterwards. Server needs `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in its `.env` (redirect URI to register: `http://localhost:8000/api/google/callback`).
+
+On the web build the browser cannot fetch iCal URLs directly (no CORS headers on Canvas / Learning Suite), so fetches are proxied through the Python server at `GET /api/ical?url=...`. The proxy base URL is a setting on the Settings page (Classes & calendars → Sync server URL). Android, iOS, and Linux fetch directly.
+
+### Calendar
+A full calendar (Syncfusion SfCalendar) with Day, Week, and Month views (month includes an agenda panel). Events can be created from the + button or by tapping a day/time cell, edited and deleted from a detail sheet. Events support all-day and repeating (none / daily / weekdays / weekly on selected days / every 2 weeks / monthly / yearly) with end conditions (forever / N times / until date). Feed events render on the calendar color-coded by class so homework and personal events appear in one place. Personal events are teal; the default empty-cell tap pre-fills the editor with the tapped date and time.
+
+### Tasks
+A to-do list with manual tasks (title, notes, optional due date) and automatically imported homework tasks (deduped by source event, completion preserved across re-syncs). The page has two tabs: To-Do (everything, incomplete first, sorted by due date, overdue highlighted) and Homework (grouped by class with class color and counts, refresh + manage classes inline). Ticking off an imported task never modifies the feed.
+
+### Preach My Gospel
+Removed (was a 13-chapter reading tracker). May return later as part of a broader missionary-work planner.
+
+### Home
+A dashboard: tasks due today/overdue, today's events, and assignments due in the next 7 days, each with quick navigation.
+
+### Revertable by design
+Every manual mutation of events, tasks, and classes is recorded as a before/after snapshot. There is a global undo/redo (app bar buttons on every page, persisted across restarts, capped at 100 steps) plus an "Undo" action on the snackbars for deletes. Feed syncs are not undoable (they clear the undo history because they are bulk, re-runnable operations). Removing a class is one composite undoable change covering the feed, its events, and its tasks.
+
 ## Financial Planning
 Currently this app only is focused on financial planning. It is important to remember that the context is broader for the finished app. **Prioritize flexibility** — many features will be added later, and the reason this app needs to exist is so that the plan is highly customizable.
 

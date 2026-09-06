@@ -42,6 +42,10 @@ dependencies:
   intl: ^0.20.2
   equatable: ^2.0.8
   plaid_flutter: ^5.1.1
+  syncfusion_flutter_calendar: ^29.2.5
+  enough_icalendar: ^0.17.0
+  timezone: ^0.10.0
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:

@@ -17,7 +17,9 @@ import 'package:intl/intl.dart';
 /// with running balance, time-until labels, and a granularity selector
 /// analogous to Google Calendar's week/month view toggle.
 class WaterfallLedgerPage extends StatelessWidget {
-  const WaterfallLedgerPage({super.key});
+  const WaterfallLedgerPage({super.key, this.showBottomNav = true});
+
+  final bool showBottomNav;
 
   static final _dateFormat = DateFormat('M/d/yy');
   static final _currencyFormat = NumberFormat.currency(symbol: '\$');
@@ -28,7 +30,7 @@ class WaterfallLedgerPage extends StatelessWidget {
     final colorScheme = theme.colorScheme;
 
     return Scaffold(
-      bottomNavigationBar: const NavBar(),
+      bottomNavigationBar: showBottomNav ? const NavBar() : null,
       body: BlocBuilder<WaterfallCubit, WaterfallState>(
         builder: (context, state) {
           return CustomScrollView(
