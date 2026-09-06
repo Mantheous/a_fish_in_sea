@@ -64,7 +64,7 @@ class _WaterfallLedgerPageState extends State<WaterfallLedgerPage> {
     final colorScheme = theme.colorScheme;
 
     return Scaffold(
-      bottomNavigationBar: showBottomNav ? const NavBar() : null,
+      bottomNavigationBar: widget.showBottomNav ? const NavBar() : null,
       body: BlocBuilder<WaterfallCubit, WaterfallState>(
         builder: (context, state) {
           // Scroll to the present if we haven't already
