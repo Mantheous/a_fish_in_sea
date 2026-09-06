@@ -1,6 +1,8 @@
 import 'package:a_fish_in_sea/finances/bloc/expense_cubit.dart';
+import 'package:a_fish_in_sea/finances/bloc/recurring_rules_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/expense.dart';
+import 'package:a_fish_in_sea/finances/model/recurring_rule.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -25,9 +27,42 @@ class TransactionAssignmentDialog extends StatelessWidget {
 
     return BlocBuilder<ExpenseCubit, List<Expense>>(
       builder: (context, expenses) {
-        // Filter to unlinked expenses only
+        // Filter to unlinked manual/concrete expenses only
         final available =
             expenses.where((e) => !e.isConcrete).toList();
+
+        // Generate and add virtual projections from recurring rules
+        final today = DateTime.now();
+        final transactionDate = transaction.date;
+        // Generate from the earlier of (transaction.date - 30 days) and today - 30 days
+        final fromDate = transactionDate.isBefore(today)
+            ? transactionDate.subtract(const Duration(days: 30))
+            : today.subtract(const Duration(days: 30));
+        final horizon = today.add(const Duration(days: 365));
+
+        final existingRuleExpenseIds = expenses
+            .where((e) => e.sourceRuleId != null)
+            .map((e) => e.id)
+            .toSet();
+
+        final recurringRules = context.read<RecurringRulesCubit>().state;
+        for (final RecurringRule rule in recurringRules) {
+          // Filter: only show virtual projections with the same transaction sign (income vs expense)
+          final isTransactionIncome = transaction.amount > 0;
+          final isRuleIncome = rule.amount > 0;
+          if (isTransactionIncome != isRuleIncome) continue;
+
+          final projected = rule.generateExpenses(
+            fromDate: fromDate,
+            horizon: horizon,
+          );
+
+          for (final exp in projected) {
+            if (!existingRuleExpenseIds.contains(exp.id)) {
+              available.add(exp);
+            }
+          }
+        }
 
         // Check for auto-categorization suggestion
         final suggestedId = context
@@ -184,6 +219,11 @@ class TransactionAssignmentDialog extends StatelessWidget {
   void _assign(BuildContext context, Expense expense) {
     final expenseCubit = context.read<ExpenseCubit>();
     final transactionsCubit = context.read<TransactionsCubit>();
+
+    // If it's a virtual projection, create it in the expense cubit first
+    if (expenseCubit.findById(expense.id) == null) {
+      expenseCubit.addExpense(expense);
+    }
 
     // Link the expense to this transaction
     expenseCubit.linkToTransaction(

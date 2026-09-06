@@ -71,6 +71,8 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
   final PlaidService? _serviceOverride;
   late PlaidService _service;
 
+  String get serverUrl => _service.baseUrl;
+
   // ── Connection ──────────────────────────────────────────────────────
 
   /// Connect via Plaid Link (iOS, Android, Web) or sandbox auto-connect on
