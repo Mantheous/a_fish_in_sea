@@ -73,13 +73,29 @@ class UndoCubit extends HydratedCubit<UndoState> {
 
   @override
   UndoState? fromJson(Map<String, dynamic> json) {
-    final undo = (json['undoStack'] as List<dynamic>? ?? [])
-        .map((e) => ChangeRecord.fromJson(e as Map<String, dynamic>))
-        .toList();
-    final redo = (json['redoStack'] as List<dynamic>? ?? [])
-        .map((e) => ChangeRecord.fromJson(e as Map<String, dynamic>))
-        .toList();
-    return UndoState(undoStack: undo, redoStack: redo);
+    List<ChangeRecord> decode(Object? value) {
+      final out = <ChangeRecord>[];
+      if (value is List) {
+        for (final item in value) {
+          try {
+            final record = ChangeRecord.fromJson(
+              Map<String, dynamic>.from(item as Map),
+            );
+            if (record.entries.isNotEmpty) out.add(record);
+          } catch (_) {}
+        }
+      }
+      return out;
+    }
+
+    try {
+      return UndoState(
+        undoStack: decode(json['undoStack']),
+        redoStack: decode(json['redoStack']),
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   @override

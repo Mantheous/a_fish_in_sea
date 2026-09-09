@@ -145,6 +145,26 @@ END:VEVENT
 END:VCALENDAR
 ''';
 
+const cancelledEventIcs = '''
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//Test//EN
+BEGIN:VEVENT
+UID:cancelled-1
+DTSTAMP:20260901T120000Z
+DTSTART;VALUE=DATE:20260911
+SUMMARY:Old topic
+STATUS:CANCELLED
+END:VEVENT
+BEGIN:VEVENT
+UID:live-1
+DTSTAMP:20260901T120000Z
+DTSTART;VALUE=DATE:20260911
+SUMMARY:Quiz 6
+END:VEVENT
+END:VCALENDAR
+''';
+
 const canvasNoCourseIcs = '''
 BEGIN:VCALENDAR
 VERSION:2.0
@@ -233,6 +253,12 @@ void main() {
       expect(events.length, 1);
       expect(events.single.subject, 'Submit lab report');
       expect(events.single.start.toUtc(), DateTime.utc(2026, 9, 12, 17));
+    });
+
+    test('skips cancelled VEVENTs', () {
+      final events = service.parseIcs(cancelledEventIcs, feedId: 'f1');
+      expect(events.length, 1);
+      expect(events.single.subject, 'Quiz 6');
     });
 
     test('uses DURATION when DTEND is missing', () {

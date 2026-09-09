@@ -20,8 +20,11 @@ abstract class RevertableHydratedCubit<T> extends HydratedCubit<T>
 
   @override
   void applyJson(Map<String, dynamic>? json) {
-    final restored = json == null ? null : fromJson(json);
-    if (restored != null) emit(restored);
+    if (json == null) return;
+    try {
+      final restored = fromJson(json);
+      if (restored != null) emit(restored);
+    } catch (_) {}
   }
 
   void emitChange(T newState) {

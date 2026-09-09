@@ -2,16 +2,16 @@ import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:a_fish_in_sea/finances/view/bank_connection_card.dart';
-import 'package:a_fish_in_sea/navigation/view/navigation_bar.dart';
+import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
 /// Bank connection page — connect via Plaid Link or sandbox shortcuts.
 class PlaidLinkPage extends StatefulWidget {
-  const PlaidLinkPage({super.key, this.showBottomNav = true});
+  const PlaidLinkPage({super.key, this.showDrawer = true});
 
-  final bool showBottomNav;
+  final bool showDrawer;
 
   @override
   State<PlaidLinkPage> createState() => _PlaidLinkPageState();
@@ -35,8 +35,7 @@ class _PlaidLinkPageState extends State<PlaidLinkPage> {
     final colorScheme = theme.colorScheme;
 
     return Scaffold(
-      bottomNavigationBar:
-          widget.showBottomNav ? const NavBar() : null,
+      drawer: widget.showDrawer ? const AppDrawer() : null,
       body: BlocBuilder<PlaidCubit, PlaidState>(
         builder: (context, plaidState) {
           return CustomScrollView(

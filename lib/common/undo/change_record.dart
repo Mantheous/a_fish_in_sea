@@ -54,11 +54,18 @@ class ChangeRecord extends Equatable {
   ChangeRecord.single(StateSnapshot snapshot)
       : entries = [snapshot];
 
-  factory ChangeRecord.fromJson(Map<String, dynamic> json) => ChangeRecord(
-        entries: (json['entries'] as List<dynamic>)
-            .map((e) => StateSnapshot.fromJson(e as Map<String, dynamic>))
-            .toList(),
-      );
+  factory ChangeRecord.fromJson(Map<String, dynamic> json) {
+    final entries = <StateSnapshot>[];
+    final list = json['entries'] as List<dynamic>? ?? const [];
+    for (final item in list) {
+      try {
+        entries.add(
+          StateSnapshot.fromJson(Map<String, dynamic>.from(item as Map)),
+        );
+      } catch (_) {}
+    }
+    return ChangeRecord(entries: entries);
+  }
 
   Map<String, dynamic> toJson() => {
         'entries': entries.map((e) => e.toJson()).toList(),

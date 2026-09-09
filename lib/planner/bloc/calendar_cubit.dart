@@ -26,6 +26,109 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
     );
   }
 
+  String? get activeTrackingId {
+    for (final event in state) {
+      if (event.isTracking) return event.id;
+    }
+    return null;
+  }
+
+  PlannerEvent? get activeTrackingEvent {
+    final id = activeTrackingId;
+    return id == null ? null : byId(id);
+  }
+
+  void startTracking(String eventId, {DateTime? now}) {
+    final target = byId(eventId);
+    if (target == null || target.allDay) return;
+    final at = now ?? DateTime.now();
+    if (target.isTracking) return;
+    var next = state;
+    final activeId = activeTrackingId;
+    if (activeId != null && activeId != eventId) {
+      final active = byId(activeId);
+      if (active != null && active.timerStartedAt != null) {
+        final start = active.timerStartedAt!;
+        final end = at.isAfter(start) ? at : start.add(const Duration(seconds: 1));
+        next = next
+            .map((e) => e.id == activeId
+                ? e.copyWith(
+                    actualStart: start,
+                    actualEnd: end,
+                    clearTimerStartedAt: true,
+                  )
+                : e)
+            .toList();
+      }
+    }
+    next = next
+        .map((e) => e.id == eventId
+            ? e.copyWith(timerStartedAt: at, failed: false)
+            : e)
+        .toList();
+    if (next != state) emitChange(next);
+  }
+
+  void stopTracking(String eventId, {DateTime? now}) {
+    final event = byId(eventId);
+    if (event == null || !event.isTracking) return;
+    final at = now ?? DateTime.now();
+    final start = event.timerStartedAt!;
+    final end = at.isAfter(start) ? at : start.add(const Duration(seconds: 1));
+    updateEvent(
+      event.copyWith(
+        actualStart: start,
+        actualEnd: end,
+        clearTimerStartedAt: true,
+      ),
+    );
+  }
+
+  void cancelTracking(String eventId) {
+    final event = byId(eventId);
+    if (event == null || !event.isTracking) return;
+    updateEvent(event.copyWith(clearTimerStartedAt: true));
+  }
+
+  void clearReported(String eventId) {
+    final event = byId(eventId);
+    if (event == null) return;
+    if (event.actualStart == null &&
+        event.actualEnd == null &&
+        !event.isTracking &&
+        !event.failed) {
+      return;
+    }
+    updateEvent(
+      event.copyWith(
+        clearActualStart: true,
+        clearActualEnd: true,
+        clearTimerStartedAt: true,
+        failed: false,
+      ),
+    );
+  }
+
+  void setFailed(String eventId, bool failed, {DateTime? now}) {
+    final event = byId(eventId);
+    if (event == null || event.failed == failed) return;
+    if (failed && event.isTracking) {
+      final at = now ?? DateTime.now();
+      final start = event.timerStartedAt!;
+      final end = at.isAfter(start) ? at : start.add(const Duration(seconds: 1));
+      updateEvent(
+        event.copyWith(
+          actualStart: start,
+          actualEnd: end,
+          clearTimerStartedAt: true,
+          failed: true,
+        ),
+      );
+      return;
+    }
+    updateEvent(event.copyWith(failed: failed));
+  }
+
   void setTaskLink(String eventId, String taskId) {
     final event = byId(eventId);
     if (event == null) return;
@@ -112,9 +215,14 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
   @override
   List<PlannerEvent>? fromJson(Map<String, dynamic> json) {
     final list = json['events'] as List<dynamic>?;
-    return list
-        ?.map((e) => PlannerEvent.fromJson(e as Map<String, dynamic>))
-        .toList();
+    if (list == null) return null;
+    final out = <PlannerEvent>[];
+    for (final item in list) {
+      try {
+        out.add(PlannerEvent.fromJson(Map<String, dynamic>.from(item as Map)));
+      } catch (_) {}
+    }
+    return out;
   }
 
   @override

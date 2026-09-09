@@ -116,9 +116,14 @@ class BudgetCubit extends HydratedCubit<List<Budget>> {
   @override
   List<Budget>? fromJson(Map<String, dynamic> json) {
     final list = json['budgets'] as List<dynamic>?;
-    return list
-        ?.map((e) => Budget.fromJson(e as Map<String, dynamic>))
-        .toList();
+    if (list == null) return null;
+    final out = <Budget>[];
+    for (final item in list) {
+      try {
+        out.add(Budget.fromJson(Map<String, dynamic>.from(item as Map)));
+      } catch (_) {}
+    }
+    return out;
   }
 
   @override

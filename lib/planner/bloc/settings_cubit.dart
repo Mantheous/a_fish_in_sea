@@ -1,6 +1,31 @@
 import 'package:equatable/equatable.dart';
+import 'package:flutter/foundation.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
+
+/// Mobile phones start on the day view; web desktop and desktop start on week.
+/// Mobile browsers (android/iOS on web) also start on day — the app is
+/// served as a web build, so `isWeb` alone can't decide.
+CalendarView platformDefaultFor({
+  required bool isWeb,
+  required TargetPlatform platform,
+}) {
+  switch (platform) {
+    case TargetPlatform.android:
+    case TargetPlatform.iOS:
+      return CalendarView.day;
+    case TargetPlatform.fuchsia:
+    case TargetPlatform.linux:
+    case TargetPlatform.macOS:
+    case TargetPlatform.windows:
+      return CalendarView.week;
+  }
+}
+
+CalendarView get platformDefaultCalendarView => platformDefaultFor(
+      isWeb: kIsWeb,
+      platform: defaultTargetPlatform,
+    );
 
 class SettingsState extends Equatable {
   final String icalProxyBase;
@@ -9,6 +34,8 @@ class SettingsState extends Equatable {
   final double dayEndHour;
   final int snapMinutes;
   final String? defaultEventFeedId;
+  final bool trackingEnabled;
+  final int trackingIntervalMinutes;
 
   const SettingsState({
     this.icalProxyBase = '',
@@ -17,6 +44,8 @@ class SettingsState extends Equatable {
     this.dayEndHour = 24,
     this.snapMinutes = 15,
     this.defaultEventFeedId,
+    this.trackingEnabled = true,
+    this.trackingIntervalMinutes = 5,
   });
 
   SettingsState copyWith({
@@ -27,6 +56,8 @@ class SettingsState extends Equatable {
     int? snapMinutes,
     String? defaultEventFeedId,
     bool clearDefaultEventFeedId = false,
+    bool? trackingEnabled,
+    int? trackingIntervalMinutes,
   }) {
     return SettingsState(
       icalProxyBase: icalProxyBase ?? this.icalProxyBase,
@@ -37,6 +68,9 @@ class SettingsState extends Equatable {
       defaultEventFeedId: clearDefaultEventFeedId
           ? null
           : (defaultEventFeedId ?? this.defaultEventFeedId),
+      trackingEnabled: trackingEnabled ?? this.trackingEnabled,
+      trackingIntervalMinutes:
+          trackingIntervalMinutes ?? this.trackingIntervalMinutes,
     );
   }
 
@@ -48,11 +82,14 @@ class SettingsState extends Equatable {
         dayEndHour,
         snapMinutes,
         defaultEventFeedId,
+        trackingEnabled,
+        trackingIntervalMinutes,
       ];
 }
 
 class SettingsCubit extends HydratedCubit<SettingsState> {
-  SettingsCubit() : super(const SettingsState());
+  SettingsCubit()
+      : super(SettingsState(defaultCalendarView: platformDefaultCalendarView));
 
   void setIcalProxyBase(String url) =>
       emit(state.copyWith(icalProxyBase: url.trim()));
@@ -95,6 +132,16 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
     emit(state.copyWith(snapMinutes: minutes.clamp(1, 60)));
   }
 
+  static const List<int> trackingIntervalChoices = [1, 2, 5, 10, 15];
+
+  void setTrackingEnabled(bool enabled) {
+    emit(state.copyWith(trackingEnabled: enabled));
+  }
+
+  void setTrackingIntervalMinutes(int minutes) {
+    emit(state.copyWith(trackingIntervalMinutes: minutes.clamp(1, 15)));
+  }
+
   void setDefaultEventFeedId(String? feedId) {
     final trimmed = feedId?.trim();
     if (trimmed == null || trimmed.isEmpty) {
@@ -105,11 +152,11 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
   }
 
   static CalendarView _parseView(String? name) {
-    if (name == null) return CalendarView.week;
+    if (name == null) return platformDefaultCalendarView;
     for (final view in CalendarView.values) {
       if (view.name == name) return view;
     }
-    return CalendarView.week;
+    return platformDefaultCalendarView;
   }
 
   static double _parseHour(Object? value, double fallback) {
@@ -122,6 +169,11 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
     return 15;
   }
 
+  static int _parseTrackingInterval(Object? value) {
+    if (value is num) return value.toInt().clamp(1, 15);
+    return 5;
+  }
+
   @override
   SettingsState? fromJson(Map<String, dynamic> json) => SettingsState(
         icalProxyBase: json['icalProxyBase'] as String? ?? '',
@@ -131,6 +183,9 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
         dayEndHour: _parseHour(json['dayEndHour'], 24),
         snapMinutes: _parseSnap(json['snapMinutes']),
         defaultEventFeedId: json['defaultEventFeedId'] as String?,
+        trackingEnabled: json['trackingEnabled'] as bool? ?? true,
+        trackingIntervalMinutes:
+            _parseTrackingInterval(json['trackingIntervalMinutes']),
       );
 
   @override
@@ -141,5 +196,7 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
         'dayEndHour': state.dayEndHour,
         'snapMinutes': state.snapMinutes,
         'defaultEventFeedId': state.defaultEventFeedId,
+        'trackingEnabled': state.trackingEnabled,
+        'trackingIntervalMinutes': state.trackingIntervalMinutes,
       };
 }

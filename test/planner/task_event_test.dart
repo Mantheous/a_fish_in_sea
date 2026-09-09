@@ -4,6 +4,7 @@ import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/task_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
+import 'package:a_fish_in_sea/planner/model/task_assignee.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
 import 'package:a_fish_in_sea/planner/service/task_event_link.dart';
@@ -62,6 +63,35 @@ void main() {
       expect(restored, cubit.state);
       expect(restored!.single.isTask, isTrue);
       expect(restored.single.done, isTrue);
+    });
+
+    test('assignees round trip and default to empty for old json', () {
+      final at = DateTime(2026, 9, 4, 9);
+      final event = _personal('e1', at).copyWith(
+        assignees: const [
+          TaskAssignee(id: 'people/1', displayName: 'Amy'),
+        ],
+      );
+      expect(PlannerEvent.fromJson(event.toJson()), event);
+      final legacy = PlannerEvent.fromJson({
+        'id': 'e1',
+        'subject': 'Old',
+        'start': at.toIso8601String(),
+        'end': at.add(const Duration(hours: 1)).toIso8601String(),
+      });
+      expect(legacy.assignees, isEmpty);
+      final corrupt = PlannerEvent.fromJson({
+        'id': 'e1',
+        'subject': 'Old',
+        'start': at.toIso8601String(),
+        'end': at.add(const Duration(hours: 1)).toIso8601String(),
+        'assignees': [
+          {'id': 'people/1', 'displayName': 'Amy'},
+          {'id': 42},
+          'not-a-map',
+        ],
+      });
+      expect(corrupt.assignees.map((a) => a.id), ['people/1']);
     });
   });
 

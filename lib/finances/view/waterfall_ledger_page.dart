@@ -6,7 +6,7 @@ import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/view/expense_detail_dialog.dart';
 import 'package:a_fish_in_sea/finances/view/transaction_assignment_dialog.dart';
-import 'package:a_fish_in_sea/navigation/view/navigation_bar.dart';
+import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
@@ -17,9 +17,9 @@ import 'package:intl/intl.dart';
 /// with running balance, time-until labels, and a granularity selector
 /// analogous to Google Calendar's week/month view toggle.
 class WaterfallLedgerPage extends StatefulWidget {
-  const WaterfallLedgerPage({super.key, this.showBottomNav = true});
+  const WaterfallLedgerPage({super.key, this.showDrawer = true});
 
-  final bool showBottomNav;
+  final bool showDrawer;
 
   @override
   State<WaterfallLedgerPage> createState() => _WaterfallLedgerPageState();
@@ -64,7 +64,7 @@ class _WaterfallLedgerPageState extends State<WaterfallLedgerPage> {
     final colorScheme = theme.colorScheme;
 
     return Scaffold(
-      bottomNavigationBar: widget.showBottomNav ? const NavBar() : null,
+      drawer: widget.showDrawer ? const AppDrawer() : null,
       body: BlocBuilder<WaterfallCubit, WaterfallState>(
         builder: (context, state) {
           // Scroll to the present if we haven't already

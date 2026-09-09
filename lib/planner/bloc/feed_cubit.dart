@@ -326,6 +326,53 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
       final events = fresh.map((event) {
         final old = previous[event.id];
         if (old != null) {
+          if (old.isTask) {
+            return event.copyWith(
+              isTask: old.isTask,
+              done: old.done,
+              completedAt: old.completedAt,
+              clearCompletedAt: !old.done || old.completedAt == null,
+              taskId: old.taskId,
+              clearTaskId: old.taskId == null,
+              placeId: old.placeId,
+              clearPlaceId: old.placeId == null,
+              assignees: old.assignees,
+              actualStart: old.actualStart,
+              clearActualStart: old.actualStart == null,
+              actualEnd: old.actualEnd,
+              clearActualEnd: old.actualEnd == null,
+              timerStartedAt: old.timerStartedAt,
+              clearTimerStartedAt: old.timerStartedAt == null,
+              failed: old.failed,
+            );
+          }
+          // The task flag is local-only (Google never stores it), so a
+          // lost calendar flag must not wipe the mark while its shadow
+          // task survives (fresh storage, hydrate race). The shadow is
+          // the durable record: un-marking deletes it, so a surviving
+          // shadow means "still a task" — heal the flag from it.
+          final backing = _taskCubit.tasksForEventId(event.id);
+          if (backing.isNotEmpty) {
+            final shadow = backing.first;
+            return event.copyWith(
+              isTask: true,
+              done: shadow.done,
+              completedAt: shadow.completedAt,
+              clearCompletedAt: !shadow.done || shadow.completedAt == null,
+              taskId: old.taskId,
+              clearTaskId: old.taskId == null,
+              placeId: old.placeId,
+              clearPlaceId: old.placeId == null,
+              assignees: shadow.assignees,
+              actualStart: old.actualStart,
+              clearActualStart: old.actualStart == null,
+              actualEnd: old.actualEnd,
+              clearActualEnd: old.actualEnd == null,
+              timerStartedAt: old.timerStartedAt,
+              clearTimerStartedAt: old.timerStartedAt == null,
+              failed: old.failed,
+            );
+          }
           return event.copyWith(
             isTask: old.isTask,
             done: old.done,
@@ -333,6 +380,29 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
             clearCompletedAt: !old.done || old.completedAt == null,
             taskId: old.taskId,
             clearTaskId: old.taskId == null,
+            placeId: old.placeId,
+            clearPlaceId: old.placeId == null,
+            assignees: old.assignees,
+            actualStart: old.actualStart,
+            clearActualStart: old.actualStart == null,
+            actualEnd: old.actualEnd,
+            clearActualEnd: old.actualEnd == null,
+            timerStartedAt: old.timerStartedAt,
+            clearTimerStartedAt: old.timerStartedAt == null,
+            failed: old.failed,
+          );
+        }
+        // Same heal for events the calendar has never seen (or lost):
+        // a surviving shadow re-asserts the mark.
+        final backing = _taskCubit.tasksForEventId(event.id);
+        if (backing.isNotEmpty) {
+          final shadow = backing.first;
+          return event.copyWith(
+            isTask: true,
+            done: shadow.done,
+            completedAt: shadow.completedAt,
+            clearCompletedAt: !shadow.done || shadow.completedAt == null,
+            assignees: shadow.assignees,
           );
         }
         // Homework assignments are tasks by default.
@@ -399,9 +469,14 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   @override
   List<Feed>? fromJson(Map<String, dynamic> json) {
     final list = json['feeds'] as List<dynamic>?;
-    return list
-        ?.map((f) => Feed.fromJson(f as Map<String, dynamic>))
-        .toList();
+    if (list == null) return null;
+    final out = <Feed>[];
+    for (final item in list) {
+      try {
+        out.add(Feed.fromJson(Map<String, dynamic>.from(item as Map)));
+      } catch (_) {}
+    }
+    return out;
   }
 
   @override

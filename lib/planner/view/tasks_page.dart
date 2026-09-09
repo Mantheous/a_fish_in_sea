@@ -4,8 +4,11 @@ import 'package:intl/intl.dart';
 
 import '../../common/undo/undo_bar.dart';
 import '../../common/undo/undo_cubit.dart';
+import '../../goals/bloc/goal_cubit.dart';
+import '../../goals/bloc/tag_cubit.dart';
+import '../../goals/model/goal.dart';
 import '../../navigation/bloc/navigation_cubit.dart';
-import '../../navigation/view/navigation_bar.dart';
+import '../../navigation/view/app_drawer.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/feed_cubit.dart';
@@ -13,9 +16,10 @@ import '../bloc/task_cubit.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../model/task.dart';
-import '../service/task_event_link.dart';
 import 'feed_manager.dart';
+import 'task_checkbox.dart';
 import 'task_editor.dart';
+import 'task_finish_sheet.dart';
 
 class TasksPage extends StatelessWidget {
   const TasksPage({super.key});
@@ -42,33 +46,103 @@ class TasksPage extends StatelessWidget {
             ],
           ),
         ),
-        bottomNavigationBar: const NavBar(),
+        drawer: const AppDrawer(),
         floatingActionButton: FloatingActionButton(
           onPressed: () => showTaskEditor(context),
           child: const Icon(Icons.add),
         ),
         body: TabBarView(
           children: [
-            BlocBuilder<TaskCubit, List<Task>>(
-              builder: (context, tasks) {
-                final feedCubit = context.watch<FeedCubit>();
-                final open = feedCubit.visibleTasks(
-                  context.read<TaskCubit>().openTasks,
-                );
-                if (open.isEmpty) return const _EmptyTodo();
-                return ListView.builder(
-                  itemCount: open.length,
-                  itemBuilder: (context, index) => _TaskTile(
-                    task: open[index],
-                    showClass: true,
-                  ),
-                );
-              },
-            ),
+            const _TodoTab(),
             const _HomeworkTab(),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _TodoTab extends StatelessWidget {
+  const _TodoTab();
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocBuilder<TaskCubit, List<Task>>(
+      builder: (context, tasks) {
+        final feedCubit = context.watch<FeedCubit>();
+        final open = feedCubit.visibleTasks(
+          context.read<TaskCubit>().openTasks,
+        );
+        return ListView(
+          children: [
+            if (open.isEmpty)
+              const _EmptyTodo()
+            else
+              for (final task in open)
+                _TaskTile(task: task, showClass: true),
+            const _GoalTasksSection(),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _GoalTasksSection extends StatelessWidget {
+  const _GoalTasksSection();
+
+  @override
+  Widget build(BuildContext context) {
+    List<Goal> goals;
+    try {
+      goals = context.watch<GoalCubit>().state;
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
+    final shown = goals
+        .where((g) =>
+            g.type == GoalType.checklist && g.showInTasks && !g.done)
+        .toList()
+      ..sort((a, b) => a.deadline.compareTo(b.deadline));
+    if (shown.isEmpty) return const SizedBox.shrink();
+    Map<String, String> tagNames;
+    try {
+      tagNames = {
+        for (final t in context.watch<TagCubit>().state) t.id: t.name
+      };
+    } catch (_) {
+      tagNames = const {};
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text('Goals',
+              style: TextStyle(fontWeight: FontWeight.bold)),
+        ),
+        for (final goal in shown)
+          ListTile(
+            leading: Checkbox(
+              value: false,
+              onChanged: (_) =>
+                  context.read<GoalCubit>().toggleDone(goal.id),
+            ),
+            title: Text(goal.title),
+            subtitle: Text(
+              'Goal · due ${DateFormat('EEE, MMM d').format(goal.deadline)}'
+              '${goal.tagIds.isEmpty ? '' : ' · ${goal.tagIds.map((id) => tagNames[id] ?? 'tag').join(', ')}'}',
+            ),
+            trailing: IconButton(
+              tooltip: 'Open goal',
+              icon: const Icon(Icons.flag_outlined),
+              onPressed: () =>
+                  context.read<NavigationCubit>().setPage(PlannerPage.goals),
+            ),
+            onTap: () =>
+                context.read<NavigationCubit>().setPage(PlannerPage.goals),
+          ),
+      ],
     );
   }
 }
@@ -93,11 +167,24 @@ class _EmptyTodo extends StatelessWidget {
   }
 }
 
-class _HomeworkTab extends StatelessWidget {
+class _HomeworkTab extends StatefulWidget {
   const _HomeworkTab();
 
   @override
+  State<_HomeworkTab> createState() => _HomeworkTabState();
+}
+
+class _HomeworkTabState extends State<_HomeworkTab>
+    with AutomaticKeepAliveClientMixin {
+  /// Class groups the user collapsed. New groups default to expanded.
+  final Set<String> _collapsed = {};
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
   Widget build(BuildContext context) {
+    super.build(context);
     final taskCubit = context.watch<TaskCubit>();
     final feedCubit = context.watch<FeedCubit>();
     final imported = feedCubit
@@ -137,6 +224,9 @@ class _HomeworkTab extends StatelessWidget {
       final key = task.classLabel ?? task.classId ?? '';
       byClass.putIfAbsent(key, () => []).add(task);
     }
+    // Sorted keys keep tile order stable across rebuilds so expansion
+    // state never jumps to the wrong class.
+    final groupKeys = byClass.keys.toList()..sort();
     return Column(
       children: [
         ValueListenableBuilder<bool>(
@@ -161,9 +251,9 @@ class _HomeworkTab extends StatelessWidget {
         ),
         Expanded(
           child: ListView.builder(
-            itemCount: byClass.length,
+            itemCount: groupKeys.length,
             itemBuilder: (context, index) {
-              final groupKey = byClass.keys.elementAt(index);
+              final groupKey = groupKeys[index];
               final labeled = !byClass[groupKey]!.every(
                 (task) => task.classLabel == null,
               );
@@ -183,7 +273,17 @@ class _HomeworkTab extends StatelessWidget {
               return Card(
                 margin: const EdgeInsets.fromLTRB(8, 4, 8, 4),
                 child: ExpansionTile(
-                  initiallyExpanded: true,
+                  key: PageStorageKey<String>('homework-$groupKey'),
+                  initiallyExpanded: !_collapsed.contains(groupKey),
+                  onExpansionChanged: (expanded) {
+                    setState(() {
+                      if (expanded) {
+                        _collapsed.remove(groupKey);
+                      } else {
+                        _collapsed.add(groupKey);
+                      }
+                    });
+                  },
                   leading: Container(
                     width: 12,
                     height: 12,
@@ -224,20 +324,20 @@ class _TaskTile extends StatelessWidget {
   final bool showClass;
 
   const _TaskTile({required this.task, required this.showClass});
-
   @override
   Widget build(BuildContext context) {
     final taskCubit = context.read<TaskCubit>();
     final feedCubit = context.watch<FeedCubit>();
     final calendarEvents = context.watch<CalendarCubit>().state;
+    final live = context.watch<TaskCubit>().byId(task.id) ?? task;
     final Color chipColor;
     final String chipLabel;
-    if (showClass && task.classLabel != null) {
-      chipColor = courseColor(task.classLabel!);
-      chipLabel = task.classLabel!;
+    if (showClass && live.classLabel != null) {
+      chipColor = courseColor(live.classLabel!);
+      chipLabel = live.classLabel!;
     } else {
       final feed =
-          showClass && task.classId != null ? feedCubit.byId(task.classId!) : null;
+          showClass && live.classId != null ? feedCubit.byId(live.classId!) : null;
       chipColor = feed == null
           ? Theme.of(context).colorScheme.primary
           : mutedCalendarColor(feed.color);
@@ -245,55 +345,113 @@ class _TaskTile extends StatelessWidget {
     }
     final hasChip = chipLabel.isNotEmpty;
     final theme = Theme.of(context);
-    final hasEvent = _hasCalendarEvent(task, calendarEvents);
+    final hasEvent = _hasCalendarEvent(live, calendarEvents);
+    final timeFormat = DateFormat('h:mm a');
+    String? workLine;
+    if (live.failed) {
+      workLine = 'Failed';
+    } else if (live.isTracking) {
+      workLine = 'Recording…';
+    } else if (live.hasReported && live.reportedDuration != null) {
+      final planned = live.plannedDuration;
+      workLine = planned == null
+          ? 'Reported ${live.reportedDuration!.inMinutes}m'
+          : 'Reported ${live.reportedDuration!.inMinutes}m '
+              '(planned ${planned.inMinutes}m)';
+    } else if (live.hasPlanned &&
+        live.plannedStart != null &&
+        live.plannedEnd != null) {
+      workLine = 'Planned ${timeFormat.format(live.plannedStart!)} – '
+          '${timeFormat.format(live.plannedEnd!)}';
+    }
     return ListTile(
-      leading: Checkbox(
-        value: task.done,
-        onChanged: (_) => TaskEventLink.toggleTaskDone(
-          taskCubit,
-          context.read<CalendarCubit>(),
-          task.id,
-        ),
-      ),
+      leading: TaskCheckbox(task: live),
       title: Text(
-        task.title,
+        live.title,
         style: TextStyle(
-          decoration: task.done ? TextDecoration.lineThrough : null,
-          color: task.done ? theme.colorScheme.outline : null,
+          decoration: live.done || live.failed ? TextDecoration.lineThrough : null,
+          color: live.failed
+              ? theme.colorScheme.error
+              : live.done
+                  ? theme.colorScheme.outline
+                  : null,
         ),
       ),
-      subtitle: Row(
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          if (hasChip) ...[
-            Container(
-              width: 8,
-              height: 8,
-              margin: const EdgeInsets.only(right: 4),
-              decoration: BoxDecoration(
-                color: chipColor,
-                shape: BoxShape.circle,
-              ),
-            ),
+          Row(
+            children: [
+              if (hasChip) ...[
+                Container(
+                  width: 8,
+                  height: 8,
+                  margin: const EdgeInsets.only(right: 4),
+                  decoration: BoxDecoration(
+                    color: chipColor,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                Text(
+                  chipLabel,
+                  style: theme.textTheme.labelSmall,
+                ),
+                const SizedBox(width: 8),
+              ],
+              if (live.due != null)
+                Text(
+                  'Due ${DateFormat('EEE, MMM d').format(live.due!)}',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: live.isOverdue ? theme.colorScheme.error : null,
+                    fontWeight:
+                        live.isDueToday ? FontWeight.bold : null,
+                  ),
+                ),
+            ],
+          ),
+          if (workLine != null)
             Text(
-              chipLabel,
-              style: theme.textTheme.labelSmall,
-            ),
-            const SizedBox(width: 8),
-          ],
-          if (task.due != null)
-            Text(
-              'Due ${DateFormat('EEE, MMM d').format(task.due!)}',
+              workLine,
               style: theme.textTheme.labelSmall?.copyWith(
-                color: task.isOverdue ? theme.colorScheme.error : null,
-                fontWeight:
-                    task.isDueToday ? FontWeight.bold : null,
+                color: live.failed
+                    ? theme.colorScheme.error
+                    : live.isTracking
+                        ? theme.colorScheme.primary
+                        : null,
+                fontWeight: live.failed || live.isTracking
+                    ? FontWeight.w600
+                    : null,
               ),
+            ),
+          if (live.assignees.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: _AssigneeLine(task: live),
             ),
         ],
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          IconButton(
+            tooltip: live.isTracking ? 'Stop recording' : 'Start recording',
+            icon: Icon(
+              live.isTracking ? Icons.stop : Icons.play_arrow,
+              color: live.isTracking ? theme.colorScheme.primary : null,
+            ),
+            onPressed: live.done
+                ? null
+                : () {
+                    if (live.isTracking) {
+                      stopTaskAndFinish(context, live.id);
+                    } else {
+                      try {
+                        taskCubit.startTracking(live.id);
+                      } catch (_) {}
+                    }
+                  },
+          ),
           IconButton(
             tooltip: hasEvent
                 ? 'Event added — tap to add another'
@@ -302,13 +460,13 @@ class _TaskTile extends StatelessWidget {
               Icons.event_available,
               color: hasEvent ? theme.colorScheme.primary : null,
             ),
-            onPressed: () => _addToCalendar(context, task),
+            onPressed: () => _addToCalendar(context, live),
           ),
           PopupMenuButton<String>(
             onSelected: (value) {
-              if (value == 'edit') showTaskEditor(context, existing: task);
-              if (value == 'delete') _delete(context, task);
-              if (value == 'calendar') _addToCalendar(context, task);
+              if (value == 'edit') showTaskEditor(context, existing: live);
+              if (value == 'delete') _delete(context, live);
+              if (value == 'calendar') _addToCalendar(context, live);
             },
             itemBuilder: (context) => const [
               PopupMenuItem(value: 'edit', child: Text('Edit')),
@@ -321,7 +479,7 @@ class _TaskTile extends StatelessWidget {
           ),
         ],
       ),
-      onTap: () => showTaskEditor(context, existing: task),
+      onTap: () => showTaskEditor(context, existing: live),
     );
   }
 
@@ -370,6 +528,54 @@ class _TaskTile extends StatelessWidget {
           onPressed: () => context.read<UndoCubit>().undo(),
         ),
       ),
+    );
+  }
+}
+
+class _AssigneeLine extends StatelessWidget {
+  final Task task;
+
+  const _AssigneeLine({required this.task});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final shown = task.assignees.take(3).toList();
+    final extra = task.assignees.length - shown.length;
+    final names = shown.map((a) => a.displayName).join(', ');
+    return Row(
+      children: [
+        SizedBox(
+          width: shown.length * 18.0 + 4,
+          height: 20,
+          child: Stack(
+            children: [
+              for (var i = 0; i < shown.length; i++)
+                Positioned(
+                  left: i * 18.0,
+                  child: CircleAvatar(
+                    radius: 10,
+                    child: Text(
+                      shown[i].displayName.isEmpty
+                          ? '?'
+                          : shown[i].displayName[0].toUpperCase(),
+                      style: const TextStyle(fontSize: 10),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Text(
+            extra > 0 ? '$names +$extra' : names,
+            style: theme.textTheme.labelSmall,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
     );
   }
 }

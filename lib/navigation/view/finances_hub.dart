@@ -4,7 +4,7 @@ import '../../common/undo/undo_bar.dart';
 import '../../finances/view/plaid_link_page.dart';
 import '../../finances/view/rules_and_budgets_page.dart';
 import '../../finances/view/waterfall_ledger_page.dart';
-import '../../navigation/view/navigation_bar.dart';
+import '../../navigation/view/app_drawer.dart';
 
 class FinancesHubPage extends StatelessWidget {
   const FinancesHubPage({super.key});
@@ -25,12 +25,12 @@ class FinancesHubPage extends StatelessWidget {
             ],
           ),
         ),
-        bottomNavigationBar: const NavBar(),
+        drawer: const AppDrawer(),
         body: const TabBarView(
           children: [
-            WaterfallLedgerPage(showBottomNav: false),
-            RulesAndBudgetsPage(showBottomNav: false),
-            PlaidLinkPage(showBottomNav: false),
+            WaterfallLedgerPage(showDrawer: false),
+            RulesAndBudgetsPage(showDrawer: false),
+            PlaidLinkPage(showDrawer: false),
           ],
         ),
       ),

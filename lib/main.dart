@@ -5,6 +5,9 @@ import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/recurring_rules_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
+import 'package:a_fish_in_sea/goals/bloc/goal_cubit.dart';
+import 'package:a_fish_in_sea/goals/bloc/tag_cubit.dart';
+import 'package:a_fish_in_sea/goals/view/goals_page.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/finances_hub.dart';
 import 'package:a_fish_in_sea/navigation/view/home_page.dart';
@@ -17,6 +20,10 @@ import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_page.dart';
 import 'package:a_fish_in_sea/planner/view/tasks_page.dart';
+import 'package:a_fish_in_sea/reporting/bloc/places_cubit.dart';
+import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
+import 'package:a_fish_in_sea/reporting/bloc/tracking_cubit.dart';
+import 'package:a_fish_in_sea/reporting/view/stats_page.dart';
 import 'package:a_fish_in_sea/settings/view/settings_page.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -63,6 +70,11 @@ class MyApp extends StatelessWidget {
         BlocProvider(create: (_) => CalendarCubit()),
         BlocProvider(create: (_) => CalendarDraftCubit()),
         BlocProvider(create: (_) => TaskCubit()),
+        BlocProvider(create: (_) => TagCubit()),
+        BlocProvider(create: (_) => GoalCubit()),
+        BlocProvider(create: (_) => PlacesCubit()),
+        BlocProvider(create: (_) => TrackingCubit()),
+        BlocProvider(create: (_) => ReportingCubit()),
         BlocProvider(
           create: (context) => FeedCubit(
             calendarCubit: context.read<CalendarCubit>(),
@@ -97,6 +109,8 @@ class MyApp extends StatelessWidget {
               PlannerPage.home => const HomePage(),
               PlannerPage.calendar => const CalendarPage(),
               PlannerPage.tasks => const TasksPage(),
+              PlannerPage.goals => const GoalsPage(),
+              PlannerPage.stats => const StatsPage(),
               PlannerPage.finances => const FinancesHubPage(),
               PlannerPage.settings => const SettingsPage(),
             };

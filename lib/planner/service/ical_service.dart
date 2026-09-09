@@ -102,6 +102,7 @@ class IcalService {
 
   PlannerEvent? _eventFromVEvent(VEvent vevent, String feedId, FeedKind kind) {
     try {
+      if (vevent.status == EventStatus.cancelled) return null;
       final startProp = vevent.getProperty<DateTimeProperty>(
         DateTimeProperty.propertyNameStart,
       );

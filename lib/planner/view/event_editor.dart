@@ -3,6 +3,8 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
 import '../../common/undo/undo_cubit.dart';
+import '../../reporting/bloc/places_cubit.dart';
+import '../../reporting/model/place.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/feed_cubit.dart';
@@ -12,7 +14,12 @@ import '../model/event_reschedule.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../model/recurrence.dart';
+import '../model/task.dart';
+import '../model/task_assignee.dart';
 import '../service/task_event_link.dart';
+import 'people_field.dart';
+import 'task_checkbox.dart';
+import 'task_finish_sheet.dart';
 
 const int _personalEventColor = 0xFF6B8F8A;
 
@@ -33,22 +40,31 @@ Future<void> showEventEditor(
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
-    builder: (sheetContext) => Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
-      ),
-      child: _EventEditorSheet(
-        existing: existing,
-        initialDate: initialDate,
-        initialTime: initialTime,
-        initialEndTime: initialEndTime,
-        initialSubject: initialSubject,
-        initialNotes: initialNotes,
-        initialLocation: initialLocation,
-        initialClassLabel: initialClassLabel,
-        initialTaskId: initialTaskId,
-        onDraftChanged: onDraftChanged,
-        allowDelete: allowDelete,
+    useSafeArea: true,
+    enableDrag: true,
+    builder: (sheetContext) => DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.5,
+      minChildSize: 0.32,
+      maxChildSize: 0.92,
+      builder: (context, scrollController) => Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
+        ),
+        child: _EventEditorSheet(
+          existing: existing,
+          initialDate: initialDate,
+          initialTime: initialTime,
+          initialEndTime: initialEndTime,
+          initialSubject: initialSubject,
+          initialNotes: initialNotes,
+          initialLocation: initialLocation,
+          initialClassLabel: initialClassLabel,
+          initialTaskId: initialTaskId,
+          onDraftChanged: onDraftChanged,
+          allowDelete: allowDelete,
+          scrollController: scrollController,
+        ),
       ),
     ),
   );
@@ -57,10 +73,12 @@ Future<void> showEventEditor(
 Future<void> showEventDetail(
   BuildContext context, {
   required PlannerEvent event,
+  VoidCallback? onReport,
 }) {
   return showModalBottomSheet<void>(
     context: context,
-    builder: (sheetContext) => _EventDetailSheet(event: event),
+    builder: (sheetContext) =>
+        _EventDetailSheet(event: event, onReport: onReport),
   );
 }
 
@@ -76,6 +94,7 @@ class _EventEditorSheet extends StatelessWidget {
   final String? initialTaskId;
   final ValueChanged<PlannerEvent>? onDraftChanged;
   final bool allowDelete;
+  final ScrollController? scrollController;
 
   const _EventEditorSheet({
     this.existing,
@@ -89,26 +108,44 @@ class _EventEditorSheet extends StatelessWidget {
     this.initialTaskId,
     this.onDraftChanged,
     this.allowDelete = true,
+    this.scrollController,
   });
 
   @override
   Widget build(BuildContext context) {
-    return EventEditorForm(
-      existing: existing,
-      initialDate: initialDate,
-      initialTime: initialTime,
-      initialEndTime: initialEndTime,
-      initialSubject: initialSubject,
-      initialNotes: initialNotes,
-      initialLocation: initialLocation,
-      initialClassLabel: initialClassLabel,
-      initialTaskId: initialTaskId,
-      onDraftChanged: onDraftChanged,
-      allowDelete: allowDelete,
-      autofocusTitle: existing == null,
-      title: existing == null ? 'New event' : 'Edit event',
-      onFinished: () => Navigator.of(context).pop(),
-      onCancelled: () => Navigator.of(context).pop(),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const SizedBox(height: 8),
+        Container(
+          width: 40,
+          height: 4,
+          decoration: BoxDecoration(
+            color: Theme.of(context).dividerColor,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        Flexible(
+          child: EventEditorForm(
+            existing: existing,
+            initialDate: initialDate,
+            initialTime: initialTime,
+            initialEndTime: initialEndTime,
+            initialSubject: initialSubject,
+            initialNotes: initialNotes,
+            initialLocation: initialLocation,
+            initialClassLabel: initialClassLabel,
+            initialTaskId: initialTaskId,
+            onDraftChanged: onDraftChanged,
+            allowDelete: allowDelete,
+            scrollController: scrollController,
+            autofocusTitle: existing == null,
+            title: existing == null ? 'New event' : 'Edit event',
+            onFinished: () => Navigator.of(context).pop(),
+            onCancelled: () => Navigator.of(context).pop(),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -129,6 +166,7 @@ class EventEditorForm extends StatefulWidget {
   final String? title;
   final VoidCallback? onFinished;
   final VoidCallback? onCancelled;
+  final ScrollController? scrollController;
 
   const EventEditorForm({
     super.key,
@@ -147,6 +185,7 @@ class EventEditorForm extends StatefulWidget {
     this.title,
     this.onFinished,
     this.onCancelled,
+    this.scrollController,
   });
 
   @override
@@ -170,6 +209,8 @@ class EventEditorFormState extends State<EventEditorForm> {
   bool _saving = false;
   String? _saveTargetFeedId;
   String? _sourceTaskId;
+  String? _placeId;
+  late List<TaskAssignee> _people;
   late bool _isTask;
   late bool _done;
   PlannerEvent? _seriesMaster;
@@ -253,6 +294,18 @@ class EventEditorFormState extends State<EventEditorForm> {
     _subject.text = existing?.subject ?? initialSubject ?? '';
     _notes.text = existing?.notes ?? initialNotes ?? '';
     _location.text = existing?.location ?? initialLocation ?? '';
+    _placeId = existing?.placeId;
+    _people = List.of(existing?.assignees ?? const []);
+    if (existing == null && _people.isEmpty && _sourceTaskId != null) {
+      // Creating a calendar block for a task: start from the task's people
+      // so saving back can't silently drop them.
+      try {
+        final task = context.read<TaskCubit>().byId(_sourceTaskId!);
+        if (task != null && task.assignees.isNotEmpty) {
+          _people = List.of(task.assignees);
+        }
+      } catch (_) {}
+    }
     _isTask = existing?.isTask ?? false;
     _done = existing?.done ?? false;
     if (existing != null) {
@@ -388,6 +441,8 @@ class EventEditorFormState extends State<EventEditorForm> {
         taskId: _sourceTaskId,
         isTask: _isTask,
         done: _isTask && _done,
+        placeId: _placeId,
+        assignees: _people,
       ),
     );
   }
@@ -416,7 +471,9 @@ class EventEditorFormState extends State<EventEditorForm> {
             ? _saveTargetFeedId
             : null;
     return SafeArea(
+      top: false,
       child: SingleChildScrollView(
+        controller: widget.scrollController,
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -543,6 +600,22 @@ class EventEditorFormState extends State<EventEditorForm> {
                 labelText: 'Location',
                 border: OutlineInputBorder(),
               ),
+            ),
+            const SizedBox(height: 12),
+            _PlaceField(
+              value: _placeId,
+              onChanged: (value) {
+                setState(() => _placeId = value);
+                _emitDraft();
+              },
+            ),
+            const SizedBox(height: 12),
+            PeopleField(
+              selected: _people,
+              onChanged: (value) {
+                setState(() => _people = value);
+                _emitDraft();
+              },
             ),
             const SizedBox(height: 12),
             TextField(
@@ -852,6 +925,7 @@ class EventEditorFormState extends State<EventEditorForm> {
         isTask: _isTask,
         done: done,
         completedAt: done ? DateTime.now() : null,
+        assignees: _people,
       );
       final targetFeed = feedCubit.byId(_saveTargetFeedId ?? '');
       if (targetFeed != null) {
@@ -877,6 +951,8 @@ class EventEditorFormState extends State<EventEditorForm> {
             } catch (_) {}
           }
         }
+        _applyLocalAssignees(result.created?.id ?? draft.id);
+        _mirrorAssigneesToSourceTask();
         _applyTaskLinkPostSync(result.created?.id ?? draft.id);
         widget.onFinished?.call();
         return;
@@ -908,6 +984,9 @@ class EventEditorFormState extends State<EventEditorForm> {
       done: done,
       completedAt: done && !base.done ? DateTime.now() : null,
       clearCompletedAt: !done,
+      placeId: _placeId,
+      clearPlaceId: _placeId == null,
+      assignees: _people,
     );
     if (_editingSeries) {
       setState(() => _saving = true);
@@ -921,6 +1000,7 @@ class EventEditorFormState extends State<EventEditorForm> {
         );
         return;
       }
+      _applyLocalAssignees(updated.id);
       _applyTaskLinkPostSync(updated.id);
       widget.onFinished?.call();
       return;
@@ -936,6 +1016,7 @@ class EventEditorFormState extends State<EventEditorForm> {
         );
         return;
       }
+      _applyLocalAssignees(updated.id);
       _applyTaskLinkPostSync(updated.id);
       widget.onFinished?.call();
       return;
@@ -993,6 +1074,50 @@ class EventEditorFormState extends State<EventEditorForm> {
     if (_done) {
       TaskEventLink.toggleEventDone(calendar, tasks, syncedId);
     }
+  }
+
+  static bool _sameAssignees(
+      List<TaskAssignee> a, List<TaskAssignee> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  /// Writes the editor's people onto the freshly synced local event. Google
+  /// never stores assignees, so without this the post-push re-sync would
+  /// restore the pre-edit (empty) list and drop the user's picks.
+  /// Must run before [_applyTaskLinkPostSync] so backing tasks pick them up.
+  void _applyLocalAssignees(String eventId) {
+    CalendarCubit calendar;
+    try {
+      calendar = context.read<CalendarCubit>();
+    } catch (_) {
+      return;
+    }
+    final synced = calendar.byId(eventId);
+    if (synced == null) return;
+    if (_sameAssignees(synced.assignees, _people)) return;
+    calendar.updateEvent(synced.copyWith(assignees: List.of(_people)));
+  }
+
+  /// Mirrors the editor's people onto the source task a new event was
+  /// created from. Skipped when nothing changed (the common case: the
+  /// picker was seeded from the task).
+  void _mirrorAssigneesToSourceTask() {
+    final sourceId = _sourceTaskId;
+    if (sourceId == null) return;
+    TaskCubit tasks;
+    try {
+      tasks = context.read<TaskCubit>();
+    } catch (_) {
+      return;
+    }
+    final source = tasks.byId(sourceId);
+    if (source == null) return;
+    if (_sameAssignees(source.assignees, _people)) return;
+    tasks.updateTask(source.copyWith(assignees: List.of(_people)));
   }
 
   void _delete(BuildContext context) async {
@@ -1077,10 +1202,91 @@ class EventEditorFormState extends State<EventEditorForm> {
 
 enum _DeleteChoice { cancel, occurrence, series }
 
-class _EventDetailSheet extends StatelessWidget {
+class _EventPeopleLine extends StatelessWidget {
   final PlannerEvent event;
 
-  const _EventDetailSheet({required this.event});
+  const _EventPeopleLine({required this.event});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final shown = event.assignees.take(3).toList();
+    final extra = event.assignees.length - shown.length;
+    final names = shown.map((a) => a.displayName).join(', ');
+    return Row(
+      children: [
+        SizedBox(
+          width: shown.length * 18.0 + 4,
+          height: 20,
+          child: Stack(
+            children: [
+              for (var i = 0; i < shown.length; i++)
+                Positioned(
+                  left: i * 18.0,
+                  child: CircleAvatar(
+                    radius: 10,
+                    child: Text(
+                      shown[i].displayName.isEmpty
+                          ? '?'
+                          : shown[i].displayName[0].toUpperCase(),
+                      style: const TextStyle(fontSize: 10),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Text(
+            extra > 0 ? '$names +$extra' : names,
+            style: theme.textTheme.bodySmall,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PlaceField extends StatelessWidget {
+  final String? value;
+  final ValueChanged<String?> onChanged;
+
+  const _PlaceField({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    List<Place> places;
+    try {
+      places = context.watch<PlacesCubit>().state;
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
+    if (places.isEmpty) return const SizedBox.shrink();
+    return DropdownButtonFormField<String?>(
+      initialValue: value,
+      isExpanded: true,
+      decoration: const InputDecoration(
+        labelText: 'Saved place (for auto-report)',
+        border: OutlineInputBorder(),
+      ),
+      items: [
+        const DropdownMenuItem(value: null, child: Text('No place')),
+        for (final place in places)
+          DropdownMenuItem(value: place.id, child: Text(place.name)),
+      ],
+      onChanged: onChanged,
+    );
+  }
+}
+
+class _EventDetailSheet extends StatelessWidget {
+  final PlannerEvent event;
+  final VoidCallback? onReport;
+
+  const _EventDetailSheet({required this.event, this.onReport});
 
   @override
   Widget build(BuildContext context) {
@@ -1094,12 +1300,19 @@ class _EventDetailSheet extends StatelessWidget {
               break;
             }
           }
+          final report = onReport;
           return EventDetailView(
             event: current,
             onEdit: () {
               Navigator.of(context).pop();
               showEventEditor(context, existing: current);
             },
+            onReport: report == null
+                ? null
+                : () {
+                    Navigator.of(context).pop();
+                    Future.microtask(report);
+                  },
             onClose: () => Navigator.of(context).pop(),
           );
         },
@@ -1111,12 +1324,14 @@ class _EventDetailSheet extends StatelessWidget {
 class EventDetailView extends StatelessWidget {
   final PlannerEvent event;
   final VoidCallback? onEdit;
+  final VoidCallback? onReport;
   final VoidCallback? onClose;
 
   const EventDetailView({
     super.key,
     required this.event,
     this.onEdit,
+    this.onReport,
     this.onClose,
   });
 
@@ -1179,10 +1394,15 @@ class EventDetailView extends StatelessWidget {
               if (event.isTask) ...[
                 const SizedBox(width: 4),
                 Icon(
-                  event.done
-                      ? Icons.check_circle
-                      : Icons.check_circle_outline,
+                  event.failed
+                      ? Icons.cancel
+                      : event.done
+                          ? Icons.check_circle
+                          : Icons.check_circle_outline,
                   size: 16,
+                  color: event.failed
+                      ? Theme.of(context).colorScheme.error
+                      : null,
                 ),
               ],
             ],
@@ -1192,7 +1412,8 @@ class EventDetailView extends StatelessWidget {
             event.subject,
             style: theme.textTheme.titleLarge?.copyWith(
               decoration:
-                  event.isTask && event.done ? TextDecoration.lineThrough : null,
+                  (event.isTask && event.done) || event.failed ? TextDecoration.lineThrough : null,
+              color: event.failed ? theme.colorScheme.error : null,
             ),
           ),
           const SizedBox(height: 4),
@@ -1205,22 +1426,15 @@ class EventDetailView extends StatelessWidget {
             const SizedBox(height: 8),
             Text(event.notes!),
           ],
+          if (event.assignees.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _EventPeopleLine(event: event),
+          ],
           if (event.isTask) ...[
             const SizedBox(height: 8),
-            CheckboxListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Completed'),
-              value: event.done,
-              onChanged: (_) {
-                try {
-                  TaskEventLink.toggleEventDone(
-                    context.read<CalendarCubit>(),
-                    context.read<TaskCubit>(),
-                    event.id,
-                  );
-                } catch (_) {}
-              },
-            ),
+            _TaskStatusTile(event: event),
+            const SizedBox(height: 8),
+            _TaskTimeSection(event: event),
           ],
           const SizedBox(height: 8),
           if (event.isFromFeed)
@@ -1242,6 +1456,11 @@ class EventDetailView extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
+              if (onReport != null && event.isTask)
+                TextButton(
+                  onPressed: onReport,
+                  child: const Text('Report'),
+                ),
               if (editable)
                 TextButton(
                   onPressed: onEdit,
@@ -1252,6 +1471,277 @@ class EventDetailView extends StatelessWidget {
                 onPressed: onClose,
                 child: const Text('Close'),
               ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TaskStatusTile extends StatelessWidget {
+  final PlannerEvent event;
+
+  const _TaskStatusTile({required this.event});
+
+  @override
+  Widget build(BuildContext context) {
+    Task? backing;
+    try {
+      for (final t in context.watch<TaskCubit>().state) {
+        if (t.calendarEventId == event.id ||
+            t.sourceEventId == event.id ||
+            t.id == event.taskId) {
+          backing = t;
+          break;
+        }
+      }
+    } catch (_) {}
+    final done = backing?.done ?? event.done;
+    final failed = backing?.failed ?? event.failed;
+    final label = done
+        ? 'Completed'
+        : failed
+            ? 'Failed'
+            : 'Not done';
+    return Row(
+      children: [
+        EventTaskCheckbox(event: event),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            label,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: failed
+                      ? Theme.of(context).colorScheme.error
+                      : null,
+                  fontWeight:
+                      done || failed ? FontWeight.w600 : null,
+                ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TaskTimeSection extends StatelessWidget {
+  final PlannerEvent event;
+
+  const _TaskTimeSection({required this.event});
+
+  @override
+  Widget build(BuildContext context) {
+    Task? task;
+    try {
+      for (final t in context.watch<TaskCubit>().state) {
+        if (t.calendarEventId == event.id ||
+            t.sourceEventId == event.id ||
+            t.id == event.taskId) {
+          task = t;
+          break;
+        }
+      }
+    } catch (_) {}
+    if (task == null) {
+      if (event.allDay) return const SizedBox.shrink();
+      return _TimeReportSection(event: event);
+    }
+    final theme = Theme.of(context);
+    final timeFormatter = DateFormat('h:mm a');
+    final plannedStart = task.plannedStart ?? event.start;
+    final plannedEnd = task.plannedEnd ?? event.end;
+    final plannedMin = plannedEnd.isAfter(plannedStart)
+        ? plannedEnd.difference(plannedStart).inMinutes
+        : 0;
+    final reported = task.reportedDuration;
+    final lines = <String>[
+      'Planned ${timeFormatter.format(plannedStart)} – '
+          '${timeFormatter.format(plannedEnd)} (${plannedMin}m)',
+      if (task.isTracking && task.timerStartedAt != null)
+        'Recording since ${timeFormatter.format(task.timerStartedAt!)}',
+      if (reported != null &&
+          task.actualStart != null &&
+          task.actualEnd != null)
+        'Reported ${timeFormatter.format(task.actualStart!)} – '
+            '${timeFormatter.format(task.actualEnd!)} (${reported.inMinutes}m)',
+      if (task.failed) 'Marked as failed',
+    ];
+    final taskId = task.id;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.dividerColor),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Time tracking', style: theme.textTheme.labelLarge),
+          const SizedBox(height: 4),
+          for (final line in lines)
+            Text(
+              line,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: line.startsWith('Marked as failed')
+                    ? theme.colorScheme.error
+                    : null,
+                fontWeight: line.startsWith('Recording') ||
+                        line.startsWith('Marked as failed')
+                    ? FontWeight.w600
+                    : null,
+              ),
+            ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              if (task.isTracking)
+                FilledButton.icon(
+                  onPressed: () => stopTaskAndFinish(context, taskId),
+                  icon: const Icon(Icons.stop, size: 16),
+                  label: const Text('Stop'),
+                )
+              else
+                OutlinedButton.icon(
+                  onPressed: task.done
+                      ? null
+                      : () {
+                          try {
+                            context
+                                .read<TaskCubit>()
+                                .startTracking(taskId);
+                          } catch (_) {}
+                        },
+                  icon: const Icon(Icons.play_arrow, size: 16),
+                  label: const Text('Start'),
+                ),
+              OutlinedButton(
+                onPressed: () {
+                  try {
+                    TaskEventLink.setTaskFailed(
+                      context.read<TaskCubit>(),
+                      context.read<CalendarCubit>(),
+                      taskId,
+                      !task!.failed,
+                    );
+                  } catch (_) {}
+                },
+                style: OutlinedButton.styleFrom(
+                  foregroundColor:
+                      task.failed ? null : theme.colorScheme.error,
+                ),
+                child: Text(task.failed ? 'Unfail' : 'Mark failed'),
+              ),
+              TextButton(
+                onPressed: () =>
+                    showFollowUpScheduler(context, taskId: taskId),
+                child: const Text('Follow-up'),
+              ),
+              if (task.hasReported && !task.isTracking)
+                TextButton(
+                  onPressed: () {
+                    try {
+                      context.read<TaskCubit>().clearReported(taskId);
+                    } catch (_) {}
+                  },
+                  child: const Text('Clear reported'),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TimeReportSection extends StatelessWidget {
+  final PlannerEvent event;
+
+  const _TimeReportSection({required this.event});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final timeFormatter = DateFormat('h:mm a');
+    final plannedMin = event.plannedDuration.inMinutes;
+    final reported = event.reportedDuration;
+    final lines = <String>[
+      'Planned ${timeFormatter.format(event.start)} – '
+          '${timeFormatter.format(event.end)} (${plannedMin}m)',
+      if (event.isTracking && event.timerStartedAt != null)
+        'Recording since ${timeFormatter.format(event.timerStartedAt!)}',
+      if (reported != null &&
+          event.actualStart != null &&
+          event.actualEnd != null)
+        'Reported ${timeFormatter.format(event.actualStart!)} – '
+            '${timeFormatter.format(event.actualEnd!)} (${reported.inMinutes}m)',
+      if (event.failed) 'Marked as failed',
+    ];
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.dividerColor),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Time tracking', style: theme.textTheme.labelLarge),
+          const SizedBox(height: 4),
+          for (final line in lines)
+            Text(
+              line,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: line.startsWith('Marked as failed')
+                    ? theme.colorScheme.error
+                    : null,
+                fontWeight: line.startsWith('Recording') ||
+                        line.startsWith('Marked as failed')
+                    ? FontWeight.w600
+                    : null,
+              ),
+            ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              if (event.isTracking)
+                FilledButton.icon(
+                  onPressed: () => context
+                      .read<CalendarCubit>()
+                      .stopTracking(event.id),
+                  icon: const Icon(Icons.stop, size: 16),
+                  label: const Text('Stop'),
+                )
+              else
+                OutlinedButton.icon(
+                  onPressed: () => context
+                      .read<CalendarCubit>()
+                      .startTracking(event.id),
+                  icon: const Icon(Icons.play_arrow, size: 16),
+                  label: const Text('Start'),
+                ),
+              OutlinedButton(
+                onPressed: () => context
+                    .read<CalendarCubit>()
+                    .setFailed(event.id, !event.failed),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: event.failed
+                      ? null
+                      : theme.colorScheme.error,
+                ),
+                child: Text(event.failed ? 'Unfail' : 'Mark failed'),
+              ),
+              if (event.hasReported && !event.isTracking)
+                TextButton(
+                  onPressed: () => context
+                      .read<CalendarCubit>()
+                      .clearReported(event.id),
+                  child: const Text('Clear reported'),
+                ),
             ],
           ),
         ],

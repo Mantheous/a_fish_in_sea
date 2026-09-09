@@ -86,6 +86,7 @@ from google_calendar import (
     google_redirect_uri,
     google_status,
     list_calendars,
+    list_contacts,
     list_events,
     update_event,
 )
@@ -1033,6 +1034,23 @@ def google_calendars_route():
         return jsonify({'calendars': list_calendars(token)})
     except GoogleAuthError as e:
         return jsonify({'error': str(e)}), 502
+
+
+@app.route('/api/google/contacts', methods=['GET'])
+def google_contacts_route():
+    uid, err = _user_id_from_request()
+    if err:
+        return err
+    try:
+        token = get_valid_access_token()
+        return jsonify({'contacts': list_contacts(token)})
+    except GoogleAuthError as e:
+        status = 502
+        payload = {'error': str(e)}
+        if e.status in (401, 403):
+            status = e.status
+            payload['needsReconnect'] = True
+        return jsonify(payload), status
 
 
 @app.route('/api/google/events', methods=['GET'])

@@ -1,11 +1,14 @@
 import 'package:a_fish_in_sea/common/undo/undo_bar.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/view/bank_connection_card.dart';
-import 'package:a_fish_in_sea/navigation/view/navigation_bar.dart';
+import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/view/feed_manager.dart';
+import 'package:a_fish_in_sea/reporting/bloc/tracking_cubit.dart';
+import 'package:a_fish_in_sea/reporting/service/location_service.dart';
+import 'package:a_fish_in_sea/reporting/view/places_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
@@ -36,7 +39,7 @@ class _SettingsPageState extends State<SettingsPage> {
         title: const Text('Settings'),
         actions: const [UndoRedoActions()],
       ),
-      bottomNavigationBar: const NavBar(),
+      drawer: const AppDrawer(),
       body: ListView(
         padding: const EdgeInsets.all(12),
         children: const [
@@ -78,6 +81,12 @@ class _SettingsPageState extends State<SettingsPage> {
                 _SyncServerTile(),
               ],
             ),
+          ),
+          _SettingsSection(
+            title: 'Location reporting',
+            subtitle: 'Record your path through the day to auto-report '
+                'events and see on-task stats. Mobile only.',
+            child: _LocationTrackingSection(),
           ),
           _SettingsSection(
             title: 'Bank connection',
@@ -415,6 +424,103 @@ class _SyncServerTile extends StatelessWidget {
               Navigator.of(dialogContext).pop();
             },
             child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LocationTrackingSection extends StatelessWidget {
+  const _LocationTrackingSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = context.watch<SettingsCubit>().state;
+    final recording = context.watch<TrackingCubit>().state.isRecording;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Location tracking'),
+          subtitle: Text(
+            settings.trackingEnabled
+                ? 'Allowed — start a day from Home.'
+                : 'Off — no location is recorded.',
+          ),
+          value: settings.trackingEnabled,
+          onChanged: (value) async {
+            final settingsCubit = context.read<SettingsCubit>();
+            final trackingCubit = context.read<TrackingCubit>();
+            settingsCubit.setTrackingEnabled(value);
+            if (!value) {
+              LocationService.stopForegroundSampling();
+              await LocationService.stopBackground();
+              trackingCubit.stopRecording();
+            }
+          },
+        ),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.timer_outlined),
+          title: const Text('Check interval'),
+          subtitle: Text(
+            'GPS fix every ${settings.trackingIntervalMinutes} min while recording',
+          ),
+          trailing: const Icon(Icons.edit_outlined),
+          onTap:
+              settings.trackingEnabled ? () => _editInterval(context) : null,
+        ),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.place_outlined),
+          title: const Text('Saved places'),
+          subtitle: const Text('Home, work, library… used for auto-report'),
+          trailing: const Icon(Icons.edit_outlined),
+          onTap: () => showPlacesSheet(context),
+        ),
+        if (recording)
+          Text(
+            'Recording now — turning tracking off stops it.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.error,
+                ),
+          ),
+        if (!LocationService.supported)
+          Text(
+            'Location recording works on Android and iOS only.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+      ],
+    );
+  }
+
+  void _editInterval(BuildContext context) {
+    final settingsCubit = context.read<SettingsCubit>();
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Check interval'),
+        content: Wrap(
+          spacing: 8,
+          children: [
+            for (final choice in SettingsCubit.trackingIntervalChoices)
+              ChoiceChip(
+                label: Text('$choice min'),
+                selected:
+                    settingsCubit.state.trackingIntervalMinutes == choice,
+                onSelected: (_) {
+                  settingsCubit.setTrackingIntervalMinutes(choice);
+                  Navigator.of(dialogContext).pop();
+                },
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
           ),
         ],
       ),

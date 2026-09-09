@@ -28,6 +28,7 @@ class TaskEventLink {
       done: updated.done,
       completedAt: updated.completedAt,
     );
+    if (updated.done) tasks.setFailedForEvent(eventId, false);
   }
 
   /// Toggles a task's completion and mirrors it onto its event, if any.
@@ -47,6 +48,38 @@ class TaskEventLink {
     final event = calendar.byId(eventId);
     if (event == null || !event.isTask) return;
     if (event.done == updated.done &&
+        event.completedAt == updated.completedAt &&
+        event.failed == updated.failed) {
+      return;
+    }
+    calendar.updateEvent(
+      event.copyWith(
+        done: updated.done,
+        completedAt: updated.completedAt,
+        clearCompletedAt: !updated.done,
+        failed: updated.failed,
+      ),
+    );
+  }
+
+  static void setTaskFailed(
+    TaskCubit tasks,
+    CalendarCubit calendar,
+    String taskId,
+    bool failed,
+  ) {
+    final task = tasks.byId(taskId);
+    if (task == null) return;
+    tasks.setFailed(taskId, failed);
+    final updated = tasks.byId(taskId);
+    if (updated == null) return;
+    final eventId =
+        updated.calendarEventId ?? updated.sourceEventId;
+    if (eventId == null) return;
+    final event = calendar.byId(eventId);
+    if (event == null || !event.isTask) return;
+    if (event.failed == failed &&
+        event.done == updated.done &&
         event.completedAt == updated.completedAt) {
       return;
     }
@@ -55,8 +88,28 @@ class TaskEventLink {
         done: updated.done,
         completedAt: updated.completedAt,
         clearCompletedAt: !updated.done,
+        failed: failed,
       ),
     );
+  }
+
+  static void setEventFailed(
+    CalendarCubit calendar,
+    TaskCubit tasks,
+    String eventId,
+    bool failed,
+  ) {
+    final event = calendar.byId(eventId);
+    if (event == null || !event.isTask) return;
+    calendar.setFailed(eventId, failed);
+    tasks.setFailedForEvent(eventId, failed);
+    if (failed) {
+      tasks.setDoneForEvent(
+        eventId,
+        done: false,
+        completedAt: null,
+      );
+    }
   }
 
   /// Marks an event as a task, creating its backing task.

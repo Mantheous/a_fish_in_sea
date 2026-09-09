@@ -35,6 +35,7 @@ class Transaction extends Equatable {
   /// This is the *only* mutable field — set by the user during
   /// reconciliation.
   final String? assignedExpenseId;
+  final List<String> tagIds;
 
   const Transaction({
     required this.id,
@@ -45,6 +46,7 @@ class Transaction extends Equatable {
     this.category,
     this.pending = false,
     this.assignedExpenseId,
+    this.tagIds = const [],
   });
 
   /// Whether this transaction has been reconciled with an expense.
@@ -53,6 +55,7 @@ class Transaction extends Equatable {
   Transaction copyWith({
     String? assignedExpenseId,
     bool clearAssignment = false,
+    List<String>? tagIds,
   }) {
     return Transaction(
       id: id,
@@ -64,6 +67,7 @@ class Transaction extends Equatable {
       pending: pending,
       assignedExpenseId:
           clearAssignment ? null : (assignedExpenseId ?? this.assignedExpenseId),
+      tagIds: tagIds ?? this.tagIds,
     );
   }
 
@@ -98,7 +102,17 @@ class Transaction extends Equatable {
       category: json['category'] as String?,
       pending: json['pending'] as bool? ?? false,
       assignedExpenseId: json['assignedExpenseId'] as String?,
+      tagIds: _tagIdsFromJson(json['tagIds']),
     );
+  }
+
+  static List<String> _tagIdsFromJson(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <String>[];
+    for (final item in raw) {
+      if (item is String && item.isNotEmpty) out.add(item);
+    }
+    return out;
   }
 
   Map<String, dynamic> toJson() => {
@@ -110,6 +124,7 @@ class Transaction extends Equatable {
         'category': category,
         'pending': pending,
         'assignedExpenseId': assignedExpenseId,
+        'tagIds': tagIds,
       };
 
   @override
@@ -122,6 +137,7 @@ class Transaction extends Equatable {
         category,
         pending,
         assignedExpenseId,
+        tagIds,
       ];
 
   static DateTime _parseDate(String dateStr) {

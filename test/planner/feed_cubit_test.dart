@@ -4,6 +4,7 @@ import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/task_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
+import 'package:a_fish_in_sea/planner/model/task_assignee.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -316,6 +317,18 @@ void main() {
           )).called(1);
     });
 
+    test('google resync preserves local assignees', () async {
+      const assignees = [TaskAssignee(id: 'people/1', displayName: 'Amy')];
+      calendarCubit.addEvent(googleEvent().copyWith(assignees: assignees));
+      // Fresh from the server: Google never stores assignees.
+      stubSync([googleEvent()]);
+      await feedCubit.syncFeed(googleFeed.id);
+      expect(
+        calendarCubit.byId('gcal:gcal:cal1:ev1')?.assignees,
+        assignees,
+      );
+    });
+
     test('pushEventUpdate patches the instance for occurrences', () async {
       final instance = PlannerEvent(
         id: 'gcal:gcal:cal1:ev1_20260910T123000Z',
@@ -455,6 +468,49 @@ void main() {
             feedId: 'gcal:cal1',
             event: draft,
           )).called(1);
+    });
+
+    test('manually marked Google events keep isTask across resync',
+        () async {
+      final fresh = googleEvent();
+      stubSync([fresh]);
+      await feedCubit.syncFeed(googleFeed.id);
+      expect(calendarCubit.byId(fresh.id)?.isTask, isFalse);
+
+      // User edits the event and marks it as a task (event editor path).
+      final marked =
+          calendarCubit.byId(fresh.id)!.copyWith(isTask: true);
+      calendarCubit.updateEvent(marked);
+      taskCubit.ensureShadowForFeedEvent(marked);
+      expect(taskCubit.tasksForEventId(fresh.id), isNotEmpty);
+
+      // Next sync returns the same server event without the local flag.
+      stubSync([fresh]);
+      await feedCubit.syncFeed(googleFeed.id);
+
+      expect(calendarCubit.byId(fresh.id)?.isTask, isTrue);
+      expect(taskCubit.tasksForEventId(fresh.id), isNotEmpty);
+    });
+
+    test('shadow task heals a lost calendar flag on resync', () async {
+      final fresh = googleEvent();
+      stubSync([fresh]);
+      await feedCubit.syncFeed(googleFeed.id);
+
+      final marked =
+          calendarCubit.byId(fresh.id)!.copyWith(isTask: true);
+      calendarCubit.updateEvent(marked);
+      taskCubit.ensureShadowForFeedEvent(marked);
+
+      // Simulate the local-only flag getting lost (fresh storage /
+      // hydrate race) while the shadow task survives.
+      calendarCubit.updateEvent(fresh.copyWith(isTask: false));
+      expect(calendarCubit.byId(fresh.id)?.isTask, isFalse);
+
+      stubSync([fresh]);
+      await feedCubit.syncFeed(googleFeed.id);
+
+      expect(calendarCubit.byId(fresh.id)?.isTask, isTrue);
     });
 
     test('fetchSeriesMaster returns the master event', () async {

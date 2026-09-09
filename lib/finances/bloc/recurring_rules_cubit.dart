@@ -20,9 +20,14 @@ class RecurringRulesCubit extends HydratedCubit<List<RecurringRule>> {
   @override
   List<RecurringRule>? fromJson(Map<String, dynamic> json) {
     final list = json['rules'] as List<dynamic>?;
-    return list
-        ?.map((e) => RecurringRule.fromJson(e as Map<String, dynamic>))
-        .toList();
+    if (list == null) return null;
+    final out = <RecurringRule>[];
+    for (final item in list) {
+      try {
+        out.add(RecurringRule.fromJson(Map<String, dynamic>.from(item as Map)));
+      } catch (_) {}
+    }
+    return out;
   }
 
   @override

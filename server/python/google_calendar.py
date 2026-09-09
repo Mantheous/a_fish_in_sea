@@ -9,9 +9,10 @@ Cloud console — by default http://localhost:<port> on the host machine.
 The connection is stored globally (single-user personal server), so after
 connecting once, every app instance syncs via /api/google/events.
 
-NOTE: the OAuth scope is calendar.events (read + write). Tokens granted
-under an older read-only scope must be reconnected before writes work —
-write calls then fail with a 403 prompting the user to reconnect.
+NOTE: the OAuth scope is calendar.events (read + write) plus
+contacts.readonly (My Contacts for task assignees). Tokens granted
+under an older calendar-only scope must be reconnected before contacts
+work — People calls then fail with a 403 prompting the user to reconnect.
 """
 
 from __future__ import annotations
@@ -30,7 +31,10 @@ import requests
 GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 GOOGLE_CALENDAR_API = "https://www.googleapis.com/calendar/v3"
-GOOGLE_SCOPE = "https://www.googleapis.com/auth/calendar.events"
+GOOGLE_PEOPLE_API = "https://people.googleapis.com/v1"
+GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events"
+GOOGLE_CONTACTS_SCOPE = "https://www.googleapis.com/auth/contacts.readonly"
+GOOGLE_SCOPE = f"{GOOGLE_CALENDAR_SCOPE} {GOOGLE_CONTACTS_SCOPE}"
 
 _STORE_KEY = "default"  # single-user personal server: one shared connection
 _STORE_PATH = Path(__file__).parent / ".google_users.json"
@@ -110,6 +114,7 @@ def exchange_code(code: str, redirect_uri: str) -> None:
         )
     tokens = response.json()
     refresh_token = tokens.get("refresh_token")
+    granted_scopes = (tokens.get("scope") or GOOGLE_SCOPE).split()
     with _LOCK:
         users = _load_users()
         record = users.get(_STORE_KEY) or {}
@@ -124,6 +129,7 @@ def exchange_code(code: str, redirect_uri: str) -> None:
             "refresh_token": refresh_token,
             "access_token": tokens.get("access_token"),
             "expires_at": time.time() + float(tokens.get("expires_in", 3600)),
+            "scopes": granted_scopes,
         }
         _save_users(users)
 
@@ -167,9 +173,12 @@ def get_valid_access_token() -> str:
 def google_status() -> dict[str, Any]:
     with _LOCK:
         record = _load_users().get(_STORE_KEY)
+    scopes = (record or {}).get("scopes") or []
     return {
         "connected": bool(record and record.get("refresh_token")),
         "email": (record or {}).get("email"),
+        "contactsGranted": GOOGLE_CONTACTS_SCOPE in scopes,
+        "scopes": scopes,
     }
 
 
@@ -501,3 +510,84 @@ def get_event(
     if not isinstance(data, dict):
         return None
     return normalize_event(data)
+
+
+def _people_request(access_token: str, path: str, params: dict[str, Any]):
+    response = requests.get(
+        f"{GOOGLE_PEOPLE_API}{path}",
+        headers={"Authorization": f"Bearer {access_token}"},
+        params=params,
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise GoogleAuthError(
+            f"People API call failed ({response.status_code}): "
+            f"{response.text[:200]}",
+            status=response.status_code,
+        )
+    return response.json()
+
+
+def normalize_contact(person: dict[str, Any]) -> dict[str, Any] | None:
+    """Flatten one People person into the app's contact format."""
+    if not isinstance(person, dict):
+        return None
+    resource = person.get("resourceName")
+    display_name: str | None = None
+    for name in person.get("names") or []:
+        if not isinstance(name, dict):
+            continue
+        candidate = (name.get("displayName") or "").strip()
+        if candidate:
+            display_name = candidate
+            break
+    emails = [
+        e.get("value", "").strip()
+        for e in (person.get("emailAddresses") or [])
+        if isinstance(e, dict) and (e.get("value") or "").strip()
+    ]
+    if not display_name and emails:
+        display_name = emails[0]
+    if not display_name:
+        return None
+    photo_url: str | None = None
+    for photo in person.get("photos") or []:
+        if isinstance(photo, dict) and (photo.get("url") or "").strip():
+            photo_url = photo["url"].strip()
+            break
+    contact_id = resource or (emails[0] if emails else display_name)
+    if not contact_id:
+        return None
+    return {
+        "id": contact_id,
+        "displayName": display_name,
+        "email": emails[0] if emails else None,
+        "photoUrl": photo_url,
+    }
+
+
+def list_contacts(
+    access_token: str,
+    page_size: int = 200,
+) -> list[dict[str, Any]]:
+    """My Contacts only (people.connections.list), paged into a flat list."""
+    contacts: list[dict[str, Any]] = []
+    page_token: str | None = None
+    while True:
+        params: dict[str, Any] = {
+            "resourceName": "people/me",
+            "pageSize": max(1, min(page_size, 1000)),
+            "personFields": "names,emailAddresses,photos",
+            "sortOrder": "FIRST_NAME_ASCENDING",
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        data = _people_request(access_token, "/people/me/connections", params)
+        for person in data.get("connections", []):
+            normalized = normalize_contact(person)
+            if normalized is not None:
+                contacts.append(normalized)
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return contacts

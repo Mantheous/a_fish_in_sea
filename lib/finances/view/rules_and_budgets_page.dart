@@ -6,16 +6,16 @@ import 'package:a_fish_in_sea/finances/model/recurring_rule.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/view/budget_editor.dart';
 import 'package:a_fish_in_sea/finances/view/recurring_rule_editor.dart';
-import 'package:a_fish_in_sea/navigation/view/navigation_bar.dart';
+import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
 /// Management page with two tabs: Recurring Rules and Budget Templates.
 class RulesAndBudgetsPage extends StatelessWidget {
-  const RulesAndBudgetsPage({super.key, this.showBottomNav = true});
+  const RulesAndBudgetsPage({super.key, this.showDrawer = true});
 
-  final bool showBottomNav;
+  final bool showDrawer;
 
   static final _currFmt = NumberFormat.currency(symbol: '\$');
 
@@ -24,7 +24,7 @@ class RulesAndBudgetsPage extends StatelessWidget {
     return DefaultTabController(
       length: 2,
       child: Scaffold(
-        bottomNavigationBar: showBottomNav ? const NavBar() : null,
+        drawer: showDrawer ? const AppDrawer() : null,
         appBar: AppBar(
           title: const Text('Rules & Budgets'),
           bottom: const TabBar(tabs: [

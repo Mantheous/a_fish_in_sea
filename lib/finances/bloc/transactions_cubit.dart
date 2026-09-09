@@ -70,9 +70,15 @@ class TransactionsCubit extends HydratedCubit<List<Transaction>> {
 
   @override
   List<Transaction>? fromJson(Map<String, dynamic> json) {
-    return (json['transactions'] as List<dynamic>?)
-        ?.map((e) => Transaction.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final list = json['transactions'] as List<dynamic>?;
+    if (list == null) return null;
+    final out = <Transaction>[];
+    for (final item in list) {
+      try {
+        out.add(Transaction.fromJson(Map<String, dynamic>.from(item as Map)));
+      } catch (_) {}
+    }
+    return out;
   }
 
   @override

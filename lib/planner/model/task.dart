@@ -1,5 +1,7 @@
 import 'package:equatable/equatable.dart';
 
+import 'task_assignee.dart';
+
 class Task extends Equatable {
   final String id;
   final String title;
@@ -11,6 +13,14 @@ class Task extends Equatable {
   final String? classId;
   final String? classLabel;
   final String? calendarEventId;
+  final DateTime? plannedStart;
+  final DateTime? plannedEnd;
+  final DateTime? actualStart;
+  final DateTime? actualEnd;
+  final DateTime? timerStartedAt;
+  final bool failed;
+  final List<TaskAssignee> assignees;
+  final List<String> tagIds;
 
   const Task({
     required this.id,
@@ -23,11 +33,39 @@ class Task extends Equatable {
     this.classId,
     this.classLabel,
     this.calendarEventId,
+    this.plannedStart,
+    this.plannedEnd,
+    this.actualStart,
+    this.actualEnd,
+    this.timerStartedAt,
+    this.failed = false,
+    this.assignees = const [],
+    this.tagIds = const [],
   });
 
   bool get isImported => sourceEventId != null;
 
   bool get hasCalendarEvent => calendarEventId != null;
+
+  bool get isTracking => timerStartedAt != null;
+
+  bool get hasReported => actualStart != null && actualEnd != null;
+
+  bool get hasPlanned => plannedStart != null && plannedEnd != null;
+
+  Duration? get reportedDuration {
+    final s = actualStart;
+    final e = actualEnd;
+    if (s == null || e == null || !e.isAfter(s)) return null;
+    return e.difference(s);
+  }
+
+  Duration? get plannedDuration {
+    final s = plannedStart;
+    final e = plannedEnd;
+    if (s == null || e == null || !e.isAfter(s)) return null;
+    return e.difference(s);
+  }
 
   bool get isOverdue {
     if (done || due == null) return false;
@@ -54,6 +92,19 @@ class Task extends Equatable {
     bool clearCompletedAt = false,
     String? calendarEventId,
     bool clearCalendarEventId = false,
+    DateTime? plannedStart,
+    bool clearPlannedStart = false,
+    DateTime? plannedEnd,
+    bool clearPlannedEnd = false,
+    DateTime? actualStart,
+    bool clearActualStart = false,
+    DateTime? actualEnd,
+    bool clearActualEnd = false,
+    DateTime? timerStartedAt,
+    bool clearTimerStartedAt = false,
+    bool? failed,
+    List<TaskAssignee>? assignees,
+    List<String>? tagIds,
   }) =>
       Task(
         id: id,
@@ -68,6 +119,18 @@ class Task extends Equatable {
         calendarEventId: clearCalendarEventId
             ? null
             : (calendarEventId ?? this.calendarEventId),
+        plannedStart:
+            clearPlannedStart ? null : (plannedStart ?? this.plannedStart),
+        plannedEnd: clearPlannedEnd ? null : (plannedEnd ?? this.plannedEnd),
+        actualStart:
+            clearActualStart ? null : (actualStart ?? this.actualStart),
+        actualEnd: clearActualEnd ? null : (actualEnd ?? this.actualEnd),
+        timerStartedAt: clearTimerStartedAt
+            ? null
+            : (timerStartedAt ?? this.timerStartedAt),
+        failed: failed ?? this.failed,
+        assignees: assignees ?? this.assignees,
+        tagIds: tagIds ?? this.tagIds,
       );
 
   factory Task.fromJson(Map<String, dynamic> json) => Task(
@@ -83,7 +146,46 @@ class Task extends Equatable {
         classId: json['classId'] as String?,
         classLabel: json['classLabel'] as String?,
         calendarEventId: json['calendarEventId'] as String?,
+        plannedStart: json['plannedStart'] == null
+            ? null
+            : DateTime.tryParse(json['plannedStart'] as String),
+        plannedEnd: json['plannedEnd'] == null
+            ? null
+            : DateTime.tryParse(json['plannedEnd'] as String),
+        actualStart: json['actualStart'] == null
+            ? null
+            : DateTime.tryParse(json['actualStart'] as String),
+        actualEnd: json['actualEnd'] == null
+            ? null
+            : DateTime.tryParse(json['actualEnd'] as String),
+        timerStartedAt: json['timerStartedAt'] == null
+            ? null
+            : DateTime.tryParse(json['timerStartedAt'] as String),
+        failed: json['failed'] as bool? ?? false,
+        assignees: _assigneesFromJson(json['assignees']),
+        tagIds: _tagIdsFromJson(json['tagIds']),
       );
+
+  static List<String> _tagIdsFromJson(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <String>[];
+    for (final item in raw) {
+      if (item is String && item.isNotEmpty) out.add(item);
+    }
+    return out;
+  }
+
+  static List<TaskAssignee> _assigneesFromJson(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <TaskAssignee>[];
+    for (final item in raw) {
+      if (item is! Map) continue;
+      try {
+        out.add(TaskAssignee.fromJson(Map<String, dynamic>.from(item)));
+      } catch (_) {}
+    }
+    return out;
+  }
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -96,6 +198,14 @@ class Task extends Equatable {
         'classId': classId,
         'classLabel': classLabel,
         'calendarEventId': calendarEventId,
+        'plannedStart': plannedStart?.toIso8601String(),
+        'plannedEnd': plannedEnd?.toIso8601String(),
+        'actualStart': actualStart?.toIso8601String(),
+        'actualEnd': actualEnd?.toIso8601String(),
+        'timerStartedAt': timerStartedAt?.toIso8601String(),
+        'failed': failed,
+        'assignees': assignees.map((a) => a.toJson()).toList(),
+        'tagIds': tagIds,
       };
 
   @override
@@ -110,5 +220,13 @@ class Task extends Equatable {
         classId,
         classLabel,
         calendarEventId,
+        plannedStart,
+        plannedEnd,
+        actualStart,
+        actualEnd,
+        timerStartedAt,
+        failed,
+        assignees,
+        tagIds,
       ];
 }
