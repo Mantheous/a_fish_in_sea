@@ -1,5 +1,5 @@
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
-import 'package:a_fish_in_sea/planner/model/task.dart';
+import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/planner/service/calendar_report.dart';
 import 'package:a_fish_in_sea/reporting/model/reported_entry.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -36,7 +36,7 @@ void main() {
       );
       final blocks = buildReportBlocks(
         visibleEvents: [base],
-        tasks: const [],
+        nodes: const [],
         reportsByDay: const {},
       );
       expect(blocks, hasLength(1));
@@ -54,7 +54,7 @@ void main() {
       );
       final blocks = buildReportBlocks(
         visibleEvents: [base],
-        tasks: const [],
+        nodes: const [],
         reportsByDay: const {},
         now: now,
       );
@@ -64,21 +64,20 @@ void main() {
       expect(blocks.single.end, now);
     });
 
-    test('linked task timer stands in for its event', () {
+    test('linked node timer stands in for its event', () {
       final base = event('e1', DateTime(2026, 9, 4, 9));
-      const task = Task(
-        id: 'task:e1',
-        title: 'Task e1',
+      final node = Node(
+        id: 'node:e1',
+        title: 'Node e1',
+        createdAt: DateTime(2026, 9, 4),
         calendarEventId: 'e1',
-        actualStart: null,
-        actualEnd: null,
       );
-      final tracking = task.copyWith(
+      final tracking = node.copyWith(
         timerStartedAt: DateTime(2026, 9, 4, 9, 10),
       );
       final live = buildReportBlocks(
         visibleEvents: [base],
-        tasks: [tracking],
+        nodes: [tracking],
         reportsByDay: const {},
         now: DateTime(2026, 9, 4, 9, 40),
       );
@@ -91,7 +90,7 @@ void main() {
       );
       final timer = buildReportBlocks(
         visibleEvents: [base],
-        tasks: [logged],
+        nodes: [logged],
         reportsByDay: const {},
       );
       expect(timer.single.kind, ReportBlockKind.timer);
@@ -108,7 +107,7 @@ void main() {
       );
       final blocks = buildReportBlocks(
         visibleEvents: [base],
-        tasks: const [],
+        nodes: const [],
         reportsByDay: {'2026-09-04': [entry]},
       );
       expect(blocks, hasLength(1));
@@ -129,7 +128,7 @@ void main() {
       );
       final blocks = buildReportBlocks(
         visibleEvents: [base],
-        tasks: const [],
+        nodes: const [],
         reportsByDay: {'2026-09-04': [entry]},
       );
       expect(blocks, hasLength(1));
@@ -148,7 +147,7 @@ void main() {
       );
       final blocks = buildReportBlocks(
         visibleEvents: [planned],
-        tasks: const [],
+        nodes: const [],
         reportsByDay: {'2026-09-04': [auto]},
       );
       expect(blocks, isEmpty);
@@ -162,7 +161,7 @@ void main() {
       );
       final blocks = buildReportBlocks(
         visibleEvents: const [],
-        tasks: const [],
+        nodes: const [],
         reportsByDay: {'2026-09-04': [extra]},
       );
       expect(blocks, hasLength(1));
@@ -181,7 +180,7 @@ void main() {
             allDay: true,
           ),
         ],
-        tasks: const [],
+        nodes: const [],
         reportsByDay: const {},
       );
       expect(blocks, isEmpty);

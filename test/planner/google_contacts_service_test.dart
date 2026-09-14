@@ -10,7 +10,9 @@ GoogleContactsService serviceWith(Map<String, http.Response> routes) {
     baseUrl: () => '',
     userId: () => 'u',
     client: MockClient((request) async {
-      return routes[request.url.path] ?? http.Response('Not found', 404);
+      // Strip the server mount prefix (/fish); see the calendar test.
+      final path = request.url.path.replaceFirst(RegExp(r'^/fish'), '');
+      return routes[path] ?? http.Response('Not found', 404);
     }),
   );
 }

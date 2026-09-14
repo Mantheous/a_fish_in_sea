@@ -1,7 +1,7 @@
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
-import 'package:a_fish_in_sea/planner/bloc/task_cubit.dart';
+import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/model/task_assignee.dart';
@@ -53,7 +53,7 @@ void main() {
   group('FeedCubit sync', () {
     late FeedCubit feedCubit;
     late CalendarCubit calendarCubit;
-    late TaskCubit taskCubit;
+    late NodeCubit nodeCubit;
     late MockClient client;
     late MockGoogleService googleService;
 
@@ -65,10 +65,10 @@ void main() {
       when(() => client.get(any()))
           .thenAnswer((_) async => http.Response(ics, 200));
       calendarCubit = CalendarCubit();
-      taskCubit = TaskCubit();
+      nodeCubit = NodeCubit();
       feedCubit = FeedCubit(
         calendarCubit: calendarCubit,
-        taskCubit: taskCubit,
+        nodeCubit: nodeCubit,
         icalService: IcalService(client: client),
         googleService: googleService,
         proxyBase: () => 'http://localhost:8000',
@@ -80,8 +80,8 @@ void main() {
       await feedCubit.syncAll();
       expect(calendarCubit.state.length, 1);
       expect(calendarCubit.state.single.subject, 'Assignment A1');
-      expect(taskCubit.state.length, 1);
-      expect(taskCubit.state.single.sourceEventId, 'hw:f1:a1');
+      expect(nodeCubit.state.length, 1);
+      expect(nodeCubit.state.single.sourceEventId, 'hw:f1:a1');
       expect(feedCubit.state.single.lastSyncAt, isNotNull);
       expect(feedCubit.state.single.lastError, isNull);
     });
@@ -99,7 +99,7 @@ void main() {
       feedCubit.addFeed(feed.copyWith(createTasks: false));
       await feedCubit.syncAll();
       expect(calendarCubit.state.length, 1);
-      expect(taskCubit.state, isEmpty);
+      expect(nodeCubit.state, isEmpty);
     });
 
     test('removeFeed cascades and one undo restores everything', () async {
@@ -108,15 +108,15 @@ void main() {
       feedCubit.removeFeed('f1');
       expect(feedCubit.state, isEmpty);
       expect(calendarCubit.state, isEmpty);
-      expect(taskCubit.state, isEmpty);
+      expect(nodeCubit.state, isEmpty);
 
       final undoCubit = UndoCubit.instance!;
       expect(undoCubit.canUndo, isTrue);
       undoCubit.undo();
       expect(feedCubit.state.single.id, 'f1');
       expect(calendarCubit.state.length, 1);
-      expect(taskCubit.state.length, 1);
-      expect(taskCubit.state.single.title, 'Assignment A1');
+      expect(nodeCubit.state.length, 1);
+      expect(nodeCubit.state.single.title, 'Assignment A1');
     });
 
     test('google feeds sync via the google service', () async {
@@ -146,7 +146,7 @@ void main() {
       await feedCubit.syncAll();
 
       expect(calendarCubit.state.single.subject, 'Dentist');
-      expect(taskCubit.state, isEmpty);
+      expect(nodeCubit.state, isEmpty);
       expect(feedCubit.state.single.lastSyncAt, isNotNull);
       expect(feedCubit.state.single.lastError, isNull);
       verify(() => googleService.fetchEvents(
@@ -185,20 +185,20 @@ void main() {
       expect(calendarCubit.state.length, 1);
       expect(feedCubit.visibleEvents(calendarCubit.state), isEmpty);
       expect(
-        feedCubit.visibleTasks(taskCubit.state).map((t) => t.id),
+        feedCubit.visibleNodes(nodeCubit.state).map((n) => n.id),
         isEmpty,
       );
 
       feedCubit.updateFeed(feed.copyWith(enabled: true));
       expect(feedCubit.visibleEvents(calendarCubit.state).length, 1);
-      expect(feedCubit.visibleTasks(taskCubit.state).length, 1);
+      expect(feedCubit.visibleNodes(nodeCubit.state).length, 1);
     });
   });
 
   group('FeedCubit Google push', () {
     late FeedCubit feedCubit;
     late CalendarCubit calendarCubit;
-    late TaskCubit taskCubit;
+    late NodeCubit nodeCubit;
     late MockGoogleService googleService;
 
     const googleFeed = Feed(
@@ -223,7 +223,7 @@ void main() {
       UndoCubit();
       googleService = MockGoogleService();
       calendarCubit = CalendarCubit();
-      taskCubit = TaskCubit();
+      nodeCubit = NodeCubit();
       final mockClient = MockClient();
       registerFallbackValue(Uri.parse('https://example.com/feed.ics'));
       registerFallbackValue(PlannerEvent(
@@ -236,7 +236,7 @@ void main() {
           .thenAnswer((_) async => http.Response(ics, 200));
       feedCubit = FeedCubit(
         calendarCubit: calendarCubit,
-        taskCubit: taskCubit,
+        nodeCubit: nodeCubit,
         icalService: IcalService(client: mockClient),
         googleService: googleService,
         proxyBase: () => 'http://localhost:8000',
@@ -481,18 +481,18 @@ void main() {
       final marked =
           calendarCubit.byId(fresh.id)!.copyWith(isTask: true);
       calendarCubit.updateEvent(marked);
-      taskCubit.ensureShadowForFeedEvent(marked);
-      expect(taskCubit.tasksForEventId(fresh.id), isNotEmpty);
+      nodeCubit.ensureNodeForFeedEvent(marked);
+      expect(nodeCubit.nodesForEventId(fresh.id), isNotEmpty);
 
       // Next sync returns the same server event without the local flag.
       stubSync([fresh]);
       await feedCubit.syncFeed(googleFeed.id);
 
       expect(calendarCubit.byId(fresh.id)?.isTask, isTrue);
-      expect(taskCubit.tasksForEventId(fresh.id), isNotEmpty);
+      expect(nodeCubit.nodesForEventId(fresh.id), isNotEmpty);
     });
 
-    test('shadow task heals a lost calendar flag on resync', () async {
+    test('backing node heals a lost calendar flag on resync', () async {
       final fresh = googleEvent();
       stubSync([fresh]);
       await feedCubit.syncFeed(googleFeed.id);
@@ -500,10 +500,10 @@ void main() {
       final marked =
           calendarCubit.byId(fresh.id)!.copyWith(isTask: true);
       calendarCubit.updateEvent(marked);
-      taskCubit.ensureShadowForFeedEvent(marked);
+      nodeCubit.ensureNodeForFeedEvent(marked);
 
       // Simulate the local-only flag getting lost (fresh storage /
-      // hydrate race) while the shadow task survives.
+      // hydrate race) while the backing node survives.
       calendarCubit.updateEvent(fresh.copyWith(isTask: false));
       expect(calendarCubit.byId(fresh.id)?.isTask, isFalse);
 

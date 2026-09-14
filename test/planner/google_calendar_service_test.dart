@@ -11,7 +11,10 @@ GoogleCalendarService serviceWith(Map<String, http.Response> routes) {
     baseUrl: () => '',
     userId: () => 'u',
     client: MockClient((request) async {
-      return routes[request.url.path] ??
+      // The live default base carries the server's mount prefix
+      // (/fish); strip it so route tables stay unprefixed.
+      final path = request.url.path.replaceFirst(RegExp(r'^/fish'), '');
+      return routes[path] ??
           http.Response('Not found', 404);
     }),
   );
@@ -161,7 +164,7 @@ void main() {
         userId: () => 'u',
         client: MockClient((request) async {
           expect(request.method, 'PATCH');
-          expect(request.url.path, '/api/google/events');
+          expect(request.url.path, '/fish/api/google/events');
           capturedBody = request.body;
           return http.Response(
             jsonEncode({'event': eventJson(id: 'e1')}),

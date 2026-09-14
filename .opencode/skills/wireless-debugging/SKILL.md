@@ -9,14 +9,32 @@ description: >
 
 # Wireless debugging (Flutter + adb)
 
-## Environment quirks (this machine)
+## Reconnect first (pairing persists)
 
-- `flutter` is NOT on PATH: use `~/flutter/bin/flutter`.
-- `adb` is NOT on PATH: use `~/Android/Sdk/platform-tools/adb`
-  (or export it into PATH per command).
-- `flutter doctor` reports no JDK until `JAVA_HOME` points at a JDK 17, e.g.
-  `export JAVA_HOME=~/tooling/jdk-17.0.11+9`. `flutter run` on Android needs it.
-- Tailscale IPs (`100.x`) work fine for both pairing and connecting.
+Pairing is one-time per PC — WiFi changes, reboots of the PC, and
+`adb` server restarts do NOT require re-pairing, only reconnecting.
+Always try this before asking for a pairing code:
+
+1. `adb devices -l` — if the phone is listed as `device`, you're done.
+   Verify with `flutter devices`. Do NOT `kill-server`, do NOT ask for
+   a pairing code.
+2. If the list is empty/`offline`: run `adb reconnect`, then
+   `adb devices -l` again.
+3. If still empty: `adb connect <last-IP>:<port>` using the last known
+   connect address. Known device: `mantheous-a16` (SM-A166U1) at
+   Tailscale IP `100.126.75.1` — resolve with `tailscale status`
+   (name `mantheous-a16`), port from the user (was `37005`; the
+   connect port rotates, so confirm if it refuses). Tailscale IPs are
+   stable across WiFi changes, so retry the same address first.
+   Then `adb devices -l`.
+4. If the port is unknown/stale: ask the user for the MAIN Wireless
+   debugging IP:port from Developer options → Wireless debugging
+   (NOT "Pair device with pairing code"), then
+   `adb connect <main-IP>:<main-port>`.
+5. Only fall through to Pairing below if `adb connect` rejects with an
+   auth/pairing error. NOTE: `adb kill-server` clears all live
+   connections — use it only as a last resort before re-pairing, and
+   always follow it with an explicit `adb connect`.
 
 ## Pairing flow
 
@@ -46,7 +64,7 @@ description: >
   (5–15 min with heavy plugins). Reloads after that are ~1s.
 - NEVER launch it with `&`/`nohup` under a tool call: the tool timeout kills
   the whole process group, including the "backgrounded" build. Use tmux:
-  `tmux new-session -d -s fish -c <repo> '<env exports>; ~/flutter/bin/flutter run -d <id>'`
+  `tmux new-session -d -s fish -c <repo> 'flutter run -d <id>'`
   Poll with `tmux capture-pane -p -t fish | tail`. The user attaches
   (`tmux attach -t fish`) for interactive hot-reload keys (`r`/`R`/`q`).
 

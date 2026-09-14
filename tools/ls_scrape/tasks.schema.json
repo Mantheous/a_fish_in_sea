@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LearningSuite tasks.json",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["title", "type", "source", "source_url", "description", "confidence", "verbatim", "sourceEventId"],
+    "properties": {
+      "title": {"type": "string", "minLength": 3, "maxLength": 140},
+      "due": {"type": ["string", "null"], "description": "ISO-8601 datetime or null"},
+      "type": {"enum": ["assignment", "exam", "reading", "expectation", "admin"]},
+      "source": {"enum": ["assignments", "schedule", "syllabus", "content", "announcement", "home", "grades"]},
+      "source_url": {"type": "string"},
+      "description": {"type": "string", "maxLength": 400},
+      "confidence": {"enum": ["high", "medium", "low"]},
+      "verbatim": {"type": "string", "maxLength": 500},
+      "sourceEventId": {"type": "string", "pattern": "^ls:[^:]+:[0-9a-f]{16}$"}
+    }
+  }
+}

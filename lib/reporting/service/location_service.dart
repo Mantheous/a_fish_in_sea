@@ -6,6 +6,7 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -59,11 +60,25 @@ Future<List<TrackedPoint>> takePendingPoints() async {
     final file = await _pendingFile();
     if (!await file.exists()) return const [];
     final raw = await file.readAsString();
-    await file.delete();
-    final list = jsonDecode(raw) as List<dynamic>;
-    return list
-        .map((e) => TrackedPoint.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) {
+      try {
+        await file.delete();
+      } catch (_) {}
+      return const [];
+    }
+    final out = <TrackedPoint>[];
+    for (final e in decoded) {
+      try {
+        if (e is Map) {
+          out.add(TrackedPoint.fromJson(Map<String, dynamic>.from(e)));
+        }
+      } catch (_) {}
+    }
+    try {
+      await file.delete();
+    } catch (_) {}
+    return out;
   } catch (_) {
     return const [];
   }
@@ -92,7 +107,6 @@ Future<TrackedPoint?> samplePosition() async {
 }
 
 Future<bool> ensureLocationPermission() async {
-  if (kIsWeb) return false;
   try {
     var permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
@@ -141,7 +155,29 @@ Future<bool> trackingServiceIosBackground(ServiceInstance service) async {
 class LocationService {
   LocationService._();
 
-  static bool get supported => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+  /// Foreground GPS via geolocator works on mobile, desktop (macOS/Windows)
+  /// and web. Linux has no geolocator implementation, so it stays manual-only.
+  static bool get supported {
+    if (kIsWeb) return true;
+    try {
+      if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS || Platform.isWindows) {
+        return true;
+      }
+    } catch (_) {
+      return true;
+    }
+    return false;
+  }
+
+  /// Background service only exists on mobile.
+  static bool get supportsBackground {
+    if (kIsWeb) return false;
+    try {
+      return Platform.isAndroid || Platform.isIOS;
+    } catch (_) {
+      return false;
+    }
+  }
 
   static Timer? _foregroundTimer;
 
@@ -160,9 +196,65 @@ class LocationService {
     _foregroundTimer = null;
   }
 
-  static Future<bool> bootstrapBackgroundService() async {
-    if (!supported) return false;
+  static const String trackingChannelId = 'location_tracking';
+
+  static bool get _isAndroid {
+    if (kIsWeb) return false;
     try {
+      return Platform.isAndroid;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Creates the notification channel the foreground service posts to.
+  /// The background-service plugin explicitly requires the app to create a
+  /// custom channel before configure(): without it startForeground throws
+  /// "Bad notification" and Android kills the whole process (not catchable
+  /// from Dart).
+  static Future<void> ensureTrackingChannel() async {
+    if (!_isAndroid) return;
+    try {
+      final plugin = FlutterLocalNotificationsPlugin();
+      await plugin.initialize(
+        const InitializationSettings(
+          android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        ),
+      );
+      final android =
+          plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+      await android?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          trackingChannelId,
+          'Location tracking',
+          description: 'Shows while your path is being recorded',
+          importance: Importance.low,
+        ),
+      );
+    } catch (_) {}
+  }
+
+  /// Android 13+ needs POST_NOTIFICATIONS to post the foreground-service
+  /// notification; without it startForeground throws and kills the app.
+  /// Returns true when background recording is allowed to start.
+  static Future<bool> ensureNotificationsAllowed() async {
+    if (!_isAndroid) return true;
+    try {
+      final plugin = FlutterLocalNotificationsPlugin();
+      final android =
+          plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+      if (android == null) return true;
+      if (await android.areNotificationsEnabled() ?? true) return true;
+      return await android.requestNotificationsPermission() ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<bool> bootstrapBackgroundService() async {
+    if (!supportsBackground) return false;
+    try {
+      await ensureTrackingChannel();
       final service = FlutterBackgroundService();
       final configured = await service.configure(
         androidConfiguration: AndroidConfiguration(
@@ -170,10 +262,11 @@ class LocationService {
           autoStart: false,
           isForegroundMode: true,
           autoStartOnBoot: false,
-          notificationChannelId: 'location_tracking',
+          notificationChannelId: trackingChannelId,
           initialNotificationTitle: 'Recording location',
           initialNotificationContent: 'Saving your path for day review',
           foregroundServiceNotificationId: 888,
+          foregroundServiceTypes: const [AndroidForegroundType.location],
         ),
         iosConfiguration: IosConfiguration(
           autoStart: false,
@@ -188,9 +281,10 @@ class LocationService {
   }
 
   static Future<bool> startBackground(int intervalMinutes) async {
-    if (!supported) return false;
+    if (!supportsBackground) return false;
     try {
       await writeTrackingConfig(intervalMinutes);
+      if (_isAndroid && !await ensureNotificationsAllowed()) return false;
       await bootstrapBackgroundService();
       return await FlutterBackgroundService().startService();
     } catch (_) {
@@ -199,7 +293,7 @@ class LocationService {
   }
 
   static Future<void> stopBackground() async {
-    if (!supported) return;
+    if (!supportsBackground) return;
     try {
       FlutterBackgroundService().invoke('stopService');
     } catch (_) {}

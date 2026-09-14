@@ -1,12 +1,8 @@
 import 'package:a_fish_in_sea/common/undo/change_record.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
-import 'package:a_fish_in_sea/finances/bloc/budget_cubit.dart';
-import 'package:a_fish_in_sea/goals/bloc/goal_cubit.dart';
-import 'package:a_fish_in_sea/goals/bloc/tag_cubit.dart';
+import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
+import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/goals/model/goal.dart';
-import 'package:a_fish_in_sea/goals/model/tag.dart';
-import 'package:a_fish_in_sea/finances/bloc/expense_cubit.dart';
-import 'package:a_fish_in_sea/finances/bloc/recurring_rules_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/budget.dart';
 import 'package:a_fish_in_sea/finances/model/expense.dart';
@@ -14,8 +10,8 @@ import 'package:a_fish_in_sea/finances/model/recurring_rule.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
-import 'package:a_fish_in_sea/planner/bloc/task_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/model/task.dart';
@@ -54,7 +50,7 @@ void main() {
 
   FeedCubit makeFeedCubit() => FeedCubit(
         calendarCubit: CalendarCubit(),
-        taskCubit: TaskCubit(),
+        nodeCubit: NodeCubit(),
         icalService: IcalService(),
         googleService: GoogleCalendarService(
           baseUrl: () => '',
@@ -64,64 +60,6 @@ void main() {
       );
 
   group('restore tolerates corrupt entries', () {
-    test('TaskCubit keeps valid tasks', () {
-      final cubit = TaskCubit();
-      final good =
-          const Task(id: 't1', title: 'Read').toJson();
-      final restored = cubit.fromJson(_withCorrupt('tasks', good));
-      expect(restored?.map((t) => t.id), ['t1']);
-    });
-
-    test('TaskCubit loads pre-tracking tasks and bad tracking dates', () {
-      final cubit = TaskCubit();
-      final legacy = const Task(id: 'old', title: 'Read').toJson()
-        ..remove('plannedStart')
-        ..remove('plannedEnd')
-        ..remove('actualStart')
-        ..remove('actualEnd')
-        ..remove('timerStartedAt')
-        ..remove('failed');
-      final restoredLegacy = cubit.fromJson({
-        'tasks': [legacy],
-      });
-      expect(restoredLegacy?.single.failed, isFalse);
-      expect(restoredLegacy?.single.isTracking, isFalse);
-      final corrupt = const Task(id: 'bad', title: 'Read').toJson()
-        ..['plannedStart'] = 'not-a-date'
-        ..['timerStartedAt'] = 'not-a-date';
-      final restoredCorrupt = cubit.fromJson({
-        'tasks': [corrupt],
-      });
-      expect(restoredCorrupt?.map((t) => t.id), ['bad']);
-      expect(restoredCorrupt?.single.hasPlanned, isFalse);
-      expect(restoredCorrupt?.single.isTracking, isFalse);
-    });
-
-    test('TaskCubit loads pre-assignee tasks and skips bad assignees', () {
-      final cubit = TaskCubit();
-      final legacy = const Task(id: 'old', title: 'Read').toJson()
-        ..remove('assignees');
-      final restoredLegacy = cubit.fromJson({
-        'tasks': [legacy],
-      });
-      expect(restoredLegacy?.single.assignees, isEmpty);
-      final corrupt = const Task(id: 'bad', title: 'Read').toJson()
-        ..['assignees'] = [
-          {
-            'id': 'people/1',
-            'displayName': 'Amy',
-            'email': 'amy@test.com',
-          },
-          {'id': 42},
-          'not-a-map',
-          {'displayName': ''},
-        ];
-      final restoredCorrupt = cubit.fromJson({
-        'tasks': [corrupt],
-      });
-      expect(restoredCorrupt?.single.assignees.map((a) => a.id), ['people/1']);
-    });
-
     test('CalendarCubit keeps valid events', () {
       final cubit = CalendarCubit();
       final good = PlannerEvent(
@@ -174,43 +112,53 @@ void main() {
       expect(restored?.map((f) => f.id), ['f1']);
     });
 
-    test('ExpenseCubit keeps valid expenses', () {
-      final cubit = ExpenseCubit();
-      final good = Expense(
-        id: 'x1',
-        name: 'Food',
-        amount: -12.5,
-        date: _day,
-      ).toJson();
-      final restored = cubit.fromJson(_withCorrupt('expenses', good));
-      expect(restored?.map((e) => e.id), ['x1']);
+    test('CalendarVisibilityCubit keeps valid ids, drops garbage', () {
+      final cubit = CalendarVisibilityCubit();
+      final restored = cubit.fromJson(const {
+        'hiddenIds': ['gcal:a', 42, '', null, 'group:google'],
+      });
+      expect(restored?.hiddenIds, {'gcal:a', 'group:google'});
+      expect(cubit.fromJson({})?.hiddenIds, isEmpty);
+      expect(
+        cubit.fromJson(const {'hiddenIds': 'not-a-list'})?.hiddenIds,
+        isEmpty,
+      );
     });
 
-    test('BudgetCubit keeps valid budgets', () {
-      final cubit = BudgetCubit();
-      final good = Budget(
+    test('legacy finance payloads still parse for node import', () {
+      // Retired cubits are gone; their on-disk format must still parse so
+      // NodeLegacyMigration can adopt the data. Corrupt rows are skipped.
+      final expenses = [
+        Expense(id: 'x1', name: 'Food', amount: -12.5, date: _day).toJson(),
+        {'id': 42},
+        'not-a-map',
+      ];
+      final parsedExpenses = <Expense>[];
+      for (final item in expenses) {
+        if (item is! Map) continue;
+        try {
+          parsedExpenses.add(
+              Expense.fromJson(Map<String, dynamic>.from(item)));
+        } catch (_) {}
+      }
+      expect(parsedExpenses.map((e) => e.id), ['x1']);
+      final budget = Budget(
         id: 'b1',
         name: 'Food',
         category: 'food',
         goalAmount: 400,
         period: TimeScale.monthly,
         startDate: _day,
-      ).toJson();
-      final restored = cubit.fromJson(_withCorrupt('budgets', good));
-      expect(restored?.map((b) => b.id), ['b1']);
-    });
-
-    test('RecurringRulesCubit keeps valid rules', () {
-      final cubit = RecurringRulesCubit();
-      final good = RecurringRule(
+      );
+      expect(Budget.fromJson(budget.toJson()), budget);
+      final rule = RecurringRule(
         id: 'r1',
         name: 'Rent',
         amount: -800,
         frequency: TimeScale.monthly,
         startDate: _day,
-      ).toJson();
-      final restored = cubit.fromJson(_withCorrupt('rules', good));
-      expect(restored?.map((r) => r.id), ['r1']);
+      );
+      expect(RecurringRule.fromJson(rule.toJson()), rule);
     });
 
     test('TransactionsCubit keeps valid transactions', () {
@@ -265,8 +213,8 @@ void main() {
       expect(restored?.containsKey('broken-day'), isFalse);
     });
 
-    test('GoalCubit keeps valid goals, loads pre-tag goals', () {
-      final cubit = GoalCubit();
+    test('legacy goal payloads import into nodes without tags', () {
+      final cubit = NodeCubit();
       final good = Goal(
         id: 'g1',
         title: 'Get an A',
@@ -276,34 +224,47 @@ void main() {
         deadline: _day.add(const Duration(days: 30)),
         showInTasks: true,
       ).toJson();
-      final restored = cubit.fromJson(_withCorrupt('goals', good));
-      expect(restored?.map((g) => g.id), ['g1']);
-      final legacy = Map<String, dynamic>.from(good)..remove('tagIds');
-      final restoredLegacy = cubit.fromJson({
-        'goals': [legacy],
-      });
-      expect(restoredLegacy?.single.tagIds, isEmpty);
-    });
-
-    test('TagCubit keeps valid tags', () {
-      final cubit = TagCubit();
-      const good = GoalTag(id: 't1', name: 'Intellectual');
-      final restored = cubit.fromJson(_withCorrupt('tags', good.toJson()));
-      expect(restored?.map((t) => t.id), ['t1']);
+      final id = cubit.importGoal(Goal.fromJson(good));
+      expect(cubit.byId(id)?.title, 'Get an A');
+      expect(cubit.byId(id)?.hasDue, isTrue);
     });
 
     test('UndoCubit keeps valid records', () {
       final cubit = UndoCubit();
       final good = const ChangeRecord(entries: [
-        StateSnapshot(cubitId: 'TaskCubit', before: {}, after: {}),
+        StateSnapshot(cubitId: 'NodeCubit', before: {}, after: {}),
       ]).toJson();
       final restored = cubit.fromJson(_withCorrupt('undoStack', good));
       expect(restored?.undoStack.length, 1);
     });
 
+    test('NodeCubit keeps valid nodes, tolerates corrupt + pre-facet data',
+        () {
+      final cubit = NodeCubit();
+      final good = Node(
+        id: 'n1',
+        title: 'Run',
+        createdAt: _day,
+        schedule: ScheduleFacet(due: _day),
+        money: const MoneyFacet(targetAmount: 10),
+      ).toJson();
+      final restored = cubit.fromJson(_withCorrupt('nodes', good));
+      expect(restored?.map((n) => n.id), ['n1']);
+      final legacy = Map<String, dynamic>.from(good)
+        ..remove('schedule')
+        ..remove('money')
+        ..remove('parentIds');
+      final restoredLegacy = cubit.fromJson({
+        'nodes': [legacy],
+      });
+      expect(restoredLegacy?.single.schedule, isNull);
+      expect(restoredLegacy?.single.money, isNull);
+      expect(restoredLegacy?.single.parentIds, isEmpty);
+    });
+
     test('applyJson with garbage does not throw', () {
-      final cubit = TaskCubit();
-      expect(() => cubit.applyJson({'tasks': 'not-a-list'}), returnsNormally);
+      final cubit = NodeCubit();
+      expect(() => cubit.applyJson({'nodes': 'not-a-list'}), returnsNormally);
       expect(cubit.state, isEmpty);
     });
   });
@@ -343,6 +304,11 @@ void main() {
       expect(PlannerEvent.fromJson(event.toJson()), event);
       const feed = Feed(id: 'f1', name: 'Class', url: 'https://x.test/f.ics');
       expect(Feed.fromJson(feed.toJson()), feed);
+      final visibility = CalendarVisibilityCubit();
+      visibility.setLeafVisible('gcal:a', false);
+      final visibilityRestored =
+          visibility.fromJson(visibility.toJson(visibility.state));
+      expect(visibilityRestored?.hiddenIds, {'gcal:a'});
     });
 
     test('finance models', () {
@@ -398,6 +364,24 @@ void main() {
         status: ReportStatus.attended,
       );
       expect(ReportedEntry.fromJson(entry.toJson()), entry);
+    });
+
+    test('unified nodes round-trip', () {
+      final node = Node(
+        id: 'n1',
+        title: 'Food month',
+        parentIds: const ['groceries'],
+        createdAt: _day,
+        schedule: ScheduleFacet(due: _day, isFixed: true),
+        money: const MoneyFacet(
+          targetAmount: 400,
+          direction: MoneyDirection.spend,
+          period: TimeScale.monthly,
+          isRecurring: true,
+        ),
+        effort: const EffortFacet(targetMinutes: 30),
+      );
+      expect(Node.fromJson(node.toJson()), node);
     });
 
     test('unknown enum values fall back instead of throwing', () {

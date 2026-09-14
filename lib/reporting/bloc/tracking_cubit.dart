@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:equatable/equatable.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 
@@ -50,21 +52,41 @@ class TrackingCubit extends HydratedCubit<TrackingState> {
     emit(state.copyWith(isRecording: false, clearStartedAt: true));
   }
 
-  void addPoint(TrackedPoint point) {
-    final last = state.points.isEmpty ? null : state.points.last;
-    if (last != null &&
-        last.lat == point.lat &&
-        last.lng == point.lng &&
-        point.timestamp.difference(last.timestamp).inMinutes < 1) {
-      return;
+  bool _isDuplicateOfLast(TrackedPoint last, TrackedPoint point) {
+    if (point.timestamp.difference(last.timestamp).inMinutes >= 1) {
+      return false;
     }
-    var next = [...state.points, point];
+    if (last.id == point.id) return true;
+    // Exact double equality almost never fires for real GPS; treat points
+    // within ~15 m of the previous fix as stationary duplicates.
+    const degToM = 111320.0;
+    final avgLatRad =
+        (last.lat + point.lat) / 2 * 3.141592653589793 / 180;
+    final dx = (point.lat - last.lat) * degToM;
+    final dy = (point.lng - last.lng) * degToM * math.cos(avgLatRad);
+    return (dx * dx + dy * dy) < 15 * 15;
+  }
+
+  List<TrackedPoint> _appendAll(
+      List<TrackedPoint> current, List<TrackedPoint> incoming) {
+    var next = [...current];
+    for (final point in incoming) {
+      final last = next.isEmpty ? null : next.last;
+      if (last != null && _isDuplicateOfLast(last, point)) continue;
+      next.add(point);
+    }
     if (next.length > maxPoints) {
       next = next.sublist(next.length - maxPoints);
     }
     final cutoff = DateTime.now().subtract(const Duration(days: retentionDays));
     next = next.where((p) => p.timestamp.isAfter(cutoff)).toList();
-    emit(state.copyWith(points: next));
+    return next;
+  }
+
+  void addPoint(TrackedPoint point) {
+    final last = state.points.isEmpty ? null : state.points.last;
+    if (last != null && _isDuplicateOfLast(last, point)) return;
+    emit(state.copyWith(points: _appendAll(state.points, [point])));
   }
 
   void mergePoints(List<TrackedPoint> incoming) {
@@ -72,15 +94,31 @@ class TrackingCubit extends HydratedCubit<TrackingState> {
     final known = {for (final p in state.points) p.id};
     final fresh = incoming.where((p) => !known.contains(p.id)).toList();
     if (fresh.isEmpty) return;
-    for (final point in fresh) {
-      addPoint(point);
-    }
+    fresh.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    // Single emit: the old per-point loop re-emitted (and re-filtered the
+    // 30-day retention + 5000-point cap) for every point, which is O(n^2)
+    // for background batches.
+    emit(state.copyWith(points: _appendAll(state.points, fresh)));
   }
 
   void clearDay(DateTime day) {
     emit(state.copyWith(
       points: state.points.where((p) => !isSameDay(p.timestamp, day)).toList(),
     ));
+  }
+
+  /// Sync apply: replaces the point set from merged server data.
+  /// Recording flags stay device-local (a phone records GPS; the server
+  /// must not remote-control that). Caps/retention still apply.
+  void applySyncedPoints(List<Map<String, dynamic>> items) {
+    final points = <TrackedPoint>[];
+    for (final item in items) {
+      try {
+        points.add(TrackedPoint.fromJson(item));
+      } catch (_) {}
+    }
+    points.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    emit(state.copyWith(points: _appendAll(const [], points)));
   }
 
   @override

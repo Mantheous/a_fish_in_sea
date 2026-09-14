@@ -9,6 +9,9 @@ import 'package:a_fish_in_sea/planner/view/feed_manager.dart';
 import 'package:a_fish_in_sea/reporting/bloc/tracking_cubit.dart';
 import 'package:a_fish_in_sea/reporting/service/location_service.dart';
 import 'package:a_fish_in_sea/reporting/view/places_sheet.dart';
+import 'package:a_fish_in_sea/sync/auth_cubit.dart';
+import 'package:a_fish_in_sea/sync/sync_engine.dart';
+import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
@@ -42,8 +45,8 @@ class _SettingsPageState extends State<SettingsPage> {
       drawer: const AppDrawer(),
       body: ListView(
         padding: const EdgeInsets.all(12),
-        children: const [
-          _SettingsSection(
+        children: [
+          const _SettingsSection(
             title: 'Classes',
             subtitle: 'Canvas and Learning Suite feeds for your courses.',
             child: FeedManagerBody(
@@ -55,7 +58,7 @@ class _SettingsPageState extends State<SettingsPage> {
               showGoogleButton: false,
             ),
           ),
-          _SettingsSection(
+          const _SettingsSection(
             title: 'Calendars',
             subtitle: 'Default view, Google calendars, other iCal links, '
                 'and the sync server used on the web.',
@@ -78,19 +81,24 @@ class _SettingsPageState extends State<SettingsPage> {
                   emptyTitle: 'No calendars yet',
                   itemNoun: 'calendar',
                 ),
-                _SyncServerTile(),
               ],
             ),
           ),
-          _SettingsSection(
+          const _SettingsSection(
             title: 'Location reporting',
             subtitle: 'Record your path through the day to auto-report '
-                'events and see on-task stats. Mobile only.',
+                'events and see on-task stats.',
             child: _LocationTrackingSection(),
           ),
           _SettingsSection(
-            title: 'Bank connection',
-            subtitle: 'Connect a bank with Plaid to pull balances and '
+            title: 'Sync',
+            subtitle: 'Signed in as ${context.watch<AuthCubit>().state.email}. '
+                'Offline-first: this device works without a connection and '
+                'merges later; server copy wins true conflicts.',
+            child: const _SyncSection(),
+          ),
+          _SettingsSection(
+            title: 'Bank connection',            subtitle: 'Connect a bank with Plaid to pull balances and '
                 'transactions into Finances.',
             child: _BankSection(),
           ),
@@ -132,8 +140,70 @@ class _SettingsSection extends StatelessWidget {
   }
 }
 
-class _DefaultViewTile extends StatelessWidget {
-  const _DefaultViewTile();
+/// Sync status + manual sync + sign-out.
+class _SyncSection extends StatelessWidget {
+  const _SyncSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final engine = context.read<SyncEngine>();
+    return ValueListenableBuilder<EngineStatus>(
+      valueListenable: engine.status,
+      builder: (context, status, _) {
+        final syncing = status == EngineStatus.syncing;
+        final last = engine.lastSyncAt;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ListTile(
+              leading: syncing
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.cloud_done_outlined),
+              title: Text(syncing
+                  ? 'Syncing…'
+                  : last == null
+                      ? 'Never synced'
+                      : 'Last synced ${_formatAgo(last)}'),
+              subtitle: engine.lastError == null
+                  ? null
+                  : Text(engine.lastError!,
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.error)),
+              trailing: TextButton(
+                onPressed: syncing
+                    ? null
+                    : () => context.read<SyncEngine>().syncNow(),
+                child: const Text('Sync now'),
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: () {
+                context.read<AuthCubit>().logout();
+                context.read<SyncMetaCubit>().reset();
+              },
+              icon: const Icon(Icons.logout),
+              label: const Text('Sign out (keeps on-device data)'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  String _formatAgo(DateTime t) {
+    final d = DateTime.now().difference(t);
+    if (d.inSeconds < 60) return 'just now';
+    if (d.inMinutes < 60) return '${d.inMinutes}m ago';
+    if (d.inHours < 24) return '${d.inHours}h ago';
+    return '${d.inDays}d ago';
+  }
+}
+
+class _DefaultViewTile extends StatelessWidget {  const _DefaultViewTile();
 
   @override
   Widget build(BuildContext context) {
@@ -376,61 +446,6 @@ String _formatHour(double hour) {  if (hour >= 24) return '12 AM';
   return '$h12:${m.toString().padLeft(2, '0')} $suffix';
 }
 
-class _SyncServerTile extends StatelessWidget {
-  const _SyncServerTile();
-
-  @override
-  Widget build(BuildContext context) {
-    final proxyBase = context.watch<SettingsCubit>().state.icalProxyBase;
-    return ListTile(
-      leading: const Icon(Icons.dns_outlined),
-      title: const Text('Sync server URL'),
-      subtitle: Text(
-        proxyBase.isEmpty
-            ? "Default (this app's own server)"
-            : proxyBase,
-      ),
-      trailing: const Icon(Icons.edit_outlined),
-      onTap: () => _editSyncServer(context),
-    );
-  }
-
-  void _editSyncServer(BuildContext context) {
-    final settingsCubit = context.read<SettingsCubit>();
-    final controller =
-        TextEditingController(text: settingsCubit.state.icalProxyBase);
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Sync server URL'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            labelText: 'Base URL',
-            helperText:
-                'Leave empty to use this app\'s own server (recommended '
-                'when testing over the web)',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              settingsCubit.setIcalProxyBase(controller.text.trim());
-              Navigator.of(dialogContext).pop();
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _LocationTrackingSection extends StatelessWidget {
   const _LocationTrackingSection();
 
@@ -489,7 +504,7 @@ class _LocationTrackingSection extends StatelessWidget {
           ),
         if (!LocationService.supported)
           Text(
-            'Location recording works on Android and iOS only.',
+            'GPS is not available on this device — you can still record and add test points manually from Day review.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
       ],

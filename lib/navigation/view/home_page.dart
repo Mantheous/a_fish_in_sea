@@ -2,18 +2,18 @@ import 'dart:async';
 
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
+import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
+import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/node_tracking.dart';
+import 'package:a_fish_in_sea/nodes/view/node_checkbox.dart';
+import 'package:a_fish_in_sea/nodes/view/node_editor.dart';
+import 'package:a_fish_in_sea/nodes/view/node_finish_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
-import 'package:a_fish_in_sea/planner/bloc/task_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
-import 'package:a_fish_in_sea/planner/model/task.dart';
 import 'package:a_fish_in_sea/planner/service/event_tracking.dart';
-import 'package:a_fish_in_sea/planner/service/task_tracking.dart';
-import 'package:a_fish_in_sea/planner/view/task_checkbox.dart';
-import 'package:a_fish_in_sea/planner/view/task_editor.dart';
-import 'package:a_fish_in_sea/planner/view/task_finish_sheet.dart';
 import 'package:a_fish_in_sea/reporting/bloc/tracking_cubit.dart';
 import 'package:a_fish_in_sea/reporting/service/location_service.dart';
 import 'package:a_fish_in_sea/reporting/view/day_review_screen.dart';
@@ -47,17 +47,18 @@ class _HomePageState extends State<HomePage> {
     final todayEvents = feedCubit.visibleEvents(
       context.watch<CalendarCubit>().eventsOnDay(today),
     );
-    final dueTasks = feedCubit.visibleTasks(
-      context.watch<TaskCubit>().overdueAndToday,
+    final nodeCubit = context.watch<NodeCubit>();
+    final dueNodes = feedCubit.visibleNodes(
+      nodeCubit.overdueAndToday,
     );
-    final weekTasks = feedCubit.visibleTasks(
-      context.watch<TaskCubit>().dueThisWeek,
+    final weekNodes = feedCubit.visibleNodes(
+      nodeCubit.dueThisWeek,
     );
     return Scaffold(
       appBar: AppBar(title: const Text('Home')),
       drawer: const AppDrawer(),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => showTaskEditor(context),
+        onPressed: () => showNodeEditor(context),
         child: const Icon(Icons.add),
       ),
       body: ListView(
@@ -66,14 +67,14 @@ class _HomePageState extends State<HomePage> {
           const _TimeTrackingCard(),
           const _TrackingCard(),
           _SectionCard(
-            title: 'Tasks due today',
+            title: 'Due today',
             onMore: () =>
                 context.read<NavigationCubit>().setPage(PlannerPage.tasks),
-            child: dueTasks.isEmpty
+            child: dueNodes.isEmpty
                 ? const _EmptyLine('Nothing due today')
                 : Column(
                     children: [
-                      for (final task in dueTasks.take(5)) _TaskLine(task: task),
+                      for (final node in dueNodes.take(5)) _NodeLine(node: node),
                     ],
                   ),
           ),
@@ -91,15 +92,15 @@ class _HomePageState extends State<HomePage> {
                   ),
           ),
           _SectionCard(
-            title: 'Tasks due this week',
+            title: 'Due this week',
             onMore: () =>
                 context.read<NavigationCubit>().setPage(PlannerPage.tasks),
-            child: weekTasks.isEmpty
-                ? const _EmptyLine('No tasks due this week')
+            child: weekNodes.isEmpty
+                ? const _EmptyLine('No nodes due this week')
                 : Column(
                     children: [
-                      for (final task in weekTasks)
-                        _AssignmentLine(task: task),
+                      for (final node in weekNodes)
+                        _AssignmentLine(node: node),
                     ],
                   ),
           ),
@@ -162,37 +163,38 @@ class _EmptyLine extends StatelessWidget {
   }
 }
 
-class _TaskLine extends StatelessWidget {
-  final Task task;
+class _NodeLine extends StatelessWidget {
+  final Node node;
 
-  const _TaskLine({required this.task});
+  const _NodeLine({required this.node});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final live = context.watch<TaskCubit>().byId(task.id) ?? task;
-    final status = live.failed
+    final live = context.watch<NodeCubit>().byId(node.id) ?? node;
+    final failed = live.status == NodeStatus.failed;
+    final status = failed
         ? 'Failed'
-        : live.isOverdue
+        : live.isOverdueAt(DateTime.now())
             ? 'Overdue'
             : 'Due today';
     return ListTile(
       dense: true,
       contentPadding: EdgeInsets.zero,
-      leading: TaskCheckbox(task: live),
+      leading: NodeCheckbox(node: live),
       title: Text(
         live.title,
-        style: live.done || live.failed
+        style: live.isDone || failed
             ? TextStyle(
                 decoration: TextDecoration.lineThrough,
-                color: live.failed ? theme.colorScheme.error : null,
+                color: failed ? theme.colorScheme.error : null,
               )
             : null,
       ),
       subtitle: Text(
         status,
         style: theme.textTheme.labelSmall?.copyWith(
-          color: live.isOverdue || live.failed
+          color: live.isOverdueAt(DateTime.now()) || failed
               ? theme.colorScheme.error
               : null,
         ),
@@ -244,36 +246,38 @@ class _EventLine extends StatelessWidget {
 }
 
 class _AssignmentLine extends StatelessWidget {
-  final Task task;
+  final Node node;
 
-  const _AssignmentLine({required this.task});
+  const _AssignmentLine({required this.node});
 
   @override
   Widget build(BuildContext context) {
     final feedCubit = context.read<FeedCubit>();
-    final Feed? feed = task.classId == null
+    final Feed? feed = node.classId == null
         ? null
-        : feedCubit.byId(task.classId!);
+        : feedCubit.byId(node.classId!);
     final formatter = DateFormat('EEE, MMM d');
-    final label = task.classLabel ?? feed?.name ?? 'Task';
-    final live = context.watch<TaskCubit>().byId(task.id) ?? task;
-    final dueLabel = live.due == null
+    final label = node.classLabel ?? feed?.name ?? 'Node';
+    final live = context.watch<NodeCubit>().byId(node.id) ?? node;
+    final failed = live.status == NodeStatus.failed;
+    final due = live.schedule?.due;
+    final dueLabel = due == null
         ? label
-        : '$label · due ${formatter.format(live.due!)}';
+        : '$label · due ${formatter.format(due)}';
     return ListTile(
       dense: true,
       contentPadding: EdgeInsets.zero,
-      leading: TaskCheckbox(task: live),
+      leading: NodeCheckbox(node: live),
       title: Text(
         live.title,
-        style: live.done || live.failed
+        style: live.isDone || failed
             ? const TextStyle(decoration: TextDecoration.lineThrough)
             : null,
       ),
       subtitle: Text(
-        live.failed ? '$dueLabel · failed' : dueLabel,
+        failed ? '$dueLabel · failed' : dueLabel,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: live.failed ? Theme.of(context).colorScheme.error : null,
+              color: failed ? Theme.of(context).colorScheme.error : null,
             ),
       ),
     );
@@ -297,10 +301,11 @@ class _TrackingCardState extends State<_TrackingCard> {
   }
 
   Future<void> _mergePending() async {
-    if (!LocationService.supported) return;
     final pending = await takePendingPoints();
     if (!mounted || pending.isEmpty) return;
-    context.read<TrackingCubit>().mergePoints(pending);
+    try {
+      context.read<TrackingCubit>().mergePoints(pending);
+    } catch (_) {}
   }
 
   Future<void> _toggle() async {
@@ -328,44 +333,48 @@ class _TrackingCardState extends State<_TrackingCard> {
       context.read<NavigationCubit>().setPage(PlannerPage.settings);
       return;
     }
-    if (!LocationService.supported) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Location recording works on Android and iOS only.'),
-        ),
-      );
-      return;
-    }
+    final gpsAvailable = LocationService.supported;
     setState(() => _busy = true);
     try {
-      final granted = await ensureLocationPermission();
-      if (!mounted) return;
-      if (!granted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Location permission denied')),
-        );
-        return;
+      if (gpsAvailable) {
+        final granted = await ensureLocationPermission();
+        if (!mounted) return;
+        if (!granted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location permission denied')),
+          );
+          return;
+        }
       }
       tracking.startRecording();
       final interval = settings.state.trackingIntervalMinutes;
-      LocationService.startForegroundSampling(
-        intervalMinutes: interval,
-        onTick: () async {
-          if (!mounted) return;
-          final point = await samplePosition();
-          if (point != null && mounted) {
+      // Capture the cubit up front: the old onTick closed over `mounted` /
+      // `context`, so leaving Home disposed the card and silently stopped
+      // all foreground sampling while `isRecording` stayed true.
+      final trackingCubit = context.read<TrackingCubit>();
+      var background = false;
+      if (gpsAvailable) {
+        LocationService.startForegroundSampling(
+          intervalMinutes: interval,
+          onTick: () async {
+            final point = await samplePosition();
+            if (point == null || trackingCubit.isClosed) return;
             try {
-              context.read<TrackingCubit>().addPoint(point);
+              trackingCubit.addPoint(point);
             } catch (_) {}
-          }
-        },
-      );
-      await LocationService.startBackground(interval);
+          },
+        );
+        background = await LocationService.startBackground(interval);
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Recording location every $interval min — see the Stats tab.',
+              !gpsAvailable
+                  ? 'Recording started (no GPS on this device) — add test points from Day review.'
+                  : background
+                      ? 'Recording location every $interval min — see the Stats tab.'
+                      : 'Recording while the app is open. Allow notifications to keep recording in the background.',
             ),
           ),
         );
@@ -431,7 +440,7 @@ class _TrackingCardState extends State<_TrackingCard> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : Icon(recording ? Icons.stop : Icons.play_arrow),
-              label: Text(recording ? 'Stop reporting' : 'Start reporting'),
+              label: Text(recording ? 'Stop recording' : 'Start recording'),
               style: recording
                   ? FilledButton.styleFrom(
                       backgroundColor:
@@ -464,7 +473,7 @@ class _TimeTrackingCardState extends State<_TimeTrackingCard> {
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       try {
-        if (context.read<TaskCubit>().activeTrackingId != null) {
+        if (context.read<NodeCubit>().activeTrackingId != null) {
           setState(() {});
         }
       } catch (_) {}
@@ -479,11 +488,11 @@ class _TimeTrackingCardState extends State<_TimeTrackingCard> {
 
   @override
   Widget build(BuildContext context) {
-    final taskCubit = context.watch<TaskCubit>();
+    final nodeCubit = context.watch<NodeCubit>();
     final feedCubit = context.watch<FeedCubit>();
     final now = DateTime.now();
-    final visible = feedCubit.visibleTasks(taskCubit.state);
-    final selection = selectTaskTracking(visible, now);
+    final visible = feedCubit.visibleNodes(nodeCubit.state);
+    final selection = selectNodeTracking(visible, now);
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -509,30 +518,30 @@ class _TimeTrackingCardState extends State<_TimeTrackingCard> {
             ),
             if (selection.isEmpty)
               const _EmptyLine(
-                  'No tasks to track — add one with the + button.'),
+                  'No nodes to track — add one with the + button.'),
             if (selection.recording != null) ...[
               const _TimeGroupLabel('Recording now'),
-              _TaskTrackLine(task: selection.recording!, highlight: true),
+              _NodeTrackLine(node: selection.recording!, highlight: true),
             ],
             if (selection.current.isNotEmpty) ...[
               const _TimeGroupLabel('Happening now'),
-              for (final task in selection.current)
-                _TaskTrackLine(task: task, highlight: true),
+              for (final node in selection.current)
+                _NodeTrackLine(node: node, highlight: true),
             ],
             if (selection.previous.isNotEmpty) ...[
               const _TimeGroupLabel('Just before'),
-              for (final task in selection.previous)
-                _TaskTrackLine(task: task),
+              for (final node in selection.previous)
+                _NodeTrackLine(node: node),
             ],
             if (selection.next.isNotEmpty) ...[
               const _TimeGroupLabel('Up next'),
-              for (final task in selection.next)
-                _TaskTrackLine(task: task),
+              for (final node in selection.next)
+                _NodeTrackLine(node: node),
             ],
             if (selection.unscheduled.isNotEmpty) ...[
               const _TimeGroupLabel('No planned time'),
-              for (final task in selection.unscheduled)
-                _TaskTrackLine(task: task),
+              for (final node in selection.unscheduled)
+                _NodeTrackLine(node: node),
             ],
           ],
         ),
@@ -555,30 +564,31 @@ class _TimeGroupLabel extends StatelessWidget {
   }
 }
 
-class _TaskTrackLine extends StatelessWidget {
-  final Task task;
+class _NodeTrackLine extends StatelessWidget {
+  final Node node;
   final bool highlight;
 
-  const _TaskTrackLine({required this.task, this.highlight = false});
+  const _NodeTrackLine({required this.node, this.highlight = false});
 
   @override
   Widget build(BuildContext context) {
-    final live = context.watch<TaskCubit>().byId(task.id) ?? task;
+    final live = context.watch<NodeCubit>().byId(node.id) ?? node;
+    final failed = live.status == NodeStatus.failed;
     final theme = Theme.of(context);
     final timeFormat = DateFormat('h:mm a');
-    final plannedLine = live.hasPlanned &&
-            live.plannedStart != null &&
-            live.plannedEnd != null
-        ? 'Planned ${timeFormat.format(live.plannedStart!)} – '
-            '${timeFormat.format(live.plannedEnd!)}'
-        : (live.due != null
-            ? 'Due ${DateFormat('EEE, MMM d').format(live.due!)}'
+    final plannedStart = live.schedule?.start;
+    final plannedEnd = live.schedule?.end;
+    final plannedLine = plannedStart != null && plannedEnd != null
+        ? 'Planned ${timeFormat.format(plannedStart)} – '
+            '${timeFormat.format(plannedEnd)}'
+        : (live.schedule?.due != null
+            ? 'Due ${DateFormat('EEE, MMM d').format(live.schedule!.due!)}'
             : 'No planned time');
     final reported = live.reportedDuration;
     final elapsed = live.timerStartedAt == null
         ? null
         : DateTime.now().difference(live.timerStartedAt!);
-    final statusLine = live.failed
+    final statusLine = failed
         ? 'Marked as failed'
         : live.isTracking && elapsed != null
             ? 'Recording ${formatStopwatch(elapsed)}'
@@ -589,7 +599,7 @@ class _TaskTrackLine extends StatelessWidget {
                     '${timeFormat.format(live.actualEnd!)} (${reported.inMinutes}m)'
                 : plannedLine;
     return InkWell(
-      onTap: () => showTaskEditor(context, existing: live),
+      onTap: () => showNodeEditor(context, existing: live),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(
@@ -597,7 +607,7 @@ class _TaskTrackLine extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.only(top: 2, right: 4),
-              child: TaskCheckbox(task: live),
+              child: NodeCheckbox(node: live),
             ),
             Expanded(
               child: Column(
@@ -606,22 +616,22 @@ class _TaskTrackLine extends StatelessWidget {
                   Text(
                     live.title,
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      decoration: live.failed || live.done
+                      decoration: failed || live.isDone
                           ? TextDecoration.lineThrough
                           : null,
-                      color: live.failed ? theme.colorScheme.error : null,
+                      color: failed ? theme.colorScheme.error : null,
                     ),
                   ),
                   Text(plannedLine, style: theme.textTheme.labelSmall),
                   Text(
                     statusLine,
                     style: theme.textTheme.labelSmall?.copyWith(
-                      color: live.failed
+                      color: failed
                           ? theme.colorScheme.error
                           : live.isTracking
                               ? theme.colorScheme.primary
                               : null,
-                      fontWeight: live.isTracking || live.failed
+                      fontWeight: live.isTracking || failed
                           ? FontWeight.w600
                           : null,
                     ),
@@ -632,19 +642,19 @@ class _TaskTrackLine extends StatelessWidget {
             const SizedBox(width: 8),
             if (live.isTracking)
               FilledButton.icon(
-                onPressed: () => stopTaskAndFinish(context, live.id),
+                onPressed: () => stopNodeAndFinish(context, live.id),
                 icon: const Icon(Icons.stop, size: 16),
                 label: Text(
                     formatStopwatch(elapsed ?? Duration.zero)),
               )
             else
               OutlinedButton.icon(
-                onPressed: live.done
+                onPressed: live.isDone
                     ? null
                     : () {
                         try {
                           context
-                              .read<TaskCubit>()
+                              .read<NodeCubit>()
                               .startTracking(live.id);
                         } catch (_) {}
                       },

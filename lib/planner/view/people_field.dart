@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../finances/bloc/plaid_cubit.dart';
+import '../../sync/auth_cubit.dart';
 import '../bloc/settings_cubit.dart';
 import '../model/task_assignee.dart';
 import '../service/google_contacts_service.dart';
@@ -41,9 +42,11 @@ class _PeopleFieldState extends State<PeopleField> {
     try {
       final settings = context.read<SettingsCubit>();
       final plaid = context.read<PlaidCubit>();
+      final auth = context.read<AuthCubit>();
       _service = GoogleContactsService(
         baseUrl: () => settings.state.icalProxyBase,
         userId: () => plaid.state.userId,
+        authToken: () => auth.state.accessToken,
       );
     } catch (_) {
       _service = null;

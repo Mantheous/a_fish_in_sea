@@ -14,7 +14,7 @@
         "flutter_driver"
       ],
       "enabled": true,
-      "timeout": 15000
+      "timeout": 60000
     }
   }
 }

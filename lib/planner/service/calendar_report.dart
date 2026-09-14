@@ -1,6 +1,6 @@
+import '../../nodes/model/node.dart';
 import '../../reporting/model/reported_entry.dart';
 import '../model/planner_event.dart';
-import '../model/task.dart';
 
 enum ReportBlockKind { live, timer, accepted }
 
@@ -72,7 +72,7 @@ ReportedEntry buildManualReportForEvent(PlannerEvent event) {
 
 List<ReportBlock> buildReportBlocks({
   required List<PlannerEvent> visibleEvents,
-  required List<Task> tasks,
+  required List<Node> nodes,
   required Map<String, List<ReportedEntry>> reportsByDay,
   DateTime? now,
 }) {
@@ -94,31 +94,31 @@ List<ReportBlock> buildReportBlocks({
     }
   }
 
-  final tasksByEvent = <String, List<Task>>{};
-  for (final task in tasks) {
-    final calendarId = task.calendarEventId;
+  final nodesByEvent = <String, List<Node>>{};
+  for (final node in nodes) {
+    final calendarId = node.calendarEventId;
     if (calendarId != null) {
-      tasksByEvent.putIfAbsent(calendarId, () => []).add(task);
+      nodesByEvent.putIfAbsent(calendarId, () => []).add(node);
     }
-    final sourceId = task.sourceEventId;
+    final sourceId = node.sourceEventId;
     if (sourceId != null) {
-      tasksByEvent.putIfAbsent(sourceId, () => []).add(task);
+      nodesByEvent.putIfAbsent(sourceId, () => []).add(node);
     }
   }
-  final tasksById = {for (final task in tasks) task.id: task};
+  final nodesById = {for (final node in nodes) node.id: node};
 
   final blocks = <ReportBlock>[];
   for (final event in visibleEvents) {
     if (event.allDay) continue;
-    final linked = <Task>[];
+    final linked = <Node>[];
     final seen = <String>{};
     for (final list in [
-      tasksByEvent[event.id] ?? const <Task>[],
-      if (event.taskId != null && tasksById[event.taskId] != null)
-        [tasksById[event.taskId]!],
+      nodesByEvent[event.id] ?? const <Node>[],
+      if (event.taskId != null && nodesById[event.taskId] != null)
+        [nodesById[event.taskId]!],
     ]) {
-      for (final task in list) {
-        if (seen.add(task.id)) linked.add(task);
+      for (final node in list) {
+        if (seen.add(node.id)) linked.add(node);
       }
     }
 
@@ -195,24 +195,24 @@ List<ReportBlock> buildReportBlocks({
   return blocks;
 }
 
-DateTime? _firstTrackingStart(List<Task> linked) {
-  for (final task in linked) {
-    if (task.timerStartedAt != null) return task.timerStartedAt;
+DateTime? _firstTrackingStart(List<Node> linked) {
+  for (final node in linked) {
+    if (node.timerStartedAt != null) return node.timerStartedAt;
   }
   return null;
 }
 
-_DateRange? _reportedInterval(PlannerEvent event, List<Task> linked) {
+_DateRange? _reportedInterval(PlannerEvent event, List<Node> linked) {
   if (event.actualStart != null && event.actualEnd != null) {
     final start = event.actualStart!;
     var end = event.actualEnd!;
     if (!end.isAfter(start)) end = start.add(const Duration(minutes: 1));
     return _DateRange(start, end);
   }
-  for (final task in linked) {
-    if (task.actualStart != null && task.actualEnd != null) {
-      final start = task.actualStart!;
-      var end = task.actualEnd!;
+  for (final node in linked) {
+    if (node.actualStart != null && node.actualEnd != null) {
+      final start = node.actualStart!;
+      var end = node.actualEnd!;
       if (!end.isAfter(start)) end = start.add(const Duration(minutes: 1));
       return _DateRange(start, end);
     }

@@ -1,25 +1,27 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
 import '../../common/undo/undo_cubit.dart';
+import '../../nodes/bloc/node_cubit.dart';
+import '../../nodes/model/node.dart';
+import '../../nodes/service/node_event_link.dart';
+import '../../nodes/view/node_checkbox.dart';
+import '../../nodes/view/node_finish_sheet.dart';
 import '../../reporting/bloc/places_cubit.dart';
 import '../../reporting/model/place.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/feed_cubit.dart';
 import '../bloc/settings_cubit.dart';
-import '../bloc/task_cubit.dart';
 import '../model/event_reschedule.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../model/recurrence.dart';
-import '../model/task.dart';
 import '../model/task_assignee.dart';
-import '../service/task_event_link.dart';
 import 'people_field.dart';
-import 'task_checkbox.dart';
-import 'task_finish_sheet.dart';
 
 const int _personalEventColor = 0xFF6B8F8A;
 
@@ -216,8 +218,26 @@ class EventEditorFormState extends State<EventEditorForm> {
   PlannerEvent? _seriesMaster;
   bool _loadingMaster = false;
   bool _masterFailed = false;
+  bool _repeatTouched = false;
+  Timer? _draftDebounce;
 
-  bool get _editingSeries => _seriesMaster != null;
+  bool get _isSeriesInstance =>
+      widget.existing?.isRecurringInstance ?? false;
+
+  /// Whether the editor should offer a calendar picker for [existing].
+  /// Personal events and single (non-recurring) Google events can move
+  /// between "This device" and any writable Google calendar. Read-only
+  /// feed events aren't editable at all, and repeating Google events are
+  /// excluded: moving one occurrence vs. a whole series needs different
+  /// Google calls and would risk duplicating the series.
+  bool _canChangeCalendar(PlannerEvent existing, FeedCubit feeds) {
+    if (!feeds.isEventEditable(existing)) return false;
+    if (existing.isRecurringInstance) return false;
+    if (existing.isFromFeed && existing.recurrenceRule.isNotEmpty) {
+      return false;
+    }
+    return true;
+  }
 
   @override
   void initState() {
@@ -228,15 +248,28 @@ class EventEditorFormState extends State<EventEditorForm> {
     _sourceTaskId = widget.existing?.taskId ?? widget.initialTaskId;
     final defaultFeedId =
         context.read<SettingsCubit>().state.defaultEventFeedId;
-    if (widget.existing == null &&
-        defaultFeedId != null &&
-        defaultFeedId.isNotEmpty) {
-      final feed = context.read<FeedCubit>().byId(defaultFeedId);
-      if (feed != null &&
-          feed.kind == FeedKind.google &&
-          feed.calendarId != null &&
-          feed.calendarId!.isNotEmpty) {
-        _saveTargetFeedId = defaultFeedId;
+    if (widget.existing == null) {
+      if (defaultFeedId != null && defaultFeedId.isNotEmpty) {
+        final feed = context.read<FeedCubit>().byId(defaultFeedId);
+        if (feed != null &&
+            feed.kind == FeedKind.google &&
+            feed.calendarId != null &&
+            feed.calendarId!.isNotEmpty) {
+          _saveTargetFeedId = defaultFeedId;
+        }
+      }
+    } else {
+      final existingFeedId = widget.existing!.feedId;
+      if (existingFeedId != null && existingFeedId.isNotEmpty) {
+        try {
+          final feed = context.read<FeedCubit>().byId(existingFeedId);
+          if (feed != null &&
+              feed.kind == FeedKind.google &&
+              feed.calendarId != null &&
+              feed.calendarId!.isNotEmpty) {
+            _saveTargetFeedId = existingFeedId;
+          }
+        } catch (_) {}
       }
     }
     _applyEvent(
@@ -249,9 +282,11 @@ class EventEditorFormState extends State<EventEditorForm> {
       initialLocation: widget.initialLocation,
     );
     if (widget.existing == null && widget.onDraftChanged != null) {
-      _subject.addListener(_emitDraft);
-      _notes.addListener(_emitDraft);
-      _location.addListener(_emitDraft);
+      // Debounced: every keystroke used to rebuild the whole CalendarPage
+      // (SfCalendar + ghost) synchronously, which made typing laggy.
+      _subject.addListener(_scheduleDraft);
+      _notes.addListener(_scheduleDraft);
+      _location.addListener(_scheduleDraft);
     }
     final existing = widget.existing;
     if (existing != null && existing.isRecurringInstance) {
@@ -274,10 +309,25 @@ class EventEditorFormState extends State<EventEditorForm> {
       _loadingMaster = false;
       if (master == null) {
         _masterFailed = true;
-        _customRepeat = true;
       } else {
         _seriesMaster = master;
-        _applyEvent(master);
+        // Sync only the repeat UI from the master so an untouched save
+        // preserves the series rule. Title/date stay on the occurrence:
+        // a single-occurrence edit must not inherit the master's date,
+        // and a series edit rebuilds the master's date separately.
+        if (!_repeatTouched) {
+          final config = RepeatConfig.tryParse(master.recurrenceRule);
+          if (config == null && master.recurrenceRule.isNotEmpty) {
+            _customRepeat = true;
+          } else if (config != null) {
+            _customRepeat = false;
+            _repeatKind = config.kind;
+            _weekDays = config.weekDays.toSet();
+            _endKind = config.endKind;
+            _count = config.count;
+            _until = config.until;
+          }
+        }
       }
     });
   }
@@ -297,12 +347,12 @@ class EventEditorFormState extends State<EventEditorForm> {
     _placeId = existing?.placeId;
     _people = List.of(existing?.assignees ?? const []);
     if (existing == null && _people.isEmpty && _sourceTaskId != null) {
-      // Creating a calendar block for a task: start from the task's people
+      // Creating a calendar block for a node: start from the node's people
       // so saving back can't silently drop them.
       try {
-        final task = context.read<TaskCubit>().byId(_sourceTaskId!);
-        if (task != null && task.assignees.isNotEmpty) {
-          _people = List.of(task.assignees);
+        final node = context.read<NodeCubit>().byId(_sourceTaskId!);
+        if (node != null && node.assignees.isNotEmpty) {
+          _people = List.of(node.assignees);
         }
       } catch (_) {}
     }
@@ -358,10 +408,23 @@ class EventEditorFormState extends State<EventEditorForm> {
 
   @override
   void dispose() {
+    _draftDebounce?.cancel();
     _subject.dispose();
     _notes.dispose();
     _location.dispose();
     super.dispose();
+  }
+
+  /// Debounced ghost update for free-text fields. Date/time/repeat/people
+  /// changes still call [_emitDraft] immediately (the ghost position
+  /// matters); title/notes/location only affect the ghost label, so they
+  /// can wait for a typing pause instead of rebuilding the calendar per
+  /// keystroke.
+  void _scheduleDraft() {
+    _draftDebounce?.cancel();
+    _draftDebounce = Timer(const Duration(milliseconds: 350), () {
+      if (mounted) _emitDraft();
+    });
   }
 
   @override
@@ -450,26 +513,11 @@ class EventEditorFormState extends State<EventEditorForm> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    if (_loadingMaster) {
-      return const SafeArea(
-        child: Padding(
-          padding: EdgeInsets.all(32),
-          child: Center(child: CircularProgressIndicator()),
-        ),
-      );
-    }
-    final googleFeeds = context
-        .watch<FeedCubit>()
-        .state
-        .where((f) =>
-            f.kind == FeedKind.google &&
-            f.calendarId != null &&
-            f.calendarId!.isNotEmpty)
-        .toList();
-    final validTarget =
-        googleFeeds.any((f) => f.id == _saveTargetFeedId)
-            ? _saveTargetFeedId
-            : null;
+    // NB: no context.watch<FeedCubit>() here on purpose. The form used to
+    // rebuild on every feed emission (sync status, background syncs), which
+    // reset the calendar dropdown via its ValueKey and made the editor feel
+    // glitchy. Only the picker below watches feeds now.
+    final existing = widget.existing;
     return SafeArea(
       top: false,
       child: SingleChildScrollView(
@@ -483,12 +531,15 @@ class EventEditorFormState extends State<EventEditorForm> {
               Text(widget.title!, style: theme.textTheme.titleMedium),
               const SizedBox(height: 12),
             ],
-            if (_editingSeries)
+            if (_isSeriesInstance)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Text(
-                  'You’re editing the whole series — changes apply to '
-                  'every occurrence.',
+                  _loadingMaster
+                      ? 'Loading series details…'
+                      : 'Part of a repeating series — on save you can '
+                          'apply changes to just this occurrence or the '
+                          'entire series.',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
@@ -504,31 +555,15 @@ class EventEditorFormState extends State<EventEditorForm> {
                   ),
                 ),
               ),
-            if (widget.existing == null) ...[
-              DropdownButtonFormField<String?>(
-                key: ValueKey('save-to:$validTarget'),
-                initialValue: validTarget,
-                isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Save to',
-                  border: OutlineInputBorder(),
-                ),
-                items: [
-                  const DropdownMenuItem(
-                    value: null,
-                    child: Text('This device'),
-                  ),
-                  for (final feed in googleFeeds)
-                    DropdownMenuItem(
-                      value: feed.id,
-                      child: Text(feed.name),
-                    ),
-                ],
-                onChanged: (value) =>
-                    setState(() => _saveTargetFeedId = value),
-              ),
-              const SizedBox(height: 12),
-            ],
+            _CalendarPicker(
+              existing: existing,
+              saveTargetFeedId: _saveTargetFeedId,
+              canChangeCalendar: (feeds) => existing == null
+                  ? true
+                  : _canChangeCalendar(existing, feeds),
+              onChanged: (value) =>
+                  setState(() => _saveTargetFeedId = value),
+            ),
             TextField(
               controller: _subject,
               autofocus: widget.autofocusTitle,
@@ -541,18 +576,34 @@ class EventEditorFormState extends State<EventEditorForm> {
             Row(
               children: [
                 Expanded(
+                  flex: 5,
                   child: _dateField(theme),
                 ),
                 const SizedBox(width: 8),
+                // Compact switch row instead of SwitchListTile: ListTile
+                // enforces its own min widths and overflows inside a tight
+                // Row on phones (~160px per side).
                 Expanded(
-                  child: SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('All day'),
-                    value: _allDay,
-                    onChanged: (value) {
-                      setState(() => _allDay = value);
-                      _emitDraft();
-                    },
+                  flex: 4,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Flexible(
+                        child: Text(
+                          'All day',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Switch(
+                        value: _allDay,
+                        materialTapTargetSize:
+                            MaterialTapTargetSize.shrinkWrap,
+                        onChanged: (value) {
+                          setState(() => _allDay = value);
+                          _emitDraft();
+                        },
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -591,6 +642,14 @@ class EventEditorFormState extends State<EventEditorForm> {
                   ),
                 ],
               ),
+            const SizedBox(height: 12),
+            _DayConflictsSection(
+              day: _date,
+              allDay: _allDay,
+              startTime: _startTime,
+              endTime: _endTime,
+              excludeId: widget.existing?.id,
+            ),
             const SizedBox(height: 12),
             _repeatSection(theme),
             const SizedBox(height: 12),
@@ -653,10 +712,15 @@ class EventEditorFormState extends State<EventEditorForm> {
                 },
               ),
             const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+            // Wrap instead of Row+Spacer: Delete + Cancel + Save never
+            // fit a 320px sheet in one tight Row without overflowing.
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                if (widget.existing != null && widget.allowDelete) ...[
+                if (widget.existing != null && widget.allowDelete)
                   TextButton(
                     onPressed: _saving ? null : () => _delete(context),
                     style: TextButton.styleFrom(
@@ -664,14 +728,11 @@ class EventEditorFormState extends State<EventEditorForm> {
                     ),
                     child: const Text('Delete'),
                   ),
-                  const Spacer(),
-                ],
                 TextButton(
                   onPressed:
                       _saving ? null : () => widget.onCancelled?.call(),
                   child: const Text('Cancel'),
                 ),
-                const SizedBox(width: 8),
                 FilledButton(
                   onPressed: _saving ? null : () => _save(context),
                   child: Text(
@@ -760,7 +821,10 @@ class EventEditorFormState extends State<EventEditorForm> {
             DropdownMenuItem(value: RepeatKind.yearly, child: Text('Yearly')),
           ],
           onChanged: (value) {
-            setState(() => _repeatKind = value ?? RepeatKind.none);
+            setState(() {
+              _repeatKind = value ?? RepeatKind.none;
+              _repeatTouched = true;
+            });
             _emitDraft();
           },
         ),
@@ -782,6 +846,7 @@ class EventEditorFormState extends State<EventEditorForm> {
                         _weekDays.remove(day);
                         if (_weekDays.isEmpty) _weekDays.add(day);
                       }
+                      _repeatTouched = true;
                     });
                     _emitDraft();
                   },
@@ -791,23 +856,38 @@ class EventEditorFormState extends State<EventEditorForm> {
         ],
         if (_repeatKind != RepeatKind.none) ...[
           const SizedBox(height: 8),
-          SegmentedButton<RepeatEndKind>(
-            segments: const [
-              ButtonSegment(value: RepeatEndKind.never, label: Text('Forever')),
-              ButtonSegment(value: RepeatEndKind.after, label: Text('N times')),
-              ButtonSegment(value: RepeatEndKind.until, label: Text('Until')),
-            ],
-            selected: {_endKind},
-            onSelectionChanged: (selection) {
-              setState(() => _endKind = selection.first);
-              _emitDraft();
-            },
+          // Horizontal scroll instead of forcing the three segments into
+          // the available width: on phones (~328px) SegmentedButton
+          // otherwise throws a RenderFlex pixel overflow.
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SegmentedButton<RepeatEndKind>(
+              segments: const [
+                ButtonSegment(value: RepeatEndKind.never, label: Text('Forever')),
+                ButtonSegment(value: RepeatEndKind.after, label: Text('N times')),
+                ButtonSegment(value: RepeatEndKind.until, label: Text('Until')),
+              ],
+              selected: {_endKind},
+              style: const ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              onSelectionChanged: (selection) {
+                setState(() {
+                  _endKind = selection.first;
+                  _repeatTouched = true;
+                });
+                _emitDraft();
+              },
+            ),
           ),
           if (_endKind == RepeatEndKind.after)
-            Row(
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 4,
               children: [
                 const Text('Repeats'),
-                const SizedBox(width: 8),
                 SizedBox(
                   width: 80,
                   child: TextFormField(
@@ -815,7 +895,10 @@ class EventEditorFormState extends State<EventEditorForm> {
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(hintText: '10'),
                     onChanged: (value) {
-                      setState(() => _count = int.tryParse(value) ?? 0);
+                      setState(() {
+                        _count = int.tryParse(value) ?? 0;
+                        _repeatTouched = true;
+                      });
                       _emitDraft();
                     },
                   ),
@@ -824,12 +907,18 @@ class EventEditorFormState extends State<EventEditorForm> {
               ],
             ),
           if (_endKind == RepeatEndKind.until)
-            Row(
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 4,
               children: [
-                Text(
-                  _until == null
-                      ? 'Until date not set'
-                      : DateFormat('EEE, MMM d, yyyy').format(_until!),
+                Flexible(
+                  child: Text(
+                    _until == null
+                        ? 'Until date not set'
+                        : DateFormat('EEE, MMM d, yyyy').format(_until!),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
                 TextButton(
                   onPressed: () async {
@@ -840,7 +929,10 @@ class EventEditorFormState extends State<EventEditorForm> {
                       lastDate: DateTime(2100),
                     );
                     if (picked != null) {
-                      setState(() => _until = picked);
+                      setState(() {
+                        _until = picked;
+                        _repeatTouched = true;
+                      });
                       _emitDraft();
                     }
                   },
@@ -870,6 +962,13 @@ class EventEditorFormState extends State<EventEditorForm> {
     final messenger = ScaffoldMessenger.of(context);
     final feedCubit = context.read<FeedCubit>();
     final calendarCubit = context.read<CalendarCubit>();
+    // Captured before any async gap: the lint (and a real crash) fires when
+    // `context.read` runs after an await with only a State.mounted guard,
+    // since the passed BuildContext may be unmounted while State is alive.
+    NodeCubit? nodeCubit;
+    try {
+      nodeCubit = context.read<NodeCubit>();
+    } catch (_) {}
     final subject = _subject.text.trim();
     if (subject.isEmpty) {
       messenger.showSnackBar(
@@ -895,7 +994,6 @@ class EventEditorFormState extends State<EventEditorForm> {
     if (end.isBefore(start) || end.isAtSameMomentAs(start)) {
       end = start.add(const Duration(hours: 1));
     }
-    final editTarget = _seriesMaster ?? widget.existing;
     final config = RepeatConfig(
       kind: _repeatKind,
       weekDays: _weekDays,
@@ -903,15 +1001,13 @@ class EventEditorFormState extends State<EventEditorForm> {
       count: _count,
       until: _until,
     );
-    final rule = _customRepeat
-        ? (editTarget?.recurrenceRule ?? config.ruleFor(start))
-        : config.ruleFor(start);
     final notes =
         _notes.text.trim().isEmpty ? null : _notes.text.trim();
     final location =
         _location.text.trim().isEmpty ? null : _location.text.trim();
     final done = _isTask && _done;
     if (widget.existing == null) {
+      final rule = _customRepeat ? '' : config.ruleFor(start);
       final draft = PlannerEvent(
         id: 'evt:${DateTime.now().microsecondsSinceEpoch}',
         subject: subject,
@@ -944,10 +1040,10 @@ class EventEditorFormState extends State<EventEditorForm> {
           final createdId = result.created?.id;
           if (createdId != null) {
             try {
-              context.read<TaskCubit>().setCalendarEvent(
-                    _sourceTaskId!,
-                    createdId,
-                  );
+              nodeCubit?.setCalendarEvent(
+                _sourceTaskId!,
+                createdId,
+              );
             } catch (_) {}
           }
         }
@@ -960,16 +1056,56 @@ class EventEditorFormState extends State<EventEditorForm> {
       calendarCubit.addEvent(draft);
       if (_sourceTaskId != null) {
         try {
-          context
-              .read<TaskCubit>()
-              .setCalendarEvent(_sourceTaskId!, draft.id);
+          nodeCubit?.setCalendarEvent(_sourceTaskId!, draft.id);
         } catch (_) {}
       }
       _syncTaskLink(draft);
       widget.onFinished?.call();
       return;
     }
-    final base = editTarget!;
+    final base = widget.existing!;
+    final ruleForMove =
+        _customRepeat ? base.recurrenceRule : config.ruleFor(start);
+    if (_canChangeCalendar(base, feedCubit)) {
+      final destFeedId = feedCubit.byId(_saveTargetFeedId ?? '')?.kind ==
+              FeedKind.google
+          ? _saveTargetFeedId
+          : null;
+      final origFeedId = base.feedId;
+      final calendarChanged = (destFeedId ?? '') != (origFeedId ?? '');
+      if (calendarChanged) {
+        await _moveEvent(
+          context,
+          base: base,
+          destFeedId: destFeedId,
+          subject: subject,
+          notes: notes,
+          location: location,
+          start: start,
+          end: end,
+          rule: ruleForMove,
+          done: done,
+        );
+        return;
+      }
+    }
+    // Repeating Google instances get a Google-style scope choice: just
+    // this occurrence, or the entire series.
+    if (base.isRecurringInstance && feedCubit.isRemoteEditable(base)) {
+      await _saveRecurringInstance(
+        context,
+        base: base,
+        subject: subject,
+        notes: notes,
+        location: location,
+        start: start,
+        end: end,
+        done: done,
+        config: config,
+      );
+      return;
+    }
+    final rule = _customRepeat ? base.recurrenceRule : config.ruleFor(start);
     final updated = base.copyWith(
       subject: subject,
       notes: notes,
@@ -988,24 +1124,24 @@ class EventEditorFormState extends State<EventEditorForm> {
       clearPlaceId: _placeId == null,
       assignees: _people,
     );
-    if (_editingSeries) {
-      setState(() => _saving = true);
-      final error =
-          await feedCubit.pushEventUpdate(updated, series: true);
-      if (!mounted) return;
-      setState(() => _saving = false);
-      if (error != null) {
-        messenger.showSnackBar(
-          SnackBar(content: Text(error)),
-        );
+    if (feedCubit.isRemoteEditable(base)) {
+      // Local-only changes (task flag, people, place, completion) never
+      // touch Google: the task flag is local-only, so pushing would at
+      // best waste a round trip and at worst fail the whole save.
+      if (!_googleVisibleChanged(
+        base,
+        subject: subject,
+        notes: notes,
+        location: location,
+        start: start,
+        end: end,
+        allDay: _allDay,
+      )) {
+        calendarCubit.updateEvent(updated);
+        _syncTaskLink(updated);
+        widget.onFinished?.call();
         return;
       }
-      _applyLocalAssignees(updated.id);
-      _applyTaskLinkPostSync(updated.id);
-      widget.onFinished?.call();
-      return;
-    }
-    if (feedCubit.isRemoteEditable(base)) {
       setState(() => _saving = true);
       final error = await feedCubit.pushEventUpdate(updated);
       if (!mounted) return;
@@ -1017,7 +1153,7 @@ class EventEditorFormState extends State<EventEditorForm> {
         return;
       }
       _applyLocalAssignees(updated.id);
-      _applyTaskLinkPostSync(updated.id);
+      _syncTaskLinkPostPush(updated.id);
       widget.onFinished?.call();
       return;
     }
@@ -1026,33 +1162,542 @@ class EventEditorFormState extends State<EventEditorForm> {
     widget.onFinished?.call();
   }
 
-  /// Mirrors a locally saved event's task flag into [TaskCubit]: creates or
-  /// refreshes the backing task when marked, removes backing tasks when
+  /// Moves an edited event between "This device" (null) and a Google
+  /// calendar, or between two Google calendars. Implemented as create in
+  /// the destination + delete from the source using the existing push
+  /// endpoints, so no server change is needed. Local-only state (task
+  /// flag, people, place) is re-asserted on the new copy; backing tasks
+  /// for the old id are removed.
+  Future<void> _moveEvent(
+    BuildContext context, {
+    required PlannerEvent base,
+    required String? destFeedId,
+    required String subject,
+    required String? notes,
+    required String? location,
+    required DateTime start,
+    required DateTime end,
+    required String rule,
+    required bool done,
+  }) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final feedCubit = context.read<FeedCubit>();
+    final calendarCubit = context.read<CalendarCubit>();
+    NodeCubit? nodeCubit;
+    try {
+      nodeCubit = context.read<NodeCubit>();
+    } catch (_) {}
+    final nodes = nodeCubit;
+
+    if (destFeedId == null) {
+      // Google → This device: snapshot locally first (never loses data),
+      // then delete the remote copy.
+      final now = DateTime.now();
+      final completedAt =
+          done ? (base.done ? base.completedAt ?? now : now) : null;
+      final local = PlannerEvent(
+        id: 'evt:${DateTime.now().microsecondsSinceEpoch}',
+        subject: subject,
+        notes: notes,
+        location: location,
+        start: start,
+        end: end,
+        allDay: _allDay,
+        recurrenceRule: rule,
+        taskId: _sourceTaskId,
+        isTask: _isTask,
+        done: done,
+        completedAt: completedAt,
+        placeId: _placeId,
+        assignees: List.of(_people),
+      );
+      setState(() => _saving = true);
+      calendarCubit.addEvent(local);
+      if (_sourceTaskId != null && nodes != null) {
+        try {
+          nodes.setCalendarEvent(_sourceTaskId!, local.id);
+        } catch (_) {}
+      }
+      _syncTaskLink(local);
+      final error = await feedCubit.pushEventDelete(base);
+      if (!mounted) return;
+      setState(() => _saving = false);
+      if (error != null) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Saved to this device, but couldn’t remove the Google copy: $error',
+            ),
+          ),
+        );
+        widget.onFinished?.call();
+        return;
+      }
+      if (nodes != null) {
+        try {
+          nodes.removeNodesForEvent(base.id);
+          nodes.clearCalendarEventForEvent(base.id);
+        } catch (_) {}
+      }
+      widget.onFinished?.call();
+      return;
+    }
+
+    final destFeed = feedCubit.byId(destFeedId);
+    if (destFeed == null ||
+        destFeed.kind != FeedKind.google ||
+        destFeed.calendarId == null ||
+        destFeed.calendarId!.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Choose a Google calendar to move to.')),
+      );
+      return;
+    }
+    final now = DateTime.now();
+    final draft = PlannerEvent(
+      id: 'evt:${DateTime.now().microsecondsSinceEpoch}',
+      subject: subject,
+      notes: notes,
+      location: location,
+      start: start,
+      end: end,
+      allDay: _allDay,
+      recurrenceRule: rule,
+      taskId: _sourceTaskId,
+      isTask: _isTask,
+      done: done,
+      completedAt: done ? (base.done ? base.completedAt ?? now : now) : null,
+      placeId: _placeId,
+      assignees: List.of(_people),
+    );
+    setState(() => _saving = true);
+    final result =
+        await feedCubit.pushEventCreate(feed: destFeed, event: draft);
+    if (!mounted) return;
+    if (result.error != null) {
+      setState(() => _saving = false);
+      messenger.showSnackBar(SnackBar(content: Text(result.error!)));
+      return;
+    }
+    final newId = result.created?.id ?? draft.id;
+    if (_sourceTaskId != null && nodes != null) {
+      try {
+        nodes.setCalendarEvent(_sourceTaskId!, newId);
+      } catch (_) {}
+    }
+    _applyLocalAssignees(newId);
+    _restorePlaceId(newId);
+    _mirrorAssigneesToSourceTask();
+    _applyTaskLinkPostSync(newId);
+    if (base.isFromFeed) {
+      final deleteError = await feedCubit.pushEventDelete(base);
+      if (!mounted) return;
+      setState(() => _saving = false);
+      if (deleteError != null) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Saved to ${destFeed.name}, but couldn’t remove the original: $deleteError',
+            ),
+          ),
+        );
+        widget.onFinished?.call();
+        return;
+      }
+      if (nodes != null) {
+        try {
+          nodes.removeNodesForEvent(base.id);
+          nodes.clearCalendarEventForEvent(base.id);
+        } catch (_) {}
+      }
+    } else {
+      calendarCubit.deleteEvent(base.id);
+      if (nodes != null) {
+        try {
+          nodes.removeNodesForEvent(base.id);
+          nodes.clearCalendarEventForEvent(base.id);
+        } catch (_) {}
+      }
+      if (!mounted) return;
+      setState(() => _saving = false);
+    }
+    widget.onFinished?.call();
+  }
+
+  /// Re-asserts the editor's place on the freshly synced Google copy.
+  /// Google never stores it, so without this a calendar move (or any
+  /// push + re-sync) would drop the user's pick.
+  void _restorePlaceId(String eventId) {
+    if (_placeId == null) return;
+    CalendarCubit calendar;
+    try {
+      calendar = context.read<CalendarCubit>();
+    } catch (_) {
+      return;
+    }
+    final synced = calendar.byId(eventId);
+    if (synced == null || synced.placeId == _placeId) return;
+    calendar.updateEvent(synced.copyWith(placeId: _placeId));
+  }
+
+  static bool _sameOpt(String? a, String? b) => (a ?? '') == (b ?? '');
+
+  bool _googleVisibleChanged(
+    PlannerEvent base, {
+    required String subject,
+    required String? notes,
+    required String? location,
+    required DateTime start,
+    required DateTime end,
+    required bool allDay,
+  }) {
+    if (base.subject != subject) return true;
+    if (!_sameOpt(base.notes, notes)) return true;
+    if (!_sameOpt(base.location, location)) return true;
+    if (base.start != start || base.end != end) return true;
+    if (base.allDay != allDay) return true;
+    return false;
+  }
+
+  Future<void> _saveRecurringInstance(
+    BuildContext context, {
+    required PlannerEvent base,
+    required String subject,
+    required String? notes,
+    required String? location,
+    required DateTime start,
+    required DateTime end,
+    required bool done,
+    required RepeatConfig config,
+  }) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final feedCubit = context.read<FeedCubit>();
+    final calendarCubit = context.read<CalendarCubit>();
+    var scope = _EditChoice.occurrence;
+    if (!_masterFailed) {
+      final choice = await showDialog<_EditChoice>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Edit repeating event'),
+          content: const Text(
+            'Apply changes to just this occurrence, or the entire series?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(_EditChoice.cancel),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext)
+                  .pop(_EditChoice.occurrence),
+              child: const Text('This occurrence'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(_EditChoice.series),
+              child: const Text('Entire series'),
+            ),
+          ],
+        ),
+      );
+      if (choice == null || choice == _EditChoice.cancel) return;
+      scope = choice;
+    }
+    if (!context.mounted) return;
+    if (scope == _EditChoice.series) {
+      await _saveSeries(
+        context,
+        base: base,
+        subject: subject,
+        notes: notes,
+        location: location,
+        done: done,
+        config: config,
+      );
+      return;
+    }
+    // Single-occurrence save. The instance patch strips recurrence on the
+    // way out, so the form's repeat UI is irrelevant here.
+    final updated = base.copyWith(
+      subject: subject,
+      notes: notes,
+      clearNotes: notes == null,
+      location: location,
+      clearLocation: location == null,
+      start: start,
+      end: end,
+      allDay: _allDay,
+      isTask: _isTask,
+      done: done,
+      completedAt: done && !base.done ? DateTime.now() : null,
+      clearCompletedAt: !done,
+      placeId: _placeId,
+      clearPlaceId: _placeId == null,
+      assignees: _people,
+    );
+    if (!_googleVisibleChanged(
+      base,
+      subject: subject,
+      notes: notes,
+      location: location,
+      start: start,
+      end: end,
+      allDay: _allDay,
+    )) {
+      // Task/assignee-only change: local update, no Google round trip, so
+      // marking a repeating event as a task can't fail to save.
+      calendarCubit.updateEvent(updated);
+      _syncTaskLink(updated);
+      widget.onFinished?.call();
+      return;
+    }
+    setState(() => _saving = true);
+    final error = await feedCubit.pushEventUpdate(updated);
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (error != null) {
+      messenger.showSnackBar(SnackBar(content: Text(error)));
+      return;
+    }
+    _applyLocalAssignees(updated.id);
+    _syncTaskLinkPostPush(updated.id);
+    widget.onFinished?.call();
+  }
+
+  Future<void> _saveSeries(
+    BuildContext context, {
+    required PlannerEvent base,
+    required String subject,
+    required String? notes,
+    required String? location,
+    required bool done,
+    required RepeatConfig config,
+  }) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final feedCubit = context.read<FeedCubit>();
+    var master = _seriesMaster;
+    if (master == null && !_masterFailed) {
+      setState(() => _saving = true);
+      try {
+        master = await feedCubit.fetchSeriesMaster(base);
+      } finally {
+        if (mounted) setState(() => _saving = false);
+      }
+      if (!context.mounted) return;
+      if (master != null) {
+        setState(() => _seriesMaster = master);
+      }
+    }
+    if (master == null) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Couldn’t load the series — try just this occurrence.'),
+        ),
+      );
+      return;
+    }
+    final seriesRule = _customRepeat
+        ? master.recurrenceRule
+        : (_repeatTouched ? config.ruleFor(_masterDateStart(master)) : master.recurrenceRule);
+    final seriesStart = _masterStart(master);
+    final seriesEnd = _masterEnd(master, seriesStart);
+    final googleChanged = master.subject != subject ||
+        !_sameOpt(master.notes, notes) ||
+        !_sameOpt(master.location, location) ||
+        master.allDay != _allDay ||
+        _toMinutes(TimeOfDay.fromDateTime(master.start)) !=
+            _toMinutes(_startTime) ||
+        _toMinutes(TimeOfDay.fromDateTime(
+              master.end.isAfter(master.start)
+                  ? master.end
+                  : master.start.add(const Duration(hours: 1)),
+            )) !=
+            _toMinutes(_endTime) ||
+        master.recurrenceRule != seriesRule;
+    if (!googleChanged) {
+      _applySeriesLocal(
+        master,
+        done: done,
+      );
+      widget.onFinished?.call();
+      return;
+    }
+    final updatedMaster = master.copyWith(
+      subject: subject,
+      notes: notes,
+      clearNotes: notes == null,
+      location: location,
+      clearLocation: location == null,
+      start: seriesStart,
+      end: seriesEnd,
+      allDay: _allDay,
+      recurrenceRule: seriesRule,
+    );
+    setState(() => _saving = true);
+    final error =
+        await feedCubit.pushEventUpdate(updatedMaster, series: true);
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (error != null) {
+      messenger.showSnackBar(SnackBar(content: Text(error)));
+      return;
+    }
+    _applySeriesPostPush(master, done: done);
+    widget.onFinished?.call();
+  }
+
+  DateTime _masterDateStart(PlannerEvent master) => DateTime(
+        master.start.year,
+        master.start.month,
+        master.start.day,
+        _startTime.hour,
+        _startTime.minute,
+      );
+
+  DateTime _masterStart(PlannerEvent master) {
+    if (_allDay) {
+      return DateTime(master.start.year, master.start.month, master.start.day);
+    }
+    return _masterDateStart(master);
+  }
+
+  DateTime _masterEnd(PlannerEvent master, DateTime seriesStart) {
+    if (_allDay) return seriesStart.add(const Duration(days: 1));
+    final candidate = DateTime(
+      master.start.year,
+      master.start.month,
+      master.start.day,
+      _endTime.hour,
+      _endTime.minute,
+    );
+    if (!candidate.isAfter(seriesStart)) {
+      return seriesStart.add(const Duration(hours: 1));
+    }
+    return candidate;
+  }
+
+  /// Local-only series update: applies the editor's task/people/place
+  /// state to every cached occurrence of the series and mirrors each
+  /// into its backing node. No Google write.
+  void _applySeriesLocal(PlannerEvent master, {required bool done}) {
+    CalendarCubit calendar;
+    NodeCubit nodes;
+    try {
+      calendar = context.read<CalendarCubit>();
+      nodes = context.read<NodeCubit>();
+    } catch (_) {
+      return;
+    }
+    final key =
+        FeedCubit.seriesRemoteId(master) ?? FeedCubit.seriesKeyFor(master);
+    if (key == null) return;
+    final completedAt = done ? DateTime.now() : null;
+    for (final event in List.of(calendar.state)) {
+      if (FeedCubit.seriesKeyFor(event) != key) continue;
+      final updated = event.copyWith(
+        isTask: _isTask,
+        done: done,
+        completedAt: completedAt,
+        clearCompletedAt: !done,
+        placeId: _placeId,
+        clearPlaceId: _placeId == null,
+        assignees: List.of(_people),
+      );
+      calendar.updateEvent(updated);
+      if (!_isTask) {
+        nodes.removeNodesForEvent(event.id);
+      } else {
+        nodes.ensureNodeForFeedEvent(updated.copyWith(isTask: true));
+        nodes.setDoneForEvent(
+          event.id,
+          done: done,
+          completedAt: completedAt,
+        );
+      }
+    }
+  }
+
+  /// Post-push series fix-up: the Google re-sync drops local-only state,
+  /// so re-assert node/people/place on every occurrence of the series.
+  void _applySeriesPostPush(PlannerEvent master, {required bool done}) {
+    CalendarCubit calendar;
+    NodeCubit nodes;
+    try {
+      calendar = context.read<CalendarCubit>();
+      nodes = context.read<NodeCubit>();
+    } catch (_) {
+      return;
+    }
+    final key =
+        FeedCubit.seriesRemoteId(master) ?? FeedCubit.seriesKeyFor(master);
+    if (key == null) return;
+    final completedAt = done ? DateTime.now() : null;
+    for (final event in List.of(calendar.state)) {
+      if (FeedCubit.seriesKeyFor(event) != key) continue;
+      if (!_sameAssignees(event.assignees, _people)) {
+        calendar.updateEvent(event.copyWith(assignees: List.of(_people)));
+      }
+      final current = calendar.byId(event.id) ?? event;
+      if (!_isTask) {
+        if (current.isTask) {
+          calendar.updateEvent(
+            current.copyWith(
+              isTask: false,
+              done: false,
+              clearCompletedAt: true,
+            ),
+          );
+        }
+        nodes.removeNodesForEvent(event.id);
+        continue;
+      }
+      final marked = current.copyWith(
+        isTask: true,
+        done: done,
+        completedAt: completedAt,
+        clearCompletedAt: !done,
+        placeId: _placeId,
+        clearPlaceId: _placeId == null,
+        assignees: List.of(_people),
+      );
+      if (marked != current) calendar.updateEvent(marked);
+      nodes.ensureNodeForFeedEvent(marked);
+      nodes.setDoneForEvent(
+        event.id,
+        done: done,
+        completedAt: completedAt,
+      );
+    }
+  }
+
+  /// Mirrors a locally saved event's task flag into [NodeCubit]: creates or
+  /// refreshes the backing node when marked, removes backing nodes when
   /// un-marked.
   void _syncTaskLink(PlannerEvent saved) {
-    TaskCubit tasks;
+    NodeCubit nodes;
     try {
-      tasks = context.read<TaskCubit>();
+      nodes = context.read<NodeCubit>();
     } catch (_) {
       return;
     }
     final calendar = context.read<CalendarCubit>();
     if (!saved.isTask) {
-      tasks.removeTasksForEvent(saved.id);
+      nodes.removeNodesForEvent(saved.id);
       return;
     }
     if (saved.isFromFeed) {
-      tasks.ensureShadowForFeedEvent(saved);
-      tasks.setDoneForEvent(
+      nodes.ensureNodeForFeedEvent(saved);
+      nodes.setDoneForEvent(
         saved.id,
         done: saved.done,
         completedAt: saved.completedAt,
       );
       return;
     }
-    final taskId = tasks.upsertLinkedTaskForEvent(saved);
-    calendar.setTaskLink(saved.id, taskId);
-    tasks.setDoneForEvent(
+    final nodeId = nodes.upsertLinkedNodeForEvent(saved);
+    calendar.setTaskLink(saved.id, nodeId);
+    nodes.setDoneForEvent(
       saved.id,
       done: saved.done,
       completedAt: saved.completedAt,
@@ -1061,20 +1706,29 @@ class EventEditorFormState extends State<EventEditorForm> {
 
   /// Re-applies the editor's task flag after a Google push + re-sync, which
   /// otherwise drops the local-only [PlannerEvent.isTask] state.
+  /// Handles both marking and un-marking: an un-check must clear the
+  /// resync-restored flag and its backing nodes.
   void _applyTaskLinkPostSync(String syncedId) {
-    if (!_isTask) return;
-    TaskCubit tasks;
+    NodeCubit nodes;
+    CalendarCubit calendar;
     try {
-      tasks = context.read<TaskCubit>();
+      nodes = context.read<NodeCubit>();
+      calendar = context.read<CalendarCubit>();
     } catch (_) {
       return;
     }
-    final calendar = context.read<CalendarCubit>();
-    TaskEventLink.markEventAsTask(calendar, tasks, syncedId);
+    if (!_isTask) {
+      NodeEventLink.unmarkEventAsNode(calendar, nodes, syncedId);
+      return;
+    }
+    NodeEventLink.markEventAsNode(calendar, nodes, syncedId);
     if (_done) {
-      TaskEventLink.toggleEventDone(calendar, tasks, syncedId);
+      NodeEventLink.toggleEventDone(calendar, nodes, syncedId);
     }
   }
+
+  void _syncTaskLinkPostPush(String syncedId) =>
+      _applyTaskLinkPostSync(syncedId);
 
   static bool _sameAssignees(
       List<TaskAssignee> a, List<TaskAssignee> b) {
@@ -1102,22 +1756,22 @@ class EventEditorFormState extends State<EventEditorForm> {
     calendar.updateEvent(synced.copyWith(assignees: List.of(_people)));
   }
 
-  /// Mirrors the editor's people onto the source task a new event was
+  /// Mirrors the editor's people onto the source node a new event was
   /// created from. Skipped when nothing changed (the common case: the
-  /// picker was seeded from the task).
+  /// picker was seeded from the node).
   void _mirrorAssigneesToSourceTask() {
     final sourceId = _sourceTaskId;
     if (sourceId == null) return;
-    TaskCubit tasks;
+    NodeCubit nodes;
     try {
-      tasks = context.read<TaskCubit>();
+      nodes = context.read<NodeCubit>();
     } catch (_) {
       return;
     }
-    final source = tasks.byId(sourceId);
+    final source = nodes.byId(sourceId);
     if (source == null) return;
     if (_sameAssignees(source.assignees, _people)) return;
-    tasks.updateTask(source.copyWith(assignees: List.of(_people)));
+    nodes.updateNode(source.copyWith(assignees: List.of(_people)));
   }
 
   void _delete(BuildContext context) async {
@@ -1126,14 +1780,32 @@ class EventEditorFormState extends State<EventEditorForm> {
     final calendarCubit = context.read<CalendarCubit>();
     final existing = widget.existing;
     if (existing == null) return;
-    void clearTaskLink() {
+    void clearTaskLink({bool wholeSeries = false}) {
       try {
-        final taskCubit = context.read<TaskCubit>();
-        if (existing.taskId != null) {
-          taskCubit.clearCalendarEvent(existing.taskId!);
+        final nodeCubit = context.read<NodeCubit>();
+        if (!wholeSeries) {
+          if (existing.taskId != null) {
+            nodeCubit.clearCalendarEvent(existing.taskId!);
+          }
+          nodeCubit.clearCalendarEventForEvent(existing.id);
+          nodeCubit.removeNodesForEvent(existing.id);
+          return;
         }
-        taskCubit.clearCalendarEventForEvent(existing.id);
-        taskCubit.removeTasksForEvent(existing.id);
+        final key = FeedCubit.seriesRemoteId(existing) ??
+            FeedCubit.seriesKeyFor(existing);
+        final ids = <String>{existing.id};
+        if (key != null) {
+          for (final event in calendarCubit.state) {
+            if (FeedCubit.seriesKeyFor(event) == key) ids.add(event.id);
+          }
+        }
+        for (final id in ids) {
+          nodeCubit.clearCalendarEventForEvent(id);
+          nodeCubit.removeNodesForEvent(id);
+        }
+        if (existing.taskId != null) {
+          nodeCubit.clearCalendarEvent(existing.taskId!);
+        }
       } catch (_) {}
     }
 
@@ -1195,12 +1867,84 @@ class EventEditorFormState extends State<EventEditorForm> {
       );
       return;
     }
-    clearTaskLink();
+    clearTaskLink(wholeSeries: series);
     widget.onFinished?.call();
   }
 }
 
 enum _DeleteChoice { cancel, occurrence, series }
+
+enum _EditChoice { cancel, occurrence, series }
+
+/// Calendar picker isolated from [EventEditorFormState.build] so feed syncs
+/// (status/last-sync emissions) only rebuild this dropdown, not the whole
+/// editor. Uses `value` (not `initialValue` + ValueKey) so feed updates
+/// never reset the widget state mid-interaction.
+class _CalendarPicker extends StatelessWidget {
+  final PlannerEvent? existing;
+  final String? saveTargetFeedId;
+  final bool Function(FeedCubit feeds) canChangeCalendar;
+  final ValueChanged<String?> onChanged;
+
+  const _CalendarPicker({
+    required this.existing,
+    required this.saveTargetFeedId,
+    required this.canChangeCalendar,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final feedCubit = context.watch<FeedCubit>();
+    final existing = this.existing;
+    final showPicker =
+        existing == null || feedCubit.isEventEditable(existing);
+    if (!showPicker) return const SizedBox.shrink();
+    final googleFeeds = feedCubit.state
+        .where((f) =>
+            f.kind == FeedKind.google &&
+            f.calendarId != null &&
+            f.calendarId!.isNotEmpty)
+        .toList();
+    final validTarget =
+        googleFeeds.any((f) => f.id == saveTargetFeedId)
+            ? saveTargetFeedId
+            : null;
+    final disabled = existing != null &&
+        !canChangeCalendar(feedCubit) &&
+        feedCubit.isEventEditable(existing);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        DropdownButtonFormField<String?>(
+          initialValue: validTarget,
+          isExpanded: true,
+          decoration: InputDecoration(
+            labelText: existing == null ? 'Save to' : 'Calendar',
+            border: const OutlineInputBorder(),
+            helperText: disabled
+                ? 'Moving repeating events between calendars isn’t supported yet.'
+                : null,
+          ),
+          items: [
+            const DropdownMenuItem(
+              value: null,
+              child: Text('This device'),
+            ),
+            for (final feed in googleFeeds)
+              DropdownMenuItem(
+                value: feed.id,
+                child: Text(feed.name),
+              ),
+          ],
+          onChanged: disabled ? null : onChanged,
+        ),
+        const SizedBox(height: 12),
+      ],
+    );
+  }
+}
 
 class _EventPeopleLine extends StatelessWidget {
   final PlannerEvent event;
@@ -1279,6 +2023,182 @@ class _PlaceField extends StatelessWidget {
       ],
       onChanged: onChanged,
     );
+  }
+}
+
+/// Events already on the picked day, so a time can be chosen without
+/// flipping back to the calendar behind the sheet. On narrow screens the
+/// sheet's scrim dims the calendar ("grayed out"), which is why synced
+/// calendars looked missing when scheduling from the task menu.
+class _DayConflictsSection extends StatelessWidget {
+  final DateTime day;
+  final bool allDay;
+  final TimeOfDay startTime;
+  final TimeOfDay endTime;
+  final String? excludeId;
+
+  const _DayConflictsSection({
+    required this.day,
+    required this.allDay,
+    required this.startTime,
+    required this.endTime,
+    this.excludeId,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    List<PlannerEvent> dayEvents;
+    String? syncWarning;
+    try {
+      final calendar = context.watch<CalendarCubit>();
+      final feeds = context.watch<FeedCubit>();
+      dayEvents = calendar
+          .eventsOnDay(day)
+          .where((e) =>
+              e.id != calendarDraftEventId &&
+              e.id != excludeId &&
+              feeds.isFeedVisible(e.feedId))
+          .toList();
+      final failing = feeds.state
+          .where((f) =>
+              f.enabled &&
+              f.kind == FeedKind.google &&
+              f.lastError != null &&
+              f.lastError!.isNotEmpty)
+          .toList();
+      if (failing.isNotEmpty) {
+        syncWarning = 'Google sync issue (${failing.first.name}): '
+            '${failing.first.lastError} — events may be missing.';
+      }
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
+    dayEvents.sort((a, b) => a.start.compareTo(b.start));
+    final selStart = DateTime(
+        day.year, day.month, day.day, startTime.hour, startTime.minute);
+    var selEnd = DateTime(
+        day.year, day.month, day.day, endTime.hour, endTime.minute);
+    if (!selEnd.isAfter(selStart)) {
+      selEnd = selStart.add(const Duration(hours: 1));
+    }
+    bool overlaps(PlannerEvent e) {
+      if (allDay) return false;
+      return e.start.isBefore(selEnd) && selStart.isBefore(e.end);
+    }
+
+    final timeFormat = DateFormat('h:mm a');
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.dividerColor),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            dayEvents.isEmpty
+                ? 'That day — clear'
+                : 'That day (${dayEvents.length})',
+            style: theme.textTheme.labelLarge,
+          ),
+          const SizedBox(height: 4),
+          if (dayEvents.isEmpty)
+            Text(
+              'No events that day — clear.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            )
+          else
+            for (final event in dayEvents.take(6))
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: _dotColor(context, event),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            event.subject,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodyMedium,
+                          ),
+                          Text(
+                            event.allDay
+                                ? 'All day'
+                                : '${timeFormat.format(event.start)} – '
+                                    '${timeFormat.format(event.end)}',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (overlaps(event))
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.errorContainer,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          'Overlaps',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.onErrorContainer,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+          if (dayEvents.length > 6)
+            Text(
+              '+${dayEvents.length - 6} more that day',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          if (syncWarning != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              syncWarning,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.error,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Color _dotColor(BuildContext context, PlannerEvent event) {
+    final label = event.classLabel;
+    if (label != null && label.isNotEmpty) return courseColor(label);
+    if (event.colorValue != null) {
+      return mutedCalendarColor(Color(event.colorValue!));
+    }
+    try {
+      final feed = context.read<FeedCubit>().byId(event.feedId ?? '');
+      if (feed != null) return mutedCalendarColor(feed.color);
+    } catch (_) {}
+    return const Color(_personalEventColor);
   }
 }
 
@@ -1445,7 +2365,7 @@ class EventDetailView extends StatelessWidget {
                     ? event.isRecurringInstance
                         ? 'Part of a repeating series on ${feed?.name ?? 'Google'} — '
                             'dragging moves just this occurrence, editing '
-                            'changes the whole series.'
+                            'lets you pick this occurrence or the whole series.'
                         : 'Synced with ${feed?.name ?? 'Google'} — edits save '
                             'back to Google Calendar.'
                     : 'Synced from ${feed?.name ?? 'your class'} — changes there '
@@ -1486,19 +2406,20 @@ class _TaskStatusTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Task? backing;
+    Node? backing;
     try {
-      for (final t in context.watch<TaskCubit>().state) {
-        if (t.calendarEventId == event.id ||
-            t.sourceEventId == event.id ||
-            t.id == event.taskId) {
-          backing = t;
+      for (final n in context.watch<NodeCubit>().state) {
+        if (n.calendarEventId == event.id ||
+            n.sourceEventId == event.id ||
+            n.id == event.taskId) {
+          backing = n;
           break;
         }
       }
     } catch (_) {}
-    final done = backing?.done ?? event.done;
-    final failed = backing?.failed ?? event.failed;
+    final done = backing?.isDone ?? event.done;
+    final failed =
+        backing != null ? backing.status == NodeStatus.failed : event.failed;
     final label = done
         ? 'Completed'
         : failed
@@ -1506,7 +2427,7 @@ class _TaskStatusTile extends StatelessWidget {
             : 'Not done';
     return Row(
       children: [
-        EventTaskCheckbox(event: event),
+        EventNodeCheckbox(event: event),
         const SizedBox(width: 8),
         Expanded(
           child: Text(
@@ -1532,42 +2453,43 @@ class _TaskTimeSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Task? task;
+    Node? node;
     try {
-      for (final t in context.watch<TaskCubit>().state) {
-        if (t.calendarEventId == event.id ||
-            t.sourceEventId == event.id ||
-            t.id == event.taskId) {
-          task = t;
+      for (final n in context.watch<NodeCubit>().state) {
+        if (n.calendarEventId == event.id ||
+            n.sourceEventId == event.id ||
+            n.id == event.taskId) {
+          node = n;
           break;
         }
       }
     } catch (_) {}
-    if (task == null) {
+    if (node == null) {
       if (event.allDay) return const SizedBox.shrink();
       return _TimeReportSection(event: event);
     }
+    final failed = node.status == NodeStatus.failed;
     final theme = Theme.of(context);
     final timeFormatter = DateFormat('h:mm a');
-    final plannedStart = task.plannedStart ?? event.start;
-    final plannedEnd = task.plannedEnd ?? event.end;
+    final plannedStart = node.schedule?.start ?? event.start;
+    final plannedEnd = node.schedule?.end ?? event.end;
     final plannedMin = plannedEnd.isAfter(plannedStart)
         ? plannedEnd.difference(plannedStart).inMinutes
         : 0;
-    final reported = task.reportedDuration;
+    final reported = node.reportedDuration;
     final lines = <String>[
       'Planned ${timeFormatter.format(plannedStart)} – '
           '${timeFormatter.format(plannedEnd)} (${plannedMin}m)',
-      if (task.isTracking && task.timerStartedAt != null)
-        'Recording since ${timeFormatter.format(task.timerStartedAt!)}',
+      if (node.isTracking && node.timerStartedAt != null)
+        'Recording since ${timeFormatter.format(node.timerStartedAt!)}',
       if (reported != null &&
-          task.actualStart != null &&
-          task.actualEnd != null)
-        'Reported ${timeFormatter.format(task.actualStart!)} – '
-            '${timeFormatter.format(task.actualEnd!)} (${reported.inMinutes}m)',
-      if (task.failed) 'Marked as failed',
+          node.actualStart != null &&
+          node.actualEnd != null)
+        'Reported ${timeFormatter.format(node.actualStart!)} – '
+            '${timeFormatter.format(node.actualEnd!)} (${reported.inMinutes}m)',
+      if (failed) 'Marked as failed',
     ];
-    final taskId = task.id;
+    final nodeId = node.id;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1597,21 +2519,21 @@ class _TaskTimeSection extends StatelessWidget {
             spacing: 8,
             runSpacing: 4,
             children: [
-              if (task.isTracking)
+              if (node.isTracking)
                 FilledButton.icon(
-                  onPressed: () => stopTaskAndFinish(context, taskId),
+                  onPressed: () => stopNodeAndFinish(context, nodeId),
                   icon: const Icon(Icons.stop, size: 16),
                   label: const Text('Stop'),
                 )
               else
                 OutlinedButton.icon(
-                  onPressed: task.done
+                  onPressed: node.isDone
                       ? null
                       : () {
                           try {
                             context
-                                .read<TaskCubit>()
-                                .startTracking(taskId);
+                                .read<NodeCubit>()
+                                .startTracking(nodeId);
                           } catch (_) {}
                         },
                   icon: const Icon(Icons.play_arrow, size: 16),
@@ -1620,30 +2542,30 @@ class _TaskTimeSection extends StatelessWidget {
               OutlinedButton(
                 onPressed: () {
                   try {
-                    TaskEventLink.setTaskFailed(
-                      context.read<TaskCubit>(),
+                    NodeEventLink.setNodeFailed(
+                      context.read<NodeCubit>(),
                       context.read<CalendarCubit>(),
-                      taskId,
-                      !task!.failed,
+                      nodeId,
+                      !failed,
                     );
                   } catch (_) {}
                 },
                 style: OutlinedButton.styleFrom(
                   foregroundColor:
-                      task.failed ? null : theme.colorScheme.error,
+                      failed ? null : theme.colorScheme.error,
                 ),
-                child: Text(task.failed ? 'Unfail' : 'Mark failed'),
+                child: Text(failed ? 'Unfail' : 'Mark failed'),
               ),
               TextButton(
                 onPressed: () =>
-                    showFollowUpScheduler(context, taskId: taskId),
+                    showFollowUpScheduler(context, nodeId: nodeId),
                 child: const Text('Follow-up'),
               ),
-              if (task.hasReported && !task.isTracking)
+              if (node.hasReported && !node.isTracking)
                 TextButton(
                   onPressed: () {
                     try {
-                      context.read<TaskCubit>().clearReported(taskId);
+                      context.read<NodeCubit>().clearReported(nodeId);
                     } catch (_) {}
                   },
                   child: const Text('Clear reported'),

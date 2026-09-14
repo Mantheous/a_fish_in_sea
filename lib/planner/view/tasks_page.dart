@@ -4,22 +4,22 @@ import 'package:intl/intl.dart';
 
 import '../../common/undo/undo_bar.dart';
 import '../../common/undo/undo_cubit.dart';
-import '../../goals/bloc/goal_cubit.dart';
-import '../../goals/bloc/tag_cubit.dart';
-import '../../goals/model/goal.dart';
 import '../../navigation/bloc/navigation_cubit.dart';
 import '../../navigation/view/app_drawer.dart';
+import '../../nodes/bloc/node_cubit.dart';
+import '../../nodes/model/node.dart';
+import '../../nodes/service/node_progress.dart';
+import '../../nodes/view/node_checkbox.dart';
+import '../../nodes/view/node_editor.dart';
+import '../../nodes/view/node_finish_sheet.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/feed_cubit.dart';
-import '../bloc/task_cubit.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
-import '../model/task.dart';
+import '../model/task_assignee.dart';
 import 'feed_manager.dart';
-import 'task_checkbox.dart';
-import 'task_editor.dart';
-import 'task_finish_sheet.dart';
+import 'syllabus_import_sheet.dart';
 
 class TasksPage extends StatelessWidget {
   const TasksPage({super.key});
@@ -32,6 +32,11 @@ class TasksPage extends StatelessWidget {
         appBar: AppBar(
           title: const Text('Tasks'),
           actions: [
+            IconButton(
+              tooltip: 'Import from syllabus',
+              icon: const Icon(Icons.auto_awesome),
+              onPressed: () => showSyllabusImport(context),
+            ),
             IconButton(
               tooltip: 'Manage classes',
               icon: const Icon(Icons.sync),
@@ -48,7 +53,7 @@ class TasksPage extends StatelessWidget {
         ),
         drawer: const AppDrawer(),
         floatingActionButton: FloatingActionButton(
-          onPressed: () => showTaskEditor(context),
+          onPressed: () => showNodeEditor(context),
           child: const Icon(Icons.add),
         ),
         body: TabBarView(
@@ -67,82 +72,22 @@ class _TodoTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BlocBuilder<TaskCubit, List<Task>>(
-      builder: (context, tasks) {
+    return BlocBuilder<NodeCubit, List<Node>>(
+      builder: (context, nodes) {
         final feedCubit = context.watch<FeedCubit>();
-        final open = feedCubit.visibleTasks(
-          context.read<TaskCubit>().openTasks,
+        final open = feedCubit.visibleNodes(
+          context.read<NodeCubit>().openNodes,
         );
         return ListView(
           children: [
             if (open.isEmpty)
               const _EmptyTodo()
             else
-              for (final task in open)
-                _TaskTile(task: task, showClass: true),
-            const _GoalTasksSection(),
+              for (final node in open)
+                _NodeTile(node: node, showClass: true),
           ],
         );
       },
-    );
-  }
-}
-
-class _GoalTasksSection extends StatelessWidget {
-  const _GoalTasksSection();
-
-  @override
-  Widget build(BuildContext context) {
-    List<Goal> goals;
-    try {
-      goals = context.watch<GoalCubit>().state;
-    } catch (_) {
-      return const SizedBox.shrink();
-    }
-    final shown = goals
-        .where((g) =>
-            g.type == GoalType.checklist && g.showInTasks && !g.done)
-        .toList()
-      ..sort((a, b) => a.deadline.compareTo(b.deadline));
-    if (shown.isEmpty) return const SizedBox.shrink();
-    Map<String, String> tagNames;
-    try {
-      tagNames = {
-        for (final t in context.watch<TagCubit>().state) t.id: t.name
-      };
-    } catch (_) {
-      tagNames = const {};
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: Text('Goals',
-              style: TextStyle(fontWeight: FontWeight.bold)),
-        ),
-        for (final goal in shown)
-          ListTile(
-            leading: Checkbox(
-              value: false,
-              onChanged: (_) =>
-                  context.read<GoalCubit>().toggleDone(goal.id),
-            ),
-            title: Text(goal.title),
-            subtitle: Text(
-              'Goal · due ${DateFormat('EEE, MMM d').format(goal.deadline)}'
-              '${goal.tagIds.isEmpty ? '' : ' · ${goal.tagIds.map((id) => tagNames[id] ?? 'tag').join(', ')}'}',
-            ),
-            trailing: IconButton(
-              tooltip: 'Open goal',
-              icon: const Icon(Icons.flag_outlined),
-              onPressed: () =>
-                  context.read<NavigationCubit>().setPage(PlannerPage.goals),
-            ),
-            onTap: () =>
-                context.read<NavigationCubit>().setPage(PlannerPage.goals),
-          ),
-      ],
     );
   }
 }
@@ -158,9 +103,18 @@ class _EmptyTodo extends StatelessWidget {
         children: [
           const Icon(Icons.check_circle_outline, size: 48),
           const SizedBox(height: 8),
-          Text('Nothing to do!', style: Theme.of(context).textTheme.titleMedium),
+          Text('Nothing to do!',
+              style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 4),
-          const Text('Add a task with the + button'),
+          const Text('Add a node with the + button'),
+          const SizedBox(height: 12),
+          Builder(
+            builder: (context) => OutlinedButton.icon(
+              onPressed: () => showSyllabusImport(context),
+              icon: const Icon(Icons.auto_awesome),
+              label: const Text('Import from syllabus'),
+            ),
+          ),
         ],
       ),
     );
@@ -185,10 +139,10 @@ class _HomeworkTabState extends State<_HomeworkTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    final taskCubit = context.watch<TaskCubit>();
+    final nodeCubit = context.watch<NodeCubit>();
     final feedCubit = context.watch<FeedCubit>();
-    final imported = feedCubit
-        .visibleTasks(taskCubit.state.where((t) => t.isImported).toList());
+    final imported = feedCubit.visibleNodes(
+        nodeCubit.state.where((n) => n.isHomework).toList());
     if (imported.isEmpty) {
       return Center(
         child: Padding(
@@ -219,10 +173,10 @@ class _HomeworkTabState extends State<_HomeworkTab>
         ),
       );
     }
-    final byClass = <String, List<Task>>{};
-    for (final task in imported) {
-      final key = task.classLabel ?? task.classId ?? '';
-      byClass.putIfAbsent(key, () => []).add(task);
+    final byClass = <String, List<Node>>{};
+    for (final node in imported) {
+      final key = node.classLabel ?? node.classId ?? '';
+      byClass.putIfAbsent(key, () => []).add(node);
     }
     // Sorted keys keep tile order stable across rebuilds so expansion
     // state never jumps to the wrong class.
@@ -245,7 +199,8 @@ class _HomeworkTabState extends State<_HomeworkTab>
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.refresh),
-              onPressed: syncing ? null : () => feedCubit.syncAll(force: true),
+              onPressed:
+                  syncing ? null : () => feedCubit.syncAll(force: true),
             ),
           ),
         ),
@@ -255,7 +210,7 @@ class _HomeworkTabState extends State<_HomeworkTab>
             itemBuilder: (context, index) {
               final groupKey = groupKeys[index];
               final labeled = !byClass[groupKey]!.every(
-                (task) => task.classLabel == null,
+                (node) => node.classLabel == null,
               );
               final Color groupColor;
               final String groupName;
@@ -269,7 +224,7 @@ class _HomeworkTabState extends State<_HomeworkTab>
                     : mutedCalendarColor(feed.color);
                 groupName = feed?.name ?? 'Unknown class';
               }
-              final classTasks = byClass[groupKey]!..sort(_compare);
+              final classNodes = byClass[groupKey]!..sort(_compare);
               return Card(
                 margin: const EdgeInsets.fromLTRB(8, 4, 8, 4),
                 child: ExpansionTile(
@@ -292,13 +247,14 @@ class _HomeworkTabState extends State<_HomeworkTab>
                       shape: BoxShape.circle,
                     ),
                   ),
-                  title: Text(groupName),
+                  title:
+                      Text(groupName, overflow: TextOverflow.ellipsis),
                   subtitle: Text(
-                    '${classTasks.where((t) => !t.done).length} to do',
+                    '${classNodes.where((n) => n.isOpen).length} to do',
                   ),
                   children: [
-                    for (final task in classTasks)
-                      _TaskTile(task: task, showClass: false),
+                    for (final node in classNodes)
+                      _NodeTile(node: node, showClass: false),
                   ],
                 ),
               );
@@ -309,9 +265,9 @@ class _HomeworkTabState extends State<_HomeworkTab>
     );
   }
 
-  static int _compare(Task a, Task b) {
-    final aDue = a.due;
-    final bDue = b.due;
+  static int _compare(Node a, Node b) {
+    final aDue = a.schedule?.due;
+    final bDue = b.schedule?.due;
     if (aDue == null && bDue == null) return 0;
     if (aDue == null) return 1;
     if (bDue == null) return -1;
@@ -319,25 +275,35 @@ class _HomeworkTabState extends State<_HomeworkTab>
   }
 }
 
-class _TaskTile extends StatelessWidget {
-  final Task task;
+bool _isDueToday(DateTime due, DateTime now) {
+  final today = DateTime(now.year, now.month, now.day);
+  final day = DateTime(due.year, due.month, due.day);
+  return day == today;
+}
+
+class _NodeTile extends StatelessWidget {
+  final Node node;
   final bool showClass;
 
-  const _TaskTile({required this.task, required this.showClass});
+  const _NodeTile({required this.node, required this.showClass});
   @override
   Widget build(BuildContext context) {
-    final taskCubit = context.read<TaskCubit>();
+    final nodeCubit = context.read<NodeCubit>();
     final feedCubit = context.watch<FeedCubit>();
+    final allNodes = context.watch<NodeCubit>().state;
     final calendarEvents = context.watch<CalendarCubit>().state;
-    final live = context.watch<TaskCubit>().byId(task.id) ?? task;
+    final live = context.watch<NodeCubit>().byId(node.id) ?? node;
+    final failed = live.status == NodeStatus.failed;
+    final now = DateTime.now();
     final Color chipColor;
     final String chipLabel;
     if (showClass && live.classLabel != null) {
       chipColor = courseColor(live.classLabel!);
       chipLabel = live.classLabel!;
     } else {
-      final feed =
-          showClass && live.classId != null ? feedCubit.byId(live.classId!) : null;
+      final feed = showClass && live.classId != null
+          ? feedCubit.byId(live.classId!)
+          : null;
       chipColor = feed == null
           ? Theme.of(context).colorScheme.primary
           : mutedCalendarColor(feed.color);
@@ -348,31 +314,37 @@ class _TaskTile extends StatelessWidget {
     final hasEvent = _hasCalendarEvent(live, calendarEvents);
     final timeFormat = DateFormat('h:mm a');
     String? workLine;
-    if (live.failed) {
+    final plannedStart = live.schedule?.start;
+    final plannedEnd = live.schedule?.end;
+    if (failed) {
       workLine = 'Failed';
     } else if (live.isTracking) {
       workLine = 'Recording…';
     } else if (live.hasReported && live.reportedDuration != null) {
-      final planned = live.plannedDuration;
+      final planned = live.schedule?.plannedDuration;
       workLine = planned == null
           ? 'Reported ${live.reportedDuration!.inMinutes}m'
           : 'Reported ${live.reportedDuration!.inMinutes}m '
               '(planned ${planned.inMinutes}m)';
-    } else if (live.hasPlanned &&
-        live.plannedStart != null &&
-        live.plannedEnd != null) {
-      workLine = 'Planned ${timeFormat.format(live.plannedStart!)} – '
-          '${timeFormat.format(live.plannedEnd!)}';
+    } else if (plannedStart != null && plannedEnd != null) {
+      workLine = 'Planned ${timeFormat.format(plannedStart)} – '
+          '${timeFormat.format(plannedEnd)}';
+    } else if (live.money != null) {
+      final actual = moneyActualForNode(live, allNodes);
+      workLine =
+          '\$${actual.toStringAsFixed(2)} / \$${live.money!.effectiveTarget.toStringAsFixed(2)}';
     }
+    final due = live.schedule?.due;
     return ListTile(
-      leading: TaskCheckbox(task: live),
+      leading: NodeCheckbox(node: live),
       title: Text(
         live.title,
         style: TextStyle(
-          decoration: live.done || live.failed ? TextDecoration.lineThrough : null,
-          color: live.failed
+          decoration:
+              live.isDone || failed ? TextDecoration.lineThrough : null,
+          color: failed
               ? theme.colorScheme.error
-              : live.done
+              : live.isDone
                   ? theme.colorScheme.outline
                   : null,
         ),
@@ -381,31 +353,44 @@ class _TaskTile extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 2,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              if (hasChip) ...[
-                Container(
-                  width: 8,
-                  height: 8,
-                  margin: const EdgeInsets.only(right: 4),
-                  decoration: BoxDecoration(
-                    color: chipColor,
-                    shape: BoxShape.circle,
-                  ),
+              if (hasChip)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      margin: const EdgeInsets.only(right: 4),
+                      decoration: BoxDecoration(
+                        color: chipColor,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    Flexible(
+                      child: Text(
+                        chipLabel,
+                        style: theme.textTheme.labelSmall,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
                 ),
+              if (due != null)
                 Text(
-                  chipLabel,
-                  style: theme.textTheme.labelSmall,
-                ),
-                const SizedBox(width: 8),
-              ],
-              if (live.due != null)
-                Text(
-                  'Due ${DateFormat('EEE, MMM d').format(live.due!)}',
+                  'Due ${DateFormat('EEE, MMM d').format(due)}',
                   style: theme.textTheme.labelSmall?.copyWith(
-                    color: live.isOverdue ? theme.colorScheme.error : null,
-                    fontWeight:
-                        live.isDueToday ? FontWeight.bold : null,
+                    color: live.isOverdueAt(now)
+                        ? theme.colorScheme.error
+                        : null,
+                    fontWeight: _isDueToday(due, now)
+                        ? FontWeight.bold
+                        : null,
                   ),
                 ),
             ],
@@ -414,12 +399,12 @@ class _TaskTile extends StatelessWidget {
             Text(
               workLine,
               style: theme.textTheme.labelSmall?.copyWith(
-                color: live.failed
+                color: failed
                     ? theme.colorScheme.error
                     : live.isTracking
                         ? theme.colorScheme.primary
                         : null,
-                fontWeight: live.failed || live.isTracking
+                fontWeight: failed || live.isTracking
                     ? FontWeight.w600
                     : null,
               ),
@@ -427,27 +412,31 @@ class _TaskTile extends StatelessWidget {
           if (live.assignees.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 2),
-              child: _AssigneeLine(task: live),
+              child: _AssigneeLine(assignees: live.assignees),
             ),
         ],
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.end,
         children: [
           IconButton(
             tooltip: live.isTracking ? 'Stop recording' : 'Start recording',
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.all(8),
+            constraints: const BoxConstraints(),
             icon: Icon(
               live.isTracking ? Icons.stop : Icons.play_arrow,
               color: live.isTracking ? theme.colorScheme.primary : null,
             ),
-            onPressed: live.done
+            onPressed: live.isDone
                 ? null
                 : () {
                     if (live.isTracking) {
-                      stopTaskAndFinish(context, live.id);
+                      stopNodeAndFinish(context, live.id);
                     } else {
                       try {
-                        taskCubit.startTracking(live.id);
+                        nodeCubit.startTracking(live.id);
                       } catch (_) {}
                     }
                   },
@@ -456,6 +445,9 @@ class _TaskTile extends StatelessWidget {
             tooltip: hasEvent
                 ? 'Event added — tap to add another'
                 : 'Add to calendar',
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.all(8),
+            constraints: const BoxConstraints(),
             icon: Icon(
               Icons.event_available,
               color: hasEvent ? theme.colorScheme.primary : null,
@@ -463,8 +455,11 @@ class _TaskTile extends StatelessWidget {
             onPressed: () => _addToCalendar(context, live),
           ),
           PopupMenuButton<String>(
+            padding: EdgeInsets.zero,
             onSelected: (value) {
-              if (value == 'edit') showTaskEditor(context, existing: live);
+              if (value == 'edit') {
+                showNodeEditor(context, existing: live);
+              }
               if (value == 'delete') _delete(context, live);
               if (value == 'calendar') _addToCalendar(context, live);
             },
@@ -479,27 +474,27 @@ class _TaskTile extends StatelessWidget {
           ),
         ],
       ),
-      onTap: () => showTaskEditor(context, existing: live),
+      onTap: () => showNodeEditor(context, existing: live),
     );
   }
 
   static bool _hasCalendarEvent(
-      Task task, List<PlannerEvent> calendarEvents) {
-    final linkedId = task.calendarEventId;
+      Node node, List<PlannerEvent> calendarEvents) {
+    final linkedId = node.calendarEventId;
     if (linkedId != null) {
       for (final event in calendarEvents) {
         if (event.id == linkedId) return true;
       }
     }
     for (final event in calendarEvents) {
-      if (event.taskId != null && event.taskId == task.id) return true;
+      if (event.taskId != null && event.taskId == node.id) return true;
     }
     return false;
   }
 
-  void _addToCalendar(BuildContext context, Task task) {
+  void _addToCalendar(BuildContext context, Node node) {
     context.read<CalendarDraftCubit>().requestDraft(
-          draftSeedFromTask(task),
+          draftSeedFromNode(node),
         );
     context.read<NavigationCubit>().setPage(PlannerPage.calendar);
     ScaffoldMessenger.of(context).showSnackBar(
@@ -512,9 +507,9 @@ class _TaskTile extends StatelessWidget {
     );
   }
 
-  void _delete(BuildContext context, Task task) {
-    final eventId = task.calendarEventId ?? task.sourceEventId;
-    context.read<TaskCubit>().deleteTask(task.id);
+  void _delete(BuildContext context, Node node) {
+    final eventId = node.calendarEventId ?? node.sourceEventId;
+    context.read<NodeCubit>().deleteNode(node.id);
     if (eventId != null) {
       try {
         context.read<CalendarCubit>().clearTaskLink(eventId);
@@ -522,7 +517,7 @@ class _TaskTile extends StatelessWidget {
     }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: const Text('Task deleted'),
+        content: const Text('Node deleted'),
         action: SnackBarAction(
           label: 'Undo',
           onPressed: () => context.read<UndoCubit>().undo(),
@@ -533,15 +528,15 @@ class _TaskTile extends StatelessWidget {
 }
 
 class _AssigneeLine extends StatelessWidget {
-  final Task task;
+  final List<TaskAssignee> assignees;
 
-  const _AssigneeLine({required this.task});
+  const _AssigneeLine({required this.assignees});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final shown = task.assignees.take(3).toList();
-    final extra = task.assignees.length - shown.length;
+    final shown = assignees.take(3).toList();
+    final extra = assignees.length - shown.length;
     final names = shown.map((a) => a.displayName).join(', ');
     return Row(
       children: [

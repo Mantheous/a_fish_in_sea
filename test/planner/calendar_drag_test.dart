@@ -2,9 +2,10 @@ import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_draft_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
-import 'package:a_fish_in_sea/planner/bloc/task_cubit.dart';
+import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
@@ -43,7 +44,8 @@ void main() {
           BlocProvider.value(value: settingsCubit),
           BlocProvider.value(value: calendarCubit),
           BlocProvider(create: (_) => CalendarDraftCubit()),
-          BlocProvider(create: (_) => TaskCubit()),
+          BlocProvider(create: (_) => CalendarVisibilityCubit()),
+          BlocProvider(create: (_) => NodeCubit()),
           BlocProvider.value(value: feedCubit),
         ],
         child: const MaterialApp(home: CalendarPage()),
@@ -54,11 +56,11 @@ void main() {
 
   testWidgets('tapping an event opens the drawer', (tester) async {
     final calendarCubit = CalendarCubit();
-    final taskCubit = TaskCubit();
+    final nodeCubit = NodeCubit();
     final settingsCubit = SettingsCubit();
     final feedCubit = FeedCubit(
       calendarCubit: calendarCubit,
-      taskCubit: taskCubit,
+      nodeCubit: nodeCubit,
       icalService: IcalService(),
       googleService: MockGoogleService(),
       proxyBase: () => '',
@@ -89,11 +91,11 @@ void main() {
 
   testWidgets('long-press hold suppresses the tap drawer', (tester) async {
     final calendarCubit = CalendarCubit();
-    final taskCubit = TaskCubit();
+    final nodeCubit = NodeCubit();
     final settingsCubit = SettingsCubit();
     final feedCubit = FeedCubit(
       calendarCubit: calendarCubit,
-      taskCubit: taskCubit,
+      nodeCubit: nodeCubit,
       icalService: IcalService(),
       googleService: MockGoogleService(),
       proxyBase: () => '',
@@ -126,11 +128,11 @@ void main() {
 
   testWidgets('dragging an event commits the snapped time', (tester) async {
     final calendarCubit = CalendarCubit();
-    final taskCubit = TaskCubit();
+    final nodeCubit = NodeCubit();
     final settingsCubit = SettingsCubit();
     final feedCubit = FeedCubit(
       calendarCubit: calendarCubit,
-      taskCubit: taskCubit,
+      nodeCubit: nodeCubit,
       icalService: IcalService(),
       googleService: MockGoogleService(),
       proxyBase: () => '',

@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../model/planner_event.dart';
+import 'server_base.dart';
 
 class GoogleCalendarInfo {
   final String id;
@@ -98,23 +100,29 @@ int? parseCssColor(String? raw) {
 class GoogleCalendarService {
   final String Function() baseUrl;
   final String Function() userId;
+  final String? Function()? authToken;
   final http.Client _client;
 
   GoogleCalendarService({
     required this.baseUrl,
     required this.userId,
+    this.authToken,
     http.Client? client,
   }) : _client = client ?? http.Client();
 
-  Map<String, String> get _headers => {'X-App-User-Id': userId()};
+  /// JWT bearer when signed in. The legacy user-id header below is ignored
+  /// by the server (kept only so signed-out calls fail as 401, not 500).
+  Map<String, String> get _headers {
+    final t = authToken?.call();
+    if (t != null && t.isNotEmpty) return {'Authorization': 'Bearer $t'};
+    return {'X-App-User-Id': userId()};
+  }
 
   /// Empty base URL means "the server that serves this app" on web; native
-  /// builds fall back to the local dev server.
+  /// builds fall back to the shared app server (the Tailnet host Plaid
+  /// already uses) instead of phone loopback.
   Uri _uri(String path, [Map<String, String>? query]) {
-    final base = baseUrl().trim().replaceAll(RegExp(r'/+$'), '');
-    final effectiveBase = base.isEmpty
-        ? (kIsWeb ? Uri.base.origin : 'http://127.0.0.1:8000')
-        : base;
+    final effectiveBase = resolveAppServerBase(baseUrl());
     final resolved = Uri.parse(
       effectiveBase.isEmpty ? path : '$effectiveBase$path',
     );
@@ -123,6 +131,33 @@ class GoogleCalendarService {
       ...resolved.queryParameters,
       ...query,
     });
+  }
+
+  /// Runs [request] with a timeout and converts transport failures
+  /// ([http.ClientException], [SocketException], [TimeoutException]) into a
+  /// [GoogleCalendarException] that names the server, instead of leaking a
+  /// bare "ClientException" string into the UI.
+  Future<http.Response> _send(Future<http.Response> Function() request) async {
+    try {
+      return await request().timeout(const Duration(seconds: 30));
+    } on GoogleCalendarException {
+      rethrow;
+    } on TimeoutException {
+      throw GoogleCalendarException(
+        'Sync server timed out at ${resolveAppServerBase(baseUrl())} — '
+        'is the server running?',
+      );
+    } on SocketException catch (e) {
+      throw GoogleCalendarException(
+        'Cannot reach the sync server at ${resolveAppServerBase(baseUrl())} '
+        '(${e.message}) — is the server running and the URL correct?',
+      );
+    } on http.ClientException catch (e) {
+      throw GoogleCalendarException(
+        'Cannot reach the sync server at ${resolveAppServerBase(baseUrl())} '
+        '(${e.message}) — is the server running and the URL correct?',
+      );
+    }
   }
 
   Map<String, dynamic> _decode(http.Response response) {
@@ -148,8 +183,9 @@ class GoogleCalendarService {
   }
 
   Future<bool> isConnected() async {
-    final data = _decode(await _client.get(_uri('/api/google/status'),
-        headers: _headers));
+    final data = _decode(await _send(() => _client.get(
+        _uri('/api/google/status'),
+        headers: _headers)));
     return data['connected'] as bool? ?? false;
   }
 
@@ -158,8 +194,9 @@ class GoogleCalendarService {
   /// must be started from a host registered in the Google Cloud console
   /// (e.g. http://localhost:8000).
   Future<String> authUrl() async {
-    final data = _decode(await _client.get(_uri('/api/google/auth_url'),
-        headers: _headers));
+    final data = _decode(await _send(() => _client.get(
+        _uri('/api/google/auth_url'),
+        headers: _headers)));
     if (data['url'] is! String) {
       throw const GoogleCalendarException('Server did not return an auth URL');
     }
@@ -167,12 +204,14 @@ class GoogleCalendarService {
   }
 
   Future<void> disconnect() async {
-    await _client.post(_uri('/api/google/disconnect'), headers: _headers);
+    await _send(
+        () => _client.post(_uri('/api/google/disconnect'), headers: _headers));
   }
 
   Future<List<GoogleCalendarInfo>> listCalendars() async {
-    final data = _decode(await _client.get(_uri('/api/google/calendars'),
-        headers: _headers));
+    final data = _decode(await _send(() => _client.get(
+        _uri('/api/google/calendars'),
+        headers: _headers)));
     final list = data['calendars'];
     if (list is! List) return const [];
     return list
@@ -230,14 +269,14 @@ class GoogleCalendarService {
     required String feedId,
     required PlannerEvent event,
   }) async {
-    final response = await _client.post(
-      _uri('/api/google/events'),
-      headers: {..._headers, 'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'calendarId': calendarId,
-        ..._writeBody(event),
-      }),
-    );
+    final response = await _send(() => _client.post(
+          _uri('/api/google/events'),
+          headers: {..._headers, 'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'calendarId': calendarId,
+            ..._writeBody(event),
+          }),
+        ));
     return _parseWriteResponse(response, feedId);
   }
 
@@ -248,15 +287,15 @@ class GoogleCalendarService {
     required PlannerEvent event,
     bool instanceEdit = false,
   }) async {
-    final response = await _client.patch(
-      _uri('/api/google/events'),
-      headers: {..._headers, 'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'calendarId': calendarId,
-        'eventId': eventId,
-        ... (instanceEdit ? _instanceWriteBody(event) : _writeBody(event)),
-      }),
-    );
+    final response = await _send(() => _client.patch(
+          _uri('/api/google/events'),
+          headers: {..._headers, 'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'calendarId': calendarId,
+            'eventId': eventId,
+            ... (instanceEdit ? _instanceWriteBody(event) : _writeBody(event)),
+          }),
+        ));
     return _parseWriteResponse(response, feedId);
   }
 
@@ -264,14 +303,14 @@ class GoogleCalendarService {
     required String calendarId,
     required String eventId,
   }) async {
-    final response = await _client.delete(
-      _uri('/api/google/events'),
-      headers: {..._headers, 'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'calendarId': calendarId,
-        'eventId': eventId,
-      }),
-    );
+    final response = await _send(() => _client.delete(
+          _uri('/api/google/events'),
+          headers: {..._headers, 'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'calendarId': calendarId,
+            'eventId': eventId,
+          }),
+        ));
     _decode(response);
   }
 
@@ -280,10 +319,10 @@ class GoogleCalendarService {
     required String feedId,
   }) async {
     final data = _decode(
-      await _client.get(
-        _uri('/api/google/events', {'calendarId': calendarId}),
-        headers: _headers,
-      ),
+      await _send(() => _client.get(
+            _uri('/api/google/events', {'calendarId': calendarId}),
+            headers: _headers,
+          )),
     );
     final list = data['events'];
     if (list is! List) return const [];
@@ -346,13 +385,13 @@ class GoogleCalendarService {
     required String eventId,
   }) async {
     final data = _decode(
-      await _client.get(
-        _uri('/api/google/events/one', {
-          'calendarId': calendarId,
-          'eventId': eventId,
-        }),
-        headers: _headers,
-      ),
+      await _send(() => _client.get(
+            _uri('/api/google/events/one', {
+              'calendarId': calendarId,
+              'eventId': eventId,
+            }),
+            headers: _headers,
+          )),
     );
     final raw = data['event'];
     if (raw is! Map<String, dynamic>) {

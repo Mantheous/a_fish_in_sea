@@ -47,8 +47,14 @@ app.*.map.json
 # Environment variables
 **/.env
 
-# Per-dev Plaid sandbox tokens (local server only)
-server/quickstart/python/.plaid_users.json
-# Per-dev server token stores (local only)
-server/python/.plaid_users.json
-server/python/.google_users.json
+# Per-dev server token stores (local only; import once via
+# server/api `python -m app.migrate_json`, then delete)
+server/.plaid_users.json
+server/.google_users.json
+
+# LearningSuite local scrape state (own login session + course dumps)
+tools/ls_scrape/.venv/
+tools/ls_scrape/.ls-profile/
+tools/ls_scrape/.cookies*
+tools/ls_scrape/raw/
+tools/ls_scrape/tasks.json

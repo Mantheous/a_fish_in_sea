@@ -1,5 +1,4 @@
 import 'package:fl_chart/fl_chart.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -66,6 +65,12 @@ class _StatsBodyState extends State<_StatsBody> {
 
   @override
   Widget build(BuildContext context) {
+    // Subscribe to every cubit _statsFor reads via context.read, otherwise
+    // the week chart goes stale (e.g. new points don't update it until a
+    // place is added/removed).
+    context.watch<TrackingCubit>();
+    context.watch<CalendarCubit>();
+    context.watch<FeedCubit>();
     final cache = <String, List<PlannedSlice>>{};
     final weekStats = [for (final d in _weekDays) _statsFor(context, d, cache)];
     final todayStats = weekStats[_day.weekday - 1];
@@ -201,12 +206,12 @@ class _StatsBodyState extends State<_StatsBody> {
             ),
           ),
         ),
-        if (!LocationService.supported && !kIsWeb)
+        if (!LocationService.supported)
           const Card(
             child: Padding(
               padding: EdgeInsets.all(16),
               child: Text(
-                'Location recording is supported on Android and iOS only.',
+                'GPS is not available on this device — Day review still accepts manual test points.',
               ),
             ),
           ),

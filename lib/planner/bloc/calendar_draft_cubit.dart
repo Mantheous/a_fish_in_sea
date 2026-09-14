@@ -1,21 +1,21 @@
 import 'package:bloc/bloc.dart';
 
+import '../../nodes/model/node.dart';
 import '../model/planner_event.dart';
-import '../model/task.dart';
 
 const String calendarDraftEventId = '__draft__';
 
-PlannerEvent draftSeedFromTask(Task task, {DateTime? now}) {
-  final ref = task.due ?? now ?? DateTime.now();
+PlannerEvent draftSeedFromNode(Node node, {DateTime? now}) {
+  final ref = node.schedule?.due ?? node.schedule?.start ?? now ?? DateTime.now();
   final start = DateTime(ref.year, ref.month, ref.day, 9);
   return PlannerEvent(
     id: calendarDraftEventId,
-    subject: task.title,
-    notes: task.notes,
+    subject: node.title,
+    notes: node.notes,
     start: start,
     end: start.add(const Duration(hours: 1)),
-    classLabel: task.classLabel,
-    taskId: task.id,
+    classLabel: node.classLabel,
+    taskId: node.id,
   );
 }
 

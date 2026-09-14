@@ -14,6 +14,7 @@ import '../bloc/reporting_cubit.dart';
 import '../bloc/tracking_cubit.dart';
 import '../model/place.dart';
 import '../model/reported_entry.dart';
+import '../model/tracked_point.dart';
 import '../reporting_logic.dart';
 import '../service/location_service.dart';
 import 'places_sheet.dart';
@@ -249,7 +250,7 @@ class _DayReviewScreenState extends State<DayReviewScreen> {
                     color: Colors.black54,
                     padding: const EdgeInsets.all(8),
                     child: const Text(
-                      'No points this day — press Start on Home to record.',
+                      'No points this day — press Start on Home, or add a test point below.',
                       style: TextStyle(color: Colors.white),
                       textAlign: TextAlign.center,
                     ),
@@ -272,6 +273,11 @@ class _DayReviewScreenState extends State<DayReviewScreen> {
                 onPressed: () => showPlacesSheet(context),
                 icon: const Icon(Icons.place_outlined, size: 18),
                 label: const Text('Places'),
+              ),
+              TextButton.icon(
+                onPressed: _addTestPoint,
+                icon: const Icon(Icons.add_location_alt_outlined, size: 18),
+                label: const Text('Test point'),
               ),
               const SizedBox(width: 4),
               FilledButton.icon(
@@ -363,15 +369,31 @@ class _DayReviewScreenState extends State<DayReviewScreen> {
     );
   }
 
-  LatLng? _positionAt(List<dynamic> points, DateTime time) {
+  LatLng? _positionAt(List<TrackedPoint> points, DateTime time) {
     LatLng? last;
     for (final p in points) {
-      final point = p as dynamic;
-      final ts = point.timestamp as DateTime;
-      if (ts.isAfter(time)) break;
-      last = LatLng(point.lat as double, point.lng as double);
+      if (p.timestamp.isAfter(time)) break;
+      last = LatLng(p.lat, p.lng);
     }
     return last;
+  }
+
+  void _addTestPoint() {
+    final places = context.read<PlacesCubit>().state;
+    final at = _dayStart.add(Duration(minutes: _scrubMin.round()));
+    final lat = places.isNotEmpty ? places.first.lat : 40.23;
+    final lng = places.isNotEmpty ? places.first.lng : -111.66;
+    context.read<TrackingCubit>().addPoint(
+          TrackedPoint(
+            id: 'pt:manual:${DateTime.now().microsecondsSinceEpoch}',
+            timestamp: at,
+            lat: lat,
+            lng: lng,
+          ),
+        );
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Test point added at the scrub time.')),
+    );
   }
 }
 

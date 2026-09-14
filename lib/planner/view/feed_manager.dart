@@ -219,7 +219,7 @@ void _confirmDelete(BuildContext context, Feed feed, [String itemNoun = 'class']
   showDialog<void>(
     context: context,
     builder: (dialogContext) => AlertDialog(
-      title: Text('Remove ${itemNoun}?'),
+      title: Text('Remove $itemNoun?'),
       content: Text(
         'Remove "${feed.name}"? Its $capitalized assignments will be removed from the '
         'calendar and its imported tasks deleted.',

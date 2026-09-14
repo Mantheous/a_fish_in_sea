@@ -1,27 +1,38 @@
 import 'dart:convert';
 
-import 'package:a_fish_in_sea/finances/service/plaid_config.dart';
+import 'package:a_fish_in_sea/sync/sync_client.dart' show SyncAuth;
 import 'package:http/http.dart' as http;
 
 import 'plaid_service_io.dart'
     if (dart.library.html) 'plaid_service_stub.dart' as platform_url;
 
-/// HTTP client for the local Plaid backend ([PlaidConfig.serverUrl]).
+/// HTTP client for the Plaid backend (the one app server).
 class PlaidService {
   final String baseUrl;
   final String userId;
+  final String? Function()? authToken;
   final http.Client _client;
 
   PlaidService({
     String? baseUrl,
     required this.userId,
+    this.authToken,
     http.Client? client,
   })  : baseUrl = baseUrl ?? _defaultBaseUrl(),
         _client = client ?? http.Client();
 
   static String _defaultBaseUrl() => platform_url.resolvePlaidBaseUrl();
 
-  Map<String, String> get _headers => {'X-Plaid-User-Id': userId};
+  /// JWT bearer when signed in. The legacy user-id header below is ignored
+  /// by the server (kept only so signed-out calls fail as 401, not 500).
+  /// Defaults to the global [SyncAuth] hook because [PlaidCubit] builds this
+  /// service internally (no context for a closure).
+  Map<String, String> get _headers {
+    final provider = authToken ?? SyncAuth.current;
+    final t = provider();
+    if (t != null && t.isNotEmpty) return {'Authorization': 'Bearer $t'};
+    return {'X-Plaid-User-Id': userId};
+  }
 
   Future<String> createLinkToken() async {
     final response = await _post('/api/create_link_token');
@@ -67,6 +78,20 @@ class PlaidService {
   Future<Map<String, dynamic>> getInfo() async {
     final response = await _post('/api/info');
     return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  /// Best-effort Link exit telemetry (`/api/link_exit_error` is open, no
+  /// JWT needed). Never throws — diagnostics must not break the flow.
+  Future<void> logLinkExitError(Map<String, dynamic> payload) async {
+    try {
+      await _client
+          .post(
+            Uri.parse('$baseUrl/api/link_exit_error'),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 5));
+    } catch (_) {}
   }
 
   /// True when the backend responds to a health check.
@@ -115,7 +140,7 @@ class PlaidService {
       return PlaidServiceException(
         'Cannot reach the Plaid server at $baseUrl. '
         'Start it from the project root:\n'
-        '  cd server/python && ./start.sh',
+        '  cd server/api && .venv/bin/uvicorn app.main:app --port 8000',
         0,
       );
     }

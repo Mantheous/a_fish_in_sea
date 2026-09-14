@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../model/task_assignee.dart';
+import 'server_base.dart';
 
 class GoogleContact {
   final String id;
@@ -87,22 +89,32 @@ class GoogleContactsStatus {
 class GoogleContactsService {
   final String Function() baseUrl;
   final String Function() userId;
+  final String? Function()? authToken;
   final http.Client _client;
   List<GoogleContact>? _cache;
+
+  /// Shared across editor instances: every event/task editor builds its own
+  /// service, so a per-instance cache never hits and each editor open cost
+  /// two HTTP round trips (status + contacts), making the editor feel slow.
+  static List<GoogleContact>? _sharedCache;
+  static Future<List<GoogleContact>>? _sharedFetch;
 
   GoogleContactsService({
     required this.baseUrl,
     required this.userId,
+    this.authToken,
     http.Client? client,
   }) : _client = client ?? http.Client();
 
-  Map<String, String> get _headers => {'X-App-User-Id': userId()};
+  /// JWT bearer when signed in (FastAPI); legacy user-id header otherwise.
+  Map<String, String> get _headers {
+    final t = authToken?.call();
+    if (t != null && t.isNotEmpty) return {'Authorization': 'Bearer $t'};
+    return {'X-App-User-Id': userId()};
+  }
 
   Uri _uri(String path, [Map<String, String>? query]) {
-    final base = baseUrl().trim().replaceAll(RegExp(r'/+$'), '');
-    final effectiveBase = base.isEmpty
-        ? (kIsWeb ? Uri.base.origin : 'http://127.0.0.1:8000')
-        : base;
+    final effectiveBase = resolveAppServerBase(baseUrl());
     final resolved = Uri.parse(
       effectiveBase.isEmpty ? path : '$effectiveBase$path',
     );
@@ -111,6 +123,29 @@ class GoogleContactsService {
       ...resolved.queryParameters,
       ...query,
     });
+  }
+
+  Future<http.Response> _send(Future<http.Response> Function() request) async {
+    try {
+      return await request().timeout(const Duration(seconds: 30));
+    } on GoogleContactsException {
+      rethrow;
+    } on TimeoutException {
+      throw GoogleContactsException(
+        'Sync server timed out at ${resolveAppServerBase(baseUrl())} — '
+        'is the server running?',
+      );
+    } on SocketException catch (e) {
+      throw GoogleContactsException(
+        'Cannot reach the sync server at ${resolveAppServerBase(baseUrl())} '
+        '(${e.message}) — is the server running and the URL correct?',
+      );
+    } on http.ClientException catch (e) {
+      throw GoogleContactsException(
+        'Cannot reach the sync server at ${resolveAppServerBase(baseUrl())} '
+        '(${e.message}) — is the server running and the URL correct?',
+      );
+    }
   }
 
   Map<String, dynamic> _decode(http.Response response) {
@@ -139,8 +174,9 @@ class GoogleContactsService {
   }
 
   Future<GoogleContactsStatus> status() async {
-    final data = _decode(await _client.get(_uri('/api/google/status'),
-        headers: _headers));
+    final data = _decode(await _send(() => _client.get(
+        _uri('/api/google/status'),
+        headers: _headers)));
     return GoogleContactsStatus(
       connected: data['connected'] as bool? ?? false,
       contactsGranted: data['contactsGranted'] as bool? ?? false,
@@ -148,27 +184,53 @@ class GoogleContactsService {
   }
 
   Future<List<GoogleContact>> fetchContacts({bool forceRefresh = false}) async {
-    if (!forceRefresh && _cache != null) return _cache!;
-    final data = _decode(await _client.get(_uri('/api/google/contacts'),
-        headers: _headers));
+    if (!forceRefresh) {
+      final hit = _cache ?? _sharedCache;
+      if (hit != null) {
+        _cache = hit;
+        return hit;
+      }
+      final inflight = _sharedFetch;
+      if (inflight != null) {
+        final shared = await inflight;
+        _cache = shared;
+        return shared;
+      }
+    }
+    final future = _fetchAndCache();
+    if (!forceRefresh) _sharedFetch = future;
+    try {
+      return await future;
+    } finally {
+      if (!forceRefresh && identical(_sharedFetch, future)) {
+        _sharedFetch = null;
+      }
+    }
+  }
+
+  Future<List<GoogleContact>> _fetchAndCache() async {
+    final data = _decode(await _send(() => _client.get(
+        _uri('/api/google/contacts'),
+        headers: _headers)));
     final list = data['contacts'];
     final out = <GoogleContact>[];
     if (list is List) {
       for (final raw in list) {
-        if (raw is! Map<String, dynamic>) continue;
+        if (raw is! Map) continue;
         try {
-          out.add(GoogleContact.fromJson(raw));
+          out.add(GoogleContact.fromJson(Map<String, dynamic>.from(raw)));
         } catch (_) {}
       }
     }
     out.sort((a, b) =>
         a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
     _cache = out;
+    _sharedCache = out;
     return out;
   }
 
   List<GoogleContact> searchCached(String query, {int limit = 20}) {
-    final cache = _cache;
+    final cache = _cache ?? _sharedCache;
     if (cache == null) return const [];
     final q = query.trim().toLowerCase();
     final matches = q.isEmpty
@@ -177,5 +239,10 @@ class GoogleContactsService {
     return matches;
   }
 
-  void clearCache() => _cache = null;
+  void clearCache() {
+    _cache = null;
+    _sharedCache = null;
+  }
+
+  static void clearSharedCache() => _sharedCache = null;
 }

@@ -8,11 +8,11 @@ A one-stop planning app: homework, calendar, tasks, and finances in one place.
 flutter run -d <device>
 ```
 
-Web requires the Python server running for iCal fetching (CORS proxy):
+Web requires the API server running for sync, bank, iCal fetching (CORS proxy) and syllabus extract:
 
 ```bash
-cd server/python
-./start.sh
+cd server/api
+.venv/bin/uvicorn app.main:app --port 8000 --reload
 ```
 
 Set the server URL in the app under Settings → Classes & calendars → Sync server URL (default `http://localhost:8000`). Android, iOS, and Linux fetch iCal feeds directly.
@@ -23,7 +23,7 @@ Canvas: add ONE feed with your personal calendar feed (Canvas web → Calendar �
 
 ## Google Calendar
 
-Classes & calendars sheet → Google → sign in once (from `http://localhost:8000` on the machine running the Python server) → pick calendars. Events flow in read-only on every sync; no re-entering anything. Requires `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in `server/python/.env` (see `.env.example`).
+Classes & calendars sheet → Google → sign in once (from `http://localhost:8000` on the machine running the API server) → pick calendars. Events flow in read-only on every sync; no re-entering anything. Requires `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in `server/.env` (see `server/.env.example`).
 
 Everything (events, tasks, classes) is undoable via the undo/redo buttons in each page's app bar or the Undo action on delete snackbars.
 

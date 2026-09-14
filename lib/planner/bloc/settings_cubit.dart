@@ -151,6 +151,14 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
     }
   }
 
+  /// Sync apply: takes the roamed settings but keeps the per-device
+  /// server URL (different networks need different URLs).
+  void applySyncedJson(Map<String, dynamic> json) {
+    final restored = fromJson(json);
+    if (restored == null) return;
+    emit(restored.copyWith(icalProxyBase: state.icalProxyBase));
+  }
+
   static CalendarView _parseView(String? name) {
     if (name == null) return platformDefaultCalendarView;
     for (final view in CalendarView.values) {

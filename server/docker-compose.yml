@@ -1,0 +1,26 @@
+services:
+  api:
+    build: ./api
+    ports:
+      - "8000:8000"
+    # server/.env supplies JWT_SECRET, TOKEN_FERNET_KEY, PLAID_*, GOOGLE_*,
+    # OLLAMA_* (see server/.env.example); DATABASE_URL is overridden below.
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://app:app@db:5432/app
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in server/.env}
+    depends_on:
+      - db
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

@@ -8,21 +8,26 @@ import 'package:syncfusion_flutter_calendar/calendar.dart';
 import '../../common/undo/undo_bar.dart';
 import '../../common/undo/undo_cubit.dart';
 import '../../navigation/view/app_drawer.dart';
+import '../../nodes/bloc/node_cubit.dart';
+import '../../nodes/model/node.dart';
+import '../../nodes/service/node_calendar.dart';
+import '../../nodes/view/node_checkbox.dart';
+import '../../nodes/view/node_editor.dart';
 import '../../reporting/bloc/reporting_cubit.dart';
 import '../../reporting/model/reported_entry.dart';
 import '../../reporting/view/day_review_screen.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
+import '../bloc/calendar_visibility_cubit.dart';
 import '../bloc/feed_cubit.dart';
-import '../bloc/task_cubit.dart';
 import '../model/event_reschedule.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../bloc/settings_cubit.dart';
 import '../service/calendar_report.dart';
+import 'calendar_filter_sheet.dart';
 import 'event_editor.dart';
 import 'feed_manager.dart';
-import 'task_checkbox.dart';
 
 const int _personalEventColor = 0xFF6B8F8A;
 const double _wideBreakpoint = 720;
@@ -111,7 +116,8 @@ class _CalendarPageState extends State<CalendarPage> {
     final feedColors = <String, Color>{
       for (final feed in feedCubit.state) feed.id: feed.color,
     };
-    final snap = context.watch<SettingsCubit>().state.snapMinutes;
+    final settings = context.watch<SettingsCubit>().state;
+    final snap = settings.snapMinutes;
     final drawerOpen = _isWide && _drawerMode != _DrawerMode.closed;
     // Narrow screens get a condensed single-row toolbar (icon-only
     // switches) and an abbreviated calendar header so the chrome above
@@ -128,6 +134,21 @@ class _CalendarPageState extends State<CalendarPage> {
       appBar: AppBar(
         title: const Text('Calendar'),
         actions: [
+          Builder(
+            builder: (buttonContext) {
+              final hasHidden = buttonContext.watch<CalendarVisibilityCubit>()
+                  .state
+                  .hasHidden;
+              return Badge(
+                isLabelVisible: hasHidden,
+                child: IconButton(
+                  tooltip: 'Calendars',
+                  icon: const Icon(Icons.layers_outlined),
+                  onPressed: () => showCalendarFilterSheet(buttonContext),
+                ),
+              );
+            },
+          ),
           IconButton(
             tooltip: 'Manage classes',
             icon: const Icon(Icons.sync),
@@ -155,34 +176,37 @@ class _CalendarPageState extends State<CalendarPage> {
                 children: [
                   Expanded(
                     flex: 3,
-                    child: SegmentedButton<CalendarView>(
-                      segments: const [
-                        ButtonSegment(
-                          value: CalendarView.day,
-                          icon: Icon(Icons.view_day),
-                          tooltip: 'Day',
+                    child: GestureDetector(
+                      onDoubleTap: _goToToday,
+                      child: SegmentedButton<CalendarView>(
+                        segments: const [
+                          ButtonSegment(
+                            value: CalendarView.day,
+                            icon: Icon(Icons.view_day),
+                            tooltip: 'Day (double-click for today)',
+                          ),
+                          ButtonSegment(
+                            value: CalendarView.week,
+                            icon: Icon(Icons.view_column),
+                            tooltip: 'Week (double-click for today)',
+                          ),
+                          ButtonSegment(
+                            value: CalendarView.month,
+                            icon: Icon(Icons.calendar_view_month),
+                            tooltip: 'Month (double-click for today)',
+                          ),
+                        ],
+                        selected: {_view},
+                        showSelectedIcon: false,
+                        style: const ButtonStyle(
+                          visualDensity: VisualDensity.compact,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
-                        ButtonSegment(
-                          value: CalendarView.week,
-                          icon: Icon(Icons.view_column),
-                          tooltip: 'Week',
-                        ),
-                        ButtonSegment(
-                          value: CalendarView.month,
-                          icon: Icon(Icons.calendar_view_month),
-                          tooltip: 'Month',
-                        ),
-                      ],
-                      selected: {_view},
-                      showSelectedIcon: false,
-                      style: const ButtonStyle(
-                        visualDensity: VisualDensity.compact,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        onSelectionChanged: (selection) {
+                          setState(() => _view = selection.first);
+                          _controller.view = _view;
+                        },
                       ),
-                      onSelectionChanged: (selection) {
-                        setState(() => _view = selection.first);
-                        _controller.view = _view;
-                      },
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -218,29 +242,35 @@ class _CalendarPageState extends State<CalendarPage> {
           else ...[
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: SegmentedButton<CalendarView>(
-                segments: const [
-                  ButtonSegment(
-                    value: CalendarView.day,
-                    icon: Icon(Icons.view_day),
-                    label: Text('Day'),
-                  ),
-                  ButtonSegment(
-                    value: CalendarView.week,
-                    icon: Icon(Icons.view_column),
-                    label: Text('Week'),
-                  ),
-                  ButtonSegment(
-                    value: CalendarView.month,
-                    icon: Icon(Icons.calendar_view_month),
-                    label: Text('Month'),
-                  ),
-                ],
-                selected: {_view},
-                onSelectionChanged: (selection) {
-                  setState(() => _view = selection.first);
-                  _controller.view = _view;
-                },
+              child: GestureDetector(
+                onDoubleTap: _goToToday,
+                child: SegmentedButton<CalendarView>(
+                  segments: const [
+                    ButtonSegment(
+                      value: CalendarView.day,
+                      icon: Icon(Icons.view_day),
+                      label: Text('Day'),
+                      tooltip: 'Day (double-click for today)',
+                    ),
+                    ButtonSegment(
+                      value: CalendarView.week,
+                      icon: Icon(Icons.view_column),
+                      label: Text('Week'),
+                      tooltip: 'Week (double-click for today)',
+                    ),
+                    ButtonSegment(
+                      value: CalendarView.month,
+                      icon: Icon(Icons.calendar_view_month),
+                      label: Text('Month'),
+                      tooltip: 'Month (double-click for today)',
+                    ),
+                  ],
+                  selected: {_view},
+                  onSelectionChanged: (selection) {
+                    setState(() => _view = selection.first);
+                    _controller.view = _view;
+                  },
+                ),
               ),
             ),
             Padding(
@@ -281,13 +311,26 @@ class _CalendarPageState extends State<CalendarPage> {
           Expanded(
             child: BlocBuilder<CalendarCubit, List<PlannerEvent>>(
               builder: (context, events) {
-                final visible =
-                    context.watch<FeedCubit>().visibleEvents(events);
+                final feeds = context.watch<FeedCubit>();
+                final feedVisible = feeds.visibleEvents(events);
+                final feedById = {
+                  for (final feed in feeds.state) feed.id: feed,
+                };
+                final visible = context
+                    .watch<CalendarVisibilityCubit>()
+                    .filterVisible(feedVisible, feedById);
                 final preview = _resizePreview;
                 var shown = visible;
                 final draft = _draftEvent;
+                // Wide only: the side drawer leaves the calendar
+                // interactive, so the ghost can be dragged/resized live.
+                // On narrow screens the creator is a modal bottom sheet:
+                // the scrim dims the calendar ("grayed out") and swallows
+                // all gestures, so rendering the ghost there is a
+                // non-draggable teaser. Times are edited via the form.
                 if (draft != null &&
-                    _drawerMode == _DrawerMode.creating) {
+                    _drawerMode == _DrawerMode.creating &&
+                    _isWide) {
                   shown = [...shown, draft];
                 }
                 if (preview != null) {
@@ -299,11 +342,11 @@ class _CalendarPageState extends State<CalendarPage> {
                 final sideBySide = _sideBySide;
                 var reportById = const <String, ReportBlock>{};
                 if (sideBySide) {
-                  final tasks = context.watch<TaskCubit>().state;
+                  final nodes = context.watch<NodeCubit>().state;
                   final reports = context.watch<ReportingCubit>().state;
                   final blocks = buildReportBlocks(
                     visibleEvents: visible,
-                    tasks: tasks,
+                    nodes: nodes,
                     reportsByDay: reports,
                     now: DateTime.now(),
                   );
@@ -322,6 +365,15 @@ class _CalendarPageState extends State<CalendarPage> {
                     for (final block in blocks) block.displayId: block,
                   };
                 }
+                // Unified-node schedule blocks render as appointments.
+                // Taps/drags on `node:` ids route back to the node.
+                try {
+                  shown = [
+                    ...shown,
+                    ...nodeCalendarBlocks(
+                        context.watch<NodeCubit>().state),
+                  ];
+                } catch (_) {}
                 final calendar = SfCalendar(
                   controller: _controller,
                   view: _view,
@@ -355,10 +407,10 @@ class _CalendarPageState extends State<CalendarPage> {
                         MonthAppointmentDisplayMode.appointment,
                     agendaItemHeight: 44,
                   ),
-                  timeSlotViewSettings: const TimeSlotViewSettings(
-                    timeInterval: Duration(minutes: 30),
-                    startHour: 6,
-                    endHour: 24,
+                  timeSlotViewSettings: TimeSlotViewSettings(
+                    timeInterval: const Duration(minutes: 30),
+                    startHour: settings.dayStartHour,
+                    endHour: settings.dayEndHour,
                   ),
                   todayHighlightColor: Theme.of(context).colorScheme.primary,
                   headerDateFormat: compactHeader ? 'MMM y' : null,
@@ -436,8 +488,11 @@ class _CalendarPageState extends State<CalendarPage> {
       color = color.withValues(alpha: 0.7);
     }
     final selected = event.id == _selectedEventId;
+    // Resize circles show only on the selected event (tap opens the side
+    // drawer and selects). Unselected events stay clean, especially on
+    // wide/web where many events are visible at once.
     final movable =
-        (isDraft || (selected && _isMovable(event))) && report == null;
+        (isDraft || (_isMovable(event) && selected)) && report == null;
     final displaySubject =
         isDraft && event.subject.trim().isEmpty ? 'New event' : event.subject;
     final timeFormat = DateFormat('h:mm a');
@@ -556,7 +611,7 @@ class _CalendarPageState extends State<CalendarPage> {
                             iconTheme: const IconThemeData(
                                 color: Colors.white),
                           ),
-                          child: EventTaskCheckbox(
+                          child: _blockCheckbox(
                             event: event,
                             size: 20,
                             doneColor: Colors.white,
@@ -726,9 +781,36 @@ class _CalendarPageState extends State<CalendarPage> {
 
   bool _isMovable(PlannerEvent event) {
     if (isReportDisplayId(event.id)) return false;
+    if (isNodeBlockId(event.id)) return true;
     if (!event.isFromFeed) return event.recurrenceRule.isEmpty;
     if (!mounted) return false;
     return context.read<FeedCubit>().isRemoteEditable(event);
+  }
+
+  /// Checkbox for a calendar block: node blocks toggle the node itself,
+  /// real events use the event/node link.
+  Widget _blockCheckbox({
+    required PlannerEvent event,
+    required double size,
+    required Color doneColor,
+  }) {
+    if (isNodeBlockId(event.id)) {
+      Node? node;
+      try {
+        node = context
+            .watch<NodeCubit>()
+            .byId(nodeIdFromBlockId(event.id));
+      } catch (_) {}
+      if (node != null) {
+        return NodeCheckbox(
+            node: node, size: size, doneColor: doneColor);
+      }
+    }
+    return EventNodeCheckbox(
+      event: event,
+      size: size,
+      doneColor: doneColor,
+    );
   }
 
   Future<void> _commitReschedule(
@@ -736,6 +818,35 @@ class _CalendarPageState extends State<CalendarPage> {
     PlannerEvent updated,
   ) async {
     if (updated.start == previous.start && updated.end == previous.end) {
+      return;
+    }
+    if (isNodeBlockId(previous.id)) {
+      Node? node;
+      try {
+        node = context
+            .read<NodeCubit>()
+            .byId(nodeIdFromBlockId(previous.id));
+      } catch (_) {}
+      if (node == null) return;
+      final s = node.schedule;
+      context.read<NodeCubit>().updateNode(node.copyWith(
+            schedule: ScheduleFacet(
+              due: s?.due,
+              start: updated.start,
+              end: updated.end,
+              allDay: updated.allDay,
+              isFixed: s?.isFixed ?? false,
+            ),
+          ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_movedText(updated)),
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () => context.read<UndoCubit>().undo(),
+          ),
+        ),
+      );
       return;
     }
     final calendarCubit = context.read<CalendarCubit>();
@@ -1031,8 +1142,17 @@ class _CalendarPageState extends State<CalendarPage> {
     _openCreator(initialDate: selected);
   }
 
-  void _openDetail(PlannerEvent event) {
-    if (!_isWide) {
+  /// Opens a node schedule block in the node editor.
+  void _openNodeBlock(String blockId) {
+    Node? node;
+    try {
+      node = context.read<NodeCubit>().byId(nodeIdFromBlockId(blockId));
+    } catch (_) {}
+    if (node == null || !mounted) return;
+    showNodeEditor(context, existing: node);
+  }
+
+  void _openDetail(PlannerEvent event) {    if (!_isWide) {
       if (_selectedEventId != null) {
         setState(() => _selectedEventId = null);
       }
@@ -1066,6 +1186,16 @@ class _CalendarPageState extends State<CalendarPage> {
       _liveTicker?.cancel();
       _liveTicker = null;
     }
+  }
+
+  /// Jumps the calendar back to today, keeping the current Day/Week/Month
+  /// view. Wired to double-tap/click on the view switcher (a re-tap on the
+  /// active segment never reaches `onSelectionChanged`, so the switcher is
+  /// wrapped in a `GestureDetector.onDoubleTap` instead).
+  void _goToToday() {
+    final now = DateTime.now();
+    _controller.displayDate = now;
+    _controller.selectedDate = now;
   }
 
   /// Creates (or reuses) the manual report entry for a task-event,
@@ -1295,6 +1425,10 @@ class _CalendarPageState extends State<CalendarPage> {
         _openReport(raw.id);
         return;
       }
+      if (raw is PlannerEvent && isNodeBlockId(raw.id)) {
+        _openNodeBlock(raw.id);
+        return;
+      }
       final event = _resolveEvent(raw, details.date);
       if (event != null) {
         _openDetail(event);
@@ -1380,6 +1514,31 @@ class _CalendarPageState extends State<CalendarPage> {
         }
         return;
       }
+      if (appointment is PlannerEvent &&
+          isNodeBlockId(appointment.id)) {
+        if (droppingTime == null) {
+          if (mounted) setState(() {});
+          return;
+        }
+        Node? node;
+        try {
+          node = context
+              .read<NodeCubit>()
+              .byId(nodeIdFromBlockId(appointment.id));
+        } catch (_) {}
+        if (node == null || node.schedule?.start == null) {
+          if (mounted) setState(() {});
+          return;
+        }
+        final snap = context.read<SettingsCubit>().state.snapMinutes;
+        final shifted = shiftEvent(
+          appointment,
+          droppingTime,
+          snapMinutes: snap,
+        );
+        await _commitReschedule(appointment, shifted);
+        return;
+      }
       if (appointment is! PlannerEvent || droppingTime == null) {
         if (mounted && appointment != null && appointment is! PlannerEvent) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -1421,6 +1580,10 @@ class _CalendarPageState extends State<CalendarPage> {
     if (raw is Appointment && tappedDate != null) {
       final cubit = context.read<CalendarCubit>();
       final feedCubit = context.read<FeedCubit>();
+      final visibility = context.read<CalendarVisibilityCubit>();
+      final feedById = {
+        for (final feed in feedCubit.state) feed.id: feed,
+      };
       final dayStart = DateTime(
         tappedDate.year,
         tappedDate.month,
@@ -1430,6 +1593,7 @@ class _CalendarPageState extends State<CalendarPage> {
       final candidates = <PlannerEvent>[];
       for (final event in cubit.state) {
         if (!feedCubit.isFeedVisible(event.feedId)) continue;
+        if (!visibility.isEventVisible(event, feedById)) continue;
         if (event.recurrenceRule.isEmpty) continue;
         final occurrences = cubit.occurrencesOf(event, dayStart, dayEnd);
         if (occurrences.isEmpty) continue;

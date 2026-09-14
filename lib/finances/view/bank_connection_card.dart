@@ -80,6 +80,14 @@ class BankConnectionCard extends StatelessWidget {
     }
 
     if (state.status == PlaidConnectionStatus.error) {
+      // Server/connectivity problems get the "start the server" help;
+      // Link exits (user backed out, institution error, …) just show the
+      // reason and a Retry button.
+      final message = state.errorMessage ?? 'Unknown error';
+      final looksLikeServerError = message.contains('Plaid server') ||
+          message.contains('Cannot reach') ||
+          message.contains('Unexpected HTML') ||
+          message.contains('invalid response');
       return Card(
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -87,20 +95,21 @@ class BankConnectionCard extends StatelessWidget {
             children: [
               Icon(Icons.error_outline, color: Colors.red.shade400, size: 48),
               const SizedBox(height: 8),
-              Text(state.errorMessage ?? 'Unknown error',
-                  textAlign: TextAlign.center),
-              const SizedBox(height: 8),
-              Text(
-                'Server: ${context.read<PlaidCubit>().serverUrl}\n\n'
-                'Start it in a terminal:\n'
-                '  cd server/python && ./start.sh\n\n'
-                'Or use the Run and Debug launch config '
-                '"Flutter & Plaid Server".',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+              Text(message, textAlign: TextAlign.center),
+              if (looksLikeServerError) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Server: ${context.read<PlaidCubit>().serverUrl}\n\n'
+                  'Start it in a terminal:\n'
+                  '  cd server/api && .venv/bin/uvicorn app.main:app --port 8000\n\n'
+                  'Or use the Run and Debug launch config '
+                  '"Flutter & API Server".',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
-              ),
+              ],
               const SizedBox(height: 16),
               FilledButton.icon(
                 onPressed: () => context.read<PlaidCubit>().connectBank(),

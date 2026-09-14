@@ -5,20 +5,26 @@ import 'package:flutter/foundation.dart';
 import '../../common/undo/change_record.dart';
 import '../../common/undo/revertable_hydrated_cubit.dart';
 import '../../common/undo/undo_cubit.dart';
+import '../../nodes/bloc/node_cubit.dart';
+import '../../nodes/model/node.dart';
+import '../../nodes/service/node_feed.dart';
+import '../../sync/sync_client.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
-import '../model/task.dart';
 import '../service/google_calendar_service.dart';
 import '../service/ical_service.dart';
 import 'calendar_cubit.dart';
-import 'task_cubit.dart';
 
 class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   final CalendarCubit _calendarCubit;
-  final TaskCubit _taskCubit;
+  final NodeCubit _nodeCubit;
   final IcalService _icalService;
   final GoogleCalendarService _googleService;
   final String Function() _proxyBase;
+
+  /// Sync-server client for server-side iCal snapshots. Null when signed
+  /// out (or in tests) — [_syncIcal] then falls back to direct fetch.
+  final SyncClient? syncClient;
 
   final ValueNotifier<bool> isSyncing = ValueNotifier(false);
   DateTime? _lastAutoSync;
@@ -30,12 +36,13 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
 
   FeedCubit({
     required CalendarCubit calendarCubit,
-    required TaskCubit taskCubit,
+    required NodeCubit nodeCubit,
     required IcalService icalService,
     required GoogleCalendarService googleService,
     required String Function() proxyBase,
+    this.syncClient,
   })  : _calendarCubit = calendarCubit,
-        _taskCubit = taskCubit,
+        _nodeCubit = nodeCubit,
         _icalService = icalService,
         _googleService = googleService,
         _proxyBase = proxyBase,
@@ -74,8 +81,8 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     emit(state.where((f) => f.id != feedId).toList());
     final calendarBefore = _calendarCubit.toJson(_calendarCubit.state);
     _calendarCubit.removeFeedEvents(feedId);
-    final taskBefore = _taskCubit.toJson(_taskCubit.state);
-    _taskCubit.removeImportedTasksFor(feedId);
+    final nodeBefore = _nodeCubit.toJson(_nodeCubit.state);
+    _nodeCubit.removeImportedNodesFor(feedId);
     UndoCubit.instance?.record(
       ChangeRecord(entries: [
         StateSnapshot(
@@ -89,9 +96,9 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
           after: _calendarCubit.toJson(_calendarCubit.state),
         ),
         StateSnapshot(
-          cubitId: _taskCubit.changeId,
-          before: taskBefore,
-          after: _taskCubit.toJson(_taskCubit.state),
+          cubitId: _nodeCubit.changeId,
+          before: nodeBefore,
+          after: _nodeCubit.toJson(_nodeCubit.state),
         ),
       ]),
     );
@@ -144,6 +151,30 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     return null;
   }
 
+  /// Resolves the remote id for a series-wide write. Real Google masters
+  /// carry no `seriesId` (only instances do), so fall back to `sourceUid`.
+  static String? seriesRemoteId(PlannerEvent event) {
+    final seriesId = event.seriesId;
+    if (seriesId != null && seriesId.isNotEmpty) return seriesId;
+    final sourceUid = event.sourceUid;
+    if (sourceUid != null && sourceUid.isNotEmpty) return sourceUid;
+    return null;
+  }
+
+  /// Local grouping key for every event in the same repeating series:
+  /// the master id for instances, the event's own remote id for masters.
+  static String? seriesKeyFor(PlannerEvent event) {
+    if (event.seriesId != null && event.seriesId!.isNotEmpty) {
+      return event.seriesId;
+    }
+    if (event.recurrenceRule.isNotEmpty &&
+        event.sourceUid != null &&
+        event.sourceUid!.isNotEmpty) {
+      return event.sourceUid;
+    }
+    return null;
+  }
+
   /// Pushes a Google event to the server, then re-syncs the feed so local
   /// state matches. With [series] true the series master is patched
   /// (whole series); otherwise the event's own id is patched (for a
@@ -157,7 +188,8 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     if (feed == null) {
       return 'This event can only be edited locally.';
     }
-    final remoteId = series ? updated.seriesId : updated.sourceUid;
+    final remoteId =
+        series ? seriesRemoteId(updated) : updated.sourceUid;
     if (remoteId == null || remoteId.isEmpty) {
       return 'This event can only be edited locally.';
     }
@@ -212,7 +244,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     if (feed == null) {
       return 'This event can only be deleted locally.';
     }
-    final remoteId = series ? event.seriesId : event.sourceUid;
+    final remoteId = series ? seriesRemoteId(event) : event.sourceUid;
     if (remoteId == null || remoteId.isEmpty) {
       return 'This event can only be deleted locally.';
     }
@@ -258,9 +290,12 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   List<PlannerEvent> visibleEvents(List<PlannerEvent> events) =>
       events.where((e) => isFeedVisible(e.feedId)).toList();
 
-  List<Task> visibleTasks(List<Task> tasks) => tasks.where((t) {
-        if (!t.isImported) return true;
-        return isFeedVisible(t.classId);
+  /// Homework nodes from disabled feeds are hidden; personal nodes always
+  /// show.
+  List<Node> visibleNodes(List<Node> nodes) =>
+      nodes.where((n) {
+        if (n.sourceEventId == null) return true;
+        return isFeedVisible(n.classId);
       }).toList();
 
   Future<void> syncAll({bool force = false}) {
@@ -320,7 +355,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
       final optOuts = <String>{
         for (final entry in previous.entries)
           if (!entry.value.isTask &&
-              isTaskCandidate(entry.value, feed, now))
+              isNodeCandidate(entry.value, feed, now))
             entry.key,
       };
       final events = fresh.map((event) {
@@ -347,18 +382,19 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
             );
           }
           // The task flag is local-only (Google never stores it), so a
-          // lost calendar flag must not wipe the mark while its shadow
-          // task survives (fresh storage, hydrate race). The shadow is
+          // lost calendar flag must not wipe the mark while its backing
+          // node survives (fresh storage, hydrate race). The node is
           // the durable record: un-marking deletes it, so a surviving
-          // shadow means "still a task" — heal the flag from it.
-          final backing = _taskCubit.tasksForEventId(event.id);
+          // node means "still actionable" — heal the flag from it.
+          final backing = _nodeCubit.nodesForEventId(event.id);
           if (backing.isNotEmpty) {
             final shadow = backing.first;
             return event.copyWith(
               isTask: true,
-              done: shadow.done,
+              done: shadow.isDone,
               completedAt: shadow.completedAt,
-              clearCompletedAt: !shadow.done || shadow.completedAt == null,
+              clearCompletedAt:
+                  !shadow.isDone || shadow.completedAt == null,
               taskId: old.taskId,
               clearTaskId: old.taskId == null,
               placeId: old.placeId,
@@ -393,27 +429,27 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
           );
         }
         // Same heal for events the calendar has never seen (or lost):
-        // a surviving shadow re-asserts the mark.
-        final backing = _taskCubit.tasksForEventId(event.id);
+        // a surviving node re-asserts the mark.
+        final backing = _nodeCubit.nodesForEventId(event.id);
         if (backing.isNotEmpty) {
           final shadow = backing.first;
           return event.copyWith(
             isTask: true,
-            done: shadow.done,
+            done: shadow.isDone,
             completedAt: shadow.completedAt,
-            clearCompletedAt: !shadow.done || shadow.completedAt == null,
+            clearCompletedAt: !shadow.isDone || shadow.completedAt == null,
             assignees: shadow.assignees,
           );
         }
-        // Homework assignments are tasks by default.
-        if (feed.createTasks && isTaskCandidate(event, feed, now)) {
+        // Homework assignments are actionable by default.
+        if (feed.createTasks && isNodeCandidate(event, feed, now)) {
           return event.copyWith(isTask: true);
         }
         return event;
       }).toList();
       _calendarCubit.replaceFeedEvents(feed.id, events);
       if (feed.createTasks) {
-        _taskCubit.importFromFeed(
+        _nodeCubit.importFromFeed(
           events,
           feed,
           taskOptOutIds: optOuts,
@@ -430,6 +466,20 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   }
 
   Future<List<PlannerEvent>> _syncIcal(Feed feed) async {
+    // Server-side fetching when signed in: the server fetches the URL and
+    // caches the ICS, so every device parses identical bytes (and web
+    // avoids CORS). Any failure falls back to the direct/proxy fetch.
+    final sc = syncClient;
+    if (sc != null) {
+      try {
+        await sc.refreshFeedSnapshot(feedId: feed.id, url: feed.url);
+        final snap = await sc.fetchFeedSnapshot(feed.id);
+        final ics = snap?['ics'] as String?;
+        if (ics != null && ics.isNotEmpty) {
+          return _icalService.parseIcs(ics, feedId: feed.id, kind: feed.kind);
+        }
+      } catch (_) {}
+    }
     final ics = await _icalService.fetchIcs(
       url: feed.url,
       proxyBase: _proxyBase,

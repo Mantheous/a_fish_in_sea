@@ -9,6 +9,7 @@ import '../model/feed.dart';
 import '../model/ical_recurrence.dart';
 import '../model/planner_event.dart';
 import '../model/recurrence.dart';
+import 'server_base.dart';
 
 class IcalFetchException implements Exception {
   final String message;
@@ -33,8 +34,9 @@ class IcalService {
     String target;
     if (kIsWeb) {
       // Empty proxy base means "the server that serves this app" — resolve
-      // against the app's own origin so the target is an absolute URL.
-      final base = prefix.isEmpty ? Uri.base.origin : prefix;
+      // against the app's own base (origin + subpath, e.g. /fish) so the
+      // target stays under the same Tailscale serve mount.
+      final base = prefix.isEmpty ? ServerConfig.webBase : prefix;
       target = '$base/api/ical?url=${Uri.encodeComponent(url)}';
     } else {
       target = url;

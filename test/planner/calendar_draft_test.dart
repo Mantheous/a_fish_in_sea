@@ -2,10 +2,11 @@ import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_draft_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
-import 'package:a_fish_in_sea/planner/bloc/task_cubit.dart';
-import 'package:a_fish_in_sea/planner/model/task.dart';
+import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
+import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_page.dart';
@@ -30,15 +31,16 @@ void main() {
     HydratedBloc.storage = storage;
   });
 
-  group('draftSeedFromTask', () {
+  group('draftSeedFromNode', () {
     test('builds a 9am ghost on the due date', () {
       final due = DateTime(2026, 9, 10, 23, 59);
-      final seed = draftSeedFromTask(
-        Task(
-          id: 'task:hw1',
+      final seed = draftSeedFromNode(
+        Node(
+          id: 'node:hw1',
           title: 'Problem set 5',
           notes: 'Chapter 3',
-          due: due,
+          createdAt: DateTime(2026),
+          schedule: ScheduleFacet(due: due),
           sourceEventId: 'evt:x',
           classLabel: 'Physics',
         ),
@@ -53,8 +55,11 @@ void main() {
 
     test('falls back to today when the task has no due date', () {
       final now = DateTime(2026, 9, 5, 15, 30);
-      final seed = draftSeedFromTask(
-        const Task(id: 'task:t1', title: 'Read me'),
+      final seed = draftSeedFromNode(
+        Node(
+            id: 'node:t1',
+            title: 'Read me',
+            createdAt: DateTime(2026)),
         now: now,
       );
       expect(seed.start, DateTime(2026, 9, 5, 9));
@@ -65,8 +70,8 @@ void main() {
     test('request/take/clear roundtrip', () {
       final cubit = CalendarDraftCubit();
       expect(cubit.state, isNull);
-      final seed = draftSeedFromTask(
-        const Task(id: 'task:t1', title: 'Hi'),
+      final seed = draftSeedFromNode(
+        Node(id: 'node:t1', title: 'Hi', createdAt: DateTime(2026)),
       );
       cubit.requestDraft(seed);
       expect(cubit.state?.subject, 'Hi');
@@ -97,7 +102,8 @@ void main() {
           BlocProvider.value(value: settingsCubit),
           BlocProvider.value(value: calendarCubit),
           BlocProvider.value(value: draftCubit),
-          BlocProvider(create: (_) => TaskCubit()),
+          BlocProvider(create: (_) => CalendarVisibilityCubit()),
+          BlocProvider(create: (_) => NodeCubit()),
           BlocProvider.value(value: feedCubit),
         ],
         child: const MaterialApp(home: CalendarPage()),
@@ -108,11 +114,11 @@ void main() {
 
   FeedCubit buildFeedCubit(
     CalendarCubit calendarCubit,
-    TaskCubit taskCubit,
+    NodeCubit nodeCubit,
   ) =>
       FeedCubit(
         calendarCubit: calendarCubit,
-        taskCubit: taskCubit,
+        nodeCubit: nodeCubit,
         icalService: IcalService(),
         googleService: MockGoogleService(),
         proxyBase: () => '',
@@ -128,16 +134,17 @@ void main() {
   testWidgets('pending homework draft opens a ghost, saves nothing until Add',
       (tester) async {
     final calendarCubit = CalendarCubit();
-    final taskCubit = TaskCubit();
+    final nodeCubit = NodeCubit();
     final settingsCubit = SettingsCubit();
     final draftCubit = CalendarDraftCubit();
-    final feedCubit = buildFeedCubit(calendarCubit, taskCubit);
+    final feedCubit = buildFeedCubit(calendarCubit, nodeCubit);
     draftCubit.requestDraft(
-      draftSeedFromTask(
-        Task(
-          id: 'task:hw1',
+      draftSeedFromNode(
+        Node(
+          id: 'node:hw1',
           title: 'Study physics',
-          due: DateTime.now(),
+          createdAt: DateTime.now(),
+          schedule: ScheduleFacet(due: DateTime.now()),
           sourceEventId: 'evt:x',
           classLabel: 'Physics',
         ),
@@ -167,10 +174,10 @@ void main() {
   testWidgets('FAB shows a movable ghost without saving until Add',
       (tester) async {
     final calendarCubit = CalendarCubit();
-    final taskCubit = TaskCubit();
+    final nodeCubit = NodeCubit();
     final settingsCubit = SettingsCubit();
     final draftCubit = CalendarDraftCubit();
-    final feedCubit = buildFeedCubit(calendarCubit, taskCubit);
+    final feedCubit = buildFeedCubit(calendarCubit, nodeCubit);
 
     await pumpCalendar(
       tester,
@@ -208,16 +215,17 @@ void main() {
   testWidgets('homework add-to-calendar requests a draft and opens calendar',
       (tester) async {
     final calendarCubit = CalendarCubit();
-    final taskCubit = TaskCubit();
+    final nodeCubit = NodeCubit();
     final settingsCubit = SettingsCubit();
     final navigationCubit = NavigationCubit();
     final draftCubit = CalendarDraftCubit();
-    final feedCubit = buildFeedCubit(calendarCubit, taskCubit);
-    taskCubit.addTask(
-      Task(
-        id: 'task:hw1',
+    final feedCubit = buildFeedCubit(calendarCubit, nodeCubit);
+    nodeCubit.addNode(
+      Node(
+        id: 'node:hw1',
         title: 'Problem set 5',
-        due: DateTime(2026, 9, 10, 23, 59),
+        createdAt: DateTime(2026),
+        schedule: ScheduleFacet(due: DateTime(2026, 9, 10, 23, 59)),
         sourceEventId: 'evt:x',
         classLabel: 'Physics',
       ),
@@ -231,7 +239,7 @@ void main() {
           BlocProvider.value(value: settingsCubit),
           BlocProvider.value(value: calendarCubit),
           BlocProvider.value(value: draftCubit),
-          BlocProvider.value(value: taskCubit),
+          BlocProvider.value(value: nodeCubit),
           BlocProvider.value(value: feedCubit),
         ],
         child: const MaterialApp(home: TasksPage()),
