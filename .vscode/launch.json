@@ -2,25 +2,34 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: Plaid Server",
+            "name": "Python: API Server",
             "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/server/quickstart/python/server.py",
+            "module": "uvicorn",
+            "args": ["app.main:app", "--port", "8000", "--reload"],
             "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}/server/quickstart/python",
-            "envFile": "${workspaceFolder}/server/quickstart/python/.env",
-            "python": "${workspaceFolder}/server/quickstart/python/.venv/bin/python"
+            "cwd": "${workspaceFolder}/server/api",
+            "envFile": "${workspaceFolder}/server/.env",
+            "python": "${workspaceFolder}/server/api/.venv/bin/python"
         },
         {
             "name": "Flutter",
             "request": "launch",
             "type": "dart"
+        },
+        {
+            "name": "Flutter (remote server)",
+            "request": "launch",
+            "type": "dart",
+            "toolArgs": [
+                "--dart-define=SERVER_URL=http://100.111.106.47:8000"
+            ]
         }
     ],
     "compounds": [
         {
-            "name": "Flutter & Plaid Server",
-            "configurations": ["Python: Plaid Server", "Flutter"]
+            "name": "Flutter & API Server",
+            "configurations": ["Python: API Server", "Flutter"]
         }
     ]
 }

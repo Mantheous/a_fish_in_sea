@@ -145,6 +145,7 @@ class RecurringRule extends Equatable {
       amount: (json['amount'] as num).toDouble(),
       frequency: TimeScale.values.firstWhere(
         (e) => e.name == json['frequency'],
+        orElse: () => TimeScale.monthly,
       ),
       customPeriodDays: json['customPeriodDays'] as int?,
       startDate: DateTime.parse(json['startDate'] as String),

@@ -3,15 +3,15 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('NavigationCubit', () {
-    test('initial state is 0', () {
+    test('initial state is home', () {
       final navigationCubit = NavigationCubit();
-      expect(navigationCubit.state, equals(0));
+      expect(navigationCubit.state, equals(PlannerPage.home));
     });
 
-    test('setPage emits the correct page index', () {
+    test('setPage emits the correct page', () {
       final navigationCubit = NavigationCubit();
-      navigationCubit.setPage(2);
-      expect(navigationCubit.state, equals(2));
+      navigationCubit.setPage(PlannerPage.calendar);
+      expect(navigationCubit.state, equals(PlannerPage.calendar));
     });
   });
 }

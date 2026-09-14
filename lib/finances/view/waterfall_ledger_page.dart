@@ -1,12 +1,11 @@
 import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
-import 'package:a_fish_in_sea/finances/bloc/expense_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/ledger_entry.dart';
-import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
-import 'package:a_fish_in_sea/finances/view/expense_detail_dialog.dart';
 import 'package:a_fish_in_sea/finances/view/transaction_assignment_dialog.dart';
-import 'package:a_fish_in_sea/navigation/view/navigation_bar.dart';
+import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
+import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
+import 'package:a_fish_in_sea/nodes/view/node_editor.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
@@ -16,11 +15,47 @@ import 'package:intl/intl.dart';
 /// Displays the chronological cascade of confirmed and projected entries
 /// with running balance, time-until labels, and a granularity selector
 /// analogous to Google Calendar's week/month view toggle.
-class WaterfallLedgerPage extends StatelessWidget {
-  const WaterfallLedgerPage({super.key});
+class WaterfallLedgerPage extends StatefulWidget {
+  const WaterfallLedgerPage({super.key, this.showDrawer = true});
+
+  final bool showDrawer;
+
+  @override
+  State<WaterfallLedgerPage> createState() => _WaterfallLedgerPageState();
+}
+
+class _WaterfallLedgerPageState extends State<WaterfallLedgerPage> {
+  final ScrollController _scrollController = ScrollController();
+  bool _hasScrolledToPresent = false;
 
   static final _dateFormat = DateFormat('M/d/yy');
   static final _currencyFormat = NumberFormat.currency(symbol: '\$');
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _scrollToPresent(List<LedgerEntry> rows) {
+    if (_hasScrolledToPresent || rows.isEmpty) return;
+
+    final presentIndex = rows.indexWhere((e) => e.status == EntryStatus.confirmed);
+    if (presentIndex == -1) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+      
+      final rowHeight = 56.0; // Estimated row height
+      double targetOffset = (presentIndex * rowHeight) - 200.0;
+      targetOffset = targetOffset.clamp(0.0, _scrollController.position.maxScrollExtent);
+      
+      _scrollController.jumpTo(targetOffset);
+      setState(() {
+        _hasScrolledToPresent = true;
+      });
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -28,10 +63,16 @@ class WaterfallLedgerPage extends StatelessWidget {
     final colorScheme = theme.colorScheme;
 
     return Scaffold(
-      bottomNavigationBar: const NavBar(),
+      drawer: widget.showDrawer ? const AppDrawer() : null,
       body: BlocBuilder<WaterfallCubit, WaterfallState>(
         builder: (context, state) {
+          // Scroll to the present if we haven't already
+          if (!_hasScrolledToPresent && state.rows.isNotEmpty) {
+            _scrollToPresent(state.rows);
+          }
+
           return CustomScrollView(
+            controller: _scrollController,
             slivers: [
               // ── Header ──
               SliverAppBar(
@@ -103,7 +144,7 @@ class WaterfallLedgerPage extends StatelessWidget {
                                       ),
                                       Text(
                                         _currencyFormat.format(
-                                            state.rows.last.runningBalance),
+                                            state.rows.first.runningBalance),
                                         style: theme.textTheme.headlineSmall
                                             ?.copyWith(
                                           color: colorScheme.onPrimary,
@@ -162,7 +203,7 @@ class WaterfallLedgerPage extends StatelessWidget {
                         ),
                         SizedBox(height: 8),
                         Text(
-                          'Connect your bank, add recurring rules,\nor create expenses to get started.',
+                          'Connect your bank, add a repeating template,\nor create a money node to get started.',
                           textAlign: TextAlign.center,
                           style: TextStyle(color: Colors.grey),
                         ),
@@ -185,7 +226,7 @@ class WaterfallLedgerPage extends StatelessWidget {
         },
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => _showAddExpenseDialog(context),
+        onPressed: () => showNodeEditor(context, enableMoney: true),
         child: const Icon(Icons.add),
       ),
     );
@@ -414,7 +455,7 @@ class WaterfallLedgerPage extends StatelessWidget {
   void _onRowTap(BuildContext context, LedgerEntry entry) {
     switch (entry.type) {
       case EntryType.transaction:
-        // Tap a transaction → assign to an expense
+        // Tap a transaction → assign to a node
         final transaction = context.read<TransactionsCubit>().state
             .firstWhere(
               (t) => t.id == entry.sourceId,
@@ -427,159 +468,15 @@ class WaterfallLedgerPage extends StatelessWidget {
         break;
 
       case EntryType.expense:
-        // Tap an expense → edit it
-        final expense = context.read<ExpenseCubit>().findById(entry.sourceId);
-        if (expense != null) {
-          showDialog(
-            context: context,
-            builder: (_) => ExpenseDetailDialog(expense: expense),
-          );
+      case EntryType.recurringProjection:
+        // Tap a money node (or a generated instance) → edit it
+        final node =
+            context.read<NodeCubit>().byId(entry.sourceId);
+        if (node != null) {
+          showNodeEditor(context, existing: node);
         }
         break;
-
-      case EntryType.recurringProjection:
-        // Tap a projection → create a concrete expense from it
-        _showCreateExpenseFromProjection(context, entry);
-        break;
     }
-  }
-
-  void _showCreateExpenseFromProjection(BuildContext context, LedgerEntry entry) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Create Expense'),
-        content: Text(
-          'Create an editable expense from this projection?\n\n'
-          '${entry.name}\n'
-          '${_currencyFormat.format(entry.amount)} on ${_dateFormat.format(entry.date)}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              context.read<ExpenseCubit>().addExpense(Expense(
-                id: 'exp_${DateTime.now().millisecondsSinceEpoch}',
-                name: entry.name,
-                amount: entry.amount,
-                date: entry.date,
-                category: entry.category,
-                sourceRuleId: entry.sourceId.contains('_gen_')
-                    ? entry.sourceId.split('_gen_').first
-                    : null,
-                status: ExpenseStatus.projected,
-              ));
-              Navigator.pop(ctx);
-            },
-            child: const Text('Create'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ──────────────────────────────────────────────────────────────────
-  // Dialogs
-  // ──────────────────────────────────────────────────────────────────
-
-  void _showAddExpenseDialog(BuildContext context) {
-    final nameCtrl = TextEditingController();
-    final amountCtrl = TextEditingController();
-    DateTime date = DateTime.now();
-    bool isExpense = true;
-    String? category;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: const Text('Add Expense'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameCtrl,
-                  decoration: const InputDecoration(labelText: 'Name'),
-                  autofocus: true,
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: amountCtrl,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(
-                      labelText: 'Amount', prefixText: '\$ '),
-                ),
-                const SizedBox(height: 12),
-                Row(children: [
-                  ChoiceChip(
-                      label: const Text('Expense'),
-                      selected: isExpense,
-                      onSelected: (_) =>
-                          setDialogState(() => isExpense = true)),
-                  const SizedBox(width: 8),
-                  ChoiceChip(
-                      label: const Text('Income'),
-                      selected: !isExpense,
-                      onSelected: (_) =>
-                          setDialogState(() => isExpense = false)),
-                ]),
-                const SizedBox(height: 12),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text('Date: ${DateFormat('yyyy-MM-dd').format(date)}'),
-                  trailing: const Icon(Icons.calendar_today),
-                  onTap: () async {
-                    final picked = await showDatePicker(
-                      context: ctx,
-                      initialDate: date,
-                      firstDate: DateTime(2000),
-                      lastDate: DateTime(2100),
-                    );
-                    if (picked != null) setDialogState(() => date = picked);
-                  },
-                ),
-                TextField(
-                  decoration: const InputDecoration(
-                      labelText: 'Category (optional)'),
-                  onChanged: (v) => category = v.isEmpty ? null : v,
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final name = nameCtrl.text.trim();
-                final parsed = double.tryParse(amountCtrl.text.trim());
-                if (name.isEmpty || parsed == null) return;
-
-                final amount = isExpense ? -parsed.abs() : parsed.abs();
-                context.read<ExpenseCubit>().addExpense(Expense(
-                  id: 'exp_${DateTime.now().millisecondsSinceEpoch}_${name.hashCode}',
-                  name: name,
-                  amount: amount,
-                  date: date,
-                  category: category,
-                  status: date.isBefore(DateTime.now())
-                      ? ExpenseStatus.due
-                      : ExpenseStatus.projected,
-                ));
-                Navigator.pop(ctx);
-              },
-              child: const Text('Add'),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   void _showWaterfallConfigDialog(

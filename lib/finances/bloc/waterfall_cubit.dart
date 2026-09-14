@@ -2,13 +2,11 @@ import 'dart:async';
 import 'package:equatable/equatable.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:a_fish_in_sea/finances/model/ledger_entry.dart';
-import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
-import 'package:a_fish_in_sea/finances/bloc/recurring_rules_cubit.dart';
-import 'package:a_fish_in_sea/finances/bloc/budget_cubit.dart';
-import 'package:a_fish_in_sea/finances/bloc/expense_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
+import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
+import 'package:a_fish_in_sea/nodes/model/node.dart';
 
 /// The full waterfall display state.
 class WaterfallState extends Equatable {
@@ -74,26 +72,24 @@ class WaterfallState extends Equatable {
 /// Listens to all data source cubits and rebuilds the waterfall timeline
 /// whenever any source data changes.  The waterfall merges:
 ///   1. Plaid transactions (confirmed, immutable)
-///   2. User-created expenses (projected or concrete)
-///   3. Recurring rule projections (as Expense instances)
-///   4. Plaid balance (starting balance)
+///   2. Money nodes (dated singles + generated template instances)
+///   3. Plaid balance (starting balance)
+///
+/// Recurring money templates materialize dated instances into [NodeCubit]
+/// on rebuild (convergent: existing instances are never rewritten), so
+/// projections are first-class nodes — visible in the queue, the ledger,
+/// and the calendar — not virtual rows.
 class WaterfallCubit extends HydratedCubit<WaterfallState> {
-  final RecurringRulesCubit recurringRulesCubit;
-  final BudgetCubit budgetCubit;
-  final ExpenseCubit expenseCubit;
+  final NodeCubit nodeCubit;
   final TransactionsCubit transactionsCubit;
   final PlaidCubit plaidCubit;
 
-  late final StreamSubscription _recurringSubscription;
-  late final StreamSubscription _budgetSubscription;
-  late final StreamSubscription _expenseSubscription;
+  late final StreamSubscription _nodeSubscription;
   late final StreamSubscription _transactionsSubscription;
   late final StreamSubscription _plaidSubscription;
 
   WaterfallCubit({
-    required this.recurringRulesCubit,
-    required this.budgetCubit,
-    required this.expenseCubit,
+    required this.nodeCubit,
     required this.transactionsCubit,
     required this.plaidCubit,
   }) : super(WaterfallState(
@@ -101,9 +97,7 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
               DateTime.now().add(const Duration(days: 365)),
         )) {
     // Listen for changes to rebuild
-    _recurringSubscription = recurringRulesCubit.stream.listen((_) => rebuild());
-    _budgetSubscription = budgetCubit.stream.listen((_) => rebuild());
-    _expenseSubscription = expenseCubit.stream.listen((_) => rebuild());
+    _nodeSubscription = nodeCubit.stream.listen((_) => rebuild());
     _transactionsSubscription = transactionsCubit.stream.listen((_) => rebuild());
     _plaidSubscription = plaidCubit.stream.listen((plaidState) {
       if (plaidState.currentBalance != null) {
@@ -154,6 +148,18 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
     final horizon = state.projectionHorizon;
     final allEntries = <LedgerEntry>[];
 
+    // 0. Materialize recurring money templates into dated instances
+    // (silent, convergent — existing instances are kept as-is).
+    for (final template in nodeCubit.state) {
+      if (template.isTemplate && template.money != null) {
+        nodeCubit.generateInstances(
+          templateId: template.id,
+          from: today,
+          horizon: horizon,
+        );
+      }
+    }
+
     // 1. Add confirmed Plaid transactions
     for (final transaction in transactionsCubit.state) {
       allEntries.add(LedgerEntry(
@@ -168,61 +174,37 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
       ));
     }
 
-    // 2. Add user-created expenses
-    // Track which transaction IDs are already covered by concrete expenses
-    // to avoid double-counting
-    final concreteTransactionIds = expenseCubit.state
-        .where((e) => e.isConcrete && e.linkedTransactionId != null)
-        .map((e) => e.linkedTransactionId!)
-        .toSet();
-
-    for (final expense in expenseCubit.state) {
-      // Skip concrete expenses whose linked transaction is already in the
-      // waterfall (avoid double-counting)
-      if (expense.isConcrete && concreteTransactionIds.contains(expense.linkedTransactionId)) {
-        // The transaction entry already covers this — skip
+    // 2. Add money nodes. Templates are skipped (their instances carry
+    // the dated amounts). Concrete nodes whose linked transaction is
+    // already in the waterfall are skipped to avoid double-counting.
+    final txnIds =
+        transactionsCubit.state.map((t) => t.id).toSet();
+    for (final node in nodeCubit.state) {
+      final money = node.money;
+      if (money == null || node.isTemplate) continue;
+      final date =
+          node.schedule?.due ?? node.schedule?.start ?? node.schedule?.end;
+      if (date == null) continue;
+      if (money.isConcrete &&
+          money.linkedTransactionIds.any(txnIds.contains)) {
         continue;
       }
-
+      final magnitude =
+          money.actualAmount ?? money.effectiveTarget;
+      if (magnitude <= 0) continue;
+      final signed =
+          money.direction == MoneyDirection.income ? magnitude : -magnitude;
       allEntries.add(LedgerEntry(
-        sourceId: expense.id,
-        name: expense.name,
-        amount: expense.amount,
-        date: expense.date,
-        type: EntryType.expense,
-        status: _expenseStatusToEntryStatus(expense.status),
-        category: expense.category,
-        isConcrete: expense.isConcrete,
+        sourceId: node.id,
+        name: node.title,
+        amount: signed,
+        date: date,
+        type: node.isInstance
+            ? EntryType.recurringProjection
+            : EntryType.expense,
+        status: _moneyStatusToEntryStatus(money.status),
+        isConcrete: money.isConcrete,
       ));
-    }
-
-    // 3. Generate projections from recurring rules
-    // Only for dates not already covered by an existing expense from
-    // that rule
-    final existingRuleExpenseIds = expenseCubit.state
-        .where((e) => e.sourceRuleId != null)
-        .map((e) => e.id)
-        .toSet();
-
-    for (final rule in recurringRulesCubit.state) {
-      final projected = rule.generateExpenses(
-        fromDate: today,
-        horizon: horizon,
-      );
-
-      for (final expense in projected) {
-        if (!existingRuleExpenseIds.contains(expense.id)) {
-          allEntries.add(LedgerEntry(
-            sourceId: expense.id,
-            name: expense.name,
-            amount: expense.amount,
-            date: expense.date,
-            type: EntryType.recurringProjection,
-            status: EntryStatus.projected,
-            category: expense.category,
-          ));
-        }
-      }
     }
 
     // 4. Sort chronologically
@@ -238,31 +220,59 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
     });
 
     // 5. Compute running balance and time-until labels
-    double balance = state.startingBalance;
-    final rows = <LedgerEntry>[];
+    final rows = List<LedgerEntry>.filled(
+      allEntries.length,
+      LedgerEntry(
+        sourceId: '',
+        name: '',
+        amount: 0,
+        date: DateTime(2000),
+        type: EntryType.expense,
+      ),
+    );
 
-    for (final entry in allEntries) {
-      balance += entry.amount;
-      rows.add(entry.copyWith(
-        runningBalance: balance,
-        timeUntilLabel: _computeTimeUntilLabel(entry.date, today),
-      ));
+    // Find the last confirmed entry index
+    int lastConfirmedIndex = -1;
+    for (int i = 0; i < allEntries.length; i++) {
+      if (allEntries[i].status == EntryStatus.confirmed) {
+        lastConfirmedIndex = i;
+      }
     }
 
-    emit(state.copyWith(rows: rows));
+    // A. Confirmed entries: work backward from today's balance (startingBalance)
+    double confirmedBalance = state.startingBalance;
+    for (int i = lastConfirmedIndex; i >= 0; i--) {
+      rows[i] = allEntries[i].copyWith(
+        runningBalance: confirmedBalance,
+        timeUntilLabel: _computeTimeUntilLabel(allEntries[i].date, today),
+      );
+      confirmedBalance -= allEntries[i].amount;
+    }
+
+    // B. Projected / pending / due entries: work forward from today's balance (startingBalance)
+    double projectedBalance = state.startingBalance;
+    for (int i = lastConfirmedIndex + 1; i < allEntries.length; i++) {
+      projectedBalance += allEntries[i].amount;
+      rows[i] = allEntries[i].copyWith(
+        runningBalance: projectedBalance,
+        timeUntilLabel: _computeTimeUntilLabel(allEntries[i].date, today),
+      );
+    }
+
+    emit(state.copyWith(rows: rows.reversed.toList()));
   }
 
   // ──────────────────────────────────────────────────────────────────
   // Private helpers
   // ──────────────────────────────────────────────────────────────────
 
-  EntryStatus _expenseStatusToEntryStatus(ExpenseStatus status) {
+  EntryStatus _moneyStatusToEntryStatus(MoneyStatus status) {
     switch (status) {
-      case ExpenseStatus.projected:
+      case MoneyStatus.projected:
         return EntryStatus.projected;
-      case ExpenseStatus.due:
+      case MoneyStatus.due:
         return EntryStatus.due;
-      case ExpenseStatus.paid:
+      case MoneyStatus.paid:
         return EntryStatus.confirmed;
     }
   }
@@ -336,11 +346,25 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
     };
   }
 
+  /// Sync apply: takes the roamed view config, then rebuilds rows from
+  /// local sources (rows themselves are derived, never stored).
+  void applySyncedConfig(Map<String, dynamic> json) {
+    final parsed = fromJson(json);
+    if (parsed == null) return;
+    emit(state.copyWith(
+      startingBalance: parsed.startingBalance,
+      projectionHorizon: parsed.projectionHorizon,
+      viewScale: parsed.viewScale,
+      clearViewScale: parsed.viewScale == null,
+      monthlyThresholdDays: parsed.monthlyThresholdDays,
+      weeklyThresholdDays: parsed.weeklyThresholdDays,
+    ));
+    rebuild();
+  }
+
   @override
   Future<void> close() {
-    _recurringSubscription.cancel();
-    _budgetSubscription.cancel();
-    _expenseSubscription.cancel();
+    _nodeSubscription.cancel();
     _transactionsSubscription.cancel();
     _plaidSubscription.cancel();
     return super.close();

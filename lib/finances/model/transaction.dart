@@ -36,6 +36,12 @@ class Transaction extends Equatable {
   /// reconciliation.
   final String? assignedExpenseId;
 
+  /// The ID of the unified node this transaction reports to. Additive
+  /// successor to [assignedExpenseId]: new reconciliation flows set this,
+  /// legacy expense links keep working untouched.
+  final String? assignedNodeId;
+  final List<String> tagIds;
+
   const Transaction({
     required this.id,
     required this.accountId,
@@ -45,14 +51,25 @@ class Transaction extends Equatable {
     this.category,
     this.pending = false,
     this.assignedExpenseId,
+    this.assignedNodeId,
+    this.tagIds = const [],
   });
 
   /// Whether this transaction has been reconciled with an expense.
   bool get isAssigned => assignedExpenseId != null;
 
+  /// Whether this transaction has been assigned to a unified node.
+  bool get isAssignedToNode => assignedNodeId != null;
+
+  /// Reconciled by either mechanism.
+  bool get isReconciled => isAssigned || isAssignedToNode;
+
   Transaction copyWith({
     String? assignedExpenseId,
     bool clearAssignment = false,
+    String? assignedNodeId,
+    bool clearNodeAssignment = false,
+    List<String>? tagIds,
   }) {
     return Transaction(
       id: id,
@@ -64,6 +81,10 @@ class Transaction extends Equatable {
       pending: pending,
       assignedExpenseId:
           clearAssignment ? null : (assignedExpenseId ?? this.assignedExpenseId),
+      assignedNodeId: clearNodeAssignment
+          ? null
+          : (assignedNodeId ?? this.assignedNodeId),
+      tagIds: tagIds ?? this.tagIds,
     );
   }
 
@@ -88,6 +109,7 @@ class Transaction extends Equatable {
   }
 
   /// Create a [Transaction] from local persistence JSON.
+  /// Tolerant: pre-node payloads simply have no `assignedNodeId`.
   factory Transaction.fromJson(Map<String, dynamic> json) {
     return Transaction(
       id: json['id'] as String,
@@ -98,7 +120,18 @@ class Transaction extends Equatable {
       category: json['category'] as String?,
       pending: json['pending'] as bool? ?? false,
       assignedExpenseId: json['assignedExpenseId'] as String?,
+      assignedNodeId: json['assignedNodeId'] as String?,
+      tagIds: _tagIdsFromJson(json['tagIds']),
     );
+  }
+
+  static List<String> _tagIdsFromJson(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <String>[];
+    for (final item in raw) {
+      if (item is String && item.isNotEmpty) out.add(item);
+    }
+    return out;
   }
 
   Map<String, dynamic> toJson() => {
@@ -110,6 +143,8 @@ class Transaction extends Equatable {
         'category': category,
         'pending': pending,
         'assignedExpenseId': assignedExpenseId,
+        'assignedNodeId': assignedNodeId,
+        'tagIds': tagIds,
       };
 
   @override
@@ -122,6 +157,8 @@ class Transaction extends Equatable {
         category,
         pending,
         assignedExpenseId,
+        assignedNodeId,
+        tagIds,
       ];
 
   static DateTime _parseDate(String dateStr) {

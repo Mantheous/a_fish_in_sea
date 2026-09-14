@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:equatable/equatable.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:a_fish_in_sea/finances/service/plaid_link_handler.dart';
@@ -71,6 +73,8 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
   final PlaidService? _serviceOverride;
   late PlaidService _service;
 
+  String get serverUrl => _service.baseUrl;
+
   // ── Connection ──────────────────────────────────────────────────────
 
   /// Connect via Plaid Link (iOS, Android, Web) or sandbox auto-connect on
@@ -84,12 +88,21 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
     try {
       if (PlaidLinkHandler.isSupported) {
         final linkToken = await _service.createLinkToken();
-        final publicToken = await PlaidLinkHandler.open(linkToken);
-        if (publicToken == null) {
-          emit(state.copyWith(status: PlaidConnectionStatus.disconnected));
+        final result = await PlaidLinkHandler.open(linkToken);
+        if (!result.succeeded || result.publicToken == null) {
+          // Link ended without connecting: report the exit reason instead
+          // of silently reverting to the Connect button (the user often
+          // believes the bank auth "worked" — e.g. they signed in but
+          // backed out before selecting accounts).
+          unawaited(_service.logLinkExitError(result.toTelemetry()));
+          emit(state.copyWith(
+            status: PlaidConnectionStatus.error,
+            errorMessage: plaidExitMessage(result),
+          ));
           return;
         }
-        final exchange = await _service.exchangePublicToken(publicToken);
+        final exchange =
+            await _service.exchangePublicToken(result.publicToken!);
         await _onConnected(itemId: exchange['item_id'] as String?);
       } else {
         await _service.sandboxAutoConnect();
@@ -190,7 +203,13 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
   Future<void> checkExistingConnection() async {
     try {
       final info = await _service.getInfo();
-      if (info['access_token'] != null) {
+      // New servers answer `connected` without echoing the access token
+      // (it must never leave the server); old servers echo `access_token`.
+      // Either shape — or a known item id — means still connected.
+      final connected = info['connected'] == true ||
+          info['access_token'] != null ||
+          info['item_id'] != null;
+      if (connected) {
         await _onConnected(itemId: info['item_id'] as String?);
       }
     } catch (_) {
@@ -199,6 +218,20 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
   }
 
   // ── Persistence ─────────────────────────────────────────────────────
+
+  /// Sync apply: only the link identity roams (userId/itemId). Connection
+  /// status, balances and accounts stay device-local; [onChange] rebuilds
+  /// the service when the userId changes.
+  void applySyncedIdentity(Map<String, dynamic> json) {
+    try {
+      final userId = json['userId'] as String?;
+      if (userId == null || userId.isEmpty) return;
+      emit(state.copyWith(
+        userId: userId,
+        itemId: json['itemId'] as String?,
+      ));
+    } catch (_) {}
+  }
 
   @override
   PlaidState? fromJson(Map<String, dynamic> json) {

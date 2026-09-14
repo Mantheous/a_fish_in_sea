@@ -51,6 +51,7 @@ class Expense extends Equatable {
   bool get isConcrete => linkedTransactionId != null;
 
   final ExpenseStatus status;
+  final List<String> tagIds;
 
   const Expense({
     required this.id,
@@ -64,6 +65,7 @@ class Expense extends Equatable {
     this.overriddenFields = const {},
     this.linkedTransactionId,
     this.status = ExpenseStatus.projected,
+    this.tagIds = const [],
   });
 
   // ── Copy / mutation helpers ─────────────────────────────────────────
@@ -81,6 +83,7 @@ class Expense extends Equatable {
     String? linkedTransactionId,
     bool clearLinkedTransaction = false,
     ExpenseStatus? status,
+    List<String>? tagIds,
   }) {
     return Expense(
       id: id ?? this.id,
@@ -95,6 +98,7 @@ class Expense extends Equatable {
       linkedTransactionId:
           clearLinkedTransaction ? null : (linkedTransactionId ?? this.linkedTransactionId),
       status: status ?? this.status,
+      tagIds: tagIds ?? this.tagIds,
     );
   }
 
@@ -159,6 +163,7 @@ class Expense extends Equatable {
       parentExpenseId: parentExpenseId,
       sourceRuleId: sourceRuleId,
       status: status,
+      tagIds: tagIds,
     );
 
     return [reduced, leftover];
@@ -183,7 +188,17 @@ class Expense extends Equatable {
         (e) => e.name == json['status'],
         orElse: () => ExpenseStatus.projected,
       ),
+      tagIds: _tagIdsFromJson(json['tagIds']),
     );
+  }
+
+  static List<String> _tagIdsFromJson(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <String>[];
+    for (final item in raw) {
+      if (item is String && item.isNotEmpty) out.add(item);
+    }
+    return out;
   }
 
   Map<String, dynamic> toJson() => {
@@ -198,6 +213,7 @@ class Expense extends Equatable {
         'overriddenFields': overriddenFields.toList(),
         'linkedTransactionId': linkedTransactionId,
         'status': status.name,
+        'tagIds': tagIds,
       };
 
   @override
@@ -213,5 +229,6 @@ class Expense extends Equatable {
         overriddenFields,
         linkedTransactionId,
         status,
+        tagIds,
       ];
 }

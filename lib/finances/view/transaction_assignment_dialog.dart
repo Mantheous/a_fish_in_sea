@@ -1,17 +1,18 @@
-import 'package:a_fish_in_sea/finances/bloc/expense_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
-import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
+import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
+import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
-/// Dialog for assigning a Plaid transaction to an expense.
+/// Dialog for assigning a Plaid transaction to a money node.
 ///
-/// Shows a list of unlinked expenses that the user can pick from.
-/// Handles subdivision (transaction < expense) and over-budget
-/// (transaction > expense) automatically.
-class TransactionAssignmentDialog extends StatelessWidget {
+/// Shows open (unpaid) money nodes — dated singles and generated
+/// template instances — sorted by date proximity, with the
+/// same-name suggestion first. Linking reports the node automatically
+/// (exact / subdivide / over-cap, same policy as before).
+class TransactionAssignmentDialog extends StatefulWidget {
   final Transaction transaction;
 
   const TransactionAssignmentDialog({super.key, required this.transaction});
@@ -20,31 +21,84 @@ class TransactionAssignmentDialog extends StatelessWidget {
   static final _dateFmt = DateFormat('M/d/yy');
 
   @override
+  State<TransactionAssignmentDialog> createState() =>
+      _TransactionAssignmentDialogState();
+}
+
+class _TransactionAssignmentDialogState
+    extends State<TransactionAssignmentDialog> {
+  bool _ensured = false;
+
+  Transaction get transaction => widget.transaction;
+
+  @override
+  void initState() {
+    super.initState();
+    // Materialize template instances around the transaction date so
+    // recurring projections are assignable (silent, convergent).
+    // Post-frame: generation emits, which must not happen during build.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _ensured) return;
+      _ensured = true;
+      try {
+        final nodeCubit = context.read<NodeCubit>();
+        final fromDate =
+            transaction.date.subtract(const Duration(days: 30));
+        final horizon = DateTime.now().add(const Duration(days: 365));
+        for (final template in nodeCubit.state) {
+          if (template.isTemplate && template.money != null) {
+            nodeCubit.generateInstances(
+              templateId: template.id,
+              from: fromDate,
+              horizon: horizon,
+            );
+          }
+        }
+      } catch (_) {}
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return BlocBuilder<ExpenseCubit, List<Expense>>(
-      builder: (context, expenses) {
-        // Filter to unlinked expenses only
-        final available =
-            expenses.where((e) => !e.isConcrete).toList();
+    return BlocBuilder<NodeCubit, List<Node>>(
+      builder: (context, nodes) {
+        final isIncome = transaction.amount > 0;
+        final available = nodes.where((n) {
+          final m = n.money;
+          if (m == null || n.isTemplate) return false;
+          if (m.status == MoneyStatus.paid) return false;
+          if (isIncome != (m.direction == MoneyDirection.income)) {
+            return false;
+          }
+          return true;
+        }).toList();
 
-        // Check for auto-categorization suggestion
+        // Same-name suggestion from node assignment history.
         final suggestedId = context
             .read<TransactionsCubit>()
-            .suggestExpenseForTransaction(transaction.name);
+            .suggestNodeForTransaction(transaction.name);
 
-        // Sort: suggested match first, then by date proximity
+        DateTime? nodeDate(Node n) =>
+            n.schedule?.due ?? n.schedule?.start ?? n.schedule?.end;
+
+        // Sort: suggested match first, then by date proximity.
         available.sort((a, b) {
           if (a.id == suggestedId) return -1;
           if (b.id == suggestedId) return 1;
-          final diffA = (a.date.difference(transaction.date).inDays).abs();
-          final diffB = (b.date.difference(transaction.date).inDays).abs();
+          final da = nodeDate(a);
+          final db = nodeDate(b);
+          if (da == null && db == null) return 0;
+          if (da == null) return 1;
+          if (db == null) return -1;
+          final diffA = (da.difference(transaction.date).inDays).abs();
+          final diffB = (db.difference(transaction.date).inDays).abs();
           return diffA.compareTo(diffB);
         });
 
         return AlertDialog(
-          title: const Text('Assign to Expense'),
+          title: const Text('Assign to Node'),
           content: SizedBox(
             width: double.maxFinite,
             child: Column(
@@ -67,13 +121,13 @@ class TransactionAssignmentDialog extends StatelessWidget {
                             Text(transaction.name,
                                 style: const TextStyle(
                                     fontWeight: FontWeight.bold)),
-                            Text(_dateFmt.format(transaction.date),
+                            Text(TransactionAssignmentDialog._dateFmt.format(transaction.date),
                                 style: theme.textTheme.bodySmall),
                           ],
                         ),
                       ),
                       Text(
-                        _currFmt.format(transaction.amount),
+                        TransactionAssignmentDialog._currFmt.format(transaction.amount),
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 16,
@@ -87,20 +141,20 @@ class TransactionAssignmentDialog extends StatelessWidget {
                 ),
                 const SizedBox(height: 16),
 
-                // Available expenses
+                // Available nodes
                 if (available.isEmpty)
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 24),
                     child: Center(
                       child: Text(
-                        'No unlinked expenses available.\nCreate an expense first.',
+                        'No open money nodes available.\nCreate one first.',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: Colors.grey),
                       ),
                     ),
                   )
                 else ...[
-                  Text('Select an expense:',
+                  Text('Select a node:',
                       style: theme.textTheme.bodySmall),
                   const SizedBox(height: 8),
                   ConstrainedBox(
@@ -109,10 +163,12 @@ class TransactionAssignmentDialog extends StatelessWidget {
                       shrinkWrap: true,
                       itemCount: available.length,
                       itemBuilder: (context, index) {
-                        final expense = available[index];
-                        final isSuggested = expense.id == suggestedId;
+                        final node = available[index];
+                        final isSuggested = node.id == suggestedId;
+                        final target =
+                            node.money?.effectiveTarget ?? 0;
                         final amountDiff =
-                            (transaction.amount.abs() - expense.amount.abs());
+                            transaction.amount.abs() - target;
 
                         return Card(
                           color: isSuggested
@@ -129,7 +185,7 @@ class TransactionAssignmentDialog extends StatelessWidget {
                             title: Row(
                               children: [
                                 Expanded(
-                                    child: Text(expense.name,
+                                    child: Text(node.title,
                                         overflow: TextOverflow.ellipsis)),
                                 if (isSuggested)
                                   Chip(
@@ -145,12 +201,12 @@ class TransactionAssignmentDialog extends StatelessWidget {
                             subtitle: Row(
                               children: [
                                 Text(
-                                    '${_currFmt.format(expense.amount)} · ${_dateFmt.format(expense.date)}'),
-                                if (amountDiff.abs() > 0.01)
+                                    '${TransactionAssignmentDialog._currFmt.format(target)} · ${TransactionAssignmentDialog._dateFmt.format(nodeDate(node) ?? transaction.date)}'),
+                                if (target > 0 && amountDiff.abs() > 0.01)
                                   Text(
                                     amountDiff > 0
-                                        ? ' (over by ${_currFmt.format(amountDiff)})'
-                                        : ' (under by ${_currFmt.format(amountDiff.abs())})',
+                                        ? ' (over by ${TransactionAssignmentDialog._currFmt.format(amountDiff)})'
+                                        : ' (under by ${TransactionAssignmentDialog._currFmt.format(amountDiff.abs())})',
                                     style: TextStyle(
                                       fontSize: 11,
                                       color: amountDiff > 0
@@ -160,7 +216,7 @@ class TransactionAssignmentDialog extends StatelessWidget {
                                   ),
                               ],
                             ),
-                            onTap: () => _assign(context, expense),
+                            onTap: () => _assign(context, node),
                           ),
                         );
                       },
@@ -181,26 +237,26 @@ class TransactionAssignmentDialog extends StatelessWidget {
     );
   }
 
-  void _assign(BuildContext context, Expense expense) {
-    final expenseCubit = context.read<ExpenseCubit>();
+  void _assign(BuildContext context, Node node) {
+    final nodeCubit = context.read<NodeCubit>();
     final transactionsCubit = context.read<TransactionsCubit>();
 
-    // Link the expense to this transaction
-    expenseCubit.linkToTransaction(
-      expenseId: expense.id,
+    // Link the node to this transaction (exact / subdivide / over-cap).
+    nodeCubit.linkTransaction(
+      nodeId: node.id,
       transactionId: transaction.id,
       transactionAmount: transaction.amount,
     );
 
-    // Mark the transaction as assigned
-    transactionsCubit.assignExpense(transaction.id, expense.id);
+    // Mark the transaction as assigned to the node.
+    transactionsCubit.assignNode(transaction.id, node.id);
 
     Navigator.pop(context);
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-            'Assigned "${transaction.name}" to "${expense.name}"'),
+        content:
+            Text('Assigned "${transaction.name}" to "${node.title}"'),
       ),
     );
   }
