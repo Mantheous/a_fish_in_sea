@@ -58,7 +58,7 @@ Effort: <S|M|L>"
   COMMENT="$PLAN
 
 ---
-Approve: comment \`approve\` on this issue (builder picks it up automatically).
+Approve: comment \`approve\` (or \`agent approved\`) on this issue (builder picks it up automatically).
 Deny: comment \`deny <reason>\` (issue is closed).
 $MARKER"
   gh issue comment "$N" --body "$COMMENT" >/dev/null
@@ -79,6 +79,6 @@ for i, l in enumerate(lines):
 $SUMMARY
 $RISK
 $URL
-Approve: comment \`approve\` on the issue / Deny: comment \`deny <reason>\`" || echo "[triage] #$N telegram ping failed (plan comment still posted)"
+Approve: comment \`approve\` (or \`agent approved\`) on the issue / Deny: comment \`deny <reason>\`" || echo "[triage] #$N telegram ping failed (plan comment still posted)"
 done
 echo "[triage] done"

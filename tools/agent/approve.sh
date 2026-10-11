@@ -31,7 +31,7 @@ for c in reversed(comments):
         continue
     first = (c.get('body') or '').strip().splitlines()[0].strip() if (c.get('body') or '').strip() else ''
     low = first.lower()
-    if low == 'approve':
+    if low == 'approve' or 'agent approved' in low:
         print(f'approve|{login}|'); break
     if low.startswith('deny'):
         print(f'deny|{login}|{first[4:].strip()}'); break
