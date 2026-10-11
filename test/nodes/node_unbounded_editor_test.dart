@@ -153,4 +153,41 @@ void main() {
     expect(kept.isUnbounded, isFalse);
     expect(kept.schedule?.due, DateTime(2026, 10, 20));
   });
+
+  testWidgets('saving a goal drops its old calendar block, keeps the due',
+      (tester) async {
+    final nodes = NodeCubit();
+    expect(
+        nodes.addNode(Node(
+          id: 'node:blocked',
+          title: 'Blocked',
+          createdAt: DateTime(2026, 10, 11),
+          schedule: ScheduleFacet(
+            due: DateTime(2026, 10, 20),
+            start: DateTime(2026, 10, 12, 9),
+            end: DateTime(2026, 10, 12, 10),
+          ),
+        )),
+        isNull);
+    await tester.pumpWidget(harness(nodes));
+    await tester.pump();
+    await tester.pump();
+
+    await tester.tap(find.text('Blocked'));
+    await tester.pumpAndSettle();
+    // No block picker anymore — calendar time comes from assigned events.
+    final dialog = find.byType(AlertDialog);
+    expect(
+        find.descendant(of: dialog, matching: find.text('Calendar block')),
+        findsNothing);
+    expect(find.textContaining('old calendar block'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    final saved = nodes.byId('node:blocked')!;
+    expect(saved.schedule?.due, DateTime(2026, 10, 20));
+    expect(saved.schedule?.start, isNull);
+    expect(saved.schedule?.end, isNull);
+  });
 }
