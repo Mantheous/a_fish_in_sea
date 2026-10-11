@@ -470,71 +470,7 @@ class _NodeTile extends StatelessWidget {
       subtitle: _subtitleWidget(context, subtitle, value, live.isUnbounded),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
-        children: [
-          if (!live.isUnbounded && live.isTracking)
-            IconButton(
-              tooltip: 'Stop recording',
-              icon: Icon(Icons.stop,
-                  color: theme.colorScheme.primary),
-              onPressed: () => stopNodeAndFinish(context, live.id),
-            )
-          else if (!live.isUnbounded && live.isOpen)
-            IconButton(
-              tooltip: 'Start recording',
-              icon: const Icon(Icons.play_arrow),
-              onPressed: () {
-                try {
-                  context.read<NodeCubit>().startTracking(live.id);
-                } catch (_) {}
-              },
-            ),
-          IconButton(
-            tooltip: 'Add subgoal',
-            icon: const Icon(Icons.add_task_outlined),
-            onPressed: () => _onMenu(context, live, 'subgoal'),
-          ),
-          PopupMenuButton<String>(
-            onSelected: (choice) =>
-                _onMenu(context, live, choice),
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                  value: 'subgoal', child: Text('Add subgoal')),
-              const PopupMenuItem(
-                  value: 'edit', child: Text('Edit')),
-              const PopupMenuItem(
-                  value: 'add-child', child: Text('Add child step')),
-              const PopupMenuItem(
-                  value: 'breakdown',
-                  child: Text('Auto-breakdown into steps…')),
-              const PopupMenuItem(
-                  value: 'duplicate',
-                  child: Text('Duplicate subtree')),
-              if (!live.isUnbounded)
-                const PopupMenuItem(
-                    value: 'toggle', child: Text('Toggle done')),
-              if (!live.isUnbounded)
-                PopupMenuItem(
-                    value: 'fail',
-                    child: Text(live.status == NodeStatus.failed
-                        ? 'Unmark failed'
-                        : 'Mark failed')),
-              if (live.isTemplate)
-                const PopupMenuItem(
-                    value: 'generate',
-                    child: Text('Generate schedule')),
-              if (live.money != null) ...[
-                const PopupMenuItem(
-                    value: 'subdivide', child: Text('Subdivide')),
-                if (live.money!.isRecurring)
-                  const PopupMenuItem(
-                      value: 'rollover',
-                      child: Text('Rollover period')),
-              ],
-              const PopupMenuItem(
-                  value: 'delete', child: Text('Delete')),
-            ],
-          ),
-        ],
+        children: _trailingActions(context, live, theme),
       ),
       onTap: () => showNodeEditor(context, existing: live),
     );
@@ -545,6 +481,13 @@ class _NodeTile extends StatelessWidget {
       tilePadding:
           EdgeInsets.only(left: 16 + depth * 20, right: 8),
       leading: _leading(context, live),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ..._trailingActions(context, live, theme),
+          const _ExpandChevron(),
+        ],
+      ),
       title: Text(live.title),
       subtitle: _subtitleWidget(context, subtitle, value, live.isUnbounded),
       children: [
@@ -567,6 +510,81 @@ class _NodeTile extends StatelessWidget {
           ),
       ],
     );
+  }
+
+  /// Action buttons shared by leaf rows ([ListTile]) and parent rows
+  /// ([ExpansionTile]): record start/stop, Add subgoal, and the overflow
+  /// menu. Parent rows previously had no trailing at all, which hid the
+  /// Add subgoal button (and the rest) on every goal with children.
+  /// Unbounded goals get no tracking buttons and no toggle/fail items:
+  /// they are ongoing directions, never completed.
+  List<Widget> _trailingActions(
+      BuildContext context, Node live, ThemeData theme) {
+    return [
+      if (!live.isUnbounded && live.isTracking)
+        IconButton(
+          tooltip: 'Stop recording',
+          icon: Icon(Icons.stop,
+              color: theme.colorScheme.primary),
+          onPressed: () => stopNodeAndFinish(context, live.id),
+        )
+      else if (!live.isUnbounded && live.isOpen)
+        IconButton(
+          tooltip: 'Start recording',
+          icon: const Icon(Icons.play_arrow),
+          onPressed: () {
+            try {
+              context.read<NodeCubit>().startTracking(live.id);
+            } catch (_) {}
+          },
+        ),
+      IconButton(
+        tooltip: 'Add subgoal',
+        icon: const Icon(Icons.add_task_outlined),
+        onPressed: () => _onMenu(context, live, 'subgoal'),
+      ),
+      PopupMenuButton<String>(
+        onSelected: (choice) =>
+            _onMenu(context, live, choice),
+        itemBuilder: (context) => [
+          const PopupMenuItem(
+              value: 'subgoal', child: Text('Add subgoal')),
+          const PopupMenuItem(
+              value: 'edit', child: Text('Edit')),
+          const PopupMenuItem(
+              value: 'add-child', child: Text('Add child step')),
+          const PopupMenuItem(
+              value: 'breakdown',
+              child: Text('Auto-breakdown into steps…')),
+          const PopupMenuItem(
+              value: 'duplicate',
+              child: Text('Duplicate subtree')),
+          if (!live.isUnbounded)
+            const PopupMenuItem(
+                value: 'toggle', child: Text('Toggle done')),
+          if (!live.isUnbounded)
+            PopupMenuItem(
+                value: 'fail',
+                child: Text(live.status == NodeStatus.failed
+                    ? 'Unmark failed'
+                    : 'Mark failed')),
+          if (live.isTemplate)
+            const PopupMenuItem(
+                value: 'generate',
+                child: Text('Generate schedule')),
+          if (live.money != null) ...[
+            const PopupMenuItem(
+                value: 'subdivide', child: Text('Subdivide')),
+            if (live.money!.isRecurring)
+              const PopupMenuItem(
+                  value: 'rollover',
+                  child: Text('Rollover period')),
+          ],
+          const PopupMenuItem(
+              value: 'delete', child: Text('Delete')),
+        ],
+      ),
+    ];
   }
 
   List<Node> _children(Node parent) {
@@ -927,6 +945,29 @@ class _NodeTile extends StatelessWidget {
             child: const Text('Split'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Expand/collapse chevron for parent goal rows.
+///
+/// Parent rows use [ExpansionTile] with custom trailing actions, which
+/// replaces the tile's default expand icon — so the chevron is rebuilt
+/// here, driven by the tile's own [ExpansibleController].
+class _ExpandChevron extends StatelessWidget {
+  const _ExpandChevron();
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = ExpansibleController.maybeOf(context);
+    if (controller == null) return const Icon(Icons.expand_more);
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) => AnimatedRotation(
+        turns: controller.isExpanded ? 0.5 : 0.0,
+        duration: const Duration(milliseconds: 200),
+        child: const Icon(Icons.expand_more),
       ),
     );
   }
