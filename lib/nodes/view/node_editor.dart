@@ -11,7 +11,10 @@ import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/task_assignee.dart';
 import 'package:a_fish_in_sea/planner/view/people_field.dart';
 
-Future<void> showNodeEditor(
+/// Shows the node editor dialog. Returns the created or updated node on
+/// save, or null when the dialog is cancelled or the node is deleted.
+/// Callers that ignore the result keep working unchanged.
+Future<Node?> showNodeEditor(
   BuildContext context, {
   Node? existing,
   bool enableMoney = false,
@@ -21,7 +24,7 @@ Future<void> showNodeEditor(
   /// goal tile). Ignored when [existing] is set.
   List<String> initialParentIds = const [],
 }) {
-  return showDialog<void>(
+  return showDialog<Node?>(
     context: context,
     builder: (dialogContext) => _NodeEditorDialog(
       existing: existing,
@@ -607,6 +610,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
 
     final existing = widget.existing;
     String? error;
+    Node? result;
     if (existing == null) {
       final node = Node(
         id: 'node:${DateTime.now().microsecondsSinceEpoch}',
@@ -623,34 +627,37 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         assignees: _people,
       );
       error = cubit.addNode(node);
-      if (error == null && recurrence != null) {
-        cubit.generateInstances(
-          templateId: node.id,
-          from: DateTime.now(),
-          horizon: DateTime.now().add(const Duration(days: 365)),
-        );
+      if (error == null) {
+        result = node;
+        if (recurrence != null) {
+          cubit.generateInstances(
+            templateId: node.id,
+            from: DateTime.now(),
+            horizon: DateTime.now().add(const Duration(days: 365)),
+          );
+        }
       }
     } else {
-      error = cubit.updateNode(
-        existing.copyWith(
-          title: title,
-          notes: notes,
-          clearNotes: notes == null,
-          parentIds: _parents,
-          isUnbounded: isUnbounded,
-          schedule: schedule,
-          clearSchedule: schedule == null,
-          money: money,
-          clearMoney: money == null,
-          effort: effort,
-          clearEffort: effort == null,
-          recurrence: recurrence,
-          clearRecurrence: recurrence == null,
-          rule: rule,
-          clearRule: rule == null,
-          assignees: _people,
-        ),
+      final updated = existing.copyWith(
+        title: title,
+        notes: notes,
+        clearNotes: notes == null,
+        parentIds: _parents,
+        isUnbounded: isUnbounded,
+        schedule: schedule,
+        clearSchedule: schedule == null,
+        money: money,
+        clearMoney: money == null,
+        effort: effort,
+        clearEffort: effort == null,
+        recurrence: recurrence,
+        clearRecurrence: recurrence == null,
+        rule: rule,
+        clearRule: rule == null,
+        assignees: _people,
       );
+      error = cubit.updateNode(updated);
+      if (error == null) result = updated;
     }
     if (error != null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -658,7 +665,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       );
       return;
     }
-    Navigator.of(context).pop();
+    Navigator.of(context).pop(result);
   }
 
   /// Confirm gate before an unbounded save clears dates/targets. Returns
