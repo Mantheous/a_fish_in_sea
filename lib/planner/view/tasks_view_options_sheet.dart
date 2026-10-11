@@ -71,7 +71,7 @@ class _TasksViewOptionsSheet extends StatelessWidget {
                   subtitle: const Text(
                     'Open items due in the rest of the calendar week '
                     '(today through Sunday) get a tinted row and a '
-                    'colored edge.',
+                    'colored edge — items due today glow orange.',
                   ),
                 ),
                 const Divider(indent: 16, endIndent: 16),

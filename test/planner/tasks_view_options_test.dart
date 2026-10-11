@@ -290,6 +290,7 @@ void main() {
       try {
         await pumpTasks(tester);
         expect(find.bySemanticsLabel('Due this week'), findsNothing);
+        expect(find.bySemanticsLabel('Due today'), findsNothing);
 
         await tester.tap(find.byTooltip('View options'));
         await tester.pumpAndSettle();
@@ -300,6 +301,18 @@ void main() {
         await tester.tap(find.byTooltip('Close'));
         await tester.pumpAndSettle();
 
+        // Rows due today get the hotter orange cue under its own label …
+        // (both the personal task and the homework row show on To-Do).
+        final today = find.bySemanticsLabel('Due today');
+        expect(today, findsNWidgets(2));
+        expect(
+          find.descendant(
+            of: today,
+            matching: find.text('Due today task'),
+          ),
+          findsOneWidget,
+        );
+        // … while the rest of the week keeps the week tint.
         final highlighted = find.bySemanticsLabel('Due this week');
         expect(highlighted, findsWidgets);
         expect(
@@ -307,7 +320,7 @@ void main() {
             of: highlighted,
             matching: find.text('Due today task'),
           ),
-          findsOneWidget,
+          findsNothing,
         );
         // Overdue and far-future rows never highlight.
         expect(
@@ -337,11 +350,49 @@ void main() {
         await tester.pumpAndSettle();
         expect(
           find.descendant(
-            of: find.bySemanticsLabel('Due this week'),
+            of: find.bySemanticsLabel('Due today'),
             matching: find.text('Due today homework'),
           ),
           findsOneWidget,
         );
+      } finally {
+        handle.dispose();
+      }
+    });
+
+    testWidgets('due-today rows glow orange, week rows keep the week tint',
+        (tester) async {
+      final handle = tester.ensureSemantics();
+      try {
+        await pumpTasks(tester);
+        viewOptions.setHighlightDueThisWeek(true);
+        await tester.pumpAndSettle();
+
+        Finder tinted(Color color) => find.ancestor(
+              of: find.text('Due today task'),
+              matching: find.byWidgetPredicate(
+                (w) =>
+                    w is Container &&
+                    w.decoration is BoxDecoration &&
+                    (w.decoration! as BoxDecoration).color == color,
+              ),
+            );
+        // Today rows sit in the orange container …
+        expect(tinted(Colors.orange.withAlpha(41)), findsOneWidget);
+        // … while a later-this-week row keeps the tertiary container.
+        final scheme =
+            Theme.of(tester.element(find.text('Due today task'))).colorScheme;
+        final weekRow = find.ancestor(
+          of: find.text('Due this week task'),
+          matching: find.byWidgetPredicate(
+            (w) =>
+                w is Container &&
+                w.decoration is BoxDecoration &&
+                (w.decoration! as BoxDecoration).color ==
+                    scheme.tertiaryContainer,
+          ),
+        );
+        expect(weekRow, findsOneWidget);
       } finally {
         handle.dispose();
       }

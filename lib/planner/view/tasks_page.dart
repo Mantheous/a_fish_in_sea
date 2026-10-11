@@ -537,6 +537,12 @@ bool _isDueToday(DateTime due, DateTime now) {
   return day == today;
 }
 
+/// Readable orange for "due today" cues in either brightness.
+Color _dueTodayColor(ThemeData theme) =>
+    theme.brightness == Brightness.dark
+        ? Colors.orange.shade300
+        : Colors.orange.shade800;
+
 class _NodeTile extends StatelessWidget {
   final Node node;
   final bool showClass;
@@ -634,6 +640,12 @@ class _NodeTile extends StatelessWidget {
           '\$${actual.toStringAsFixed(2)} / \$${live.money!.effectiveTarget.toStringAsFixed(2)}';
     }
     final due = live.schedule?.due;
+    // Due today outranks the week tint: same highlight option, hotter
+    // color. (A highlighted row is always open — the week set is
+    // open-only — so no extra status check is needed.)
+    final isDueTodayHighlight = highlightDueThisWeek &&
+        due != null &&
+        _isDueToday(due, effectiveNow);
     final tile = ListTile(
       leading: NodeCheckbox(node: live),
       title: Text(
@@ -686,9 +698,11 @@ class _NodeTile extends StatelessWidget {
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: live.isOverdueAt(effectiveNow)
                         ? theme.colorScheme.error
-                        : highlightDueThisWeek
-                            ? theme.colorScheme.tertiary
-                            : null,
+                        : isDueTodayHighlight
+                            ? _dueTodayColor(theme)
+                            : highlightDueThisWeek
+                                ? theme.colorScheme.tertiary
+                                : null,
                     fontWeight:
                         _isDueToday(due, effectiveNow) || highlightDueThisWeek
                             ? FontWeight.bold
@@ -778,6 +792,27 @@ class _NodeTile extends StatelessWidget {
       ),
       onTap: () => showNodeEditor(context, existing: live),
     );
+    if (isDueTodayHighlight) {
+      // Due today: hotter orange row and edge so today's work jumps out
+      // from the rest of the week. Same transparent-Material trick as
+      // below keeps ink splashes above the tint.
+      return Semantics(
+        container: true,
+        label: 'Due today',
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.orange.withAlpha(41),
+            border: const Border(
+              left: BorderSide(color: Colors.orange, width: 4),
+            ),
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: tile,
+          ),
+        ),
+      );
+    }
     if (!highlightDueThisWeek) return tile;
     // Tinted row plus a colored edge: this item is due inside the
     // calendar-week window and the option is on. The transparent Material
