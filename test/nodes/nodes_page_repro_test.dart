@@ -61,7 +61,16 @@ void main() {
 
     await tester.tap(find.byType(FloatingActionButton));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField).first, 'Via editor');
+    // Scope to the editor dialog: the page's own search field is also a
+    // TextField once nodes exist.
+    await tester.enterText(
+        find
+            .descendant(
+              of: find.byType(AlertDialog),
+              matching: find.byType(TextField),
+            )
+            .first,
+        'Via editor');
     await tester.tap(find.widgetWithText(FilledButton, 'Add'));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
@@ -87,7 +96,16 @@ void main() {
     await tester.pumpAndSettle();
     // Parent is already attached; no need to use the picker.
     expect(find.widgetWithText(Chip, 'Parent'), findsOneWidget);
-    await tester.enterText(find.byType(TextField).first, 'Child');
+    // Scope to the editor dialog: the page's search field is also a
+    // TextField.
+    await tester.enterText(
+        find
+            .descendant(
+              of: find.byType(AlertDialog),
+              matching: find.byType(TextField),
+            )
+            .first,
+        'Child');
     await tester.tap(find.widgetWithText(FilledButton, 'Add'));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
