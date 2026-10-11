@@ -95,12 +95,50 @@ right.
 
 ## Shipping changes to the user
 
+Two kinds of agents ship differently. Know which one you are:
+
+- **Loop builders** (`tools/agent/builder-run.sh`, `rework-run.sh`):
+  NEVER deploy, NEVER push to `main`, NEVER build the web bundle.
+  Finish with a pushed branch + PR — the loop (`poll.sh` → human merge
+  → `deploy.sh`) ships reviewed work to the funnel.
+- **Ad-hoc** (the user asked you directly in this session): YOU ship it.
+  Do not report done until the user can see the change on the active
+  target. "Run this build to see it" is not done.
+
 Before shipping anything, read `DEBUG_PREFS.md` (gitignored, per-developer)
 and follow ONLY its active target. It tells you whether the developer is
 currently on the Tailnet web build or the mobile app — do not guess, do
 not do both, do not ask unless the file is missing.
 
-### Mobile (preferred): hot reload/restart over wireless debugging
+### Ad-hoc, web target: deploy to the Tailnet funnel
+
+The user views the web app at `https://alauris.tail088878.ts.net/fish/`.
+Tailscale serve maps `/fish` → `http://127.0.0.1:8000` (prefix stripped)
+and the FastAPI server (`server/api`, `_mount_web` in `app/main.py`)
+serves `<repo>/build/web` from disk — no server restart or copy step
+needed after a rebuild. The funnel serves the main checkout's bundle,
+so building inside a worktree does NOT ship — get the change onto `main`
+first, then deploy from the main checkout:
+
+1. Commit your work on your branch and push it. Then land it on `main`
+   via a throwaway worktree per `tools/agent/CONVENTIONS.md` rule 4
+   (verify, then publish). Ad-hoc may merge to `main`; loop builders
+   must never.
+2. From the main checkout (`$HOME/Repos/a_fish_in_sea`), run
+   `tools/agent/deploy.sh` — never a bare `flutter build web`. The script
+   keeps the data-guardian gate, the DB backup, and the base-href checks
+   (a bare build emits `<base href="/">`, which white-screens under
+   `/fish/`; the script refuses to mark such a bundle).
+3. Verify the bundle timestamp is newer than the edited source and that
+   `build/web/index.html` contains `<base href="/fish/">`.
+4. Tell the user to hard-refresh (Ctrl+Shift+R): the Flutter service
+   worker caches the previous bundle, so a normal reload can still show
+   stale code or a stale white screen.
+5. If the deploy is held back — data-guardian block, diverged `main`,
+   or build failure — stop and say so. Do NOT report done while the
+   funnel still shows the old code.
+
+### Ad-hoc, mobile target: hot reload/restart over wireless debugging
 
 Load the `wireless-debugging` skill and follow it (reconnect with
 `adb reconnect` / `adb connect` first — never re-pair unless auth fails;
@@ -113,21 +151,3 @@ known device `mantheous-a16` via Tailscale). Then:
 2. If no session exists, start one per the skill
    (`tmux new-session -d -s fish -c <repo> 'flutter run -d <id>'`;
    first launch is a 5–15 min Gradle build, reloads after are ~1s).
-
-### Web: rebuild for the Tailnet funnel
-
-The user views the web app at `https://alauris.tail088878.ts.net/fish/`.
-Tailscale serve maps `/fish` → `http://127.0.0.1:8000` (prefix stripped)
-and the FastAPI server (`server/api`, `_mount_web` in `app/main.py`)
-serves `<repo>/build/web` from disk — no server restart or copy step
-needed after a rebuild. After Dart changes:
-
-1. Rebuild with the subpath base href (REQUIRED — a bare
-   `flutter build web` emits `<base href="/">`, which white-screens
-   under `/fish/`):
-   `~/flutter/bin/flutter build web --base-href /fish/`
-2. Verify the bundle timestamp is newer than the edited source and that
-   `build/web/index.html` contains `<base href="/fish/">`.
-3. Tell the user to hard-refresh (Ctrl+Shift+R): the Flutter service
-   worker caches the previous bundle, so a normal reload can still show
-   stale code or a stale white screen.
