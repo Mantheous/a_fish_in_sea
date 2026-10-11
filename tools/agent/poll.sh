@@ -30,4 +30,5 @@ fi
 "$REPO/tools/agent/data-guard.sh"
 "$REPO/tools/agent/deploy.sh"
 "$REPO/tools/agent/ux-walk.sh"
+"$REPO/tools/agent/perf-walk.sh"
 echo "[agent-poll] done"

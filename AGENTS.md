@@ -28,6 +28,21 @@ The post-deploy walk covers labeled scopes and files findings as new
 issues. Never gate a PR or merge on a walk verdict. The loop's
 heartbeat walk still covers the whole app regularly.
 
+## Perf loop: measure, don't guess
+
+`tools/agent/perf-walk.sh` runs post-deploy in `poll.sh`: a deterministic
+API-latency + bundle-size regression check against
+`tools/agent/perf-baseline.json`. Confirmed breaches file `agent-pending` +
+`perf-regression` issues (at most one open — repeats comment on it), so
+perf fixes flow through the normal triage → builder → review path, bounded
+to one hot spot per issue.
+
+1. Baselines never auto-update. Refresh deliberately with
+   `tools/agent/perf-walk.sh --update` after a perf fix ships (or the loop
+   host changes), then commit the diff.
+2. After a perf fix merges, re-run `tools/agent/perf-walk.sh --force` to
+   confirm before updating the baseline.
+
 ## Persisted state: never wipe device data
 
 All app state is per-device HydratedBloc (`hydrated_box`: IndexedDB on

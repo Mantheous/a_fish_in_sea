@@ -1,0 +1,13 @@
+{
+  "_note": "Loop-host perf baselines for tools/agent/perf-walk.sh. Refresh DELIBERATELY via perf-walk.sh --update after a perf fix ships (or the loop host changes). The walk NEVER rewrites this.",
+  "measured_at": "2026-10-11T11:35:00Z",
+  "api": {
+    "sync_pull_ms": 7,
+    "items_nodes_ms": 7,
+    "sync_push_ms": 23
+  },
+  "web": {
+    "bundle_bytes": 48654627,
+    "main_dart_js_bytes": 5829428
+  }
+}
