@@ -16,6 +16,7 @@ Future<void> showNodeEditor(
   Node? existing,
   bool enableMoney = false,
   bool enableRecurrence = false,
+  String? initialParentId,
 }) {
   return showDialog<void>(
     context: context,
@@ -23,6 +24,7 @@ Future<void> showNodeEditor(
       existing: existing,
       enableMoney: enableMoney,
       enableRecurrence: enableRecurrence,
+      initialParentId: initialParentId,
     ),
   );
 }
@@ -31,9 +33,13 @@ class _NodeEditorDialog extends StatefulWidget {
   final Node? existing;
   final bool enableMoney;
   final bool enableRecurrence;
+  final String? initialParentId;
 
   const _NodeEditorDialog(
-      {this.existing, this.enableMoney = false, this.enableRecurrence = false});
+      {this.existing,
+      this.enableMoney = false,
+      this.enableRecurrence = false,
+      this.initialParentId});
 
   @override
   State<_NodeEditorDialog> createState() => _NodeEditorDialogState();
@@ -79,7 +85,9 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     final e = widget.existing;
     _title = TextEditingController(text: e?.title ?? '');
     _notes = TextEditingController(text: e?.notes ?? '');
-    _parents = List.of(e?.parentIds ?? const []);
+    final seedParent = widget.initialParentId;
+    _parents = List.of(e?.parentIds ??
+        (seedParent == null ? const [] : [seedParent]));
     _due = e?.schedule?.due;
     _blockStart = e?.schedule?.start;
     _blockEnd = e?.schedule?.end;
