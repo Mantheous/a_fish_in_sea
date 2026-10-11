@@ -55,13 +55,20 @@ void main() {
     await tester.pumpWidget(harness(nodes));
     await tester.pump();
 
-    // Parent goals render as expansion tiles in the All view.
+    // Parent goals render as expandable rows in the All view.
     await tester.tap(find.text('All'));
     await tester.pump();
     expect(find.text('Parent'), findsOneWidget);
 
-    // Expand the parent so the child leaf renders too.
+    // Tapping the parent row itself opens the editor, not the children.
     await tester.tap(find.text('Parent'));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit node'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+
+    // Expand the parent via its chevron so the child leaf renders too.
+    await tester.tap(find.byTooltip('Expand'));
     await tester.pumpAndSettle();
 
     // Both the parent header and the child leaf must offer Add subgoal

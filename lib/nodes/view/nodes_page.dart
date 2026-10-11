@@ -475,21 +475,31 @@ class _NodeTile extends StatelessWidget {
       onTap: () => showNodeEditor(context, existing: live),
     );
     if (kids.isEmpty) return tile;
-    return ExpansionTile(
+    return _ParentTile(
       key: ValueKey('${live.id}:$expandToken:$expandAll'),
-      initiallyExpanded: expandAll,
       tilePadding:
           EdgeInsets.only(left: 16 + depth * 20, right: 8),
       leading: _leading(context, live),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ..._trailingActions(context, live, theme),
-          const _ExpandChevron(),
-        ],
+      title: Text(
+        live.title,
+        style: TextStyle(
+          decoration: live.isDone ||
+                  live.status == NodeStatus.failed
+              ? TextDecoration.lineThrough
+              : null,
+          color: live.status == NodeStatus.failed
+              ? theme.colorScheme.error
+              : live.isDone
+                  ? theme.colorScheme.outline
+                  : null,
+        ),
       ),
-      title: Text(live.title),
-      subtitle: _subtitleWidget(context, subtitle, value, live.isUnbounded),
+      subtitle:
+          _subtitleWidget(context, subtitle, value, live.isUnbounded),
+      trailingActions: _trailingActions(context, live, theme),
+      initiallyExpanded: expandAll,
+      expandToken: expandToken,
+      onTap: () => showNodeEditor(context, existing: live),
       children: [
         for (final k in kids)
           _NodeTile(
@@ -513,7 +523,7 @@ class _NodeTile extends StatelessWidget {
   }
 
   /// Action buttons shared by leaf rows ([ListTile]) and parent rows
-  /// ([ExpansionTile]): record start/stop, Add subgoal, and the overflow
+  /// ([_ParentTile]): record start/stop, Add subgoal, and the overflow
   /// menu. Parent rows previously had no trailing at all, which hid the
   /// Add subgoal button (and the rest) on every goal with children.
   /// Unbounded goals get no tracking buttons and no toggle/fail items:
@@ -950,25 +960,81 @@ class _NodeTile extends StatelessWidget {
   }
 }
 
-/// Expand/collapse chevron for parent goal rows.
+/// Parent goal row in the All view.
 ///
-/// Parent rows use [ExpansionTile] with custom trailing actions, which
-/// replaces the tile's default expand icon — so the chevron is rebuilt
-/// here, driven by the tile's own [ExpansibleController].
-class _ExpandChevron extends StatelessWidget {
-  const _ExpandChevron();
+/// Tapping the row itself opens the goal editor (same as leaf rows);
+/// only the chevron expands/collapses the children. The old
+/// [ExpansionTile] expanded on any header tap, which left collapsed
+/// parents with no discoverable way to edit.
+class _ParentTile extends StatefulWidget {
+  final EdgeInsetsGeometry tilePadding;
+  final Widget leading;
+  final Widget title;
+  final Widget subtitle;
+  final List<Widget> trailingActions;
+  final List<Widget> children;
+  final bool initiallyExpanded;
+  final int expandToken;
+  final VoidCallback onTap;
+
+  const _ParentTile({
+    super.key,
+    required this.tilePadding,
+    required this.leading,
+    required this.title,
+    required this.subtitle,
+    required this.trailingActions,
+    required this.children,
+    required this.initiallyExpanded,
+    required this.expandToken,
+    required this.onTap,
+  });
+
+  @override
+  State<_ParentTile> createState() => _ParentTileState();
+}
+
+class _ParentTileState extends State<_ParentTile> {
+  late bool _expanded = widget.initiallyExpanded;
+
+  @override
+  void didUpdateWidget(covariant _ParentTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.expandToken != widget.expandToken) {
+      _expanded = widget.initiallyExpanded;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final controller = ExpansibleController.maybeOf(context);
-    if (controller == null) return const Icon(Icons.expand_more);
-    return AnimatedBuilder(
-      animation: controller,
-      builder: (context, _) => AnimatedRotation(
-        turns: controller.isExpanded ? 0.5 : 0.0,
-        duration: const Duration(milliseconds: 200),
-        child: const Icon(Icons.expand_more),
-      ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ListTile(
+          contentPadding: widget.tilePadding,
+          leading: widget.leading,
+          title: widget.title,
+          subtitle: widget.subtitle,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ...widget.trailingActions,
+              IconButton(
+                tooltip: _expanded ? 'Collapse' : 'Expand',
+                icon: AnimatedRotation(
+                  turns: _expanded ? 0.5 : 0.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: const Icon(Icons.expand_more),
+                ),
+                onPressed: () =>
+                    setState(() => _expanded = !_expanded),
+              ),
+            ],
+          ),
+          onTap: widget.onTap,
+        ),
+        if (_expanded) ...widget.children,
+      ],
     );
   }
 }
