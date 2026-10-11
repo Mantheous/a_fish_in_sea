@@ -467,14 +467,7 @@ class _NodeTile extends StatelessWidget {
                   : null,
         ),
       ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(subtitle, style: theme.textTheme.labelSmall),
-          const SizedBox(height: 4),
-          LinearProgressIndicator(value: value),
-        ],
-      ),
+      subtitle: _subtitleWidget(context, subtitle, value, live.isUnbounded),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: _trailingActions(context, live, theme),
@@ -496,14 +489,7 @@ class _NodeTile extends StatelessWidget {
         ],
       ),
       title: Text(live.title),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(subtitle, style: theme.textTheme.labelSmall),
-          const SizedBox(height: 4),
-          LinearProgressIndicator(value: value),
-        ],
-      ),
+      subtitle: _subtitleWidget(context, subtitle, value, live.isUnbounded),
       children: [
         for (final k in kids)
           _NodeTile(
@@ -530,17 +516,19 @@ class _NodeTile extends StatelessWidget {
   /// ([ExpansionTile]): record start/stop, Add subgoal, and the overflow
   /// menu. Parent rows previously had no trailing at all, which hid the
   /// Add subgoal button (and the rest) on every goal with children.
+  /// Unbounded goals get no tracking buttons and no toggle/fail items:
+  /// they are ongoing directions, never completed.
   List<Widget> _trailingActions(
       BuildContext context, Node live, ThemeData theme) {
     return [
-      if (live.isTracking)
+      if (!live.isUnbounded && live.isTracking)
         IconButton(
           tooltip: 'Stop recording',
           icon: Icon(Icons.stop,
               color: theme.colorScheme.primary),
           onPressed: () => stopNodeAndFinish(context, live.id),
         )
-      else if (live.isOpen)
+      else if (!live.isUnbounded && live.isOpen)
         IconButton(
           tooltip: 'Start recording',
           icon: const Icon(Icons.play_arrow),
@@ -571,13 +559,15 @@ class _NodeTile extends StatelessWidget {
           const PopupMenuItem(
               value: 'duplicate',
               child: Text('Duplicate subtree')),
-          const PopupMenuItem(
-              value: 'toggle', child: Text('Toggle done')),
-          PopupMenuItem(
-              value: 'fail',
-              child: Text(live.status == NodeStatus.failed
-                  ? 'Unmark failed'
-                  : 'Mark failed')),
+          if (!live.isUnbounded)
+            const PopupMenuItem(
+                value: 'toggle', child: Text('Toggle done')),
+          if (!live.isUnbounded)
+            PopupMenuItem(
+                value: 'fail',
+                child: Text(live.status == NodeStatus.failed
+                    ? 'Unmark failed'
+                    : 'Mark failed')),
           if (live.isTemplate)
             const PopupMenuItem(
                 value: 'generate',
@@ -633,6 +623,12 @@ class _NodeTile extends StatelessWidget {
   }
 
   Widget _leading(BuildContext context, Node live) {
+    if (live.isUnbounded) {
+      return const Tooltip(
+        message: 'Unbounded goal — ongoing, no checkbox',
+        child: Icon(Icons.all_inclusive),
+      );
+    }
     if (live.isTemplate) {
       return const Icon(Icons.repeat_outlined);
     }
@@ -648,8 +644,35 @@ class _NodeTile extends StatelessWidget {
     return NodeCheckbox(node: live);
   }
 
+  /// Subtitle area: unbounded goals show text only (no bar, no percent);
+  /// everything else keeps the progress bar underneath.
+  Widget _subtitleWidget(
+      BuildContext context, String subtitle, double value, bool unbounded) {
+    final theme = Theme.of(context);
+    if (unbounded) {
+      return Text(subtitle, style: theme.textTheme.labelSmall);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(subtitle, style: theme.textTheme.labelSmall),
+        const SizedBox(height: 4),
+        LinearProgressIndicator(value: value),
+      ],
+    );
+  }
+
   String _subtitle(BuildContext context, Node live, double value,
       int childCount) {
+    // Unbounded goals never show dates, targets, or a percent — just the
+    // ongoing marker plus how many concrete steps hang underneath.
+    if (live.isUnbounded) {
+      final parts = <String>['unbounded'];
+      if (childCount > 0) {
+        parts.add('$childCount step${childCount == 1 ? '' : 's'}');
+      }
+      return parts.join(' · ');
+    }
     final effectiveNow = now ?? DateTime.now();
     final parts = <String>[];
     if (childCount > 0) {

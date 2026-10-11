@@ -381,6 +381,13 @@ class RuleFacet extends Equatable {
 /// parents (e.g. groceries under both "Food budget" and "Errands").
 /// Reporting is direct — subtree sums plus [MoneyFacet.linkedTransactionIds]
 /// and recorded actuals. There are no tags.
+///
+/// An [isUnbounded] node is an abstract, ongoing direction ("serve
+/// others"): no due date, no targets, no progress bar. It never completes
+/// itself; concrete subgoals underneath carry the dates and the progress.
+/// Unbounded nodes stay out of the priority queue, the leaf list, and
+/// parent progress averages, so an aspiration that never ends cannot pin a
+/// concrete goal below 100%.
 class Node extends Equatable {
   static const int storageVersion = 1;
 
@@ -391,6 +398,11 @@ class Node extends Equatable {
   final NodeStatus status;
   final DateTime? completedAt;
   final DateTime createdAt;
+
+  /// True for abstract, unbounded goals: ongoing directions with no due
+  /// date, no targets, and no progress bar. Additive flag, defaults to
+  /// false, so every payload written before it existed loads as bounded.
+  final bool isUnbounded;
 
   final ScheduleFacet? schedule;
   final MoneyFacet? money;
@@ -426,6 +438,7 @@ class Node extends Equatable {
     this.status = NodeStatus.open,
     this.completedAt,
     required this.createdAt,
+    this.isUnbounded = false,
     this.schedule,
     this.money,
     this.effort,
@@ -500,6 +513,7 @@ class Node extends Equatable {
     DateTime? completedAt,
     bool clearCompletedAt = false,
     DateTime? createdAt,
+    bool? isUnbounded,
     ScheduleFacet? schedule,
     bool clearSchedule = false,
     MoneyFacet? money,
@@ -540,6 +554,7 @@ class Node extends Equatable {
         completedAt:
             clearCompletedAt ? null : (completedAt ?? this.completedAt),
         createdAt: createdAt ?? this.createdAt,
+        isUnbounded: isUnbounded ?? this.isUnbounded,
         schedule: clearSchedule ? null : (schedule ?? this.schedule),
         money: clearMoney ? null : (money ?? this.money),
         effort: clearEffort ? null : (effort ?? this.effort),
@@ -598,6 +613,11 @@ class Node extends Equatable {
       ),
       completedAt: _tryDate(json['completedAt']),
       createdAt: createdAt,
+      // Missing (pre-flag payloads) reads as bounded, so old data loads
+      // untouched and never trips [validateUnbounded]. The == true
+      // coercion also survives wrong-typed values: a corrupt flag reads
+      // as bounded instead of dropping the whole node.
+      isUnbounded: json['isUnbounded'] == true,
       schedule: json['schedule'] is Map
           ? _facetOrNull(
               () => ScheduleFacet.fromJson(
@@ -642,6 +662,7 @@ class Node extends Equatable {
         'status': status.name,
         'completedAt': completedAt?.toIso8601String(),
         'createdAt': createdAt.toIso8601String(),
+        'isUnbounded': isUnbounded,
         'schedule': schedule?.toJson(),
         'money': money?.toJson(),
         'effort': effort?.toJson(),
@@ -669,6 +690,7 @@ class Node extends Equatable {
         status,
         completedAt,
         createdAt,
+        isUnbounded,
         schedule,
         money,
         effort,
