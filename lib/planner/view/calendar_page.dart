@@ -273,38 +273,12 @@ class _CalendarPageState extends State<CalendarPage> {
                   ),
                 ],
               ),
-            ),
-          if (compactHeader)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                mainAxisSize: MainAxisSize.max,
-                children: [
-                  TextButton(
-                    onPressed: _goToToday,
-                    style: const ButtonStyle(
-                      visualDensity: VisualDensity.compact,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: const Text('Today'),
-                  ),
-                ],
-              ),
             )
           else ...[
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
               child: Row(
                 children: [
-                  TextButton(
-                    onPressed: _goToToday,
-                    style: const ButtonStyle(
-                      visualDensity: VisualDensity.compact,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: const Text('Today'),
-                  ),
                   Expanded(
                     child: Align(
                       alignment: Alignment.centerRight,
@@ -1638,11 +1612,9 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   /// Jumps the calendar back to today, keeping the current Day/Week/Month
-  /// view. Wired to the Today button and double-tap/click on the view
-  /// switcher (a re-tap on the active segment never reaches
-  /// `onSelectionChanged`, so the switcher is wrapped in a
-  /// `GestureDetector.onDoubleTap` instead). Prev/next stepping is the
-  /// SfCalendar header's own navigation arrows.
+  /// view. Reached via double-tap/click on the view switcher (a re-tap on
+  /// the active segment never reaches `onSelectionChanged`, so the
+  /// switcher is wrapped in a `GestureDetector.onDoubleTap` instead).
   void _goToToday() {
     final now = DateTime.now();
     _controller.displayDate = now;
