@@ -8,6 +8,7 @@ import '../../common/undo/undo_cubit.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_event_link.dart';
+import '../../nodes/view/goal_picker.dart';
 import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_finish_sheet.dart';
 import '../../reporting/bloc/places_cubit.dart';
@@ -2503,6 +2504,8 @@ class EventDetailView extends StatelessWidget {
             _TaskStatusTile(event: event),
             const SizedBox(height: 8),
             _TaskTimeSection(event: event),
+            const SizedBox(height: 8),
+            _GoalAssignmentSection(event: event),
           ] else if (!event.allDay) ...[
             // Plain calendar events (Google / personal) can also be timed
             // like in Toggl: one tap on Start records from now, Stop saves
@@ -2596,6 +2599,141 @@ class _TaskStatusTile extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Goal assignment for a task-event: which goal(s) its backing node
+/// reports to, plus assign/remove. Backing nodes parented under a goal
+/// roll their completion into the goal's progress.
+class _GoalAssignmentSection extends StatelessWidget {
+  final PlannerEvent event;
+
+  const _GoalAssignmentSection({required this.event});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    List<Node> all = const [];
+    try {
+      all = context.watch<NodeCubit>().state;
+    } catch (_) {}
+    Node? backing;
+    for (final n in all) {
+      if (n.calendarEventId == event.id ||
+          n.sourceEventId == event.id ||
+          n.id == event.taskId) {
+        backing = n;
+        break;
+      }
+    }
+    final byId = {for (final n in all) n.id: n};
+    final parents = backing == null
+        ? const <Node>[]
+        : [
+            for (final pid in backing.parentIds)
+              if (byId[pid] != null) byId[pid]!,
+          ];
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.dividerColor),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Goal', style: theme.textTheme.labelLarge),
+          const SizedBox(height: 4),
+          if (backing == null) ...[
+            Text(
+              'This task has no linked step yet — assign to create the link.',
+              style: theme.textTheme.bodySmall,
+            ),
+          ] else if (parents.isEmpty) ...[
+            Text(
+              'Not assigned to a goal yet.',
+              style: theme.textTheme.bodySmall,
+            ),
+          ] else ...[
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (final p in parents)
+                  Chip(
+                    label: Text(
+                      p.title,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    deleteIcon: const Icon(Icons.close, size: 16),
+                    onDeleted: () => _unassign(context, backing!.id, p.id),
+                  ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: () => _assign(context),
+              icon: const Icon(Icons.flag_outlined, size: 16),
+              label: Text(parents.isEmpty ? 'Assign to goal' : 'Change goal'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _assign(BuildContext context) async {
+    NodeCubit nodes;
+    CalendarCubit calendar;
+    try {
+      nodes = context.read<NodeCubit>();
+      calendar = context.read<CalendarCubit>();
+    } catch (_) {
+      return;
+    }
+    final liveBacking =
+        NodeEventLink.backingNodeFor(nodes, calendar, event.id);
+    final goal = await showGoalPicker(
+      context,
+      excludeNodeId: liveBacking?.id,
+    );
+    if (goal == null || !context.mounted) return;
+    final result = NodeEventLink.assignEventToGoal(
+      calendar,
+      nodes,
+      event.id,
+      goal.id,
+      includeSeries: false,
+    );
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result.assigned > 0
+              ? 'Assigned to “${goal.title}”'
+              : (result.error ?? 'Already assigned to “${goal.title}”.'),
+        ),
+      ),
+    );
+  }
+
+  void _unassign(BuildContext context, String nodeId, String goalId) {
+    NodeCubit nodes;
+    try {
+      nodes = context.read<NodeCubit>();
+    } catch (_) {
+      return;
+    }
+    final error = NodeEventLink.unassignNodeFromGoal(nodes, nodeId, goalId);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(error ?? 'Removed from goal'),
+      ),
     );
   }
 }
