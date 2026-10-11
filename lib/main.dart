@@ -103,6 +103,8 @@ class MyApp extends StatelessWidget {
               userId: () => context.read<PlaidCubit>().state.userId,
               authToken: () =>
                   context.read<AuthCubit>().state.accessToken,
+              refreshAccessToken: () =>
+                  context.read<AuthCubit>().refreshAccessToken(),
             ),
             proxyBase: () =>
                 context.read<SettingsCubit>().state.icalProxyBase,

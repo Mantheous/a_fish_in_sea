@@ -101,12 +101,20 @@ class GoogleCalendarService {
   final String Function() baseUrl;
   final String Function() userId;
   final String? Function()? authToken;
+
+  /// Refreshes the app session (JWT) and returns the new access token.
+  /// Wired to [AuthCubit.refreshAccessToken] in main.dart. Without it an
+  /// access token that expires mid-session (15 min) turns every Google
+  /// push into a 401 "Invalid token" — the sync client already retries
+  /// this way, the Google proxy did not.
+  final Future<String?> Function()? refreshAccessToken;
   final http.Client _client;
 
   GoogleCalendarService({
     required this.baseUrl,
     required this.userId,
     this.authToken,
+    this.refreshAccessToken,
     http.Client? client,
   }) : _client = client ?? http.Client();
 
@@ -137,7 +145,37 @@ class GoogleCalendarService {
   /// ([http.ClientException], [SocketException], [TimeoutException]) into a
   /// [GoogleCalendarException] that names the server, instead of leaking a
   /// bare "ClientException" string into the UI.
+  ///
+  /// On a 401 that looks like an expired app session (the server's string
+  /// `detail`, e.g. "Invalid token" — not the map-shaped Google-error
+  /// payload that carries `needsReconnect`), refreshes the session once
+  /// and retries with the new bearer, mirroring [SyncClient]. Callers pass
+  /// a closure so [_headers] is re-read and the retry carries the fresh
+  /// token.
   Future<http.Response> _send(Future<http.Response> Function() request) async {
+    final first = await _attempt(request);
+    if (first.statusCode != 401 || refreshAccessToken == null) return first;
+    if (!_isAppSessionExpiry(first)) return first;
+    final fresh = await refreshAccessToken!();
+    if (fresh == null || fresh.isEmpty) return first;
+    return _attempt(request);
+  }
+
+  /// True when a 401 looks like our own JWT expired, not a Google-side
+  /// auth failure. Google failures arrive as
+  /// `{"detail": {"error": ..., "needsReconnect": ...}}` (map detail) and
+  /// refreshing the app session can't fix those.
+  bool _isAppSessionExpiry(http.Response response) {
+    try {
+      final body = jsonDecode(response.body);
+      if (body is Map) return body['detail'] is! Map;
+    } catch (_) {}
+    return true;
+  }
+
+  Future<http.Response> _attempt(
+    Future<http.Response> Function() request,
+  ) async {
     try {
       return await request().timeout(const Duration(seconds: 30));
     } on GoogleCalendarException {
