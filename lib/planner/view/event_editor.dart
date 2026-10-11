@@ -1794,6 +1794,11 @@ class EventEditorFormState extends State<EventEditorForm> {
     }
     final calendar = context.read<CalendarCubit>();
     if (!saved.isTask) {
+      if (_seededSourceNode(nodes, saved.id, saved.taskId) != null) {
+        // The Task switch describes the event, not the assignment it was
+        // scheduled from: turning it off must not delete that task.
+        return;
+      }
       nodes.removeNodesForEvent(saved.id);
       return;
     }
@@ -1815,6 +1820,21 @@ class EventEditorFormState extends State<EventEditorForm> {
     );
   }
 
+  /// The pre-existing task that seeded this event ("Add to calendar"),
+  /// when it is still linked to it. Never the synthetic `node:<id>`
+  /// backing that [NodeCubit.upsertLinkedNodeForEvent] creates for an
+  /// event marked as a task itself — that one is disposable.
+  static Node? _seededSourceNode(
+    NodeCubit nodes,
+    String eventId,
+    String? linkedId,
+  ) {
+    if (linkedId == null || linkedId == 'node:$eventId') return null;
+    final node = nodes.byId(linkedId);
+    if (node == null || node.calendarEventId != eventId) return null;
+    return node;
+  }
+
   /// Re-applies the editor's task flag after a Google push + re-sync, which
   /// otherwise drops the local-only [PlannerEvent.isTask] state.
   /// Handles both marking and un-marking: an un-check must clear the
@@ -1829,6 +1849,9 @@ class EventEditorFormState extends State<EventEditorForm> {
       return;
     }
     if (!_isTask) {
+      if (_seededSourceNode(nodes, syncedId, _sourceTaskId) != null) {
+        return;
+      }
       NodeEventLink.unmarkEventAsNode(calendar, nodes, syncedId);
       return;
     }
