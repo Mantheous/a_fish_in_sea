@@ -281,12 +281,6 @@ class _CalendarPageState extends State<CalendarPage> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 mainAxisSize: MainAxisSize.max,
                 children: [
-                  IconButton(
-                    tooltip: _previousTooltip,
-                    icon: const Icon(Icons.chevron_left),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: _goToPrevious,
-                  ),
                   TextButton(
                     onPressed: _goToToday,
                     style: const ButtonStyle(
@@ -294,12 +288,6 @@ class _CalendarPageState extends State<CalendarPage> {
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
                     child: const Text('Today'),
-                  ),
-                  IconButton(
-                    tooltip: _nextTooltip,
-                    icon: const Icon(Icons.chevron_right),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: _goToNext,
                   ),
                 ],
               ),
@@ -309,12 +297,6 @@ class _CalendarPageState extends State<CalendarPage> {
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
               child: Row(
                 children: [
-                  IconButton(
-                    tooltip: _previousTooltip,
-                    icon: const Icon(Icons.chevron_left),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: _goToPrevious,
-                  ),
                   TextButton(
                     onPressed: _goToToday,
                     style: const ButtonStyle(
@@ -322,12 +304,6 @@ class _CalendarPageState extends State<CalendarPage> {
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
                     child: const Text('Today'),
-                  ),
-                  IconButton(
-                    tooltip: _nextTooltip,
-                    icon: const Icon(Icons.chevron_right),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: _goToNext,
                   ),
                   Expanded(
                     child: Align(
@@ -1662,89 +1638,15 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   /// Jumps the calendar back to today, keeping the current Day/Week/Month
-  /// view. Wired to the Today button, the header arrows' long-press
-  /// fallback, and double-tap/click on the view switcher (a re-tap on the
-  /// active segment never reaches `onSelectionChanged`, so the switcher is
-  /// wrapped in a `GestureDetector.onDoubleTap` instead).
+  /// view. Wired to the Today button and double-tap/click on the view
+  /// switcher (a re-tap on the active segment never reaches
+  /// `onSelectionChanged`, so the switcher is wrapped in a
+  /// `GestureDetector.onDoubleTap` instead). Prev/next stepping is the
+  /// SfCalendar header's own navigation arrows.
   void _goToToday() {
     final now = DateTime.now();
     _controller.displayDate = now;
     _controller.selectedDate = now;
-  }
-
-  String get _previousTooltip => switch (_view) {
-        CalendarView.day => 'Previous day',
-        CalendarView.week => 'Previous week',
-        CalendarView.month => 'Previous month',
-        _ => 'Previous',
-      };
-
-  String get _nextTooltip => switch (_view) {
-        CalendarView.day => 'Next day',
-        CalendarView.week => 'Next week',
-        CalendarView.month => 'Next month',
-        _ => 'Next',
-      };
-
-  /// Steps the visible page back by one day/week/month, matching the
-  /// current view. Drives `displayDate` directly — `CalendarController`
-  /// exposes no forward()/backward() API.
-  void _goToPrevious() {
-    final base = _controller.displayDate ??
-        _controller.selectedDate ??
-        DateTime.now();
-    _controller.displayDate = _shiftByView(base, -1);
-  }
-
-  /// Steps the visible page forward by one day/week/month.
-  void _goToNext() {
-    final base = _controller.displayDate ??
-        _controller.selectedDate ??
-        DateTime.now();
-    _controller.displayDate = _shiftByView(base, 1);
-  }
-
-  DateTime _shiftByView(DateTime date, int direction) {
-    switch (_view) {
-      case CalendarView.day:
-        return date.add(Duration(days: direction));
-      case CalendarView.week:
-        return date.add(Duration(days: 7 * direction));
-      case CalendarView.month:
-        return _addMonths(date, direction);
-      case CalendarView.timelineDay:
-        return date.add(Duration(days: direction));
-      case CalendarView.timelineWeek:
-        return date.add(Duration(days: 7 * direction));
-      case CalendarView.timelineWorkWeek:
-        return date.add(Duration(days: 7 * direction));
-      case CalendarView.timelineMonth:
-        return _addMonths(date, direction);
-      case CalendarView.workWeek:
-        return date.add(Duration(days: 7 * direction));
-      case CalendarView.schedule:
-        return _addMonths(date, direction);
-    }
-  }
-
-  /// Month arithmetic clamped to the target month's last day (so Jan 31 →
-  /// Feb lands on Feb 28/29 instead of overflowing into March).
-  DateTime _addMonths(DateTime date, int months) {
-    final monthIndex = (date.month - 1) + months;
-    final year = date.year + monthIndex ~/ 12;
-    final month = monthIndex % 12 + 1;
-    final lastDay = DateTime(year, month + 1, 0).day;
-    final day = date.day > lastDay ? lastDay : date.day;
-    return DateTime(
-      year,
-      month,
-      day,
-      date.hour,
-      date.minute,
-      date.second,
-      date.millisecond,
-      date.microsecond,
-    );
   }
 
   /// Creates (or reuses) the manual report entry for a task-event,
