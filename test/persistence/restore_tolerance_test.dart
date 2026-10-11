@@ -105,6 +105,33 @@ void main() {
       expect(restoredCorrupt?.single.isTracking, isFalse);
     });
 
+    test('CalendarCubit loads pre-reminder events and bad reminders', () {
+      final cubit = CalendarCubit();
+      final legacy = PlannerEvent(
+        id: 'old',
+        subject: 'Lecture',
+        start: _day,
+        end: _day.add(const Duration(hours: 1)),
+      ).toJson()
+        ..remove('reminderMinutesBefore');
+      final restoredLegacy = cubit.fromJson({
+        'events': [legacy],
+      });
+      expect(restoredLegacy?.single.reminderMinutesBefore, isNull);
+      final corrupt = PlannerEvent(
+        id: 'bad',
+        subject: 'Lecture',
+        start: _day,
+        end: _day.add(const Duration(hours: 1)),
+      ).toJson()
+        ..['reminderMinutesBefore'] = 'soon';
+      final restoredCorrupt = cubit.fromJson({
+        'events': [corrupt],
+      });
+      expect(restoredCorrupt?.map((e) => e.id), ['bad']);
+      expect(restoredCorrupt?.single.reminderMinutesBefore, isNull);
+    });
+
     test('FeedCubit keeps valid feeds', () {
       final cubit = makeFeedCubit();
       const good = Feed(id: 'f1', name: 'Class', url: 'https://x.test/f.ics');
@@ -300,6 +327,7 @@ void main() {
         actualEnd: _day.add(const Duration(minutes: 50)),
         timerStartedAt: _day.add(const Duration(minutes: 2)),
         failed: true,
+        reminderMinutesBefore: 30,
       );
       expect(PlannerEvent.fromJson(event.toJson()), event);
       const feed = Feed(id: 'f1', name: 'Class', url: 'https://x.test/f.ics');

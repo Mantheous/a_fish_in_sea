@@ -27,6 +27,7 @@ class PlannerEvent extends Equatable {
   final bool failed;
   final List<TaskAssignee> assignees;
   final List<String> tagIds;
+  final int? reminderMinutesBefore;
 
   const PlannerEvent({
     required this.id,
@@ -53,6 +54,7 @@ class PlannerEvent extends Equatable {
     this.failed = false,
     this.assignees = const [],
     this.tagIds = const [],
+    this.reminderMinutesBefore,
   });
 
   bool get isFromFeed => feedId != null;
@@ -62,6 +64,9 @@ class PlannerEvent extends Equatable {
   bool get isTracking => timerStartedAt != null;
 
   bool get hasReported => actualStart != null && actualEnd != null;
+
+  bool get hasReminder =>
+      reminderMinutesBefore != null && reminderMinutesBefore! > 0;
 
   Duration get plannedDuration =>
       end.isAfter(start) ? end.difference(start) : Duration.zero;
@@ -107,6 +112,8 @@ class PlannerEvent extends Equatable {
     bool? failed,
     List<TaskAssignee>? assignees,
     List<String>? tagIds,
+    int? reminderMinutesBefore,
+    bool clearReminder = false,
   }) =>
       PlannerEvent(
         id: id,
@@ -139,6 +146,9 @@ class PlannerEvent extends Equatable {
         failed: failed ?? this.failed,
         assignees: assignees ?? this.assignees,
         tagIds: tagIds ?? this.tagIds,
+        reminderMinutesBefore: clearReminder
+            ? null
+            : (reminderMinutesBefore ?? this.reminderMinutesBefore),
       );
 
   factory PlannerEvent.fromJson(Map<String, dynamic> json) => PlannerEvent(
@@ -174,7 +184,16 @@ class PlannerEvent extends Equatable {
         failed: json['failed'] as bool? ?? false,
         assignees: _assigneesFromJson(json['assignees']),
         tagIds: _tagIdsFromJson(json['tagIds']),
+        reminderMinutesBefore:
+            _reminderFromJson(json['reminderMinutesBefore']),
       );
+
+  static int? _reminderFromJson(Object? raw) {
+    if (raw == null) return null;
+    final parsed = raw is num ? raw.toInt() : int.tryParse('$raw');
+    if (parsed == null || parsed <= 0) return null;
+    return parsed;
+  }
 
   static List<String> _tagIdsFromJson(Object? raw) {
     if (raw is! List) return const [];
@@ -222,6 +241,7 @@ class PlannerEvent extends Equatable {
         'failed': failed,
         'assignees': assignees.map((a) => a.toJson()).toList(),
         'tagIds': tagIds,
+        'reminderMinutesBefore': reminderMinutesBefore,
       };
 
   @override
@@ -250,5 +270,6 @@ class PlannerEvent extends Equatable {
         failed,
         assignees,
         tagIds,
+        reminderMinutesBefore,
       ];
 }
