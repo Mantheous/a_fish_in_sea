@@ -136,7 +136,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   List<Node> overdueAt(DateTime now) {
     final today = DateTime(now.year, now.month, now.day);
     return state.where((n) {
-      if (!n.isOpen || n.isTemplate) return false;
+      if (!n.isOpen || n.isTemplate || n.isUnbounded) return false;
       final due = n.schedule?.due;
       if (due == null) return false;
       return due.isBefore(today);
@@ -153,7 +153,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final today = DateTime(now.year, now.month, now.day);
     final tomorrow = today.add(const Duration(days: 1));
     return state.where((n) {
-      if (!n.isOpen || n.isTemplate) return false;
+      if (!n.isOpen || n.isTemplate || n.isUnbounded) return false;
       final due = n.schedule?.due;
       if (due == null) return false;
       return !due.isBefore(today) && due.isBefore(tomorrow);

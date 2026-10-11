@@ -159,15 +159,20 @@ void main() {
     test('abstract goal stays out of the to-do list and week views', () {
       final cubit = NodeCubit();
       cubit.addNode(node('serve-others', isUnbounded: true));
+      // Wednesday: mid calendar-week, so the week window (Mon–Sun)
+      // covers the subgoal's due date under the calendar-week semantics.
       cubit.addNode(node('serve-this-week',
           parents: ['serve-others'],
-          schedule: ScheduleFacet(due: DateTime(2026, 9, 14))));
+          schedule: ScheduleFacet(due: DateTime(2026, 9, 16))));
       expect(cubit.openNodes.map((n) => n.id), ['serve-this-week']);
       expect(
-          cubit.overdueAndTodayAt(DateTime(2026, 9, 14)).map((n) => n.id),
+          cubit.overdueAndTodayAt(DateTime(2026, 9, 16)).map((n) => n.id),
           ['serve-this-week']);
-      expect(cubit.dueThisWeekAt(DateTime(2026, 9, 12)).map((n) => n.id),
+      expect(cubit.dueThisWeekAt(DateTime(2026, 9, 16)).map((n) => n.id),
           ['serve-this-week']);
+      expect(cubit.dueTodayAt(DateTime(2026, 9, 16)).map((n) => n.id),
+          ['serve-this-week']);
+      expect(cubit.overdueAt(DateTime(2026, 9, 16)), isEmpty);
     });
 
     test('done concrete subgoal does not "complete" the abstract parent', () {
