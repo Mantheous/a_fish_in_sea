@@ -8,9 +8,11 @@ import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/service/node_legacy_migration.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
 import 'package:a_fish_in_sea/nodes/service/node_tree_ops.dart';
+import 'package:a_fish_in_sea/nodes/view/goal_picker.dart';
 import 'package:a_fish_in_sea/nodes/view/node_checkbox.dart';
 import 'package:a_fish_in_sea/nodes/view/node_editor.dart';
 import 'package:a_fish_in_sea/nodes/view/node_finish_sheet.dart';
@@ -591,6 +593,9 @@ class _NodeTile extends StatelessWidget {
             const PopupMenuItem(
                 value: 'generate',
                 child: Text('Generate schedule')),
+          const PopupMenuItem(
+              value: 'assign-event',
+              child: Text('Assign repeating event…')),
           if (live.money != null) ...[
             const PopupMenuItem(
                 value: 'subdivide', child: Text('Subdivide')),
@@ -783,6 +788,8 @@ class _NodeTile extends StatelessWidget {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Generated $made instance(s)')),
         );
+      case 'assign-event':
+        _assignRepeatingEvent(context, live);
       case 'subdivide':
         _promptSubdivide(context, live);
       case 'rollover':
@@ -823,6 +830,58 @@ class _NodeTile extends StatelessWidget {
             ),
           );
     }
+  }
+
+  void _assignRepeatingEvent(BuildContext context, Node live) async {
+    final messenger = ScaffoldMessenger.of(context);
+    CalendarCubit calendar;
+    NodeCubit nodes;
+    try {
+      calendar = context.read<CalendarCubit>();
+      nodes = context.read<NodeCubit>();
+    } catch (_) {
+      return;
+    }
+    final event = await showRepeatingEventPicker(context);
+    if (event == null || !context.mounted) return;
+    // The tile's snapshot may be stale; the goal itself is what matters.
+    final goal = nodes.byId(live.id);
+    if (goal == null || !context.mounted) return;
+    final result = NodeEventLink.assignEventToGoal(
+      calendar,
+      nodes,
+      event.id,
+      goal.id,
+      includeSeries: true,
+    );
+    if (!context.mounted) return;
+    if (result.assigned == 0) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(result.error ?? 'Already assigned to “${goal.title}”.'),
+        ),
+      );
+      return;
+    }
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            result.error != null
+                ? 'Assigned ${result.assigned} item(s) to “${goal.title}”; ${result.error}'
+                : result.assigned == 1
+                    ? 'Assigned to “${goal.title}”'
+                    : 'Assigned ${result.assigned} items to “${goal.title}”',
+          ),
+          duration: const Duration(seconds: 4),
+          persist: false,
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () => context.read<UndoCubit>().undo(),
+          ),
+        ),
+      );
   }
 
   void _promptBreakdown(BuildContext context, Node live) {
