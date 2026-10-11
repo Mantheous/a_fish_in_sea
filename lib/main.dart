@@ -14,6 +14,7 @@ import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/tasks_tab_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/tasks_view_options_cubit.dart';
 import 'package:a_fish_in_sea/planner/service/canvas_service.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
@@ -87,6 +88,7 @@ class MyApp extends StatelessWidget {
         BlocProvider(create: (_) => CalendarVisibilityCubit()),
         BlocProvider(create: (_) => CalendarDraftCubit()),
         BlocProvider(create: (_) => TasksTabCubit()),
+        BlocProvider(create: (_) => TasksViewOptionsCubit()),
         BlocProvider(create: (_) => PlacesCubit()),
         BlocProvider(create: (_) => TrackingCubit()),
         BlocProvider(create: (_) => ReportingCubit()),
