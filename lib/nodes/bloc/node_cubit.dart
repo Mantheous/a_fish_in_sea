@@ -12,6 +12,7 @@ import '../model/node.dart';
 import '../model/node_relations.dart';
 import '../service/node_feed.dart';
 import '../service/node_progress.dart';
+import '../service/node_tree_ops.dart';
 
 /// Unified goals/tasks store. One DAG of [Node]s replaces Goal + Task +
 /// Budget + Expense; transactions and calendar events stay separate and
@@ -202,6 +203,160 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final node = byId(id);
     if (node == null) return 'Node not found.';
     return updateNode(node.copyWith(parentIds: parentIds));
+  }
+
+  // ── Goal-tree building (issue #4: complex goal trees) ───────────────
+  //
+  // Quick child / subtree duplication / automatic breakdown. All three
+  // emit a single undoable change and mint no new stored fields, so old
+  // payloads keep loading untouched.
+
+  /// Adds one child step under [parentId]. Returns an error string, or
+  /// null on success. [nodeId] is an optional test seam; the UI leaves it
+  /// null so ids are timestamped.
+  String? createChild(
+    String parentId, {
+    String? nodeId,
+    String title = 'New step',
+    DateTime? now,
+  }) {
+    if (byId(parentId) == null) return 'Parent node not found.';
+    final trimmed = title.trim();
+    if (trimmed.isEmpty) return 'Please enter a title.';
+    final at = now ?? DateTime.now();
+    final id = nodeId ?? 'node:${at.microsecondsSinceEpoch}';
+    if (byId(id) != null) return 'A node with that id exists.';
+    final child = Node(
+      id: id,
+      title: trimmed,
+      parentIds: [parentId],
+      createdAt: at,
+    );
+    return addNode(child);
+  }
+
+  /// Deep-copies [sourceId] and its whole descendant closure. External
+  /// parents of copied nodes are preserved, so shared DAG children stay
+  /// shared. Copies are titled `<title> (copy)` at the root only.
+  /// Returns an error string, or null on success (single undo step).
+  String? duplicateSubtree(
+    String sourceId, {
+    String? attachToParentId,
+    String? idSuffix,
+    DateTime? now,
+  }) {
+    final source = byId(sourceId);
+    if (source == null) return 'Node not found.';
+    if (attachToParentId != null) {
+      if (byId(attachToParentId) == null) {
+        return 'Parent node not found.';
+      }
+      if (attachToParentId == sourceId ||
+          subtreeIds(sourceId, state).contains(attachToParentId)) {
+        return 'Cannot attach a copy under its own subtree.';
+      }
+    }
+    final closure = <String>{sourceId, ...subtreeIds(sourceId, state)};
+    final at = now ?? DateTime.now();
+    final stamp = idSuffix ?? '${at.microsecondsSinceEpoch}';
+    final remap = {
+      for (final oldId in closure) oldId: '${oldId}_copy_$stamp',
+    };
+    for (final newId in remap.values) {
+      if (byId(newId) != null) return 'A node with that id exists.';
+    }
+    final copies = <Node>[];
+    for (final n in state) {
+      if (!closure.contains(n.id)) continue;
+      final parents = [
+        for (final p in n.parentIds) remap[p] ?? p,
+        if (n.id == sourceId && attachToParentId != null) attachToParentId,
+      ];
+      copies.add(Node(
+        id: remap[n.id]!,
+        title: n.id == sourceId ? '${n.title} (copy)' : n.title,
+        notes: n.notes,
+        parentIds: parents,
+        status: NodeStatus.open,
+        createdAt: at,
+        schedule: n.schedule,
+        money: n.money?.copyWith(
+            status: MoneyStatus.projected, clearActual: true),
+        effort: n.effort,
+        recurrence: n.recurrence,
+        rule: n.rule,
+        instanceOfId: n.instanceOfId == null
+            ? null
+            : (remap[n.instanceOfId] ?? n.instanceOfId),
+        overriddenFields: Set.of(n.overriddenFields),
+        sourceEventId: null,
+        calendarEventId: null,
+        feedId: n.feedId,
+        classId: n.classId,
+        classLabel: n.classLabel,
+        assignees: n.assignees,
+      ));
+    }
+    emitChange([...state, ...copies]);
+    return null;
+  }
+
+  /// Splits [parentId] into [count] ordered step children in one undoable
+  /// change: dates spread across the parent window, money split to the
+  /// cent, effort split by whole minutes. The automation that keeps the
+  /// fast-changing bottom of a big goal tree cheap to rebuild week to
+  /// week — steps stay estimates ([isFixed] false) so they move freely.
+  ({String? error, List<String> ids}) breakdownGoal(
+    String parentId, {
+    int count = 4,
+    String stepPrefix = 'Step',
+    bool splitMoney = true,
+    bool splitEffort = true,
+    bool spreadDates = true,
+    DateTime? now,
+  }) {
+    final parent = byId(parentId);
+    if (parent == null) {
+      return (error: 'Node not found.', ids: const []);
+    }
+    final n = count.clamp(2, 30);
+    final at = now ?? DateTime.now();
+    final slices = planBreakdown(
+      parent: parent,
+      count: n,
+      now: at,
+      stepPrefix: stepPrefix.trim().isEmpty ? 'Step' : stepPrefix.trim(),
+      spreadDates: spreadDates,
+      splitMoney: splitMoney,
+      splitEffort: splitEffort,
+    );
+    final stamp = at.microsecondsSinceEpoch;
+    final kids = <Node>[];
+    for (var i = 0; i < slices.length; i++) {
+      final s = slices[i];
+      kids.add(Node(
+        id: '${parentId}_step${i + 1}_$stamp',
+        title: s.title,
+        parentIds: [parentId],
+        createdAt: at,
+        schedule: s.due == null ? null : ScheduleFacet(due: s.due),
+        money: s.targetAmount == null || parent.money == null
+            ? null
+            : MoneyFacet(
+                targetAmount: s.targetAmount!,
+                direction: parent.money!.direction,
+                status: MoneyStatus.projected,
+              ),
+        effort: s.targetMinutes == null
+            ? null
+            : EffortFacet(targetMinutes: s.targetMinutes!),
+      ));
+    }
+    if (kids.any((k) => byId(k.id) != null)) {
+      return (error: 'A node with that id exists.', ids: const []);
+    }
+    emitChange([...state, ...kids]);
+    return (error: null, ids: [for (final k in kids) k.id]);
   }
 
   /// Deletes [id], its generated instances, and any orphaned subtree.

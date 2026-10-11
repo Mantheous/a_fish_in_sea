@@ -22,7 +22,9 @@ import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../model/recurrence.dart';
 import '../model/task_assignee.dart';
+import '../service/event_reminders.dart';
 import 'people_field.dart';
+import 'reminder_prompt.dart' show ReminderField, maybePromptForEventReminder;
 
 const int _personalEventColor = 0xFF6B8F8A;
 
@@ -216,6 +218,7 @@ class EventEditorFormState extends State<EventEditorForm> {
   late List<TaskAssignee> _people;
   late bool _isTask;
   late bool _done;
+  int? _reminderMinutesBefore;
   PlannerEvent? _seriesMaster;
   bool _loadingMaster = false;
   bool _masterFailed = false;
@@ -360,6 +363,7 @@ class EventEditorFormState extends State<EventEditorForm> {
     }
     _isTask = existing?.isTask ?? false;
     _done = existing?.done ?? false;
+    _reminderMinutesBefore = existing?.reminderMinutesBefore;
     if (existing != null) {
       _date = DateTime(
         existing.start.year,
@@ -536,14 +540,15 @@ class EventEditorFormState extends State<EventEditorForm> {
         allDay: _allDay,
         isTask: _isTask,
         done: _isTask && _done,
+        placeId: _placeId,
         assignees: List.of(_people),
+        reminderMinutesBefore: _reminderMinutesBefore,
       ),
     );
   }
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+  Widget build(BuildContext context) {    final theme = Theme.of(context);
     // NB: no context.watch<FeedCubit>() here on purpose. The form used to
     // rebuild on every feed emission (sync status, background syncs), which
     // reset the calendar dropdown via its ValueKey and made the editor feel
@@ -684,6 +689,13 @@ class EventEditorFormState extends State<EventEditorForm> {
             const SizedBox(height: 12),
             _repeatSection(theme),
             const SizedBox(height: 12),
+            ReminderField(
+              value: _reminderMinutesBefore,
+              onChanged: (value) {
+                setState(() => _reminderMinutesBefore = value);
+                _emitDraft();
+              },
+            ),            const SizedBox(height: 12),
             TextField(
               controller: _location,
               decoration: const InputDecoration(
@@ -1053,6 +1065,8 @@ class EventEditorFormState extends State<EventEditorForm> {
         done: done,
         completedAt: done ? DateTime.now() : null,
         assignees: _people,
+        placeId: _placeId,
+        reminderMinutesBefore: _reminderMinutesBefore,
       );
       final targetFeed = feedCubit.byId(_saveTargetFeedId ?? '');
       if (targetFeed != null) {
@@ -1081,6 +1095,19 @@ class EventEditorFormState extends State<EventEditorForm> {
         _applyLocalAssignees(result.created?.id ?? draft.id);
         _mirrorAssigneesToSourceTask();
         _applyTaskLinkPostSync(result.created?.id ?? draft.id);
+        _restoreReminder(result.created?.id ?? draft.id);
+        await EventReminderService.scheduleReminder(
+          calendarCubit.byId(result.created?.id ?? draft.id) ?? draft,
+        );
+        if (!context.mounted) return;
+        final savedForPrompt =
+            calendarCubit.byId(result.created?.id ?? draft.id) ?? draft;
+        await maybePromptForEventReminder(
+          context,
+          savedForPrompt,
+          calendar: calendarCubit,
+        );
+        if (!context.mounted) return;
         widget.onFinished?.call();
         return;
       }
@@ -1091,6 +1118,14 @@ class EventEditorFormState extends State<EventEditorForm> {
         } catch (_) {}
       }
       _syncTaskLink(draft);
+      await EventReminderService.scheduleReminder(draft);
+      if (!context.mounted) return;
+      await maybePromptForEventReminder(
+        context,
+        draft,
+        calendar: calendarCubit,
+      );
+      if (!context.mounted) return;
       widget.onFinished?.call();
       return;
     }
@@ -1154,6 +1189,8 @@ class EventEditorFormState extends State<EventEditorForm> {
       placeId: _placeId,
       clearPlaceId: _placeId == null,
       assignees: _people,
+      reminderMinutesBefore: _reminderMinutesBefore,
+      clearReminder: _reminderMinutesBefore == null,
     );
     if (feedCubit.isRemoteEditable(base)) {
       // Local-only changes (task flag, people, place, completion) never
@@ -1170,6 +1207,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       )) {
         calendarCubit.updateEvent(updated);
         _syncTaskLink(updated);
+        await EventReminderService.scheduleReminder(updated);
         widget.onFinished?.call();
         return;
       }
@@ -1185,11 +1223,16 @@ class EventEditorFormState extends State<EventEditorForm> {
       }
       _applyLocalAssignees(updated.id);
       _syncTaskLinkPostPush(updated.id);
+      _restoreReminder(updated.id);
+      await EventReminderService.scheduleReminder(
+        calendarCubit.byId(updated.id) ?? updated,
+      );
       widget.onFinished?.call();
       return;
     }
     calendarCubit.updateEvent(updated);
     _syncTaskLink(updated);
+    await EventReminderService.scheduleReminder(updated);
     widget.onFinished?.call();
   }
 
@@ -1241,6 +1284,8 @@ class EventEditorFormState extends State<EventEditorForm> {
         completedAt: completedAt,
         placeId: _placeId,
         assignees: List.of(_people),
+        reminderMinutesBefore:
+            _reminderMinutesBefore ?? base.reminderMinutesBefore,
       );
       setState(() => _saving = true);
       calendarCubit.addEvent(local);
@@ -1250,6 +1295,7 @@ class EventEditorFormState extends State<EventEditorForm> {
         } catch (_) {}
       }
       _syncTaskLink(local);
+      await EventReminderService.scheduleReminder(local);
       final error = await feedCubit.pushEventDelete(base);
       if (!mounted) return;
       setState(() => _saving = false);
@@ -1300,6 +1346,8 @@ class EventEditorFormState extends State<EventEditorForm> {
       completedAt: done ? (base.done ? base.completedAt ?? now : now) : null,
       placeId: _placeId,
       assignees: List.of(_people),
+      reminderMinutesBefore:
+          _reminderMinutesBefore ?? base.reminderMinutesBefore,
     );
     setState(() => _saving = true);
     final result =
@@ -1318,8 +1366,12 @@ class EventEditorFormState extends State<EventEditorForm> {
     }
     _applyLocalAssignees(newId);
     _restorePlaceId(newId);
+    _restoreReminder(newId);
     _mirrorAssigneesToSourceTask();
     _applyTaskLinkPostSync(newId);
+    await EventReminderService.scheduleReminder(
+      calendarCubit.byId(newId) ?? draft,
+    );
     if (base.isFromFeed) {
       final deleteError = await feedCubit.pushEventDelete(base);
       if (!mounted) return;
@@ -1369,6 +1421,23 @@ class EventEditorFormState extends State<EventEditorForm> {
     final synced = calendar.byId(eventId);
     if (synced == null || synced.placeId == _placeId) return;
     calendar.updateEvent(synced.copyWith(placeId: _placeId));
+  }
+
+  /// Re-asserts the editor's reminder on the freshly synced Google copy.
+  /// Reminders are device-local (Google never stores them), so without
+  /// this a push + re-sync would drop the user's pick.
+  void _restoreReminder(String eventId) {
+    final reminder = _reminderMinutesBefore;
+    if (reminder == null) return;
+    CalendarCubit calendar;
+    try {
+      calendar = context.read<CalendarCubit>();
+    } catch (_) {
+      return;
+    }
+    final synced = calendar.byId(eventId);
+    if (synced == null || synced.reminderMinutesBefore == reminder) return;
+    calendar.updateEvent(synced.copyWith(reminderMinutesBefore: reminder));
   }
 
   static bool _sameOpt(String? a, String? b) => (a ?? '') == (b ?? '');
@@ -1466,6 +1535,8 @@ class EventEditorFormState extends State<EventEditorForm> {
       placeId: _placeId,
       clearPlaceId: _placeId == null,
       assignees: _people,
+      reminderMinutesBefore: _reminderMinutesBefore,
+      clearReminder: _reminderMinutesBefore == null,
     );
     if (!_googleVisibleChanged(
       base,
@@ -1480,6 +1551,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       // marking a repeating event as a task can't fail to save.
       calendarCubit.updateEvent(updated);
       _syncTaskLink(updated);
+      await EventReminderService.scheduleReminder(updated);
       widget.onFinished?.call();
       return;
     }
@@ -1493,6 +1565,10 @@ class EventEditorFormState extends State<EventEditorForm> {
     }
     _applyLocalAssignees(updated.id);
     _syncTaskLinkPostPush(updated.id);
+    _restoreReminder(updated.id);
+    await EventReminderService.scheduleReminder(
+      calendarCubit.byId(updated.id) ?? updated,
+    );
     widget.onFinished?.call();
   }
 
@@ -1634,6 +1710,8 @@ class EventEditorFormState extends State<EventEditorForm> {
         placeId: _placeId,
         clearPlaceId: _placeId == null,
         assignees: List.of(_people),
+        reminderMinutesBefore: _reminderMinutesBefore,
+        clearReminder: _reminderMinutesBefore == null,
       );
       calendar.updateEvent(updated);
       if (!_isTask) {
@@ -1691,6 +1769,8 @@ class EventEditorFormState extends State<EventEditorForm> {
         placeId: _placeId,
         clearPlaceId: _placeId == null,
         assignees: List.of(_people),
+        reminderMinutesBefore: _reminderMinutesBefore,
+        clearReminder: _reminderMinutesBefore == null,
       );
       if (marked != current) calendar.updateEvent(marked);
       nodes.ensureNodeForFeedEvent(marked);
@@ -1843,6 +1923,7 @@ class EventEditorFormState extends State<EventEditorForm> {
     if (!feedCubit.isRemoteEditable(existing)) {
       calendarCubit.deleteEvent(existing.id);
       clearTaskLink();
+      await EventReminderService.cancelReminder(existing.id);
       messenger.showSnackBar(
         SnackBar(
           content: const Text('Event deleted'),
@@ -1899,6 +1980,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       return;
     }
     clearTaskLink(wholeSeries: series);
+    await EventReminderService.cancelReminder(existing.id);
     widget.onFinished?.call();
   }
 }
@@ -2369,6 +2451,18 @@ class EventDetailView extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(when, style: theme.textTheme.bodyMedium),
+          if (event.hasReminder) ...[
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                const Icon(Icons.notifications_outlined, size: 16),
+                const SizedBox(width: 4),
+                Text(
+                  'Reminder: ${eventReminderLabel(event.reminderMinutesBefore!)}',
+                ),
+              ],
+            ),
+          ],
           if (event.location != null && event.location!.isNotEmpty) ...[
             const SizedBox(height: 4),
             Text('Where: ${event.location}'),

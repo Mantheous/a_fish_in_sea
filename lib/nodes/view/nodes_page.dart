@@ -10,6 +10,7 @@ import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_legacy_migration.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
+import 'package:a_fish_in_sea/nodes/service/node_tree_ops.dart';
 import 'package:a_fish_in_sea/nodes/view/node_checkbox.dart';
 import 'package:a_fish_in_sea/nodes/view/node_editor.dart';
 import 'package:a_fish_in_sea/nodes/view/node_finish_sheet.dart';
@@ -28,6 +29,16 @@ class NodesPage extends StatefulWidget {
 
 class _NodesPageState extends State<NodesPage> {
   _NodeView _view = _NodeView.leaves;
+  final TextEditingController _search = TextEditingController();
+  String _query = '';
+  bool _expandAll = false;
+  int _expandToken = 0;
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -43,11 +54,53 @@ class _NodesPageState extends State<NodesPage> {
       ),
       body: Column(
         children: [
+          Padding(
+            padding:
+                const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _search,
+                    decoration: const InputDecoration(
+                      labelText: 'Search goals',
+                      prefixIcon: Icon(Icons.search),
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    onChanged: (v) =>
+                        setState(() => _query = v),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Tooltip(
+                  message: _expandAll
+                      ? 'Collapse all'
+                      : 'Expand all',
+                  child: IconButton(
+                    icon: Icon(_expandAll
+                        ? Icons.unfold_less
+                        : Icons.unfold_more),
+                    onPressed: () => setState(() {
+                      _expandAll = !_expandAll;
+                      _expandToken++;
+                    }),
+                  ),
+                ),
+              ],
+            ),
+          ),
           _ViewRow(
             view: _view,
             onView: (v) => setState(() => _view = v),
           ),
-          Expanded(child: _NodeBody(view: _view)),
+          Expanded(
+              child: _NodeBody(
+            view: _view,
+            query: _query,
+            expandAll: _expandAll,
+            expandToken: _expandToken,
+          )),
         ],
       ),
     );
@@ -93,8 +146,15 @@ class _ViewRow extends StatelessWidget {
 
 class _NodeBody extends StatelessWidget {
   final _NodeView view;
+  final String query;
+  final bool expandAll;
+  final int expandToken;
 
-  const _NodeBody({required this.view});
+  const _NodeBody(
+      {required this.view,
+      this.query = '',
+      this.expandAll = false,
+      this.expandToken = 0});
 
   @override
   Widget build(BuildContext context) {
@@ -110,6 +170,13 @@ class _NodeBody extends StatelessWidget {
           goals,
           moneyActualByNodeId: txnAmounts,
         );
+        final trimmed = query.trim();
+        final visible = trimmed.isEmpty
+            ? null
+            : filterTreeIds(nodes, trimmed);
+        List<Node> matching(List<Node> items) => visible == null
+            ? items
+            : items.where((n) => visible.contains(n.id)).toList();
         // Hoisted once per body build (not per tile): shared DAG indexes,
         // liveness map, one `now`, and one homework-ahead evaluation
         // (the old code re-ran it O(n) per rule tile).
@@ -137,6 +204,9 @@ class _NodeBody extends StatelessWidget {
                 txnAmounts: txnAmounts,
                 depth: 0,
                 flat: true,
+                visible: visible,
+                expandAll: expandAll,
+                expandToken: expandToken,
                 nodeById: nodeById,
                 byParent: byParent,
                 now: now,
@@ -148,7 +218,7 @@ class _NodeBody extends StatelessWidget {
 
         switch (view) {
           case _NodeView.leaves:
-            final items = leafNodes(nodes);
+            final items = matching(leafNodes(nodes));
             if (items.isEmpty) {
               return const Center(child: Text('No leaf nodes.'));
             }
@@ -158,32 +228,36 @@ class _NodeBody extends StatelessWidget {
               nodes: goals,
               progress: progress,
               txnAmounts: txnAmounts,
+              visible: visible,
+              expandAll: expandAll,
+              expandToken: expandToken,
               nodeById: nodeById,
               byParent: byParent,
               now: now,
               homeworkAhead: getHomeworkAhead(),
             );
           case _NodeView.due:
-            final queue = priorityQueue(goals, now);
+            final queue = matching(priorityQueue(goals, now));
             if (queue.isEmpty) {
               return const Center(child: Text('Nothing due.'));
             }
             return flatList(queue);
           case _NodeView.scheduled:
-            final items = calendarNodes(goals);
+            final items = matching(calendarNodes(goals));
             if (items.isEmpty) {
               return const Center(child: Text('Nothing scheduled.'));
             }
             return flatList(items);
           case _NodeView.money:
-            final items = ledgerNodes(goals)
+            final items = matching(ledgerNodes(goals))
               ..sort((a, b) => _nodeDate(a).compareTo(_nodeDate(b)));
             if (items.isEmpty) {
               return const Center(child: Text('No money nodes yet.'));
             }
             return flatList(items);
           case _NodeView.habits:
-            final items = goals.where((n) => n.isTemplate).toList();
+            final items = matching(
+                goals.where((n) => n.isTemplate).toList());
             if (items.isEmpty) {
               return const Center(
                   child: Text(
@@ -201,6 +275,9 @@ class _NodeBody extends StatelessWidget {
                   txnAmounts: txnAmounts,
                   depth: 0,
                   flat: false,
+                  visible: visible,
+                  expandAll: expandAll,
+                  expandToken: expandToken,
                   nodeById: nodeById,
                   byParent: byParent,
                   now: now,
@@ -228,6 +305,9 @@ class _NodeTree extends StatelessWidget {
   final Map<String, List<Node>>? byParent;
   final DateTime? now;
   final HomeworkAheadResult? homeworkAhead;
+  final Set<String>? visible;
+  final bool expandAll;
+  final int expandToken;
 
   const _NodeTree({
     required this.nodes,
@@ -237,19 +317,36 @@ class _NodeTree extends StatelessWidget {
     this.byParent,
     this.now,
     this.homeworkAhead,
+    this.visible,
+    this.expandAll = false,
+    this.expandToken = 0,
   });
 
   @override
   Widget build(BuildContext context) {
-    final roots = nodes.where((n) => n.parentIds.isEmpty).toList()
+    final inView = visible == null
+        ? nodes
+        : nodes.where((n) => visible!.contains(n.id)).toList();
+    if (inView.isEmpty) {
+      return const Center(
+          child: Text('No goals match the search.'));
+    }
+    final visibleIds =
+        visible ?? {for (final n in nodes) n.id};
+    // Filtered roots: visible nodes with no visible parent.
+    final roots = inView
+        .where((n) => n.parentIds
+            .where(visibleIds.contains)
+            .isEmpty)
+        .toList()
       ..sort(_compareRoots);
     if (roots.isEmpty) {
       // DAG cycle fallback (shouldn't happen): show everything flat.
       return ListView.builder(
         padding: const EdgeInsets.only(bottom: 80),
-        itemCount: nodes.length,
+        itemCount: inView.length,
         itemBuilder: (context, index) {
-          final n = nodes[index];
+          final n = inView[index];
           return _NodeTile(
             node: n,
             nodes: nodes,
@@ -257,6 +354,9 @@ class _NodeTree extends StatelessWidget {
             txnAmounts: txnAmounts,
             depth: 0,
             flat: true,
+            visible: visible,
+            expandAll: expandAll,
+            expandToken: expandToken,
             nodeById: nodeById,
             byParent: byParent,
             now: now,
@@ -278,6 +378,9 @@ class _NodeTree extends StatelessWidget {
           depth: 0,
           flat: false,
           visited: {n.id},
+          visible: visible,
+          expandAll: expandAll,
+          expandToken: expandToken,
           nodeById: nodeById,
           byParent: byParent,
           now: now,
@@ -313,6 +416,9 @@ class _NodeTile extends StatelessWidget {
   final Map<String, List<Node>>? byParent;
   final DateTime? now;
   final HomeworkAheadResult? homeworkAhead;
+  final Set<String>? visible;
+  final bool expandAll;
+  final int expandToken;
 
   const _NodeTile({
     required this.node,
@@ -326,6 +432,9 @@ class _NodeTile extends StatelessWidget {
     this.byParent,
     this.now,
     this.homeworkAhead,
+    this.visible,
+    this.expandAll = false,
+    this.expandToken = 0,
   });
 
   @override
@@ -339,7 +448,7 @@ class _NodeTile extends StatelessWidget {
         : (_children(live)..sort((a, b) => _compareKids(a, b)));
     final value = progress[live.id] ?? 0;
     final theme = Theme.of(context);
-    final subtitle = _subtitle(context, live, value);
+    final subtitle = _subtitle(context, live, value, kids.length);
     final tile = ListTile(
       contentPadding:
           EdgeInsets.only(left: 16 + depth * 20, right: 8),
@@ -400,6 +509,14 @@ class _NodeTile extends StatelessWidget {
               const PopupMenuItem(
                   value: 'edit', child: Text('Edit')),
               const PopupMenuItem(
+                  value: 'add-child', child: Text('Add child step')),
+              const PopupMenuItem(
+                  value: 'breakdown',
+                  child: Text('Auto-breakdown into steps…')),
+              const PopupMenuItem(
+                  value: 'duplicate',
+                  child: Text('Duplicate subtree')),
+              const PopupMenuItem(
                   value: 'toggle', child: Text('Toggle done')),
               PopupMenuItem(
                   value: 'fail',
@@ -428,6 +545,8 @@ class _NodeTile extends StatelessWidget {
     );
     if (kids.isEmpty) return tile;
     return ExpansionTile(
+      key: ValueKey('${live.id}:$expandToken:$expandAll'),
+      initiallyExpanded: expandAll,
       tilePadding:
           EdgeInsets.only(left: 16 + depth * 20, right: 8),
       leading: _leading(context, live),
@@ -450,6 +569,9 @@ class _NodeTile extends StatelessWidget {
             depth: depth + 1,
             flat: false,
             visited: {...visited, k.id},
+            visible: visible,
+            expandAll: expandAll,
+            expandToken: expandToken,
             nodeById: nodeById,
             byParent: byParent,
             now: now,
@@ -464,13 +586,16 @@ class _NodeTile extends StatelessWidget {
     if (parentMap != null) {
       final out = <Node>[];
       for (final n in parentMap[parent.id] ?? const <Node>[]) {
+        if (visible != null && !visible!.contains(n.id)) continue;
         if (!visited.contains(n.id)) out.add(n);
       }
       return out;
     }
     final byId = {for (final n in nodes) n.id: n};
+    final filter = visible;
     final out = <Node>[];
     for (final n in nodes) {
+      if (filter != null && !filter.contains(n.id)) continue;
       if (n.parentIds.contains(parent.id) &&
           !visited.contains(n.id) &&
           byId.containsKey(n.id)) {
@@ -507,9 +632,13 @@ class _NodeTile extends StatelessWidget {
     return NodeCheckbox(node: live);
   }
 
-  String _subtitle(BuildContext context, Node live, double value) {
+  String _subtitle(BuildContext context, Node live, double value,
+      int childCount) {
     final effectiveNow = now ?? DateTime.now();
     final parts = <String>[];
+    if (childCount > 0) {
+      parts.add('$childCount step${childCount == 1 ? '' : 's'}');
+    }
     if (live.money != null) {
       final m = live.money!;
       final actual = byParent != null && nodeById != null
@@ -569,6 +698,16 @@ class _NodeTile extends StatelessWidget {
         showNodeEditor(context, initialParentIds: [live.id]);
       case 'edit':
         showNodeEditor(context, existing: live);
+      case 'add-child':
+        showNodeEditor(context, initialParentIds: [live.id]);
+      case 'breakdown':
+        _promptBreakdown(context, live);
+      case 'duplicate':
+        final error = cubit.duplicateSubtree(live.id);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text(error ?? 'Duplicated “${live.title}”')),
+        );
       case 'toggle':
         cubit.toggleDone(live.id);
       case 'fail':
@@ -621,6 +760,113 @@ class _NodeTile extends StatelessWidget {
           ),
         );
     }
+  }
+
+  void _promptBreakdown(BuildContext context, Node live) {
+    final countCtrl = TextEditingController(text: '4');
+    final prefixCtrl = TextEditingController(text: 'Step');
+    var splitMoney = live.money != null;
+    var splitEffort = live.effort != null;
+    var spreadDates = true;
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: Text('Break down “${live.title}”'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Creates ordered step children in one undoable change. '
+                  'Dates spread across the goal window; targets split evenly.',
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: countCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Number of steps (2–30)',
+                    border: OutlineInputBorder(),
+                  ),
+                  autofocus: true,
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: prefixCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Step name prefix',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: const Text('Spread due dates'),
+                  value: spreadDates,
+                  onChanged: (v) => setLocal(() => spreadDates = v),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: const Text('Split money target'),
+                  value: splitMoney,
+                  onChanged: live.money == null
+                      ? null
+                      : (v) => setLocal(() => splitMoney = v),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: const Text('Split time target'),
+                  value: splitEffort,
+                  onChanged: live.effort == null
+                      ? null
+                      : (v) => setLocal(() => splitEffort = v),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final count =
+                    int.tryParse(countCtrl.text.trim()) ?? 0;
+                if (count < 2 || count > 30) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text('Enter 2–30 steps')),
+                  );
+                  return;
+                }
+                final result =
+                    context.read<NodeCubit>().breakdownGoal(
+                          live.id,
+                          count: count,
+                          stepPrefix: prefixCtrl.text.trim().isEmpty
+                              ? 'Step'
+                              : prefixCtrl.text.trim(),
+                          splitMoney: splitMoney,
+                          splitEffort: splitEffort,
+                          spreadDates: spreadDates,
+                        );
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                      content: Text(result.error ??
+                          'Created ${result.ids.length} step(s)')),
+                );
+              },
+              child: const Text('Create steps'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _promptSubdivide(BuildContext context, Node live) {
