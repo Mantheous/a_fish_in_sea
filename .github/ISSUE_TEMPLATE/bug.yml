@@ -1,0 +1,32 @@
+name: Bug report
+description: Something isn't working (verified testers only, see tools/testers.json)
+labels: [bug, agent-pending]
+body:
+  - type: input
+    id: title
+    attributes:
+      label: Title
+      description: Short summary of the bug
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: device
+    attributes:
+      label: Device / target
+      description: e.g. Android mantheous-a16, web at /fish/, Linux desktop
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: Paste relevant logs or describe screenshots
+    validations:
+      required: false

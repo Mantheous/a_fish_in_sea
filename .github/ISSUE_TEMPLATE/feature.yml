@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose a feature (verified testers only, see tools/testers.json)
+labels: [feature, agent-pending]
+body:
+  - type: input
+    id: title
+    attributes:
+      label: Title
+      description: Short summary of the feature
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What problem does this solve? Who is it for?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: How should it work? Any UI, nav, or persistence impact?
+    validations:
+      required: false
