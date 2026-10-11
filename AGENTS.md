@@ -1,5 +1,15 @@
 # AGENTS.md
 
+## Parallel agents: one worktree per writer
+
+Multiple agents share this clone. Before touching any checkout, read
+`tools/agent/CONVENTIONS.md` and follow it — headline rules: diagnose
+before editing (`git worktree list` / `status`), never work in a tree
+with someone else's uncommitted changes, one worktree + branch per
+writer (ad-hoc sessions too), commit WIP often, and `git stash` is
+banned in shared clones (commit instead). Merges happen in a
+throwaway worktree on `main`, verified before push.
+
 ## UX check: user-visible changes must be walked
 
 If your change touches anything a user can see or tap — screens under
