@@ -289,6 +289,27 @@ void main() {
       expect(restoredLegacy?.single.parentIds, isEmpty);
     });
 
+    test('NodeCubit loads pre-flag nodes as bounded', () {
+      final cubit = NodeCubit();
+      final preFlag = Node(
+        id: 'n2',
+        title: 'Serve others',
+        createdAt: _day,
+      ).toJson()
+        ..remove('isUnbounded');
+      final restored = cubit.fromJson({
+        'nodes': [preFlag],
+      });
+      expect(restored?.single.isUnbounded, isFalse);
+      final unbounded = Node(
+        id: 'n3',
+        title: 'Serve others',
+        createdAt: _day,
+        isUnbounded: true,
+      );
+      expect(Node.fromJson(unbounded.toJson()), unbounded);
+    });
+
     test('applyJson with garbage does not throw', () {
       final cubit = NodeCubit();
       expect(() => cubit.applyJson({'nodes': 'not-a-list'}), returnsNormally);

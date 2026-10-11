@@ -53,6 +53,8 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   late final TextEditingController _notes;
   late List<String> _parents;
 
+  bool _isUnbounded = false;
+
   DateTime? _due;
   DateTime? _blockStart;
   DateTime? _blockEnd;
@@ -89,6 +91,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _title = TextEditingController(text: e?.title ?? '');
     _notes = TextEditingController(text: e?.notes ?? '');
     _parents = List.of(e?.parentIds ?? widget.initialParentIds);
+    _isUnbounded = e?.isUnbounded ?? false;
     _due = e?.schedule?.due;
     _blockStart = e?.schedule?.start;
     _blockEnd = e?.schedule?.end;
@@ -171,6 +174,18 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
               selected: _people,
               onChanged: (next) => setState(() => _people = next),
             ),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text('Abstract / unbounded goal'),
+              subtitle: const Text(
+                  'Ongoing direction — no due date, no progress bar. '
+                  'Track it through concrete subgoals.'),
+              value: _isUnbounded,
+              onChanged: (v) => setState(() => _isUnbounded = v),
+            ),
+            if (!_isUnbounded) ...[
             const SizedBox(height: 16),
             _sectionTitle(context, 'Schedule'),
             _DateRow(
@@ -410,6 +425,15 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                     labelText: 'Floor balance', prefixText: '\$ '),
               ),
             ],
+            ], // end if (!_isUnbounded): dates, targets, repeats, rules
+            if (_isUnbounded) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Add concrete subgoals underneath (e.g. “Serve others '
+                'this week”) — they carry the dates and the progress.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
             if (e != null && e.hasReported && e.reportedDuration != null) ...[
               const SizedBox(height: 8),
               Text(
@@ -541,6 +565,17 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       );
     }
 
+    // Unbounded goals carry no dates, targets, repeats, or rules — the
+    // hidden sections' stale state is dropped so the save validates.
+    final isUnbounded = _isUnbounded;
+    if (isUnbounded) {
+      schedule = null;
+      money = null;
+      effort = null;
+      recurrence = null;
+      rule = null;
+    }
+
     final existing = widget.existing;
     String? error;
     if (existing == null) {
@@ -550,6 +585,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         notes: notes,
         parentIds: _parents,
         createdAt: DateTime.now(),
+        isUnbounded: isUnbounded,
         schedule: schedule,
         money: money,
         effort: effort,
@@ -572,6 +608,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
           notes: notes,
           clearNotes: notes == null,
           parentIds: _parents,
+          isUnbounded: isUnbounded,
           schedule: schedule,
           clearSchedule: schedule == null,
           money: money,

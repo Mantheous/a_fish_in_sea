@@ -97,10 +97,11 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
 
   /// Open nodes sorted queue-first, done by recency — the To-Do list.
   /// Templates (dateless prescriptions) are excluded; their instances
-  /// carry the dates.
+  /// carry the dates. Unbounded goals are excluded too: they never
+  /// complete, so they would sit in the list forever.
   List<Node> get openNodes {
     final open = state
-        .where((n) => n.isOpen && !n.isTemplate)
+        .where((n) => n.isOpen && !n.isTemplate && !n.isUnbounded)
         .toList()
       ..sort(_byDueThenCreated);
     final done = state.where((n) => n.isDone).toList()
@@ -119,7 +120,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final today = DateTime(now.year, now.month, now.day);
     final tomorrow = today.add(const Duration(days: 1));
     return state.where((n) {
-      if (!n.isOpen || n.isTemplate) return false;
+      if (!n.isOpen || n.isTemplate || n.isUnbounded) return false;
       final due = n.schedule?.due;
       if (due == null) return false;
       final day = DateTime(due.year, due.month, due.day);
@@ -136,7 +137,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final today = DateTime(now.year, now.month, now.day);
     final endExclusive = today.add(const Duration(days: 8));
     return state.where((n) {
-      if (!n.isOpen || n.isTemplate) return false;
+      if (!n.isOpen || n.isTemplate || n.isUnbounded) return false;
       final due = n.schedule?.due;
       if (due == null) return false;
       return !due.isBefore(today) && due.isBefore(endExclusive);
@@ -184,6 +185,8 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
 
   String? addNode(Node node) {
     if (byId(node.id) != null) return 'A node with that id exists.';
+    final unboundedError = validateUnbounded(node);
+    if (unboundedError != null) return unboundedError;
     final error = validateParents(node, node.parentIds);
     if (error != null) return error;
     emitChange([...state, node]);
@@ -192,6 +195,8 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
 
   String? updateNode(Node updated) {
     if (byId(updated.id) == null) return 'Node not found.';
+    final unboundedError = validateUnbounded(updated);
+    if (unboundedError != null) return unboundedError;
     final error = validateParents(updated, updated.parentIds);
     if (error != null) return error;
     emitChange(
@@ -279,6 +284,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         parentIds: parents,
         status: NodeStatus.open,
         createdAt: at,
+        isUnbounded: n.isUnbounded,
         schedule: n.schedule,
         money: n.money?.copyWith(
             status: MoneyStatus.projected, clearActual: true),

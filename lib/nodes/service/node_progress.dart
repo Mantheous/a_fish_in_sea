@@ -70,8 +70,12 @@ Map<String, double> progressForest(
           moneyActualByNodeId: moneyActualByNodeId);
     }
     if (kids.any((k) => k.instanceOfId == node.id)) {
-      final rated =
-          kids.where((k) => k.status != NodeStatus.skipped).toList();
+      // Skipped and unbounded instances never rate: an unbounded goal
+      // never completes, so counting it would pin the average down.
+      final rated = kids
+          .where((k) =>
+              k.status != NodeStatus.skipped && !k.isUnbounded)
+          .toList();
       if (rated.isEmpty) return 0.0;
       return childrenProgress(
           [for (final k in rated) visit(k.id, {...stack})]);
@@ -110,8 +114,13 @@ Map<String, double> progressForest(
           node.id, byId, byParent, timeActualByNodeId, {});
       return (actual / target).clamp(0.0, 1.0);
     }
-    final rated =
-        kids.where((k) => k.status != NodeStatus.skipped).toList();
+    // Plain parents average their rated children. Unbounded children are
+    // excluded like skipped ones: they never complete, so counting them
+    // would pin a concrete parent below 100% forever.
+    final rated = kids
+        .where(
+            (k) => k.status != NodeStatus.skipped && !k.isUnbounded)
+        .toList();
     if (rated.isEmpty) return 0.0;
     return childrenProgress(
         [for (final k in rated) visit(k.id, {...stack})]);
@@ -382,15 +391,17 @@ bool isGoalNode(Node n) => !n.isHomework && n.calendarEventId == null;
 List<Node> goalNodes(List<Node> all) => all.where(isGoalNode).toList();
 
 /// Leaf goal nodes: goal nodes no other goal node lists as a parent.
-/// Sorted by due date, then creation. This is the actionable bottom of
-/// the tree — the default landing for the Nodes page.
+/// Unbounded goals are excluded — they are directions, not actionable
+/// steps. Sorted by due date, then creation. This is the actionable bottom
+/// of the tree — the default landing for the Nodes page.
 List<Node> leafNodes(List<Node> all) {
   final goals = goalNodes(all);
   final parented = <String>{};
   for (final n in goals) {
     parented.addAll(n.parentIds);
   }
-  final leaves = goals.where((n) => !parented.contains(n.id)).toList()
+  final leaves =
+      goals.where((n) => !n.isUnbounded && !parented.contains(n.id)).toList()
     ..sort((a, b) {
       final aDue = a.schedule?.due;
       final bDue = b.schedule?.due;
@@ -412,9 +423,11 @@ List<Node> calendarNodes(List<Node> all) {
 }
 
 /// Open nodes with a due date, overdue first then earliest due.
+/// Unbounded goals never queue: they carry no due date by construction.
 List<Node> priorityQueue(List<Node> all, DateTime now) {
-  final items =
-      all.where((n) => n.isOpen && n.hasDue).toList()..sort((a, b) {
+  final items = all
+      .where((n) => n.isOpen && !n.isUnbounded && n.hasDue)
+      .toList()..sort((a, b) {
         final aOver = a.isOverdueAt(now) ? 0 : 1;
         final bOver = b.isOverdueAt(now) ? 0 : 1;
         if (aOver != bOver) return aOver - bOver;
