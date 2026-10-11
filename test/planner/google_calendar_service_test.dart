@@ -394,6 +394,80 @@ void main() {
       expect(master.recurrenceRule, 'FREQ=DAILY');
     });
   });
+  group('GoogleCalendarService errors', () {
+    test('FastAPI detail envelope surfaces the upstream message', () async {
+      final service = serviceWith({
+        '/api/google/events': http.Response(
+          jsonEncode({
+            'detail': {
+              'error': 'Calendar API call failed (404): not found',
+            },
+          }),
+          502,
+        ),
+      });
+      try {
+        await service.fetchEvents(calendarId: 'primary', feedId: 'f1');
+        fail('expected a GoogleCalendarException');
+      } on GoogleCalendarException catch (e) {
+        expect(e.statusCode, 502);
+        expect(e.message, contains('404'));
+        expect(e.needsReconnect, isFalse);
+      }
+    });
+
+    test('reconnect payload survives the detail envelope', () async {
+      final service = serviceWith({
+        '/api/google/events': http.Response(
+          jsonEncode({
+            'detail': {
+              'error': 'Google account not connected',
+              'needsReconnect': true,
+            },
+          }),
+          401,
+        ),
+      });
+      try {
+        await service.fetchEvents(calendarId: 'primary', feedId: 'f1');
+        fail('expected a GoogleCalendarException');
+      } on GoogleCalendarException catch (e) {
+        expect(e.statusCode, 401);
+        expect(e.message, 'Google account not connected');
+        expect(e.needsReconnect, isTrue);
+      }
+    });
+
+    test('string detail becomes the message', () async {
+      final service = serviceWith({
+        '/api/google/events': http.Response(
+          jsonEncode({'detail': 'Missing bearer token'}),
+          401,
+        ),
+      });
+      try {
+        await service.fetchEvents(calendarId: 'primary', feedId: 'f1');
+        fail('expected a GoogleCalendarException');
+      } on GoogleCalendarException catch (e) {
+        expect(e.message, 'Missing bearer token');
+      }
+    });
+
+    test('legacy bare error shape still decodes', () async {
+      final service = serviceWith({
+        '/api/google/events': http.Response(
+          jsonEncode({'error': 'Token refresh failed (400): nope'}),
+          502,
+        ),
+      });
+      try {
+        await service.fetchEvents(calendarId: 'primary', feedId: 'f1');
+        fail('expected a GoogleCalendarException');
+      } on GoogleCalendarException catch (e) {
+        expect(e.message, contains('refresh failed'));
+      }
+    });
+  });
   group('PlannerEvent colorValue', () {
     test('seriesId round trips through json', () {
       final event = PlannerEvent(

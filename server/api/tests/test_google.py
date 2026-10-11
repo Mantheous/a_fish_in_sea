@@ -183,6 +183,77 @@ def test_expired_token_refreshes(client: TestClient, monkeypatch):
     assert r.status_code == 200, r.text
 
 
+def test_disconnected_events_prompt_reconnect(client: TestClient):
+    h = _register(client, "g6@example.com")
+    r = client.get("/api/google/events?calendarId=primary", headers=h)
+    assert r.status_code == 401, r.text
+    body = r.json()["detail"]
+    assert body["error"] == "Google account not connected"
+    assert body["needsReconnect"] is True
+
+
+def _connect(client: TestClient, monkeypatch, email: str) -> dict:
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "csecret")
+    h = _register(client, email)
+    auth = client.get("/api/google/auth_url", headers=h)
+    state = urllib.parse.parse_qs(
+        urllib.parse.urlparse(auth.json()["url"]).query
+    )["state"][0]
+
+    async def fake_redeem(code: str, redirect_uri: str):
+        return {
+            "access_token": "at",
+            "refresh_token": "rt",
+            "expires_in": 3600,
+            "scope": g.GOOGLE_SCOPE,
+        }
+
+    monkeypatch.setattr(g, "redeem_code", fake_redeem)
+    client.get("/api/google/callback", params={"code": "c", "state": state})
+    return h
+
+
+def test_upstream_calendar_failure_is_502_with_message(
+    client: TestClient, monkeypatch
+):
+    h = _connect(client, monkeypatch, "g7@example.com")
+
+    async def fake_events(access_token: str, calendar_id: str, *args):
+        raise g.GoogleAuthError(
+            "Calendar API call failed (404): not found", status=404
+        )
+
+    async def fake_colors(access_token: str, calendar_id: str, events):
+        return {}
+
+    monkeypatch.setattr(g, "list_events", fake_events)
+    monkeypatch.setattr(g, "enrich_events_with_colors", fake_colors)
+    r = client.get("/api/google/events?calendarId=primary", headers=h)
+    assert r.status_code == 502, r.text
+    body = r.json()["detail"]
+    assert "404" in body["error"]
+    assert "needsReconnect" not in body
+
+
+def test_transport_failure_is_502_json(client: TestClient, monkeypatch):
+    import httpx
+
+    h = _connect(client, monkeypatch, "g8@example.com")
+
+    async def fake_events(access_token: str, calendar_id: str, *args):
+        raise httpx.ConnectError("unreachable")
+
+    async def fake_colors(access_token: str, calendar_id: str, events):
+        return {}
+
+    monkeypatch.setattr(g, "list_events", fake_events)
+    monkeypatch.setattr(g, "enrich_events_with_colors", fake_colors)
+    r = client.get("/api/google/events?calendarId=primary", headers=h)
+    assert r.status_code == 502, r.text
+    assert "error" in r.json()["detail"]
+
+
 def test_fernet_roundtrip(monkeypatch):
     from app import oauth_store as store
 

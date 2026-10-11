@@ -166,10 +166,19 @@ class GoogleCalendarService {
       bool needsReconnect = false;
       try {
         final body = jsonDecode(response.body);
-        if (body is Map && body['error'] is String) {
-          message = body['error'] as String;
+        // FastAPI wraps error payloads as {"detail": {...}} while the
+        // legacy Flask server returned them bare; accept both.
+        final Map? err = body is Map && body['detail'] is Map
+            ? body['detail'] as Map
+            : body is Map
+                ? body
+                : null;
+        if (err != null && err['error'] is String) {
+          message = err['error'] as String;
+        } else if (body is Map && body['detail'] is String) {
+          message = body['detail'] as String;
         }
-        if (body is Map && body['needsReconnect'] == true) {
+        if (err != null && err['needsReconnect'] == true) {
           needsReconnect = true;
         }
       } catch (_) {}

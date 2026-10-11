@@ -15,6 +15,7 @@ import datetime as dt
 import secrets
 
 import jwt
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -102,11 +103,25 @@ async def _access_token(session: AsyncSession, user_id: int) -> str:
     return new_access
 
 
-def _google_error(e: g.GoogleAuthError, reconnect_statuses=(401, 403)):
+def _google_error(e: Exception, reconnect_statuses=(401, 403)):
+    """Map proxy failures to (payload, status).
+
+    Auth problems (revoked tokens, failed refresh, no connection) become
+    401/403 with needsReconnect so the app can prompt a reconnect;
+    everything else is a 502 with the upstream message preserved (the app
+    surfaces `detail.error`). Transport failures (httpx.HTTPError) stay a
+    plain 502 — reconnecting can't fix the network.
+    """
     status = 502
-    payload: dict = {"error": str(e)}
-    if e.status in reconnect_statuses:
-        status = e.status
+    payload: dict = {"error": str(e) or type(e).__name__}
+    err_status = getattr(e, "status", None)
+    if err_status in reconnect_statuses:
+        status = err_status
+        payload["needsReconnect"] = True
+    elif err_status is None and isinstance(e, g.GoogleAuthError):
+        # No-connection and refresh failures carry no upstream status, but
+        # the only fix is reconnecting the Google account.
+        status = 401
         payload["needsReconnect"] = True
     return payload, status
 
@@ -207,7 +222,7 @@ async def calendars(
     try:
         token = await _access_token(session, user.id)
         return {"calendars": await g.list_calendars(token)}
-    except g.GoogleAuthError as e:
+    except (g.GoogleAuthError, httpx.HTTPError) as e:
         payload, status = _google_error(e)
         raise HTTPException(status_code=status, detail=payload)
 
@@ -220,7 +235,7 @@ async def contacts(
     try:
         token = await _access_token(session, user.id)
         return {"contacts": await g.list_contacts(token)}
-    except g.GoogleAuthError as e:
+    except (g.GoogleAuthError, httpx.HTTPError) as e:
         payload, status = _google_error(e)
         raise HTTPException(status_code=status, detail=payload)
 
@@ -243,7 +258,7 @@ async def events(
         token = await _access_token(session, user.id)
         found = await g.list_events(token, calendarId, timeMin, timeMax)
         colors = await g.enrich_events_with_colors(token, calendarId, found)
-    except g.GoogleAuthError as e:
+    except (g.GoogleAuthError, httpx.HTTPError) as e:
         payload, status = _google_error(e)
         raise HTTPException(status_code=status, detail=payload)
     return {"events": found, "calendar": colors}
@@ -279,7 +294,7 @@ async def get_one(
     try:
         token = await _access_token(session, user.id)
         event = await g.get_event(token, calendarId, eventId)
-    except g.GoogleAuthError as e:
+    except (g.GoogleAuthError, httpx.HTTPError) as e:
         payload, status = _google_error(e, reconnect_statuses=(403, 404))
         if status == 404:
             raise HTTPException(status_code=404, detail=payload)
@@ -311,7 +326,7 @@ async def create(
                 _recurrence(data),
             ),
         )
-    except g.GoogleAuthError as e:
+    except (g.GoogleAuthError, httpx.HTTPError) as e:
         payload, status = _google_error(e, reconnect_statuses=(403, 404))
         raise HTTPException(status_code=status, detail=payload)
     return {"event": event}
@@ -340,7 +355,7 @@ async def update(
                 _recurrence(data),
             ),
         )
-    except g.GoogleAuthError as e:
+    except (g.GoogleAuthError, httpx.HTTPError) as e:
         payload, status = _google_error(e, reconnect_statuses=(403, 404))
         raise HTTPException(status_code=status, detail=payload)
     return {"event": event}
@@ -356,7 +371,7 @@ async def delete(
     try:
         token = await _access_token(session, user.id)
         await g.delete_event(token, data["calendarId"], data["eventId"])
-    except g.GoogleAuthError as e:
+    except (g.GoogleAuthError, httpx.HTTPError) as e:
         payload, status = _google_error(e, reconnect_statuses=(403, 404))
         raise HTTPException(status_code=status, detail=payload)
     return {"deleted": True}
