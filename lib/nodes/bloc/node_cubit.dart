@@ -1085,12 +1085,19 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   String upsertLinkedNodeForEvent(PlannerEvent event) {
     Node syncLinked(Node linked) {
       final hasNotes = (event.notes ?? '').trim().isNotEmpty;
+      // Imported homework keeps the due date its feed gave it: the block
+      // says when the user plans to work, which is not when the
+      // assignment is due. Personal nodes have no such date, so their
+      // due stays the event's own start (the previous behaviour).
+      final due = linked.sourceEventId != null
+          ? (linked.schedule?.due ?? event.start)
+          : event.start;
       return linked.copyWith(
         title: event.subject,
         notes: hasNotes ? event.notes!.trim() : null,
         clearNotes: !hasNotes,
         schedule: ScheduleFacet(
-          due: event.start,
+          due: due,
           start: event.start,
           end: event.end,
         ),

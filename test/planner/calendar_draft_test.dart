@@ -10,6 +10,7 @@ import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_page.dart';
+import 'package:a_fish_in_sea/planner/view/event_editor.dart';
 import 'package:a_fish_in_sea/planner/view/tasks_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -257,5 +258,212 @@ void main() {
     expect(draftCubit.state!.id, calendarDraftEventId);
     expect(navigationCubit.state, PlannerPage.calendar);
     expect(calendarCubit.state, isEmpty);
+  });
+
+  group('scheduling an assignment', () {
+    // The Canvas "AI Plan" report: scheduling an assignment from the
+    // Tasks menu must leave it in the task list, showing the block the
+    // user picked — not silently delete it or demote it to an event.
+
+    Node homework({
+      String id = 'node:hw1',
+      String title = 'AI Plan',
+      DateTime? due,
+    }) =>
+        Node(
+          id: id,
+          title: title,
+          createdAt: DateTime(2026, 10, 1),
+          schedule: ScheduleFacet(due: due ?? DateTime(2026, 10, 16, 15)),
+          sourceEventId: 'evt:x',
+          classId: 'feed:1',
+          classLabel: 'C S 291 Fall 2026',
+        );
+
+    /// Pumps the calendar with the caller's node store wired in, so a
+    /// draft seeded from a task can be asserted against that same store.
+    Future<void> pumpSeededCalendar(
+      WidgetTester tester, {
+      required CalendarCubit calendarCubit,
+      required NodeCubit nodeCubit,
+      required FeedCubit feedCubit,
+      required SettingsCubit settingsCubit,
+      required CalendarDraftCubit draftCubit,
+      required NavigationCubit navigationCubit,
+    }) async {
+      tester.view.physicalSize = const Size(800, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MultiBlocProvider(
+          providers: [
+            BlocProvider(create: (_) => UndoCubit()),
+            BlocProvider.value(value: navigationCubit),
+            BlocProvider.value(value: settingsCubit),
+            BlocProvider.value(value: calendarCubit),
+            BlocProvider.value(value: draftCubit),
+            BlocProvider(create: (_) => CalendarVisibilityCubit()),
+            BlocProvider.value(value: nodeCubit),
+            BlocProvider.value(value: feedCubit),
+          ],
+          child: const MaterialApp(home: CalendarPage()),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('keeps the assignment and marks it as a scheduled task',
+        (tester) async {
+      final calendarCubit = CalendarCubit();
+      final nodeCubit = NodeCubit();
+      final settingsCubit = SettingsCubit();
+      final draftCubit = CalendarDraftCubit();
+      final navigationCubit = NavigationCubit();
+      final feedCubit = buildFeedCubit(calendarCubit, nodeCubit);
+      nodeCubit.addNode(homework());
+      draftCubit.requestDraft(draftSeedFromNode(nodeCubit.byId('node:hw1')!));
+
+      await pumpSeededCalendar(
+        tester,
+        calendarCubit: calendarCubit,
+        nodeCubit: nodeCubit,
+        feedCubit: feedCubit,
+        settingsCubit: settingsCubit,
+        draftCubit: draftCubit,
+        navigationCubit: navigationCubit,
+      );
+
+      await tapDrawerAdd(tester);
+      await tester.pumpAndSettle();
+
+      expect(calendarCubit.state, hasLength(1));
+      final saved = calendarCubit.state.first;
+      // Scheduled out of a task: the event is that task's plan.
+      expect(saved.isTask, isTrue);
+      expect(saved.taskId, 'node:hw1');
+      // The assignment is still in the task list, showing the block the
+      // user picked, and keeps the due date its class gave it.
+      final node = nodeCubit.byId('node:hw1');
+      expect(node, isNotNull);
+      expect(node!.calendarEventId, saved.id);
+      expect(node.schedule?.start, saved.start);
+      expect(node.schedule?.end, saved.end);
+      expect(node.schedule?.due, DateTime(2026, 10, 16, 15));
+      // Scheduling sends the user back to the task they just scheduled.
+      expect(navigationCubit.state, PlannerPage.tasks);
+    });
+
+    testWidgets('turning the Task switch off still keeps the assignment',
+        (tester) async {
+      final calendarCubit = CalendarCubit();
+      final nodeCubit = NodeCubit();
+      final settingsCubit = SettingsCubit();
+      final draftCubit = CalendarDraftCubit();
+      final navigationCubit = NavigationCubit();
+      final feedCubit = buildFeedCubit(calendarCubit, nodeCubit);
+      nodeCubit.addNode(homework());
+      draftCubit.requestDraft(draftSeedFromNode(nodeCubit.byId('node:hw1')!));
+
+      await pumpSeededCalendar(
+        tester,
+        calendarCubit: calendarCubit,
+        nodeCubit: nodeCubit,
+        feedCubit: feedCubit,
+        settingsCubit: settingsCubit,
+        draftCubit: draftCubit,
+        navigationCubit: navigationCubit,
+      );
+
+      final taskSwitch = find.widgetWithText(SwitchListTile, 'Task');
+      expect(tester.widget<SwitchListTile>(taskSwitch).value, isTrue);
+      await tester.ensureVisible(taskSwitch);
+      await tester.pumpAndSettle();
+      await tester.tap(taskSwitch);
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(taskSwitch).value, isFalse);
+
+      await tapDrawerAdd(tester);
+      await tester.pumpAndSettle();
+
+      expect(calendarCubit.state, hasLength(1));
+      expect(calendarCubit.state.first.isTask, isFalse);
+      // An event the user saved as a plain calendar block must not take
+      // the assignment down with it.
+      final node = nodeCubit.byId('node:hw1');
+      expect(node, isNotNull);
+      expect(node!.schedule?.start, calendarCubit.state.first.start);
+      expect(node.schedule?.end, calendarCubit.state.first.end);
+      expect(node.schedule?.due, DateTime(2026, 10, 16, 15));
+    });
+
+    testWidgets('the Task switch starts off for a plain new event',
+        (tester) async {
+      final settingsCubit = SettingsCubit();
+      final calendarCubit = CalendarCubit();
+      final nodeCubit = NodeCubit();
+      final feedCubit = buildFeedCubit(calendarCubit, nodeCubit);
+
+      await tester.pumpWidget(
+        MultiBlocProvider(
+          providers: [
+            BlocProvider.value(value: settingsCubit),
+            BlocProvider.value(value: calendarCubit),
+            BlocProvider.value(value: nodeCubit),
+            BlocProvider.value(value: feedCubit),
+          ],
+          child: const MaterialApp(
+            home: Scaffold(body: EventEditorForm()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<SwitchListTile>(
+                find.widgetWithText(SwitchListTile, 'Task'))
+            .value,
+        isFalse,
+      );
+    });
+
+    testWidgets('the Task switch starts on for an event seeded by a task',
+        (tester) async {
+      final settingsCubit = SettingsCubit();
+      final calendarCubit = CalendarCubit();
+      final nodeCubit = NodeCubit();
+      final feedCubit = buildFeedCubit(calendarCubit, nodeCubit);
+      final start = DateTime(2026, 10, 16, 9);
+
+      await tester.pumpWidget(
+        MultiBlocProvider(
+          providers: [
+            BlocProvider.value(value: settingsCubit),
+            BlocProvider.value(value: calendarCubit),
+            BlocProvider.value(value: nodeCubit),
+            BlocProvider.value(value: feedCubit),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: EventEditorForm(
+                initialDate: DateTime(2026, 10, 16),
+                initialTime: TimeOfDay.fromDateTime(start),
+                initialTaskId: 'node:hw1',
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<SwitchListTile>(
+                find.widgetWithText(SwitchListTile, 'Task'))
+            .value,
+        isTrue,
+      );
+    });
   });
 }

@@ -361,7 +361,13 @@ class EventEditorFormState extends State<EventEditorForm> {
         }
       } catch (_) {}
     }
-    _isTask = existing?.isTask ?? false;
+    // Scheduling something out of the Tasks menu ("Add to calendar" on a
+    // task) means the event *is* that task's plan, so the switch starts
+    // on instead of silently demoting the assignment to a plain calendar
+    // event. An existing event always keeps whatever flag it was saved
+    // with — including a deliberate un-check.
+    final seededFromTask = widget.existing == null && _sourceTaskId != null;
+    _isTask = existing?.isTask ?? seededFromTask;
     _done = existing?.done ?? false;
     _reminderMinutesBefore = existing?.reminderMinutesBefore;
     if (existing != null) {
@@ -1794,6 +1800,15 @@ class EventEditorFormState extends State<EventEditorForm> {
     }
     final calendar = context.read<CalendarCubit>();
     if (!saved.isTask) {
+      final seeded = _seededSourceNode(nodes, saved.id, saved.taskId);
+      if (seeded != null) {
+        // The Task switch describes the event, not the assignment it was
+        // scheduled from: turning it off must not delete that task. The
+        // block the user just picked is still that task's plan, so the
+        // task list keeps showing it as scheduled.
+        nodes.setScheduleBlock(seeded.id, saved.start, saved.end);
+        return;
+      }
       nodes.removeNodesForEvent(saved.id);
       return;
     }
@@ -1815,6 +1830,21 @@ class EventEditorFormState extends State<EventEditorForm> {
     );
   }
 
+  /// The pre-existing task that seeded this event ("Add to calendar"),
+  /// when it is still linked to it. Never the synthetic `node:<id>`
+  /// backing that [NodeCubit.upsertLinkedNodeForEvent] creates for an
+  /// event marked as a task itself — that one is disposable.
+  static Node? _seededSourceNode(
+    NodeCubit nodes,
+    String eventId,
+    String? linkedId,
+  ) {
+    if (linkedId == null || linkedId == 'node:$eventId') return null;
+    final node = nodes.byId(linkedId);
+    if (node == null || node.calendarEventId != eventId) return null;
+    return node;
+  }
+
   /// Re-applies the editor's task flag after a Google push + re-sync, which
   /// otherwise drops the local-only [PlannerEvent.isTask] state.
   /// Handles both marking and un-marking: an un-check must clear the
@@ -1829,10 +1859,22 @@ class EventEditorFormState extends State<EventEditorForm> {
       return;
     }
     if (!_isTask) {
+      if (_seededSourceNode(nodes, syncedId, _sourceTaskId) != null) {
+        // Scheduling an assignment must not delete it, even when the user
+        // saved the calendar block as a plain event.
+        return;
+      }
       NodeEventLink.unmarkEventAsNode(calendar, nodes, syncedId);
       return;
     }
     NodeEventLink.markEventAsNode(calendar, nodes, syncedId);
+    // The block the user picked is the source task's plan as well. Google
+    // holds the time; the task keeps its own due date.
+    final seeded = _seededSourceNode(nodes, syncedId, _sourceTaskId);
+    final synced = calendar.byId(syncedId);
+    if (seeded != null && synced != null) {
+      nodes.setScheduleBlock(seeded.id, synced.start, synced.end);
+    }
     if (_done) {
       NodeEventLink.toggleEventDone(calendar, nodes, syncedId);
     }
