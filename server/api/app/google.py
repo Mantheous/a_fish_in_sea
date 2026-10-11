@@ -19,8 +19,17 @@ GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 GOOGLE_CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 GOOGLE_PEOPLE_API = "https://people.googleapis.com/v1"
 GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events"
+GOOGLE_CALENDAR_READONLY_SCOPE = (
+    "https://www.googleapis.com/auth/calendar.readonly"
+)
 GOOGLE_CONTACTS_SCOPE = "https://www.googleapis.com/auth/contacts.readonly"
-GOOGLE_SCOPE = f"{GOOGLE_CALENDAR_SCOPE} {GOOGLE_CONTACTS_SCOPE}"
+# calendar.readonly is required for calendarList (listing/reading calendar
+# metadata and colors); calendar.events alone covers only event CRUD.
+GOOGLE_SCOPE = (
+    f"{GOOGLE_CALENDAR_SCOPE} "
+    f"{GOOGLE_CALENDAR_READONLY_SCOPE} "
+    f"{GOOGLE_CONTACTS_SCOPE}"
+)
 
 
 class GoogleAuthError(Exception):
