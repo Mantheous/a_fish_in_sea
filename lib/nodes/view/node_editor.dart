@@ -494,7 +494,36 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       );
       return;
     }
+    _saveConfirmed(context);
+  }
+
+  /// Second half of [_save], after the unbounded-facets confirm dialog.
+  /// Split out so the async confirm gate stays readable.
+  Future<void> _saveConfirmed(BuildContext context) async {
+    // The cubit is read before any await so no BuildContext crosses the
+    // confirm dialog's async gap.
     final cubit = context.read<NodeCubit>();
+    // Going unbounded drops dates/targets/repeats/rules. The hidden
+    // sections' state is still in memory here, so confirm before the
+    // save clears stored facets — one tap back to safety.
+    if (_isUnbounded) {
+      final dropping = <String>[];
+      if (_due != null || _blockStart != null || _blockEnd != null) {
+        dropping.add('schedule');
+      }
+      if (_hasMoney) dropping.add('money target');
+      if (_hasEffort) dropping.add('time target');
+      if (_hasRecurrence) dropping.add('repeats');
+      if (_ruleKind != NodeRuleKind.none) dropping.add('rule');
+      if (dropping.isNotEmpty) {
+        final drop = await _confirmDropFacets(context, dropping);
+        if (!context.mounted) return;
+        if (!drop) return;
+      }
+    }
+    if (!context.mounted) return;
+    final title = _title.text.trim();
+    if (title.isEmpty) return; // guarded in [_save]; re-check after await.
     final notes =
         _notes.text.trim().isEmpty ? null : _notes.text.trim();
 
@@ -630,6 +659,34 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       return;
     }
     Navigator.of(context).pop();
+  }
+
+  /// Confirm gate before an unbounded save clears dates/targets. Returns
+  /// true when the user accepts the removal.
+  Future<bool> _confirmDropFacets(
+      BuildContext context, List<String> dropping) async {
+    final drop = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove dates and targets?'),
+        content: Text(
+          'Saving as an unbounded goal removes this goal\u2019s '
+          '${dropping.join(', ')}. Subgoals keep their own dates.\n\n'
+          'You can still Undo right after saving.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Keep editing'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Remove and save'),
+          ),
+        ],
+      ),
+    );
+    return drop ?? false;
   }
 
   void _delete(BuildContext context, Node existing) {
