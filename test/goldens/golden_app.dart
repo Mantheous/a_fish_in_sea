@@ -9,6 +9,7 @@ import 'package:a_fish_in_sea/planner/bloc/calendar_draft_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/tasks_tab_cubit.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
 import 'package:a_fish_in_sea/reporting/bloc/places_cubit.dart';
@@ -72,6 +73,7 @@ Future<SyncEngine> pumpGoldenPage(WidgetTester tester, Widget page) async {
   final events = CalendarCubit();
   final visibility = CalendarVisibilityCubit();
   final drafts = CalendarDraftCubit();
+  final tasksTab = TasksTabCubit();
   final places = PlacesCubit();
   final tracking = TrackingCubit();
   final reporting = ReportingCubit();
@@ -106,6 +108,7 @@ Future<SyncEngine> pumpGoldenPage(WidgetTester tester, Widget page) async {
     reporting,
     tracking,
     places,
+    tasksTab,
     drafts,
     visibility,
     events,
@@ -150,6 +153,7 @@ Future<SyncEngine> pumpGoldenPage(WidgetTester tester, Widget page) async {
           BlocProvider<CalendarCubit>.value(value: events),
           BlocProvider<CalendarVisibilityCubit>.value(value: visibility),
           BlocProvider<CalendarDraftCubit>.value(value: drafts),
+          BlocProvider<TasksTabCubit>.value(value: tasksTab),
           BlocProvider<PlacesCubit>.value(value: places),
           BlocProvider<TrackingCubit>.value(value: tracking),
           BlocProvider<ReportingCubit>.value(value: reporting),

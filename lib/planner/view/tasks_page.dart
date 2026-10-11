@@ -15,6 +15,7 @@ import '../../nodes/view/node_finish_sheet.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/feed_cubit.dart';
+import '../bloc/tasks_tab_cubit.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../model/task_assignee.dart';
@@ -24,47 +25,118 @@ import 'syllabus_import_sheet.dart';
 class TasksPage extends StatelessWidget {
   const TasksPage({super.key});
 
+  /// Tab the user was last on (0 = To-Do, 1 = Homework). Falls back to 0
+  /// when the cubit isn't provided (widget tests pump TasksPage standalone).
+  static int _initialTab(BuildContext context) {
+    try {
+      final i = context.read<TasksTabCubit>().state;
+      if (i < 0 || i > 1) return 0;
+      return i;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  static void _saveTab(BuildContext context, int index) {
+    try {
+      context.read<TasksTabCubit>().setTab(index);
+    } catch (_) {}
+  }
+
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
       length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Tasks'),
-          actions: [
-            IconButton(
-              tooltip: 'Import from syllabus',
-              icon: const Icon(Icons.auto_awesome),
-              onPressed: () => showSyllabusImport(context),
+      initialIndex: _initialTab(context),
+      child: Builder(
+        builder: (context) {
+          return Scaffold(
+            appBar: AppBar(
+              title: const Text('Tasks'),
+              actions: [
+                IconButton(
+                  tooltip: 'Import from syllabus',
+                  icon: const Icon(Icons.auto_awesome),
+                  onPressed: () => showSyllabusImport(context),
+                ),
+                IconButton(
+                  tooltip: 'Manage classes',
+                  icon: const Icon(Icons.sync),
+                  onPressed: () => showFeedManager(context),
+                ),
+                const UndoRedoActions(),
+              ],
+              bottom: TabBar(
+                onTap: (i) => _saveTab(context, i),
+                tabs: const [
+                  Tab(text: 'To-Do'),
+                  Tab(text: 'Homework'),
+                ],
+              ),
             ),
-            IconButton(
-              tooltip: 'Manage classes',
-              icon: const Icon(Icons.sync),
-              onPressed: () => showFeedManager(context),
+            drawer: const AppDrawer(),
+            floatingActionButton: FloatingActionButton(
+              onPressed: () => showNodeEditor(context),
+              child: const Icon(Icons.add),
             ),
-            const UndoRedoActions(),
-          ],
-          bottom: const TabBar(
-            tabs: [
-              Tab(text: 'To-Do'),
-              Tab(text: 'Homework'),
-            ],
-          ),
-        ),
-        drawer: const AppDrawer(),
-        floatingActionButton: FloatingActionButton(
-          onPressed: () => showNodeEditor(context),
-          child: const Icon(Icons.add),
-        ),
-        body: TabBarView(
-          children: [
-            const _TodoTab(),
-            const _HomeworkTab(),
-          ],
-        ),
+            body: _TabSaver(
+              child: TabBarView(
+                children: const [
+                  _TodoTab(),
+                  _HomeworkTab(),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
+}
+
+/// Persists swipe-driven tab changes (TabBar.onTap only fires on taps, not
+/// on TabBarView swipes). Listens to the DefaultTabController and records
+/// the settled index in [TasksTabCubit]; tolerates a missing cubit so
+/// standalone widget tests keep working.
+class _TabSaver extends StatefulWidget {
+  final Widget child;
+
+  const _TabSaver({required this.child});
+
+  @override
+  State<_TabSaver> createState() => _TabSaverState();
+}
+
+class _TabSaverState extends State<_TabSaver> {
+  TabController? _controller;
+
+  void _onTabChanged() {
+    final controller = _controller;
+    if (controller == null || controller.indexIsChanging) return;
+    try {
+      context.read<TasksTabCubit>().setTab(controller.index);
+    } catch (_) {}
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final next = DefaultTabController.of(context);
+    if (_controller != next) {
+      _controller?.removeListener(_onTabChanged);
+      _controller = next;
+      _controller?.addListener(_onTabChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.removeListener(_onTabChanged);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 final _timeFormat = DateFormat('h:mm a');
