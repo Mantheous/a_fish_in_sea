@@ -27,4 +27,11 @@ Classes & calendars sheet → Google → sign in once (from `http://localhost:80
 
 Everything (events, tasks, classes) is undoable via the undo/redo buttons in each page's app bar or the Undo action on delete snackbars.
 
+## Agent-driven development
+
+Issues flow through an agent loop: a verified tester files an issue labelled `agent-pending`, a triage agent posts a plan, a maintainer approves (or denies) it, and a builder agent implements the approved issue on its own `agent/<n>-<slug>` branch and opens a PR against `main`. Agents never push to or commit on `main`.
+
+- Verified testers (the only accounts whose issues are picked up) are listed in `tools/testers.json`.
+- The loop scripts (triage, approve, build, poll, Telegram notify) live in `tools/agent/`.
+
 See `product_specs.md` for the full design and `Worklog.md` for status.
