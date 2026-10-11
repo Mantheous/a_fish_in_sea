@@ -380,7 +380,13 @@ class RuleFacet extends Equatable {
 /// Hierarchy is a DAG via [parentIds]: a node may contribute to several
 /// parents (e.g. groceries under both "Food budget" and "Errands").
 /// Reporting is direct — subtree sums plus [MoneyFacet.linkedTransactionIds]
-/// and recorded actuals. There are no tags.
+/// and recorded actuals.
+///
+/// This class carries no `tagIds`. The legacy models it replaced
+/// ([Transaction], [Expense], [PlannerEvent], [Task], [Goal],
+/// [ReportedEntry]) still persist one, but nothing reads it: it is
+/// write-only dead data carried for round-trip compatibility. See
+/// [Node.importExpense] for the legacy path.
 class Node extends Equatable {
   static const int storageVersion = 1;
 
