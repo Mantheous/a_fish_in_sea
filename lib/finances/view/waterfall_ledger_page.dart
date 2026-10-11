@@ -1,5 +1,6 @@
 import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
+import 'package:a_fish_in_sea/finances/model/granularity.dart';
 import 'package:a_fish_in_sea/finances/model/ledger_entry.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/view/transaction_assignment_dialog.dart';
@@ -28,8 +29,18 @@ class _WaterfallLedgerPageState extends State<WaterfallLedgerPage> {
   final ScrollController _scrollController = ScrollController();
   bool _hasScrolledToPresent = false;
 
+  /// Buckets the reader has expanded, keyed by [bucketKey]. Local, view-only
+  /// state: collapsing is for readability, never a mutation of the model.
+  final Set<String> _expandedBuckets = <String>{};
+
   static final _dateFormat = DateFormat('M/d/yy');
   static final _currencyFormat = NumberFormat.currency(symbol: '\$');
+
+  /// Stable identity for a bucket across rebuilds. Buckets are recomputed
+  /// on every rebuild, so the key has to be the bucket's own content, not
+  /// its position.
+  static String bucketKey(LedgerBucket bucket) =>
+      '${bucket.granularity.name}:${bucket.bucketStart.toIso8601String()}';
 
   @override
   void dispose() {
@@ -177,7 +188,7 @@ class _WaterfallLedgerPageState extends State<WaterfallLedgerPage> {
                       ],
                       const Spacer(),
                       Text(
-                        '${state.rows.length} entries',
+                        _entrySummary(state),
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: colorScheme.onSurfaceVariant,
                         ),
@@ -215,10 +226,13 @@ class _WaterfallLedgerPageState extends State<WaterfallLedgerPage> {
                 SliverList(
                   delegate: SliverChildBuilderDelegate(
                     (context, index) {
-                      final entry = state.rows[index];
-                      return _buildWaterfallRow(context, entry, theme);
+                      // One widget per bucket, plus its member rows when
+                      // expanded. Built from state.buckets (already grouped
+                      // by the cubit) so scrolling never re-groups.
+                      final widgets = _bucketWidgets(context, state, theme);
+                      return widgets[index];
                     },
-                    childCount: state.rows.length,
+                    childCount: _bucketWidgetCount(state),
                   ),
                 ),
             ],
@@ -288,10 +302,178 @@ class _WaterfallLedgerPageState extends State<WaterfallLedgerPage> {
     );
   }
 
+  // ── Bucketed (granular) rendering ──────────────────────────────────
+  //
+  // Waterfall mode groups rows by distance: nearby days bucket daily,
+  // mid-range weeks bucket weekly, far-out months bucket monthly. The
+  // thresholds behind that are user-configurable (the tune button) and
+  // are persisted on WaterfallState.
+  //
+  // Collapsing hides rows for readability only. state.rows is untouched
+  // and state.buckets holds references to the same LedgerEntry objects,
+  // so nothing is ever lost — expanding rebuilds the list from the model.
+
+  /// Flattened widget list: a header per bucket, then the bucket's member
+  /// rows when it is expanded.
+  List<Widget> _bucketWidgets(
+      BuildContext context, WaterfallState state, ThemeData theme) {
+    final out = <Widget>[];
+    for (final bucket in state.buckets) {
+      out.add(_buildBucketHeader(context, state, bucket, theme));
+      if (!bucket.isCollapsible || _expandedBuckets.contains(bucketKey(bucket))) {
+        for (final entry in bucket.entries) {
+          out.add(_buildWaterfallRow(context, entry, theme));
+        }
+      }
+    }
+    return out;
+  }
+
+  int _bucketWidgetCount(WaterfallState state) {
+    var count = 0;
+    for (final bucket in state.buckets) {
+      count += 1;
+      if (!bucket.isCollapsible ||
+          _expandedBuckets.contains(bucketKey(bucket))) {
+        count += bucket.entries.length;
+      }
+    }
+    return count;
+  }
+
+  /// Collapsed buckets read as one summary line carrying the whole bucket.
+  String _entrySummary(WaterfallState state) {
+    final entries = state.rows.length;
+    final buckets = state.buckets.length;
+    if (buckets == 0 || buckets == entries) {
+      return '$entries ${_plural(entries, 'entry', 'entries')}';
+    }
+    return '$entries ${_plural(entries, 'entry', 'entries')} · '
+        '$buckets ${_plural(buckets, 'bucket', 'buckets')}';
+  }
+
+  static String _plural(int n, String one, String many) =>
+      n == 1 ? one : many;
+
+  /// Header for one bucket. Tapping toggles expansion.
+  Widget _buildBucketHeader(BuildContext context, WaterfallState state,
+      LedgerBucket bucket, ThemeData theme) {
+    final colorScheme = theme.colorScheme;
+    final expanded =
+        !bucket.isCollapsible || _expandedBuckets.contains(bucketKey(bucket));
+    final net = bucket.netAmount;
+    final projected = !bucket.hasConfirmed;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.7),
+        border: Border(
+          top: BorderSide(color: colorScheme.outlineVariant),
+          bottom: BorderSide(
+            color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+          ),
+        ),
+      ),
+      child: InkWell(
+        onTap: bucket.isCollapsible
+            ? () {
+                setState(() {
+                  final key = bucketKey(bucket);
+                  if (!_expandedBuckets.remove(key)) {
+                    _expandedBuckets.add(key);
+                  }
+                });
+              }
+            : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            children: [
+              if (bucket.isCollapsible)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Icon(
+                    expanded ? Icons.expand_less : Icons.expand_more,
+                    size: 18,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                )
+              else
+                const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  _bucketLabel(bucket),
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: colorScheme.onSurface,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '${bucket.entries.length} '
+                    '${_plural(bucket.entries.length, 'entry', 'entries')}',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  Text(
+                    '${net < 0 ? '' : '+'}${_currencyFormat.format(net)}',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: net < 0 ? colorScheme.error : Colors.green.shade700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    'balance',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  Text(
+                    _currencyFormat.format(bucket.runningBalance),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: projected
+                          ? colorScheme.onSurfaceVariant
+                          : colorScheme.onSurface,
+                      fontStyle: projected ? FontStyle.italic : FontStyle.normal,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Human label for a bucket, e.g. "Wed, Oct 8", "Week of Oct 5",
+  /// "October 2026".
+  String _bucketLabel(LedgerBucket bucket) {
+    switch (bucket.granularity) {
+      case DisplayGranularity.daily:
+        return DateFormat('EEE, MMM d').format(bucket.bucketStart);
+      case DisplayGranularity.weekly:
+        return 'Week of ${DateFormat('MMM d').format(bucket.bucketStart)}';
+      case DisplayGranularity.monthly:
+        return DateFormat('MMMM yyyy').format(bucket.bucketStart);
+    }
+  }
+
   /// A single row in the waterfall table.
   Widget _buildWaterfallRow(
       BuildContext context, LedgerEntry entry, ThemeData theme) {
-    final isProjected = entry.status != EntryStatus.confirmed;
     final isIncome = entry.amount > 0;
     final colorScheme = theme.colorScheme;
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:equatable/equatable.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
+import 'package:a_fish_in_sea/finances/model/granularity.dart';
 import 'package:a_fish_in_sea/finances/model/ledger_entry.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
@@ -26,6 +27,15 @@ class WaterfallState extends Equatable {
   final int monthlyThresholdDays;
   final int weeklyThresholdDays;
 
+  /// [rows] grouped into [LedgerBucket]s at the granularity the current
+  /// view mode asks for: by distance from today in waterfall mode, or at
+  /// a fixed scale when [viewScale] is set.
+  ///
+  /// Derived alongside [rows], never stored: the buckets hold references
+  /// to the same [LedgerEntry] objects, so grouping for readability can
+  /// never lose the granular data behind it.
+  final List<LedgerBucket> buckets;
+
   const WaterfallState({
     this.startingBalance = 0.0,
     this.rows = const [],
@@ -33,6 +43,7 @@ class WaterfallState extends Equatable {
     this.viewScale,
     this.monthlyThresholdDays = 60,
     this.weeklyThresholdDays = 7,
+    this.buckets = const [],
   });
 
   WaterfallState copyWith({
@@ -43,6 +54,7 @@ class WaterfallState extends Equatable {
     bool clearViewScale = false,
     int? monthlyThresholdDays,
     int? weeklyThresholdDays,
+    List<LedgerBucket>? buckets,
   }) {
     return WaterfallState(
       startingBalance: startingBalance ?? this.startingBalance,
@@ -53,6 +65,7 @@ class WaterfallState extends Equatable {
           monthlyThresholdDays ?? this.monthlyThresholdDays,
       weeklyThresholdDays:
           weeklyThresholdDays ?? this.weeklyThresholdDays,
+      buckets: buckets ?? this.buckets,
     );
   }
 
@@ -64,7 +77,14 @@ class WaterfallState extends Equatable {
         viewScale,
         monthlyThresholdDays,
         weeklyThresholdDays,
+        buckets,
       ];
+
+  /// The thresholds as one value, for [groupLedgerEntries].
+  GranularityThresholds get thresholds => GranularityThresholds(
+        monthlyThresholdDays: monthlyThresholdDays,
+        weeklyThresholdDays: weeklyThresholdDays,
+      );
 }
 
 /// The core waterfall engine.
@@ -87,6 +107,9 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
   late final StreamSubscription _nodeSubscription;
   late final StreamSubscription _transactionsSubscription;
   late final StreamSubscription _plaidSubscription;
+  Timer? _rebuildTimer;
+  bool _rebuilding = false;
+  bool _rebuildQueued = false;
 
   WaterfallCubit({
     required this.nodeCubit,
@@ -96,18 +119,35 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
           projectionHorizon:
               DateTime.now().add(const Duration(days: 365)),
         )) {
-    // Listen for changes to rebuild
-    _nodeSubscription = nodeCubit.stream.listen((_) => rebuild());
-    _transactionsSubscription = transactionsCubit.stream.listen((_) => rebuild());
+    // Listen for changes to rebuild (debounced: node instance generation
+    // re-emits NodeCubit, which would otherwise cascade into O(templates)
+    // nested rebuilds on the UI thread).
+    _nodeSubscription = nodeCubit.stream.listen((_) => scheduleRebuild());
+    _transactionsSubscription =
+        transactionsCubit.stream.listen((_) => scheduleRebuild());
     _plaidSubscription = plaidCubit.stream.listen((plaidState) {
       if (plaidState.currentBalance != null) {
         emit(state.copyWith(startingBalance: plaidState.currentBalance));
       }
-      rebuild();
+      scheduleRebuild();
     });
 
     // Initial build
     rebuild();
+  }
+
+  /// Coalesces rapid source emits (e.g. per-template instance generation)
+  /// into one rebuild on the next microtask.
+  void scheduleRebuild() {
+    if (_rebuilding) {
+      _rebuildQueued = true;
+      return;
+    }
+    _rebuildTimer?.cancel();
+    _rebuildTimer = Timer(const Duration(milliseconds: 50), () {
+      _rebuildTimer = null;
+      rebuild();
+    });
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -144,20 +184,44 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
 
   /// Rebuild the entire waterfall timeline from all sources.
   void rebuild() {
+    if (_rebuilding) {
+      _rebuildQueued = true;
+      return;
+    }
+    _rebuilding = true;
+    try {
+      _rebuildNow();
+    } finally {
+      _rebuilding = false;
+      if (_rebuildQueued) {
+        _rebuildQueued = false;
+        scheduleRebuild();
+      }
+    }
+  }
+
+  void _rebuildNow() {
     final today = DateTime.now();
     final horizon = state.projectionHorizon;
     final allEntries = <LedgerEntry>[];
 
     // 0. Materialize recurring money templates into dated instances
     // (silent, convergent — existing instances are kept as-is).
+    // Batched: one id-set build + one emit for all templates, instead of
+    // one scan + one emit per template (which re-fired this listener per
+    // template: O(templates) cascading rebuilds).
+    final templateIds = <String>[];
     for (final template in nodeCubit.state) {
       if (template.isTemplate && template.money != null) {
-        nodeCubit.generateInstances(
-          templateId: template.id,
-          from: today,
-          horizon: horizon,
-        );
+        templateIds.add(template.id);
       }
+    }
+    if (templateIds.isNotEmpty) {
+      nodeCubit.generateInstancesForTemplates(
+        templateIds: templateIds,
+        from: today,
+        horizon: horizon,
+      );
     }
 
     // 1. Add confirmed Plaid transactions
@@ -219,17 +283,13 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
       return b.amount.compareTo(a.amount);
     });
 
-    // 5. Compute running balance and time-until labels
-    final rows = List<LedgerEntry>.filled(
-      allEntries.length,
-      LedgerEntry(
-        sourceId: '',
-        name: '',
-        amount: 0,
-        date: DateTime(2000),
-        type: EntryType.expense,
-      ),
-    );
+    // 5. Compute running balance and time-until labels.
+    // Built directly in display order (newest first): avoids the old
+    // placeholder List.filled + per-row copyWith + reversed.toList() triple
+    // allocation. Labels are computed once per row here (not in the row
+    // builder) so scrolling never recomputes date math.
+    final todayDate = DateTime(today.year, today.month, today.day);
+    final rows = <LedgerEntry>[];
 
     // Find the last confirmed entry index
     int lastConfirmedIndex = -1;
@@ -242,24 +302,39 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
     // A. Confirmed entries: work backward from today's balance (startingBalance)
     double confirmedBalance = state.startingBalance;
     for (int i = lastConfirmedIndex; i >= 0; i--) {
-      rows[i] = allEntries[i].copyWith(
+      rows.add(allEntries[i].copyWith(
         runningBalance: confirmedBalance,
-        timeUntilLabel: _computeTimeUntilLabel(allEntries[i].date, today),
-      );
+        timeUntilLabel:
+            _computeTimeUntilLabelForDay(allEntries[i].date, todayDate),
+      ));
       confirmedBalance -= allEntries[i].amount;
     }
 
     // B. Projected / pending / due entries: work forward from today's balance (startingBalance)
+    // Collected oldest-first, then appended newest-first to keep display order.
     double projectedBalance = state.startingBalance;
+    final projected = <LedgerEntry>[];
     for (int i = lastConfirmedIndex + 1; i < allEntries.length; i++) {
       projectedBalance += allEntries[i].amount;
-      rows[i] = allEntries[i].copyWith(
+      projected.add(allEntries[i].copyWith(
         runningBalance: projectedBalance,
-        timeUntilLabel: _computeTimeUntilLabel(allEntries[i].date, today),
-      );
+        timeUntilLabel:
+            _computeTimeUntilLabelForDay(allEntries[i].date, todayDate),
+      ));
+    }
+    for (var i = projected.length - 1; i >= 0; i--) {
+      rows.add(projected[i]);
     }
 
-    emit(state.copyWith(rows: rows.reversed.toList()));
+    emit(state.copyWith(
+      rows: rows,
+      buckets: groupLedgerEntries(
+        rows: rows,
+        thresholds: state.thresholds,
+        today: todayDate,
+        fixedScale: state.viewScale,
+      ),
+    ));
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -277,9 +352,9 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
     }
   }
 
-  /// Compute a human-readable label for the time until [date] from [today].
-  String _computeTimeUntilLabel(DateTime date, DateTime today) {
-    final todayDate = DateTime(today.year, today.month, today.day);
+  /// Same as the old [_computeTimeUntilLabel] but takes the already-truncated
+  /// [todayDate] so per-row calls don't reallocate it O(rows) times.
+  String _computeTimeUntilLabelForDay(DateTime date, DateTime todayDate) {
     final targetDate = DateTime(date.year, date.month, date.day);
 
     if (targetDate.isBefore(todayDate)) {
@@ -364,6 +439,7 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
 
   @override
   Future<void> close() {
+    _rebuildTimer?.cancel();
     _nodeSubscription.cancel();
     _transactionsSubscription.cancel();
     _plaidSubscription.cancel();

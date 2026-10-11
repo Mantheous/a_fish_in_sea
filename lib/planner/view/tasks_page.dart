@@ -67,6 +67,9 @@ class TasksPage extends StatelessWidget {
   }
 }
 
+final _timeFormat = DateFormat('h:mm a');
+final _dueFormat = DateFormat('EEE, MMM d');
+
 class _TodoTab extends StatelessWidget {
   const _TodoTab();
 
@@ -78,14 +81,38 @@ class _TodoTab extends StatelessWidget {
         final open = feedCubit.visibleNodes(
           context.read<NodeCubit>().openNodes,
         );
-        return ListView(
-          children: [
-            if (open.isEmpty)
-              const _EmptyTodo()
-            else
-              for (final node in open)
-                _NodeTile(node: node, showClass: true),
-          ],
+        if (open.isEmpty) return const _EmptyTodo();
+        // Precompute once per list build (not per tile): calendar link set,
+        // feed map, node indexes, and a single `now`. Tiles receive plain
+        // data and use `read` — no per-tile full-state watches.
+        final calendarState = context.watch<CalendarCubit>().state;
+        final now = DateTime.now();
+        final linkedEventIds = <String>{};
+        final linkedTaskIds = <String>{};
+        for (final e in calendarState) {
+          linkedEventIds.add(e.id);
+          final t = e.taskId;
+          if (t != null) linkedTaskIds.add(t);
+        }
+        final feedById = {for (final f in feedCubit.state) f.id: f};
+        final nodeById = {for (final n in nodes) n.id: n};
+        final indexes = buildNodeIndexes(nodes);
+        return ListView.builder(
+          itemCount: open.length,
+          itemBuilder: (context, index) {
+            final node = open[index];
+            return _NodeTile(
+              node: node,
+              showClass: true,
+              now: now,
+              feedById: feedById,
+              nodeById: nodeById,
+              indexById: indexes.byId,
+              indexByParent: indexes.byParent,
+              linkedEventIds: linkedEventIds,
+              linkedTaskIds: linkedTaskIds,
+            );
+          },
         );
       },
     );
@@ -181,6 +208,47 @@ class _HomeworkTabState extends State<_HomeworkTab>
     // Sorted keys keep tile order stable across rebuilds so expansion
     // state never jumps to the wrong class.
     final groupKeys = byClass.keys.toList()..sort();
+    // Hoisted per-build (not per-tile/per-group): feed map, node liveness
+    // map, shared money indexes, calendar link sets, one `now`. Sort each
+    // group once up front instead of inside the itemBuilder on every
+    // rebuild (the old `..sort` mutated the list during build).
+    final now = DateTime.now();
+    final feedById = {for (final f in feedCubit.state) f.id: f};
+    final allNodes = nodeCubit.state;
+    final nodeById = {for (final n in allNodes) n.id: n};
+    final indexes = buildNodeIndexes(allNodes);
+    final calendarState = context.watch<CalendarCubit>().state;
+    final linkedEventIds = <String>{};
+    final linkedTaskIds = <String>{};
+    for (final e in calendarState) {
+      linkedEventIds.add(e.id);
+      final t = e.taskId;
+      if (t != null) linkedTaskIds.add(t);
+    }
+    final groupNodes = <String, List<Node>>{};
+    final groupOpenCount = <String, int>{};
+    final groupMeta = <String, ({Color color, String name})>{};
+    for (final key in groupKeys) {
+      final list = byClass[key]!..sort(_compare);
+      groupNodes[key] = list;
+      var openCount = 0;
+      for (final n in list) {
+        if (n.isOpen) openCount++;
+      }
+      groupOpenCount[key] = openCount;
+      final labeled = !list.every((node) => node.classLabel == null);
+      if (labeled) {
+        groupMeta[key] = (color: courseColor(key), name: key);
+      } else {
+        final feed = feedById[key];
+        groupMeta[key] = (
+          color: feed == null
+              ? Theme.of(context).colorScheme.primary
+              : mutedCalendarColor(feed.color),
+          name: feed?.name ?? 'Unknown class',
+        );
+      }
+    }
     return Column(
       children: [
         ValueListenableBuilder<bool>(
@@ -209,22 +277,8 @@ class _HomeworkTabState extends State<_HomeworkTab>
             itemCount: groupKeys.length,
             itemBuilder: (context, index) {
               final groupKey = groupKeys[index];
-              final labeled = !byClass[groupKey]!.every(
-                (node) => node.classLabel == null,
-              );
-              final Color groupColor;
-              final String groupName;
-              if (labeled) {
-                groupColor = courseColor(groupKey);
-                groupName = groupKey;
-              } else {
-                final feed = feedCubit.byId(groupKey);
-                groupColor = feed == null
-                    ? Theme.of(context).colorScheme.primary
-                    : mutedCalendarColor(feed.color);
-                groupName = feed?.name ?? 'Unknown class';
-              }
-              final classNodes = byClass[groupKey]!..sort(_compare);
+              final meta = groupMeta[groupKey]!;
+              final classNodes = groupNodes[groupKey]!;
               return Card(
                 margin: const EdgeInsets.fromLTRB(8, 4, 8, 4),
                 child: ExpansionTile(
@@ -243,18 +297,28 @@ class _HomeworkTabState extends State<_HomeworkTab>
                     width: 12,
                     height: 12,
                     decoration: BoxDecoration(
-                      color: groupColor,
+                      color: meta.color,
                       shape: BoxShape.circle,
                     ),
                   ),
                   title:
-                      Text(groupName, overflow: TextOverflow.ellipsis),
+                      Text(meta.name, overflow: TextOverflow.ellipsis),
                   subtitle: Text(
-                    '${classNodes.where((n) => n.isOpen).length} to do',
+                    '${groupOpenCount[groupKey]} to do',
                   ),
                   children: [
                     for (final node in classNodes)
-                      _NodeTile(node: node, showClass: false),
+                      _NodeTile(
+                        node: node,
+                        showClass: false,
+                        now: now,
+                        feedById: feedById,
+                        nodeById: nodeById,
+                        indexById: indexes.byId,
+                        indexByParent: indexes.byParent,
+                        linkedEventIds: linkedEventIds,
+                        linkedTaskIds: linkedTaskIds,
+                      ),
                   ],
                 ),
               );
@@ -284,26 +348,52 @@ bool _isDueToday(DateTime due, DateTime now) {
 class _NodeTile extends StatelessWidget {
   final Node node;
   final bool showClass;
+  // Hoisted per-list data (all optional for backwards compat): when
+  // supplied the tile avoids per-tile `watch` subscriptions and O(n) scans.
+  final DateTime? now;
+  final Map<String, Feed>? feedById;
+  final Map<String, Node>? nodeById;
+  final Map<String, Node>? indexById;
+  final Map<String, List<Node>>? indexByParent;
+  final Set<String>? linkedEventIds;
+  final Set<String>? linkedTaskIds;
 
-  const _NodeTile({required this.node, required this.showClass});
+  const _NodeTile({
+    required this.node,
+    required this.showClass,
+    this.now,
+    this.feedById,
+    this.nodeById,
+    this.indexById,
+    this.indexByParent,
+    this.linkedEventIds,
+    this.linkedTaskIds,
+  });
   @override
   Widget build(BuildContext context) {
     final nodeCubit = context.read<NodeCubit>();
-    final feedCubit = context.watch<FeedCubit>();
-    final allNodes = context.watch<NodeCubit>().state;
-    final calendarEvents = context.watch<CalendarCubit>().state;
-    final live = context.watch<NodeCubit>().byId(node.id) ?? node;
+    // Fast path: parent already rebuilt on NodeCubit changes, so resolve
+    // liveness from the hoisted map instead of subscribing every tile to
+    // the full node list (N tiles × full-state subscription + O(n) byId
+    // each = O(n²) per edit).
+    final live = nodeById?[node.id] ??
+        context.read<NodeCubit>().byId(node.id) ??
+        node;
     final failed = live.status == NodeStatus.failed;
-    final now = DateTime.now();
+    final effectiveNow = now ?? DateTime.now();
     final Color chipColor;
     final String chipLabel;
     if (showClass && live.classLabel != null) {
       chipColor = courseColor(live.classLabel!);
       chipLabel = live.classLabel!;
     } else {
-      final feed = showClass && live.classId != null
-          ? feedCubit.byId(live.classId!)
-          : null;
+      Feed? feed;
+      if (showClass && live.classId != null) {
+        final map = feedById;
+        feed = map != null
+            ? map[live.classId]
+            : context.read<FeedCubit>().byId(live.classId!);
+      }
       chipColor = feed == null
           ? Theme.of(context).colorScheme.primary
           : mutedCalendarColor(feed.color);
@@ -311,8 +401,13 @@ class _NodeTile extends StatelessWidget {
     }
     final hasChip = chipLabel.isNotEmpty;
     final theme = Theme.of(context);
-    final hasEvent = _hasCalendarEvent(live, calendarEvents);
-    final timeFormat = DateFormat('h:mm a');
+    final hasEvent = _hasCalendarEventFast(
+      live,
+      linkedEventIds: linkedEventIds,
+      linkedTaskIds: linkedTaskIds,
+    ) ??
+        _hasCalendarEvent(
+            live, context.read<CalendarCubit>().state);
     String? workLine;
     final plannedStart = live.schedule?.start;
     final plannedEnd = live.schedule?.end;
@@ -327,10 +422,17 @@ class _NodeTile extends StatelessWidget {
           : 'Reported ${live.reportedDuration!.inMinutes}m '
               '(planned ${planned.inMinutes}m)';
     } else if (plannedStart != null && plannedEnd != null) {
-      workLine = 'Planned ${timeFormat.format(plannedStart)} – '
-          '${timeFormat.format(plannedEnd)}';
+      workLine = 'Planned ${_timeFormat.format(plannedStart)} – '
+          '${_timeFormat.format(plannedEnd)}';
     } else if (live.money != null) {
-      final actual = moneyActualForNode(live, allNodes);
+      final actual = (indexById != null && indexByParent != null)
+          ? moneyActualForNodeIndexed(
+              live,
+              byId: indexById!,
+              byParent: indexByParent!,
+            )
+          : moneyActualForNode(
+              live, context.read<NodeCubit>().state);
       workLine =
           '\$${actual.toStringAsFixed(2)} / \$${live.money!.effectiveTarget.toStringAsFixed(2)}';
     }
@@ -383,12 +485,12 @@ class _NodeTile extends StatelessWidget {
                 ),
               if (due != null)
                 Text(
-                  'Due ${DateFormat('EEE, MMM d').format(due)}',
+                  'Due ${_dueFormat.format(due)}',
                   style: theme.textTheme.labelSmall?.copyWith(
-                    color: live.isOverdueAt(now)
+                    color: live.isOverdueAt(effectiveNow)
                         ? theme.colorScheme.error
                         : null,
-                    fontWeight: _isDueToday(due, now)
+                    fontWeight: _isDueToday(due, effectiveNow)
                         ? FontWeight.bold
                         : null,
                   ),
@@ -476,6 +578,19 @@ class _NodeTile extends StatelessWidget {
       ),
       onTap: () => showNodeEditor(context, existing: live),
     );
+  }
+
+  /// O(1) link check against hoisted sets. Returns null when the sets
+  /// weren't supplied so callers fall back to the O(n) scan.
+  static bool? _hasCalendarEventFast(
+    Node node, {
+    Set<String>? linkedEventIds,
+    Set<String>? linkedTaskIds,
+  }) {
+    if (linkedEventIds == null || linkedTaskIds == null) return null;
+    final linkedId = node.calendarEventId;
+    if (linkedId != null && linkedEventIds.contains(linkedId)) return true;
+    return linkedTaskIds.contains(node.id);
   }
 
   static bool _hasCalendarEvent(

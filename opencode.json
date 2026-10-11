@@ -1,20 +1,53 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "dart": {
-      "type": "local",
-      "command": [
-        "/home/mantheous/flutter/bin/dart",
-        "mcp-server",
-        "--flutter-sdk",
-        "/home/mantheous/flutter",
-        "--disable",
-        "create_project",
-        "--disable",
-        "flutter_driver"
-      ],
-      "enabled": true,
-      "timeout": 60000
+    "servers": {
+      "dart": {
+        "type": "local",
+        "command": [
+          "/home/mantheous/flutter/bin/dart",
+          "mcp-server",
+          "--flutter-sdk",
+          "/home/mantheous/flutter",
+          "--disable",
+          "create_project",
+          "--disable",
+          "flutter_driver"
+        ],
+        "timeout": {
+          "startup": 60000
+        }
+      },
+      "playwright": {
+        "type": "local",
+        "command": [
+          "/home/mantheous/.local/bin/mcp-playwright-tools",
+          "--working-dir",
+          "/home/mantheous/Repos/a_fish_in_sea",
+          "--allowed-root",
+          "/tmp/opencode"
+        ],
+        "timeout": {
+          "startup": 60000
+        }
+      },
+      "patrol": {
+        "type": "local",
+        "command": [
+          "/home/mantheous/flutter/bin/dart",
+          "run",
+          "patrol_mcp"
+        ],
+        "cwd": "/home/mantheous/Repos/a_fish_in_sea",
+        "environment": {
+          "PROJECT_ROOT": "/home/mantheous/Repos/a_fish_in_sea",
+          "PATROL_ANALYTICS_ENABLED": "false",
+          "PATH": "/home/mantheous/.local/bin:/home/mantheous/flutter/bin:/home/mantheous/.pub-cache/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        },
+        "timeout": {
+          "startup": 120000
+        }
+      }
     }
   }
 }

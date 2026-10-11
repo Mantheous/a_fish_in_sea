@@ -23,13 +23,21 @@ git worktree add "$WT" -b "$BRANCH" origin/main
 echo "[builder] #$N worktree $WT branch $BRANCH"
 
 PROMPT="You are the builder agent. Work ONLY inside this worktree: $WT (branch $BRANCH, based on origin/main).
-Issue: gh issue view $N --json number,title,body (run it to get the spec).
+Issue: gh issue view $N --json number,title,body,comments (run it to get the spec).
 Rules:
-1. Follow AGENTS.md persistence rules exactly (additive-only models, orElse enum fallback, gated migrations with Migration.removeAfter, extend tolerance tests).
-2. Implement the issue, nothing more. NEVER push to main, NEVER commit to main.
-3. Gates (must both pass): ~/flutter/bin/flutter analyze (0 issues) and ~/flutter/bin/flutter test (all pass, add/update tests for the change).
-4. Commit on $BRANCH, push origin $BRANCH, open PR with: gh pr create --base main --head $BRANCH --title \"[agent #$N] <title>\" --body \"Closes #$N. Test log: <paste tail of flutter test>. Risk notes: <...>\"
-5. If the gates fail and you cannot fix within reason, push the branch anyway and report FAIL status in the PR body.
+1. The triage plan lives in the <!-- agent-plan --> comment on the issue — that scope is the contract. Implement the plan, nothing more. If the plan is wrong, say so in the PR body instead of freelancing.
+2. Keep the diff SMALL and focused: the issue and nothing else. No drive-by refactors, no unrelated cleanups, no formatting churn. If the change naturally exceeds ~300 lines, stop and explain why in the PR body instead of ballooning it.
+3. Follow AGENTS.md persistence rules exactly (additive-only models, orElse enum fallback, gated migrations with Migration.removeAfter, extend tolerance tests).
+4. NEVER push to main, NEVER commit to main.
+5. Gates (must both pass): ~/flutter/bin/flutter analyze (0 issues) and ~/flutter/bin/flutter test (all pass, add/update tests for the change, including goldens under test/goldens/ if you touched a screen).
+6. If you touched a user flow (auth, navigation, create/edit/delete, sync), add or extend a patrol_test and run it headless against the dev API server: export PATH="$HOME/.local/bin:$HOME/.pub-cache/bin:$PATH" PATROL_ANALYTICS_ENABLED=false; patrol test --device chrome --web-headless --target patrol_test/<file>.dart --dart-define=SERVER_URL=http://127.0.0.1:8000 (needs the API server on :8000; uses a unique test account per run).
+7. UX check (AGENTS.md rule, mandatory when the triage plan says UX check: needed OR you touched lib/*/view, navigation, dialogs, or user-facing copy): the served :8000 build does NOT contain your branch, so preview yours — build it to a temp dir, serve it statically, and walk THAT:
+   PREVIEW=/tmp/opencode/ux-issue-$N; PORT=$((8100 + $N % 500)); ~/flutter/bin/flutter build web --base-href / --dart-define=SERVER_URL=http://127.0.0.1:8000 --output $PREVIEW/web && (cd $PREVIEW/web && nohup python3 -m http.server $PORT >/dev/null 2>&1 &) && sleep 2
+   then: opencode run --agent ux-walker --title "ux-walk-issue-$N" with APP_URL http://127.0.0.1:$PORT/, SHOT_DIR/REPORT under $PREVIEW/, UX_EMAIL ux-walker@example.com, UX_PASSWORD ux-walker-dev-pass-1, and a SCOPE limited to your change.
+   Address its findings in the branch or note them in the PR body with the report path. Kill the static server when done.
+7. Commit on $BRANCH, push origin $BRANCH, open PR with: gh pr create --base main --head $BRANCH --title \"[agent #$N] <title>\" --body \"Closes #$N. Scope: <one line, matches the triage plan>. Test log: <paste tail of flutter test>. Risk notes: <...>. Screenshots: <host paths under /tmp/opencode/ you verified against, for UX-filed issues>\"
+8. If the gates fail and you cannot fix within reason, push the branch anyway and report FAIL status in the PR body.
+A separate reviewer agent will read your diff against the plan — write the PR body for a skeptical reader.
 Report at the end: PR_URL=<url or NONE> STATUS=<ready|failed>."
 if opencode run --auto --title "builder-#$N" "$PROMPT" >"$WT/.agent-build.log" 2>&1; then
   echo "[builder] #$N opencode run finished"

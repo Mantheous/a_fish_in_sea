@@ -1,5 +1,17 @@
 # AGENTS.md
 
+## UX check: user-visible changes must be walked
+
+If your change touches anything a user can see or tap — screens under
+`lib/*/view/`, navigation, dialogs/sheets, button behavior, auth flow,
+empty states, copy — it is not done until the `ux-walker` subagent has
+walked it in a real browser and its findings are addressed or filed.
+Launch it with the parameters from `tools/agent/ux-walk.sh` (APP_URL,
+SHOT_DIR, REPORT, UX_EMAIL/UX_PASSWORD) plus a SCOPE limiting it to your
+feature, then stop. No code reading is needed on your part; report back
+the verdict line. The nightly loop walks the whole app anyway — this rule
+is about YOUR change, BEFORE merge.
+
 ## Persisted state: never wipe device data
 
 All app state is per-device HydratedBloc (`hydrated_box`: IndexedDB on
@@ -23,7 +35,39 @@ next boot. Restores are per-item tolerant (see
 4. Extend the round-trip + tolerance tests for any model change, then
    run `~/flutter/bin/flutter test` and verify old data still loads.
 
+## Data guardianship (loop + live data)
+
+The developer uses their real planning data in this app while it changes.
+Data safety is enforced in three layers — do not weaken any of them:
+
+1. `tools/agent/data-guard.sh` runs before every deploy in the agent
+   loop: it runs `flutter test test/persistence test/sync`, then the
+   `data-guardian` subagent (`.opencode/agents/data-guardian.md`) audits
+   the pending diff. A block writes `build/web/.agent-data-blocked` and
+   `deploy.sh` refuses that revision until the findings are fixed or
+   `.agent-data-override` (one-shot; `touch` it) is present. Open agent
+   PRs get the same audit as a `data:safe` / `data:blocked` label.
+2. The sync mass-deletion guard (client `SyncEngine._pushDiffs`, server
+   `server/api/app/routers/sync.py`) withholds tombstones that would
+   wipe most of a collection at once — that pattern means a device lost
+   its local store, not that the user deleted things. Keep both
+   threshold sets in sync; `SYNC_ALLOW_MASS_DELETE=1` on the server is
+   the deliberate escape hatch — never set it to "fix" a blocked sync.
+3. `tools/agent/backup-db.sh` (also run by `deploy.sh`) snapshots
+   `server/api/data/app.db` to `server/api/data/backups/` (gzipped;
+   32 recent + 14 daily). Restore: stop uvicorn, gunzip over `app.db`,
+   start uvicorn.
+
+When a persisted model changes, extend the per-item tolerance tests and
+expect the guardian to hold the deploy until the migration gating is
+right.
+
 ## Shipping changes to the user
+
+Before shipping anything, read `DEBUG_PREFS.md` (gitignored, per-developer)
+and follow ONLY its active target. It tells you whether the developer is
+currently on the Tailnet web build or the mobile app — do not guess, do
+not do both, do not ask unless the file is missing.
 
 ### Mobile (preferred): hot reload/restart over wireless debugging
 

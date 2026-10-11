@@ -161,13 +161,21 @@ double _leafValue(
 
 /// Reported minutes for [node] plus all descendants.
 double timeActualForNode(Node node, List<Node> all) {
-  final byId = {for (final n in all) n.id: n};
-  final byParent = <String, List<Node>>{};
-  for (final n in all) {
-    for (final p in n.parentIds) {
-      byParent.putIfAbsent(p, () => []).add(n);
-    }
-  }
+  final idx = buildNodeIndexes(all);
+  return timeActualForNodeIndexed(
+    node,
+    byId: idx.byId,
+    byParent: idx.byParent,
+  );
+}
+
+/// Indexed variant: reuses the caller's maps so list tiles don't
+/// rebuild them O(n) each.
+double timeActualForNodeIndexed(
+  Node node, {
+  required Map<String, Node> byId,
+  required Map<String, List<Node>> byParent,
+}) {
   return _subtreeTimeActual(node.id, byId, byParent, const {}, {});
 }
 
@@ -207,8 +215,38 @@ double moneyActualForNode(
       byParent.putIfAbsent(p, () => []).add(n);
     }
   }
+  return moneyActualForNodeIndexed(
+    node,
+    byId: byId,
+    byParent: byParent,
+    txnAmountsById: txnAmountsById,
+  );
+}
+
+/// Indexed variant of [moneyActualForNode]: reuses caller-built [byId] /
+/// [byParent] so per-tile calls in a list don't rebuild the maps O(n) each
+/// (which made lists O(n²)).
+double moneyActualForNodeIndexed(
+  Node node, {
+  required Map<String, Node> byId,
+  required Map<String, List<Node>> byParent,
+  Map<String, double> txnAmountsById = const {},
+}) {
   return _subtreeMoneyActual(
       node.id, byId, byParent, txnAmountsById, {});
+}
+
+/// Builds the shared node indexes once per list build.
+({Map<String, Node> byId, Map<String, List<Node>> byParent})
+    buildNodeIndexes(List<Node> all) {
+  final byId = {for (final n in all) n.id: n};
+  final byParent = <String, List<Node>>{};
+  for (final n in all) {
+    for (final p in n.parentIds) {
+      byParent.putIfAbsent(p, () => []).add(n);
+    }
+  }
+  return (byId: byId, byParent: byParent);
 }
 
 double _subtreeMoneyActual(
@@ -334,6 +372,37 @@ Set<String> ancestorIds(String nodeId, List<Node> all) {
 }
 
 // ── Views as queries ──────────────────────────────────────────────────────
+
+/// User-built goal-tree nodes: excludes auto-imported homework
+/// ([Node.isHomework]) and personal calendar links (`calendarEventId`).
+/// Those live in Tasks/Calendar; Nodes is the goal tree.
+bool isGoalNode(Node n) => !n.isHomework && n.calendarEventId == null;
+
+/// Goal-tree subset of [all].
+List<Node> goalNodes(List<Node> all) => all.where(isGoalNode).toList();
+
+/// Leaf goal nodes: goal nodes no other goal node lists as a parent.
+/// Sorted by due date, then creation. This is the actionable bottom of
+/// the tree — the default landing for the Nodes page.
+List<Node> leafNodes(List<Node> all) {
+  final goals = goalNodes(all);
+  final parented = <String>{};
+  for (final n in goals) {
+    parented.addAll(n.parentIds);
+  }
+  final leaves = goals.where((n) => !parented.contains(n.id)).toList()
+    ..sort((a, b) {
+      final aDue = a.schedule?.due;
+      final bDue = b.schedule?.due;
+      if (aDue == null && bDue == null) {
+        return a.createdAt.compareTo(b.createdAt);
+      }
+      if (aDue == null) return 1;
+      if (bDue == null) return -1;
+      return aDue.compareTo(bDue);
+    });
+  return leaves;
+}
 
 /// Nodes with a calendar block, sorted by start.
 List<Node> calendarNodes(List<Node> all) {

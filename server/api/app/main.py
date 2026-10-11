@@ -13,9 +13,39 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
 from .db import init_db
-from .routers import auth, feedback, fetch, google, items, plaid, proxy, syllabus, sync, tokens
+from .routers import auth, canvas, feedback, fetch, google, items, plaid, proxy, syllabus, sync, tokens
 
 log = logging.getLogger("a_fish_in_sea")
+
+
+class _FishPrefixStrip:
+    """Mirror the Tailnet funnel locally.
+
+    Tailscale serve maps /fish -> this server with the prefix stripped,
+    so the Flutter client (see ServerConfig.webBase) keeps API calls under
+    the page's own prefix: /fish/api/... Local browsers and the UX walker
+    hit this server directly at http://host:8000/fish/ with no proxy to
+    strip anything, so without this every API call 405s against the
+    GET-only SPA fallback and auth is a dead end. Stripping here makes
+    direct-local behave exactly like via-funnel; funnelled traffic (no
+    prefix left) passes through untouched.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http":
+            path = scope.get("path", "")
+            if path == "/fish" or path.startswith("/fish/"):
+                stripped = path[len("/fish"):] or "/"
+                raw = scope.get("raw_path", b"")
+                try:
+                    raw_stripped = raw[len(b"/fish"):] or b"/"
+                except Exception:
+                    raw_stripped = stripped.encode("latin-1")
+                scope = {**scope, "path": stripped, "raw_path": raw_stripped}
+        await self.app(scope, receive, send)
 
 # Flutter web build lives at <repo>/build/web when `flutter build web`
 # has run. Served same-origin so the web app needs no CORS at all.
@@ -60,6 +90,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Strip the Tailnet subpath before routing (see _FishPrefixStrip).
+    app.add_middleware(_FishPrefixStrip)
 
     @app.get("/api/health")
     async def health():
@@ -73,6 +105,7 @@ def create_app() -> FastAPI:
     # Google keeps its legacy /api/google/* paths so the Flutter client
     # needs no changes; tokens are per-user now (was: global on Flask).
     app.include_router(google.router, prefix="/api")
+    app.include_router(canvas.router, prefix="/api")
     app.include_router(fetch.router, prefix="/api/v1")
     app.include_router(proxy.router, prefix="/api")
     # Plaid keeps its legacy /api/* paths so the Flutter client needs

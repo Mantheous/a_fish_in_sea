@@ -44,6 +44,32 @@ if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$DESC" ] \
   exit 0
 fi
 
+# Data guardian gate: data-guard.sh (run earlier in poll.sh) blocks the
+# revision when pending changes could break the user's existing data.
+BLOCK_MARKER="build/web/.agent-data-blocked"
+OVERRIDE=".agent-data-override"
+ALERT_MARKER="build/web/.agent-data-alerted"
+if [ -f "$BLOCK_MARKER" ] && [ "$(cat "$BLOCK_MARKER")" = "$DESC" ]; then
+  if [ -f "$OVERRIDE" ] && { [ ! -s "$OVERRIDE" ] || [ "$(cat "$OVERRIDE")" = "$DESC" ]; }; then
+    echo "[deploy] data guardian blocked $DESC but override is present — proceeding"
+    [ -s "$OVERRIDE" ] || rm -f "$OVERRIDE" # one-shot empty-file override
+  else
+    echo "[deploy] data guardian BLOCKED $DESC — not building this revision"
+    echo "[deploy] see build/web/.agent-data-report.md; override: touch .agent-data-override"
+    if [ ! -f "$ALERT_MARKER" ] || [ "$(cat "$ALERT_MARKER")" != "$DESC" ]; then
+      echo "$DESC" > "$ALERT_MARKER"
+      "$DIR/tg.sh" "🛑 Web deploy held back by the data guardian ($DESC)
+Report: build/web/.agent-data-report.md
+Fix the findings or touch .agent-data-override to ship anyway." || true
+    fi
+    exit 0
+  fi
+fi
+
+# Data insurance before every deploy: snapshot the sync DB (kept if the
+# deploy goes bad; cheap and skipped when nothing changed).
+"$DIR/backup-db.sh" || echo "[deploy] backup-db failed (continuing)"
+
 echo "[deploy] rebuilding web bundle for $DESC"
 if "$FLUTTER" build web --base-href /fish/ 2>&1 | tail -n 3; then
   if ! grep -q '<base href="/fish/">' build/web/index.html; then

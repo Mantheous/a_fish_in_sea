@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 
+import 'package:a_fish_in_sea/common/time/planned_actual.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/planner/model/task_assignee.dart';
 
@@ -54,6 +55,13 @@ class ScheduleFacet extends Equatable {
     if (s == null || e == null || !e.isAfter(s)) return null;
     return e.difference(s);
   }
+
+  /// The planned half of planned-vs-actual. A [ScheduleFacet] carries no
+  /// occurrence of its own — actuals live on [Node] and on
+  /// [PlannerEvent] — so this is the claim the facet makes, for callers
+  /// that want the comparison without knowing which record they hold.
+  PlannedActual get planned =>
+      PlannedActual(plannedStart: start, plannedEnd: end);
 
   ScheduleFacet copyWith({
     DateTime? due,
@@ -458,6 +466,22 @@ class Node extends Equatable {
     if (s == null || e == null || !e.isAfter(s)) return null;
     return e.difference(s);
   }
+
+  /// The plan next to the occurrence, in one object.
+  ///
+  /// This is the Project Time Management Ontology's central comparison —
+  /// what was scheduled against what actually happened — exposed once
+  /// instead of being re-derived by each caller. The individual
+  /// [ScheduleFacet.plannedDuration] and [reportedDuration] getters are
+  /// kept because their return contracts differ (nullable vs.
+  /// non-nullable on [PlannerEvent]); this is the one that can be
+  /// compared directly.
+  PlannedActual get plannedActual => PlannedActual(
+        plannedStart: schedule?.start,
+        plannedEnd: schedule?.end,
+        actualStart: actualStart,
+        actualEnd: actualEnd,
+      );
 
   bool isOverdueAt(DateTime now) {
     final due = schedule?.due;

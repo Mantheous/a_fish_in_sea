@@ -114,9 +114,19 @@ class PullOut(BaseModel):
     has_more: bool = False
 
 
+class GuardedChange(BaseModel):
+    """A tombstone the mass-deletion guard withheld: the item stays on the
+    server (and on every other device) instead of being deleted."""
+
+    collection: str
+    item_id: str
+    reason: str = "mass deletion from a client that lost its local data"
+
+
 class PushOut(BaseModel):
     applied: list[SyncRecord]
     server_time: dt.datetime
+    guarded: list[GuardedChange] = []
 
 
 class ItemUpsertIn(BaseModel):

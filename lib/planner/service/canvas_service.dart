@@ -1,0 +1,202 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:http/http.dart' as http;
+
+import 'server_base.dart';
+
+/// One Canvas assignment's submission state, as normalized by the server
+/// from the planner API (`plannable_id` matches the iCal UID suffix in
+/// `event-assignment-<id>`).
+class CanvasSubmission {
+  final int assignmentId;
+  final bool submitted;
+  final bool excused;
+  final bool graded;
+  final bool missing;
+  final bool late;
+
+  const CanvasSubmission({
+    required this.assignmentId,
+    this.submitted = false,
+    this.excused = false,
+    this.graded = false,
+    this.missing = false,
+    this.late = false,
+  });
+
+  /// Conservative "done elsewhere" rule: submitted or excused. A bare
+  /// `graded` without submission (e.g. a posted zero) must NOT
+  /// auto-complete — the student still owes the work.
+  bool get countsAsDone => submitted || excused;
+
+  factory CanvasSubmission.fromJson(Map<String, dynamic> json) {
+    final rawId = json['assignment_id'];
+    final assignmentId = rawId is int
+        ? rawId
+        : int.tryParse(rawId?.toString() ?? '') ?? -1;
+    return CanvasSubmission(
+      assignmentId: assignmentId,
+      submitted: json['submitted'] as bool? ?? false,
+      excused: json['excused'] as bool? ?? false,
+      graded: json['graded'] as bool? ?? false,
+      missing: json['missing'] as bool? ?? false,
+      late: json['late'] as bool? ?? false,
+    );
+  }
+}
+
+class CanvasException implements Exception {
+  final String message;
+  final int? statusCode;
+  final bool needsReconnect;
+  const CanvasException(
+    this.message, {
+    this.statusCode,
+    this.needsReconnect = false,
+  });
+
+  @override
+  String toString() => message;
+}
+
+/// Talks to the Python server's Canvas endpoints. The server holds the
+/// personal access token (per sync-user, Fernet-encrypted) and proxies
+/// the Canvas planner API, so the app only deals with submission states.
+class CanvasService {
+  final String Function() baseUrl;
+  final String Function() userId;
+  final String? Function()? authToken;
+  final http.Client _client;
+
+  CanvasService({
+    required this.baseUrl,
+    required this.userId,
+    this.authToken,
+    http.Client? client,
+  }) : _client = client ?? http.Client();
+
+  /// JWT bearer when signed in. The legacy user-id header below is ignored
+  /// by the server (kept only so signed-out calls fail as 401, not 500).
+  Map<String, String> get _headers {
+    final t = authToken?.call();
+    if (t != null && t.isNotEmpty) return {'Authorization': 'Bearer $t'};
+    return {'X-App-User-Id': userId()};
+  }
+
+  Uri _uri(String path, [Map<String, String>? query]) {
+    final effectiveBase = resolveAppServerBase(baseUrl());
+    final resolved = Uri.parse(
+      effectiveBase.isEmpty ? path : '$effectiveBase$path',
+    );
+    if (query == null) return resolved;
+    return resolved.replace(queryParameters: {
+      ...resolved.queryParameters,
+      ...query,
+    });
+  }
+
+  Future<http.Response> _send(Future<http.Response> Function() request) async {
+    try {
+      return await request().timeout(const Duration(seconds: 30));
+    } on CanvasException {
+      rethrow;
+    } on TimeoutException {
+      throw CanvasException(
+        'Sync server timed out at ${resolveAppServerBase(baseUrl())} — '
+        'is the server running?',
+      );
+    } on SocketException catch (e) {
+      throw CanvasException(
+        'Cannot reach the sync server at ${resolveAppServerBase(baseUrl())} '
+        '(${e.message}) — is the server running and the URL correct?',
+      );
+    } on http.ClientException catch (e) {
+      throw CanvasException(
+        'Cannot reach the sync server at ${resolveAppServerBase(baseUrl())} '
+        '(${e.message}) — is the server running and the URL correct?',
+      );
+    }
+  }
+
+  Map<String, dynamic> _decode(http.Response response) {
+    if (response.statusCode != 200) {
+      String message = 'Server returned ${response.statusCode}';
+      bool needsReconnect = false;
+      try {
+        final body = jsonDecode(response.body);
+        // FastAPI wraps error payloads as {"detail": {...}}; accept bare
+        // maps too.
+        final Map? err = body is Map && body['detail'] is Map
+            ? body['detail'] as Map
+            : body is Map
+                ? body
+                : null;
+        if (err != null && err['error'] is String) {
+          message = err['error'] as String;
+        } else if (body is Map && body['detail'] is String) {
+          message = body['detail'] as String;
+        }
+        if (err != null && err['needsReconnect'] == true) {
+          needsReconnect = true;
+        }
+      } catch (_) {}
+      throw CanvasException(
+        message,
+        statusCode: response.statusCode,
+        needsReconnect: needsReconnect,
+      );
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<bool> isConnected() async {
+    final data = _decode(await _send(() => _client.get(
+        _uri('/api/canvas/status'),
+        headers: _headers)));
+    return data['connected'] as bool? ?? false;
+  }
+
+  Future<String?> connectedHost() async {
+    final data = _decode(await _send(() => _client.get(
+        _uri('/api/canvas/status'),
+        headers: _headers)));
+    return data['host'] as String?;
+  }
+
+  /// Sends the pasted personal access token to the server, which verifies
+  /// it against [host] before storing. The token itself is never kept on
+  /// this device beyond this call.
+  Future<void> connect({required String token, required String host}) async {
+    final response = await _send(() => _client.post(
+          _uri('/api/canvas/connect'),
+          headers: {..._headers, 'Content-Type': 'application/json'},
+          body: jsonEncode({'token': token, 'host': host}),
+        ));
+    _decode(response);
+  }
+
+  Future<void> disconnect() async {
+    await _send(() => _client.post(
+        _uri('/api/canvas/disconnect'),
+        headers: _headers));
+  }
+
+  /// Submission states across the server's sync window (wide enough to
+  /// cover the overdue pile, not just this week).
+  Future<List<CanvasSubmission>> fetchSubmissions() async {
+    final data = _decode(await _send(() => _client.get(
+        _uri('/api/canvas/submissions'),
+        headers: _headers)));
+    final list = data['submissions'];
+    if (list is! List) return const [];
+    final out = <CanvasSubmission>[];
+    for (final raw in list) {
+      if (raw is! Map<String, dynamic>) continue;
+      final submission = CanvasSubmission.fromJson(raw);
+      if (submission.assignmentId >= 0) out.add(submission);
+    }
+    return out;
+  }
+}

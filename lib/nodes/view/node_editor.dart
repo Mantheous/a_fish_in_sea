@@ -16,6 +16,10 @@ Future<void> showNodeEditor(
   Node? existing,
   bool enableMoney = false,
   bool enableRecurrence = false,
+
+  /// Pre-selected parents for a brand-new node (e.g. "add subgoal" from a
+  /// goal tile). Ignored when [existing] is set.
+  List<String> initialParentIds = const [],
 }) {
   return showDialog<void>(
     context: context,
@@ -23,6 +27,7 @@ Future<void> showNodeEditor(
       existing: existing,
       enableMoney: enableMoney,
       enableRecurrence: enableRecurrence,
+      initialParentIds: initialParentIds,
     ),
   );
 }
@@ -31,9 +36,13 @@ class _NodeEditorDialog extends StatefulWidget {
   final Node? existing;
   final bool enableMoney;
   final bool enableRecurrence;
+  final List<String> initialParentIds;
 
   const _NodeEditorDialog(
-      {this.existing, this.enableMoney = false, this.enableRecurrence = false});
+      {this.existing,
+      this.enableMoney = false,
+      this.enableRecurrence = false,
+      this.initialParentIds = const []});
 
   @override
   State<_NodeEditorDialog> createState() => _NodeEditorDialogState();
@@ -79,7 +88,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     final e = widget.existing;
     _title = TextEditingController(text: e?.title ?? '');
     _notes = TextEditingController(text: e?.notes ?? '');
-    _parents = List.of(e?.parentIds ?? const []);
+    _parents = List.of(e?.parentIds ?? widget.initialParentIds);
     _due = e?.schedule?.due;
     _blockStart = e?.schedule?.start;
     _blockEnd = e?.schedule?.end;
@@ -621,7 +630,7 @@ class _ParentsField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final nodes = context.watch<NodeCubit>().state;
+    final nodes = goalNodes(context.watch<NodeCubit>().state);
     final names = {for (final n in nodes) n.id: n.title};
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

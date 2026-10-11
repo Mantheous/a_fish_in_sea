@@ -9,6 +9,7 @@ import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/model/task.dart';
 
 import '../model/node.dart';
+import '../model/node_relations.dart';
 import '../service/node_feed.dart';
 import '../service/node_progress.dart';
 
@@ -18,14 +19,51 @@ import '../service/node_progress.dart';
 class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   NodeCubit() : super(const []);
 
-  // ── Lookups ─────────────────────────────────────────────────────────
+  // ── Lookups (indexed; rebuilt once per state change, not per tile) ────
 
-  Node? byId(String id) {
-    for (final n in state) {
-      if (n.id == id) return n;
+  List<Node>? _indexSource;
+  Map<String, Node>? _byIdIndex;
+  Map<String, List<Node>>? _eventIndex;
+
+  Map<String, Node> get _byIdMap {
+    final s = state;
+    if (!identical(s, _indexSource) || _byIdIndex == null) {
+      _byIdIndex = {for (final n in s) n.id: n};
+      _eventIndex = null;
+      _indexSource = s;
     }
-    return null;
+    return _byIdIndex!;
   }
+
+  Map<String, List<Node>> get _byEventId {
+    _byIdMap; // ensures _indexSource is fresh
+    var idx = _eventIndex;
+    if (idx == null) {
+      idx = <String, List<Node>>{};
+      for (final n in state) {
+        final c = n.calendarEventId;
+        if (c != null) (idx[c] ??= []).add(n);
+        final src = n.sourceEventId;
+        if (src != null) (idx[src] ??= []).add(n);
+      }
+      _eventIndex = idx;
+    }
+    return idx;
+  }
+
+  void _invalidateIndex() {
+    _indexSource = null;
+    _byIdIndex = null;
+    _eventIndex = null;
+  }
+
+  @override
+  void emit(List<Node> state) {
+    _invalidateIndex();
+    super.emit(state);
+  }
+
+  Node? byId(String id) => _byIdMap[id];
 
   List<Node> childrenOf(String parentId) =>
       state.where((n) => n.parentIds.contains(parentId)).toList();
@@ -65,13 +103,18 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         .toList()
       ..sort(_byDueThenCreated);
     final done = state.where((n) => n.isDone).toList()
-      ..sort((a, b) => (b.completedAt ?? DateTime.fromMillisecondsSinceEpoch(0))
-          .compareTo(a.completedAt ?? DateTime.fromMillisecondsSinceEpoch(0)));
+      ..sort(_byCompletedDesc);
     return [...open, ...done];
   }
 
-  List<Node> get overdueAndToday {
-    final now = DateTime.now();
+  static final DateTime _epoch = DateTime.fromMillisecondsSinceEpoch(0);
+
+  static int _byCompletedDesc(Node a, Node b) =>
+      (b.completedAt ?? _epoch).compareTo(a.completedAt ?? _epoch);
+
+  List<Node> get overdueAndToday => overdueAndTodayAt(DateTime.now());
+
+  List<Node> overdueAndTodayAt(DateTime now) {
     final today = DateTime(now.year, now.month, now.day);
     final tomorrow = today.add(const Duration(days: 1));
     return state.where((n) {
@@ -86,8 +129,9 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
 
   /// Open nodes due in the next 7 days (start of today through the end of
   /// the 7th day out). Used by the Home dashboard's week section.
-  List<Node> get dueThisWeek {
-    final now = DateTime.now();
+  List<Node> get dueThisWeek => dueThisWeekAt(DateTime.now());
+
+  List<Node> dueThisWeekAt(DateTime now) {
     final today = DateTime(now.year, now.month, now.day);
     final endExclusive = today.add(const Duration(days: 8));
     return state.where((n) {
@@ -102,6 +146,15 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   // ── Validation (DAG) ────────────────────────────────────────────────
 
   /// Returns an error string, or null when [parentIds] is acceptable.
+  ///
+  /// Two layers, deliberately separate:
+  ///
+  ///  - **Graph shape** (here): self-parenting, duplicates, unknown ids,
+  ///    and cycles that run through [Node.parentIds] alone. These are
+  ///    answerable without knowing what the nodes *mean*.
+  ///  - **Structural relations** ([validateNodeRelations]): everything
+  ///    expressed through `instanceOfId` rather than `parentIds`, which
+  ///    the cycle walk below cannot see.
   String? validateParents(Node draft, List<String> parentIds) {
     final seenParents = <String>{};
     for (final p in parentIds) {
@@ -117,6 +170,12 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         return 'That parent would create a cycle.';
       }
     }
+    final relationError = validateNodeRelations(
+      draft: draft,
+      all: state,
+      parentIds: parentIds,
+    );
+    if (relationError != null) return relationError;
     return null;
   }
 
@@ -149,20 +208,37 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   /// Surviving children keep their other parents; fully orphaned children
   /// become roots.
   void deleteNode(String id) {
+    // Single-pass worklist BFS via a byParent index: O(n) instead of the
+    // old fixpoint loop which rescanned state until it stopped growing.
+    final byParent = <String, List<String>>{};
+    final byInstanceOf = <String, List<String>>{};
+    for (final n in state) {
+      for (final p in n.parentIds) {
+        (byParent[p] ??= []).add(n.id);
+      }
+      final t = n.instanceOfId;
+      if (t != null) (byInstanceOf[t] ??= []).add(n.id);
+    }
     final doomed = <String>{id};
-    var grew = true;
-    while (grew) {
-      grew = false;
-      for (final n in state) {
-        if (doomed.contains(n.id)) continue;
-        if (n.instanceOfId != null && doomed.contains(n.instanceOfId)) {
-          if (doomed.add(n.id)) grew = true;
-          continue;
+    final queue = <String>[id];
+    while (queue.isNotEmpty) {
+      final current = queue.removeLast();
+      final instances = byInstanceOf[current];
+      if (instances != null) {
+        for (final child in instances) {
+          if (doomed.add(child)) queue.add(child);
         }
+      }
+      final children = byParent[current];
+      if (children == null) continue;
+      for (final child in children) {
+        if (doomed.contains(child)) continue;
+        final node = _byIdMap[child];
+        if (node == null) continue;
         // Cascade only when ALL parents are doomed (DAG-aware).
-        if (n.parentIds.isNotEmpty &&
-            n.parentIds.every(doomed.contains)) {
-          if (doomed.add(n.id)) grew = true;
+        if (node.parentIds.isNotEmpty &&
+            node.parentIds.every(doomed.contains)) {
+          if (doomed.add(child)) queue.add(child);
         }
       }
     }
@@ -503,10 +579,17 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   /// [from]..[horizon]. Existing instances (user-edited) are never
   /// overwritten. Silent (no undo record): generation is a system action
   /// like feed sync. Returns the number created.
+  ///
+  /// When [existingIds] is supplied the caller guarantees it already
+  /// contains every node id (shared across templates), so this call never
+  /// rebuilds the set and never emits — the caller emits once. Used by
+  /// [generateInstancesForTemplates] to avoid an O(templates × nodes)
+  /// rescan plus an emit storm.
   int generateInstances({
     required String templateId,
     required DateTime from,
     required DateTime horizon,
+    Set<String>? existingIds,
   }) {
     final template = byId(templateId);
     final recurrence = template?.recurrence;
@@ -514,7 +597,8 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final anchor =
         template.schedule?.due ?? template.schedule?.start ?? from;
     var cursor = _firstOnOrAfter(anchor, recurrence, from);
-    final existingIds = state.map((n) => n.id).toSet();
+    final owned = existingIds != null;
+    final known = existingIds ?? state.map((n) => n.id).toSet();
     final fresh = <Node>[];
     var guard = 0;
     final end = recurrence.endDate != null &&
@@ -523,15 +607,47 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         : horizon;
     while (!cursor.isAfter(end)) {
       final id = _instanceId(templateId, cursor, recurrence.frequency);
-      if (!existingIds.contains(id)) {
+      if (!known.contains(id)) {
         fresh.add(_spawnInstance(template, id, cursor));
-        existingIds.add(id);
+        known.add(id);
       }
       cursor = _next(cursor, recurrence);
       if (++guard > 5000) break;
     }
-    if (fresh.isNotEmpty) emitSilent([...state, ...fresh]);
+    if (fresh.isNotEmpty && !owned) emitSilent([...state, ...fresh]);
+    if (fresh.isNotEmpty && owned) {
+      // Caller batches: append directly without emitting; the shared
+      // [known] set already tracks the new ids.
+      _pendingBatchedInstances.addAll(fresh);
+    }
     return fresh.length;
+  }
+
+  final List<Node> _pendingBatchedInstances = [];
+
+  /// Batch version of [generateInstances]: one id-set build and one emit
+  /// for [templateIds], instead of one scan + one emit per template.
+  /// Returns the total number created.
+  int generateInstancesForTemplates({
+    required Iterable<String> templateIds,
+    required DateTime from,
+    required DateTime horizon,
+  }) {
+    _pendingBatchedInstances.clear();
+    final known = state.map((n) => n.id).toSet();
+    var total = 0;
+    for (final id in templateIds) {
+      total += generateInstances(
+        templateId: id,
+        from: from,
+        horizon: horizon,
+        existingIds: known,
+      );
+    }
+    final fresh = _pendingBatchedInstances.toList();
+    _pendingBatchedInstances.clear();
+    if (fresh.isNotEmpty) emitSilent([...state, ...fresh]);
+    return total;
   }
 
   Node _spawnInstance(Node template, String id, DateTime date) {
@@ -796,13 +912,13 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
 
   /// All nodes backing an event: personal links ([Node.calendarEventId])
   /// and homework nodes ([Node.sourceEventId]).
-  List<Node> nodesForEventId(String eventId) => state
-      .where((n) =>
-          n.calendarEventId == eventId || n.sourceEventId == eventId)
-      .toList();
+  List<Node> nodesForEventId(String eventId) =>
+      List<Node>.unmodifiable(_byEventId[eventId] ?? const <Node>[]);
 
   Node? nodeForCalendarEvent(String eventId) {
-    for (final n in state) {
+    final list = _byEventId[eventId];
+    if (list == null) return null;
+    for (final n in list) {
       if (n.calendarEventId == eventId) return n;
     }
     return null;

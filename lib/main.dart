@@ -13,6 +13,7 @@ import 'package:a_fish_in_sea/planner/bloc/calendar_draft_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
+import 'package:a_fish_in_sea/planner/service/canvas_service.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_page.dart';
@@ -102,6 +103,13 @@ class MyApp extends StatelessWidget {
             proxyBase: () =>
                 context.read<SettingsCubit>().state.icalProxyBase,
             syncClient: context.read<AuthCubit>().syncClient,
+            canvasService: CanvasService(
+              baseUrl: () =>
+                  context.read<SettingsCubit>().state.icalProxyBase,
+              userId: () => context.read<PlaidCubit>().state.userId,
+              authToken: () =>
+                  context.read<AuthCubit>().state.accessToken,
+            ),
           ),
         ),
         RepositoryProvider(
@@ -137,17 +145,21 @@ class _SyncBootstrap extends StatefulWidget {
 }
 
 class _SyncBootstrapState extends State<_SyncBootstrap> {
+  // Saved in initState: context.read in dispose() is unsafe once the
+  // element is deactivated (crashed test teardown and hot restart).
+  SyncEngine? _engine;
+
   @override
   void initState() {
     super.initState();
-    final engine = context.read<SyncEngine>();
-    engine.boot();
-    engine.startAutoSync();
+    _engine = context.read<SyncEngine>();
+    _engine!.boot();
+    _engine!.startAutoSync();
   }
 
   @override
   void dispose() {
-    context.read<SyncEngine>().stopAutoSync();
+    _engine?.stopAutoSync();
     super.dispose();
   }
 

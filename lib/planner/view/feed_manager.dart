@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../bloc/feed_cubit.dart';
 import '../model/feed.dart';
+import '../service/canvas_service.dart';
 import '../service/google_calendar_service.dart';
 
 FeedKind _kindFromUrl(String url) {
@@ -96,6 +97,7 @@ class FeedManagerBody extends StatelessWidget {
   final String? emptyTitle;
   final String itemNoun;
   final bool showGoogleButton;
+  final bool showCanvasButton;
 
   const FeedManagerBody({
     super.key,
@@ -104,6 +106,7 @@ class FeedManagerBody extends StatelessWidget {
     this.emptyTitle,
     this.itemNoun = 'class',
     this.showGoogleButton = true,
+    this.showCanvasButton = true,
   });
 
   String get _capitalizedNoun =>
@@ -193,6 +196,9 @@ class FeedManagerBody extends StatelessWidget {
                   label: Text('Add ${_capitalizedNoun.toLowerCase()}'),
                 ),
         ),
+        if (showCanvasButton &&
+            (kinds == null || kinds!.contains(FeedKind.canvas)))
+          const _CanvasTile(),
       ],
     );
   }
@@ -210,6 +216,28 @@ void _connectGoogle(BuildContext context) {
   showDialog<void>(
     context: context,
     builder: (dialogContext) => _GoogleConnectDialog(googleService),
+  );
+}
+
+void _connectCanvas(BuildContext context) {
+  final canvasService = context.read<FeedCubit>().canvasService;
+  if (canvasService == null) return;
+  // Prefill the host from an existing Canvas feed URL when there is one.
+  var host = 'byu.instructure.com';
+  try {
+    for (final feed in context.read<FeedCubit>().state) {
+      if (feed.kind != FeedKind.canvas) continue;
+      final uri = Uri.tryParse(feed.url);
+      if (uri != null && uri.host.endsWith('.instructure.com')) {
+        host = uri.host;
+        break;
+      }
+    }
+  } catch (_) {}
+  showDialog<void>(
+    context: context,
+    builder: (dialogContext) =>
+        _CanvasConnectDialog(canvasService, initialHost: host),
   );
 }
 
@@ -746,6 +774,301 @@ class _GoogleConnectDialogState extends State<_GoogleConnectDialog> {
         FilledButton(
           onPressed: _selected.isEmpty ? null : _addSelected,
           child: Text('Add ${_selected.length} selected'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Canvas submission sync: when connected, each feed sync auto-completes
+/// homework Canvas reports as submitted or excused.
+class _CanvasTile extends StatefulWidget {
+  const _CanvasTile();
+
+  @override
+  State<_CanvasTile> createState() => _CanvasTileState();
+}
+
+class _CanvasTileState extends State<_CanvasTile> {
+  bool? _connected;
+  String? _host;
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+  }
+
+  Future<void> _check() async {
+    final service = _service();
+    if (service == null) return;
+    try {
+      final connected = await service.isConnected();
+      String? host;
+      if (connected) {
+        try {
+          host = await service.connectedHost();
+        } catch (_) {}
+      }
+      if (!mounted) return;
+      setState(() {
+        _connected = connected;
+        _host = host;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _connected = false);
+    }
+  }
+
+  CanvasService? _service() {
+    try {
+      return context.read<FeedCubit>().canvasService;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_service() == null) return const SizedBox.shrink();
+    final connected = _connected;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: Card(
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        leading: const Icon(Icons.school_outlined),
+        title: const Text('Canvas submissions'),
+        subtitle: Text(
+          connected == null
+              ? 'Checking…'
+              : connected
+                  ? 'Connected${_host == null ? '' : ' ($_host)'} — submitted homework completes on sync'
+                  : 'Not connected — submitted homework stays overdue',
+        ),
+        trailing: connected == true
+            ? TextButton(
+                onPressed: () async {
+                  await _connectCanvasRefresh();
+                },
+                child: const Text('Manage'),
+              )
+            : OutlinedButton(
+                onPressed: () async {
+                  _connectCanvas(context);
+                  // Refresh the status line after the dialog closes.
+                  await Future<void>.delayed(
+                    const Duration(milliseconds: 300),
+                  );
+                  await _check();
+                },
+                child: const Text('Connect'),
+              ),
+      ),
+      ),
+    );
+  }
+
+  Future<void> _connectCanvasRefresh() async {
+    _connectCanvas(context);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    await _check();
+  }
+}
+
+class _CanvasConnectDialog extends StatefulWidget {
+  final CanvasService canvasService;
+  final String initialHost;
+
+  const _CanvasConnectDialog(this.canvasService, {required this.initialHost});
+
+  @override
+  State<_CanvasConnectDialog> createState() => _CanvasConnectDialogState();
+}
+
+class _CanvasConnectDialogState extends State<_CanvasConnectDialog> {
+  late final TextEditingController _host;
+  late final TextEditingController _token;
+  bool _checking = true;
+  bool _connected = false;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _host = TextEditingController(text: widget.initialHost);
+    _token = TextEditingController();
+    _checkConnection();
+  }
+
+  @override
+  void dispose() {
+    _host.dispose();
+    _token.dispose();
+    super.dispose();
+  }
+
+  Future<void> _checkConnection() async {
+    setState(() {
+      _checking = true;
+      _error = null;
+    });
+    try {
+      final connected = await widget.canvasService.isConnected();
+      if (!mounted) return;
+      setState(() {
+        _checking = false;
+        _connected = connected;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _checking = false;
+        _connected = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  Future<void> _save() async {
+    final token = _token.text.trim();
+    final host = _host.text.trim();
+    if (token.isEmpty || host.isEmpty) {
+      setState(() => _error = 'Host and token are both required');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.canvasService.connect(token: token, host: host);
+      // Never keep the pasted token in the field.
+      _token.clear();
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _connected = true;
+      });
+      // Apply immediately: submitted homework completes on this sync.
+      try {
+        await context.read<FeedCubit>().syncAll(force: true);
+      } catch (_) {}
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Canvas connected — submitted homework marked done'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  Future<void> _disconnect() async {
+    try {
+      await widget.canvasService.disconnect();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString());
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _connected = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Canvas submissions'),
+      content: SizedBox(
+        width: 420,
+        child: _checking
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 32),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    _connected
+                        ? 'Connected. Each sync marks homework submitted or '
+                            'excused in Canvas as done.'
+                        : 'Paste a personal access token so submitted homework '
+                            'marks itself done on sync. Create one in Canvas '
+                            'web → Account → Settings → New Access Token. '
+                            'The token is stored on the sync server, never on '
+                            'this device.',
+                  ),
+                  const SizedBox(height: 12),
+                  if (!_connected) ...[
+                    TextField(
+                      controller: _host,
+                      decoration: const InputDecoration(
+                        labelText: 'Canvas host',
+                        helperText: 'e.g. byu.instructure.com',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _token,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Access token',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (_error != null) ...[
+                    Text(
+                      _error!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (!_connected)
+                    FilledButton.icon(
+                      onPressed: _saving ? null : _save,
+                      icon: _saving
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.link),
+                      label: const Text('Connect Canvas'),
+                    ),
+                ],
+              ),
+      ),
+      actions: [
+        if (_connected && !_checking)
+          TextButton(
+            onPressed: _disconnect,
+            child: const Text('Disconnect'),
+          ),
+        if (!_connected && !_checking)
+          TextButton(
+            onPressed: _checkConnection,
+            child: const Text('Retry'),
+          ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
         ),
       ],
     );

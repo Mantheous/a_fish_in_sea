@@ -142,7 +142,7 @@ class OAuthConnection(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    provider: Mapped[str] = mapped_column(String(32))  # 'plaid' | 'google'
+    provider: Mapped[str] = mapped_column(String(32))  # 'plaid' | 'google' | 'canvas'
     access_token: Mapped[str] = mapped_column(Text, default="")
     refresh_token: Mapped[str] = mapped_column(Text, default="")
     item_id: Mapped[str] = mapped_column(String(256), default="")

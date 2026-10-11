@@ -28,14 +28,21 @@ abstract class RevertableHydratedCubit<T> extends HydratedCubit<T>
   }
 
   void emitChange(T newState) {
+    final undo = UndoCubit.instance;
+    // Fast path: no undo history to record (e.g. tests, or sync which calls
+    // resetHistory) — skip the double full-state toJson, which is O(n)
+    // string allocs per edit for list cubits.
+    if (undo == null) {
+      emit(newState);
+      return;
+    }
     final before = toJson(state) ?? const <String, dynamic>{};
     emit(newState);
     final after = toJson(newState) ?? const <String, dynamic>{};
-    UndoCubit.instance
-        ?.record(ChangeRecord.single(StateSnapshot(
-          cubitId: changeId,
-          before: before,
-          after: after,
-        )));
+    undo.record(ChangeRecord.single(StateSnapshot(
+      cubitId: changeId,
+      before: before,
+      after: after,
+    )));
   }
 }

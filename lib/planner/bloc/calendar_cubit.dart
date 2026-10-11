@@ -6,6 +6,28 @@ import '../model/planner_event.dart';
 class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
   CalendarCubit() : super(const []);
 
+  // Indexed lookup: rebuilt once per state change instead of once per tile.
+  List<PlannerEvent>? _indexSource;
+  Map<String, PlannerEvent>? _byIdIndex;
+
+  Map<String, PlannerEvent> get _byIdMap {
+    final s = state;
+    if (!identical(s, _indexSource) || _byIdIndex == null) {
+      _byIdIndex = {for (final e in s) e.id: e};
+      _indexSource = s;
+      _dayCacheSource = null;
+      _dayCache.clear();
+    }
+    return _byIdIndex!;
+  }
+
+  @override
+  void emit(List<PlannerEvent> state) {
+    _indexSource = null;
+    _byIdIndex = null;
+    super.emit(state);
+  }
+
   void addEvent(PlannerEvent event) => emitChange([...state, event]);
 
   void updateEvent(PlannerEvent event) => emitChange(
@@ -150,12 +172,7 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
     );
   }
 
-  PlannerEvent? byId(String eventId) {
-    for (final event in state) {
-      if (event.id == eventId) return event;
-    }
-    return null;
-  }
+  PlannerEvent? byId(String eventId) => _byIdMap[eventId];
 
   void replaceFeedEvents(String feedId, List<PlannerEvent> events) {
     final kept = state.where((e) => e.feedId != feedId).toList();
@@ -188,15 +205,38 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
 
   List<PlannerEvent> eventsOnDay(DateTime day) {
     final dayStart = DateTime(day.year, day.month, day.day);
+    // Memoized by (state identity, day): Home + Stats + DayReview call this
+    // repeatedly for the same day within a build.
+    _byIdMap; // ensures _dayCacheSource/_dayCache are fresh
+    if (identical(state, _dayCacheSource) && _dayCache.containsKey(dayStart)) {
+      return _dayCache[dayStart]!;
+    }
     final dayEnd = dayStart.add(const Duration(days: 1));
     final result = <PlannerEvent>[];
     for (final event in state) {
+      // Fast path: non-recurring events need only a range check — skip the
+      // SfCalendar recurrence expansion entirely.
+      if (event.recurrenceRule.isEmpty) {
+        final s = event.start;
+        if (!s.isBefore(dayStart) && s.isBefore(dayEnd)) result.add(event);
+        continue;
+      }
       final occurrences = occurrencesOf(event, dayStart, dayEnd);
       if (occurrences.isNotEmpty) result.add(event);
     }
     result.sort((a, b) => a.start.compareTo(b.start));
+    _dayCacheSource = state;
+    _dayCache[dayStart] = result;
+    // Bound the cache: days are unbounded over time.
+    if (_dayCache.length > 31) {
+      final first = _dayCache.keys.first;
+      _dayCache.remove(first);
+    }
     return result;
   }
+
+  List<PlannerEvent>? _dayCacheSource;
+  final Map<DateTime, List<PlannerEvent>> _dayCache = {};
 
   List<PlannerEvent> feedEventsInRange(
     DateTime windowStart,

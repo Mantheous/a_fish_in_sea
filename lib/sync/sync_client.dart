@@ -206,10 +206,16 @@ class SyncClient {
 
   /// Pushes in 400-item chunks: a full first-sync (years of points and
   /// events) exceeds the server's per-request cap, which answers 422.
-  Future<List<SyncRecord>> push(
+  ///
+  /// Returns the applied records plus the collections whose tombstones the
+  /// server's mass-deletion guard withheld (client-side counterpart:
+  /// `SyncEngine._looksLikeDataLoss`). Withheld items stay on the server;
+  /// they show up in Settings → Sync.
+  Future<({List<SyncRecord> applied, Set<String> guarded})> push(
       List<Map<String, dynamic>> changes) async {
     const chunk = 400;
     final applied = <SyncRecord>[];
+    final guarded = <String>{};
     for (var i = 0; i < changes.length; i += chunk) {
       final slice = changes.sublist(i, min(i + chunk, changes.length));
       final body = Map<String, dynamic>.from(
@@ -217,8 +223,16 @@ class SyncClient {
       applied.addAll(
           ((body['applied'] as List? ?? const []).map((e) =>
               SyncRecord.fromJson(Map<String, dynamic>.from(e as Map)))));
+      final held = body['guarded'];
+      if (held is List) {
+        for (final entry in held) {
+          if (entry is Map && entry['collection'] is String) {
+            guarded.add(entry['collection'] as String);
+          }
+        }
+      }
     }
-    return applied;
+    return (applied: applied, guarded: guarded);
   }
 
   Future<Map<String, dynamic>> health() async {

@@ -87,11 +87,30 @@ int _byDueThenTitle(Node a, Node b) {
   final aDue = a.schedule?.due ?? a.schedule?.start;
   final bDue = b.schedule?.due ?? b.schedule?.start;
   if (aDue == null && bDue == null) {
-    return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+    return _compareTitles(a.title, b.title);
   }
   if (aDue == null) return 1;
   if (bDue == null) return -1;
   final cmp = aDue.compareTo(bDue);
   if (cmp != 0) return cmp;
-  return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+  return _compareTitles(a.title, b.title);
+}
+
+/// Case-insensitive title compare without allocating two lower-cased
+/// strings per comparison (the old code called `toLowerCase()` on every
+/// comparator invocation: O(n log n) throwaway strings per build, and this
+/// runs every second while tracking).
+int _compareTitles(String a, String b) {
+  final aLen = a.length;
+  final bLen = b.length;
+  final len = aLen < bLen ? aLen : bLen;
+  for (var i = 0; i < len; i++) {
+    var ca = a.codeUnitAt(i);
+    var cb = b.codeUnitAt(i);
+    // ASCII fast path for case folding.
+    if (ca >= 65 && ca <= 90) ca += 32;
+    if (cb >= 65 && cb <= 90) cb += 32;
+    if (ca != cb) return ca - cb;
+  }
+  return aLen - bLen;
 }

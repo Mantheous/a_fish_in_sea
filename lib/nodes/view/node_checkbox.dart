@@ -113,9 +113,19 @@ class EventNodeCheckbox extends StatefulWidget {
   final PlannerEvent event;
   final double size;
   final Color? doneColor;
+  // Pre-resolved by the caller (e.g. calendar tile's hoisted maps) to avoid
+  // per-checkbox full-list watches + O(n) scans.
+  final Node? backing;
+  final PlannerEvent? liveEvent;
 
-  const EventNodeCheckbox(
-      {super.key, required this.event, this.size = 24, this.doneColor});
+  const EventNodeCheckbox({
+    super.key,
+    required this.event,
+    this.size = 24,
+    this.doneColor,
+    this.backing,
+    this.liveEvent,
+  });
 
   @override
   State<EventNodeCheckbox> createState() => _EventNodeCheckboxState();
@@ -172,45 +182,41 @@ class _EventNodeCheckboxState extends State<EventNodeCheckbox> {
 
   @override
   Widget build(BuildContext context) {
-    Node? backing;
-    try {
-      final nodes = context.watch<NodeCubit>().state;
-      for (final n in nodes) {
-        if (n.calendarEventId == widget.event.id ||
-            n.sourceEventId == widget.event.id ||
-            n.id == widget.event.taskId) {
-          backing = n;
-          break;
+    // Fast path: caller pre-resolved (calendar tiles pass hoisted maps).
+    Node? backing = widget.backing;
+    PlannerEvent? liveEvent = widget.liveEvent;
+    if (backing == null && liveEvent == null) {
+      try {
+        final cubit = context.read<NodeCubit>();
+        final list = cubit.nodesForEventId(widget.event.id);
+        if (list.isNotEmpty) {
+          backing = list.first;
+        } else if (widget.event.taskId != null) {
+          backing = cubit.byId(widget.event.taskId!);
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
     final backed = backing;
     if (backed != null) {
       return NodeCheckbox(
           node: backed, size: widget.size, doneColor: widget.doneColor);
     }
     final event = widget.event;
-    try {
-      final live = context
-          .watch<CalendarCubit>()
-          .byId(event.id) ??
-          event;
-      return _FallbackBox(
-        done: live.done,
-        failed: live.failed,
-        size: widget.size,
-        onTap: _onTapFallback,
-        onLongPress: _failFallback,
-      );
-    } catch (_) {
-      return _FallbackBox(
-        done: event.done,
-        failed: event.failed,
-        size: widget.size,
-        onTap: _onTapFallback,
-        onLongPress: _failFallback,
-      );
-    }
+    final live = liveEvent ??
+        (() {
+          try {
+            return context.read<CalendarCubit>().byId(event.id) ?? event;
+          } catch (_) {
+            return event;
+          }
+        }());
+    return _FallbackBox(
+      done: live.done,
+      failed: live.failed,
+      size: widget.size,
+      onTap: _onTapFallback,
+      onLongPress: _failFallback,
+    );
   }
 }
 

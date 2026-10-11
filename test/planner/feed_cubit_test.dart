@@ -1,10 +1,12 @@
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
+import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/model/task_assignee.dart';
+import 'package:a_fish_in_sea/planner/service/canvas_service.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -17,6 +19,29 @@ class MockStorage extends Mock implements Storage {}
 class MockClient extends Mock implements http.Client {}
 
 class MockGoogleService extends Mock implements GoogleCalendarService {}
+
+class MockCanvasService extends Mock implements CanvasService {}
+
+const canvasIcs = '''
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//Test//EN
+BEGIN:VEVENT
+UID:event-assignment-42
+DTSTAMP:20260901T120000Z
+DTSTART:20300101T090000Z
+DTEND:20300101T091500Z
+SUMMARY:Homework 42 [STAT 230-002]
+END:VEVENT
+BEGIN:VEVENT
+UID:event-assignment-43
+DTSTAMP:20260901T120000Z
+DTSTART:20300102T090000Z
+DTEND:20300102T091500Z
+SUMMARY:Homework 43 [STAT 230-002]
+END:VEVENT
+END:VCALENDAR
+''';
 
 const ics = '''
 BEGIN:VCALENDAR
@@ -192,6 +217,110 @@ void main() {
       feedCubit.updateFeed(feed.copyWith(enabled: true));
       expect(feedCubit.visibleEvents(calendarCubit.state).length, 1);
       expect(feedCubit.visibleNodes(nodeCubit.state).length, 1);
+    });
+  });
+
+  group('FeedCubit Canvas completions', () {
+    late FeedCubit feedCubit;
+    late CalendarCubit calendarCubit;
+    late NodeCubit nodeCubit;
+    late MockClient client;
+    late MockGoogleService googleService;
+    late MockCanvasService canvasService;
+
+    const canvasFeed = Feed(
+      id: 'f1',
+      name: 'STAT 230',
+      url: 'https://byu.instructure.com/feeds/calendars/user_1.ics',
+      kind: FeedKind.canvas,
+    );
+
+    setUp(() {
+      UndoCubit();
+      client = MockClient();
+      googleService = MockGoogleService();
+      canvasService = MockCanvasService();
+      registerFallbackValue(Uri.parse('https://example.com/feed.ics'));
+      when(() => client.get(any()))
+          .thenAnswer((_) async => http.Response(canvasIcs, 200));
+      when(() => canvasService.fetchSubmissions())
+          .thenAnswer((_) async => const []);
+      calendarCubit = CalendarCubit();
+      nodeCubit = NodeCubit();
+      feedCubit = FeedCubit(
+        calendarCubit: calendarCubit,
+        nodeCubit: nodeCubit,
+        icalService: IcalService(client: client),
+        googleService: googleService,
+        proxyBase: () => 'http://localhost:8000',
+        canvasService: canvasService,
+      );
+    });
+
+    test('submitted homework completes on sync', () async {
+      when(() => canvasService.fetchSubmissions()).thenAnswer((_) async =>
+          const [CanvasSubmission(assignmentId: 42, submitted: true)]);
+      feedCubit.addFeed(canvasFeed);
+      await feedCubit.syncAll();
+
+      expect(nodeCubit.state, hasLength(2));
+      final done =
+          nodeCubit.state.singleWhere((n) => n.title == 'Homework 42');
+      expect(done.isDone, isTrue);
+      expect(
+        nodeCubit.state.singleWhere((n) => n.title == 'Homework 43').isOpen,
+        isTrue,
+      );
+      expect(
+        calendarCubit.byId('hw:f1:event-assignment-42')?.done,
+        isTrue,
+      );
+      expect(
+        calendarCubit.byId('hw:f1:event-assignment-43')?.done,
+        isFalse,
+      );
+      expect(feedCubit.state.single.lastError, isNull);
+    });
+
+    test('graded without submission does not complete', () async {
+      when(() => canvasService.fetchSubmissions()).thenAnswer((_) async =>
+          const [CanvasSubmission(assignmentId: 42, graded: true)]);
+      feedCubit.addFeed(canvasFeed);
+      await feedCubit.syncAll();
+
+      expect(nodeCubit.byId('hw:f1:event-assignment-42')?.isOpen, isTrue);
+      expect(
+        calendarCubit.byId('hw:f1:event-assignment-42')?.done,
+        isFalse,
+      );
+    });
+
+    test('failed nodes are left alone', () async {
+      feedCubit.addFeed(canvasFeed);
+      await feedCubit.syncAll();
+      final id = 'hw:f1:event-assignment-42';
+      nodeCubit.setStatus(id, NodeStatus.failed);
+
+      when(() => canvasService.fetchSubmissions()).thenAnswer((_) async =>
+          const [CanvasSubmission(assignmentId: 42, submitted: true)]);
+      await feedCubit.syncFeed('f1');
+
+      expect(nodeCubit.byId(id)?.status, NodeStatus.failed);
+      expect(calendarCubit.byId(id)?.done, isFalse);
+    });
+
+    test('canvas failures never fail the feed sync', () async {
+      when(() => canvasService.fetchSubmissions()).thenThrow(
+        const CanvasException('Canvas account not connected',
+            needsReconnect: true),
+      );
+      feedCubit.addFeed(canvasFeed);
+      await feedCubit.syncAll();
+
+      expect(calendarCubit.state, hasLength(2));
+      expect(nodeCubit.state, hasLength(2));
+      expect(feedCubit.state.single.lastSyncAt, isNotNull);
+      expect(feedCubit.state.single.lastError, isNull);
     });
   });
 

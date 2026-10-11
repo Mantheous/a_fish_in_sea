@@ -11,6 +11,7 @@ import '../../nodes/service/node_feed.dart';
 import '../../sync/sync_client.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
+import '../service/canvas_service.dart';
 import '../service/google_calendar_service.dart';
 import '../service/ical_service.dart';
 import 'calendar_cubit.dart';
@@ -21,6 +22,10 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   final IcalService _icalService;
   final GoogleCalendarService _googleService;
   final String Function() _proxyBase;
+
+  /// Canvas submission states for auto-completing submitted homework.
+  /// Null when not connected (or in tests) — sync then skips that step.
+  final CanvasService? _canvasService;
 
   /// Sync-server client for server-side iCal snapshots. Null when signed
   /// out (or in tests) — [_syncIcal] then falls back to direct fetch.
@@ -34,6 +39,10 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   /// the same server/user identity the sync uses.
   GoogleCalendarService get googleService => _googleService;
 
+  /// Exposed so the classes sheet can run the Canvas token flow against
+  /// the same server/user identity the sync uses. Null unless wired.
+  CanvasService? get canvasService => _canvasService;
+
   FeedCubit({
     required CalendarCubit calendarCubit,
     required NodeCubit nodeCubit,
@@ -41,11 +50,13 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     required GoogleCalendarService googleService,
     required String Function() proxyBase,
     this.syncClient,
+    CanvasService? canvasService,
   })  : _calendarCubit = calendarCubit,
         _nodeCubit = nodeCubit,
         _icalService = icalService,
         _googleService = googleService,
         _proxyBase = proxyBase,
+        _canvasService = canvasService,
         super(const []);
 
   @override
@@ -104,11 +115,31 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     );
   }
 
-  Feed? byId(String feedId) {
-    for (final feed in state) {
-      if (feed.id == feedId) return feed;
+  Feed? byId(String feedId) => _byIdMap[feedId];
+
+  List<Feed>? _feedIndexSource;
+  Map<String, Feed>? _feedByIdIndex;
+  Set<String>? _enabledIdsCache;
+
+  Map<String, Feed> get _byIdMap {
+    final s = state;
+    if (!identical(s, _feedIndexSource) || _feedByIdIndex == null) {
+      _feedByIdIndex = {for (final f in s) f.id: f};
+      _enabledIdsCache = {
+        for (final f in s)
+          if (f.enabled) f.id,
+      };
+      _feedIndexSource = s;
     }
-    return null;
+    return _feedByIdIndex!;
+  }
+
+  @override
+  void emit(List<Feed> state) {
+    _feedIndexSource = null;
+    _feedByIdIndex = null;
+    _enabledIdsCache = null;
+    super.emit(state);
   }
 
   /// A Google event backed by a writable calendar that can be pushed back
@@ -275,28 +306,45 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     }
   }
 
-  Set<String> get enabledFeedIds => {
-        for (final feed in state)
-          if (feed.enabled) feed.id,
-      };
+  Set<String> get enabledFeedIds {
+    _byIdMap; // refresh cache
+    return _enabledIdsCache!;
+  }
 
   bool isFeedVisible(String? feedId) {
     if (feedId == null) return true;
-    final feed = byId(feedId);
-    if (feed == null) return true;
-    return feed.enabled;
+    // Null (unknown feed) stays visible; disabled feeds hide.
+    return _byIdMap[feedId]?.enabled ?? true;
   }
 
-  List<PlannerEvent> visibleEvents(List<PlannerEvent> events) =>
-      events.where((e) => isFeedVisible(e.feedId)).toList();
+  List<PlannerEvent> visibleEvents(List<PlannerEvent> events) {
+    final byId = _byIdMap;
+    final enabled = _enabledIdsCache!;
+    // Fast path: everything enabled — no per-item map lookup.
+    if (enabled.length == byId.length) return List.of(events);
+    return events.where((e) {
+      final id = e.feedId;
+      if (id == null) return true;
+      // Unknown feeds stay visible (matches isFeedVisible).
+      if (!byId.containsKey(id)) return true;
+      return enabled.contains(id);
+    }).toList();
+  }
 
   /// Homework nodes from disabled feeds are hidden; personal nodes always
   /// show.
-  List<Node> visibleNodes(List<Node> nodes) =>
-      nodes.where((n) {
-        if (n.sourceEventId == null) return true;
-        return isFeedVisible(n.classId);
-      }).toList();
+  List<Node> visibleNodes(List<Node> nodes) {
+    final byId = _byIdMap;
+    final enabled = _enabledIdsCache!;
+    if (enabled.length == byId.length) return List.of(nodes);
+    return nodes.where((n) {
+      if (n.sourceEventId == null) return true;
+      final id = n.classId;
+      if (id == null) return true;
+      if (!byId.containsKey(id)) return true;
+      return enabled.contains(id);
+    }).toList();
+  }
 
   Future<void> syncAll({bool force = false}) {
     if (!force) {
@@ -334,6 +382,10 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
       for (final feed in feeds) {
         await _syncOne(feed);
       }
+      // Submitted-in-Canvas homework completes itself. Runs after the
+      // iCal import so fresh nodes are covered too; failures never fail
+      // the feed sync (reconnect is handled in the classes sheet).
+      await _applyCanvasCompletions(feeds);
     } finally {
       isSyncing.value = false;
     }
@@ -495,6 +547,112 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
       );
     }
     return _googleService.fetchEvents(calendarId: calendarId, feedId: feed.id);
+  }
+
+  /// Marks homework done when Canvas reports it submitted or excused.
+  ///
+  /// The iCal feed carries no completion state, so submitted work piles
+  /// up as overdue forever. This heals that: one planner-API read per
+  /// sync, then silent batched emits (syncs stay non-undoable, like the
+  /// iCal import itself). Local state always wins — only open nodes and
+  /// open task-events are touched, never done/failed/skipped, and
+  /// anything Canvas doesn't report stays exactly as it was.
+  Future<void> _applyCanvasCompletions(List<Feed> syncedFeeds) async {
+    final canvas = _canvasService;
+    if (canvas == null) return;
+    final canvasFeedIds = <String>{
+      for (final feed in syncedFeeds)
+        if (feed.kind == FeedKind.canvas && feed.createTasks) feed.id,
+    };
+    if (canvasFeedIds.isEmpty) return;
+    late final List<CanvasSubmission> submissions;
+    try {
+      submissions = await canvas.fetchSubmissions();
+    } catch (_) {
+      return;
+    }
+    final doneIds = <int>{
+      for (final s in submissions)
+        if (s.countsAsDone) s.assignmentId,
+    };
+    if (doneIds.isEmpty) return;
+    final now = DateTime.now();
+
+    // Calendar task-events first: only open ones whose backing nodes
+    // carry no explicit failed/skipped decision.
+    final events = _calendarCubit.state;
+    final markedByFeed = <String, List<PlannerEvent>>{};
+    var eventsChanged = false;
+    for (final event in events) {
+      final feedId = event.feedId;
+      if (feedId == null || !canvasFeedIds.contains(feedId)) continue;
+      if (!event.isTask || event.done) continue;
+      final aid = _assignmentIdOf(event.sourceUid);
+      if (aid == null || !doneIds.contains(aid)) continue;
+      var keepOpen = false;
+      for (final node in _nodeCubit.nodesForEventId(event.id)) {
+        if (node.status == NodeStatus.failed ||
+            node.status == NodeStatus.skipped) {
+          // An explicit local decision — leave the event alone.
+          keepOpen = true;
+          break;
+        }
+      }
+      if (keepOpen) continue;
+      markedByFeed
+          .putIfAbsent(feedId, () => [])
+          .add(event.copyWith(done: true, completedAt: now));
+      eventsChanged = true;
+    }
+    if (eventsChanged) {
+      final byId = <String, PlannerEvent>{
+        for (final e in markedByFeed.values.expand((l) => l)) e.id: e,
+      };
+      final perFeed = <String, List<PlannerEvent>>{};
+      for (final event in events) {
+        final feedId = event.feedId;
+        if (feedId == null || !markedByFeed.containsKey(feedId)) continue;
+        perFeed
+            .putIfAbsent(feedId, () => [])
+            .add(byId[event.id] ?? event);
+      }
+      for (final entry in perFeed.entries) {
+        _calendarCubit.replaceFeedEvents(entry.key, entry.value);
+      }
+    }
+
+    // Homework nodes, including stale ones whose events aged out of the
+    // feed window: node ids look like `hw:<feedId>:event-assignment-<aid>`.
+    final nodes = _nodeCubit.state;
+    var nodesChanged = false;
+    final next = <Node>[
+      for (final node in nodes)
+        if (node.isOpen &&
+            node.sourceEventId != null &&
+            node.classId != null &&
+            canvasFeedIds.contains(node.classId) &&
+            doneIds.contains(_assignmentIdOf(node.sourceEventId) ?? -1))
+          () {
+            nodesChanged = true;
+            return node.copyWith(
+              status: NodeStatus.done,
+              completedAt: now,
+            );
+          }()
+        else
+          node,
+    ];
+    if (nodesChanged) _nodeCubit.emitSilent(next);
+  }
+
+  /// Canvas assignment id from an iCal UID (`event-assignment-<id>`) or a
+  /// homework node/event id (`hw:<feedId>:event-assignment-<id>`).
+  static int? _assignmentIdOf(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    final tail = raw.split(':').last;
+    const prefix = 'event-assignment-';
+    if (!tail.startsWith(prefix)) return null;
+    return int.tryParse(tail.substring(prefix.length));
   }
 
   void _updateFeedStatus(

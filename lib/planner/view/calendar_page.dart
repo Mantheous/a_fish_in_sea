@@ -8,11 +8,13 @@ import 'package:syncfusion_flutter_calendar/calendar.dart';
 import '../../common/undo/undo_bar.dart';
 import '../../common/undo/undo_cubit.dart';
 import '../../navigation/view/app_drawer.dart';
+import '../../navigation/bloc/navigation_cubit.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_calendar.dart';
 import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_editor.dart';
+import '../../nodes/view/node_finish_sheet.dart';
 import '../../reporting/bloc/reporting_cubit.dart';
 import '../../reporting/model/reported_entry.dart';
 import '../../reporting/view/day_review_screen.dart';
@@ -32,6 +34,12 @@ import 'feed_manager.dart';
 const int _personalEventColor = 0xFF6B8F8A;
 const double _wideBreakpoint = 720;
 const double _drawerWidth = 360;
+
+// Hoisted: DateFormat construction parses ICU skeletons — doing it per tile
+// per frame (30+ tiles) showed up in profiles.
+final _calendarTimeFormat = DateFormat('h:mm a');
+final _calendarMoveFormat = DateFormat('EEE, MMM d · h:mm a');
+final _calendarDayFormat = DateFormat('EEE, MMM d');
 
 enum _DrawerMode { closed, detail, creating, editing }
 
@@ -57,6 +65,29 @@ class _CalendarPageState extends State<CalendarPage> {
   bool _sideBySide = false;
   Timer? _liveTicker;
   Timer? _suppressTimer;
+  TimeSlotViewSettings? _slotSettingsCache;
+  double? _slotStartHour;
+  double? _slotEndHour;
+
+  TimeSlotViewSettings _slotSettings(double startHour, double endHour) {
+    if (_slotSettingsCache == null ||
+        _slotStartHour != startHour ||
+        _slotEndHour != endHour) {
+      _slotSettingsCache = TimeSlotViewSettings(
+        timeInterval: const Duration(minutes: 30),
+        startHour: startHour,
+        endHour: endHour,
+        // Default is 'h a' (e.g. "9 AM"), which renders 9:00 and 9:30
+        // identically. Include minutes so each 30-min line is distinct.
+        timeFormat: 'h:mm a',
+        // Wide enough for "12:30 PM" on one line (auto size wraps it).
+        timeRulerSize: 70,
+      );
+      _slotStartHour = startHour;
+      _slotEndHour = endHour;
+    }
+    return _slotSettingsCache!;
+  }
 
   /// Schedules the tap-suppression reset. Cancelable so a pending reset
   /// never outlives the widget (widget tests fail on leaked timers).
@@ -67,6 +98,10 @@ class _CalendarPageState extends State<CalendarPage> {
     });
   }
   PlannerEvent? _resizePreview;
+  // Live preview of the event being edited in the side drawer: the edit
+  // form owns its time/label state until Save, so without this the tile
+  // stays at the old time while the sidebar shows the new one.
+  PlannerEvent? _editPreview;
   PlannerEvent? _handleOriginal;
   bool _handleTop = true;
   double _handleDy = 0;
@@ -238,60 +273,145 @@ class _CalendarPageState extends State<CalendarPage> {
                   ),
                 ],
               ),
+            ),
+          if (compactHeader)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.max,
+                children: [
+                  IconButton(
+                    tooltip: _previousTooltip,
+                    icon: const Icon(Icons.chevron_left),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: _goToPrevious,
+                  ),
+                  TextButton(
+                    onPressed: _goToToday,
+                    style: const ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('Today'),
+                  ),
+                  IconButton(
+                    tooltip: _nextTooltip,
+                    icon: const Icon(Icons.chevron_right),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: _goToNext,
+                  ),
+                ],
+              ),
             )
           else ...[
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: GestureDetector(
-                onDoubleTap: _goToToday,
-                child: SegmentedButton<CalendarView>(
-                  segments: const [
-                    ButtonSegment(
-                      value: CalendarView.day,
-                      icon: Icon(Icons.view_day),
-                      label: Text('Day'),
-                      tooltip: 'Day (double-click for today)',
+              child: Row(
+                children: [
+                  IconButton(
+                    tooltip: _previousTooltip,
+                    icon: const Icon(Icons.chevron_left),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: _goToPrevious,
+                  ),
+                  TextButton(
+                    onPressed: _goToToday,
+                    style: const ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
-                    ButtonSegment(
-                      value: CalendarView.week,
-                      icon: Icon(Icons.view_column),
-                      label: Text('Week'),
-                      tooltip: 'Week (double-click for today)',
+                    child: const Text('Today'),
+                  ),
+                  IconButton(
+                    tooltip: _nextTooltip,
+                    icon: const Icon(Icons.chevron_right),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: _goToNext,
+                  ),
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 360),
+                        child: GestureDetector(
+                          onDoubleTap: _goToToday,
+                          child: SegmentedButton<CalendarView>(
+                            segments: const [
+                              ButtonSegment(
+                                value: CalendarView.day,
+                                icon: Icon(Icons.view_day),
+                                label: Text('Day'),
+                                tooltip: 'Day (double-click for today)',
+                              ),
+                              ButtonSegment(
+                                value: CalendarView.week,
+                                icon: Icon(Icons.view_column),
+                                label: Text('Week'),
+                                tooltip: 'Week (double-click for today)',
+                              ),
+                              ButtonSegment(
+                                value: CalendarView.month,
+                                icon: Icon(Icons.calendar_view_month),
+                                label: Text('Month'),
+                                tooltip: 'Month (double-click for today)',
+                              ),
+                            ],
+                            selected: {_view},
+                            showSelectedIcon: false,
+                            style: const ButtonStyle(
+                              visualDensity: VisualDensity.compact,
+                              tapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                              textStyle: WidgetStatePropertyAll(
+                                TextStyle(fontSize: 13),
+                              ),
+                            ),
+                            onSelectionChanged: (selection) {
+                              setState(() => _view = selection.first);
+                              _controller.view = _view;
+                            },
+                          ),
+                        ),
+                      ),
                     ),
-                    ButtonSegment(
-                      value: CalendarView.month,
-                      icon: Icon(Icons.calendar_view_month),
-                      label: Text('Month'),
-                      tooltip: 'Month (double-click for today)',
-                    ),
-                  ],
-                  selected: {_view},
-                  onSelectionChanged: (selection) {
-                    setState(() => _view = selection.first);
-                    _controller.view = _view;
-                  },
-                ),
+                  ),
+                ],
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: SegmentedButton<bool>(
-                segments: const [
-                  ButtonSegment(
-                    value: false,
-                    icon: Icon(Icons.calendar_month),
-                    label: Text('Plans'),
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 360),
+                  child: SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(
+                        value: false,
+                        icon: Icon(Icons.calendar_month),
+                        label: Text('Plans'),
+                      ),
+                      ButtonSegment(
+                        value: true,
+                        icon: Icon(Icons.fact_check),
+                        label: Text('Plan + Report'),
+                      ),
+                    ],
+                    selected: {_sideBySide},
+                    showSelectedIcon: false,
+                    style: const ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      textStyle: WidgetStatePropertyAll(
+                        TextStyle(fontSize: 13),
+                      ),
+                    ),
+                    onSelectionChanged: (selection) {
+                      _setSideBySide(selection.first);
+                    },
                   ),
-                  ButtonSegment(
-                    value: true,
-                    icon: Icon(Icons.fact_check),
-                    label: Text('Plan + Report'),
-                  ),
-                ],
-                selected: {_sideBySide},
-                onSelectionChanged: (selection) {
-                  _setSideBySide(selection.first);
-                },
+                ),
               ),
             ),
           ],
@@ -300,7 +420,7 @@ class _CalendarPageState extends State<CalendarPage> {
               padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
               child: Text(
                 'Left: plan · Right: report (timer logs + accepted '
-                'auto-reports) · red = recording now',
+                'auto-reports) · red = recording now · ▶ on a tile starts recording',
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
                       color:
                           Theme.of(context).colorScheme.onSurfaceVariant,
@@ -308,6 +428,20 @@ class _CalendarPageState extends State<CalendarPage> {
                 textAlign: TextAlign.center,
               ),
             ),
+          // Toggl-style running-entry bar: always visible while an event
+          // timer is recording, with elapsed time and Stop.
+          _RecordingBannerSlot(
+            onOpen: (event) {
+              PlannerEvent? live;
+              try {
+                live =
+                    context.read<CalendarCubit>().byId(event.id) ?? event;
+              } catch (_) {
+                live = event;
+              }
+              _openDetail(live);
+            },
+          ),
           Expanded(
             child: BlocBuilder<CalendarCubit, List<PlannerEvent>>(
               builder: (context, events) {
@@ -332,6 +466,15 @@ class _CalendarPageState extends State<CalendarPage> {
                     _drawerMode == _DrawerMode.creating &&
                     _isWide) {
                   shown = [...shown, draft];
+                }
+                final editPreview = _editPreview;
+                if (editPreview != null &&
+                    _drawerMode == _DrawerMode.editing &&
+                    _isWide) {
+                  shown = [
+                    for (final e in shown)
+                      if (e.id == editPreview.id) editPreview else e,
+                  ];
                 }
                 if (preview != null) {
                   shown = [
@@ -367,19 +510,64 @@ class _CalendarPageState extends State<CalendarPage> {
                 }
                 // Unified-node schedule blocks render as appointments.
                 // Taps/drags on `node:` ids route back to the node.
+                List<Node> nodeState = const [];
                 try {
+                  nodeState = context.watch<NodeCubit>().state;
                   shown = [
                     ...shown,
-                    ...nodeCalendarBlocks(
-                        context.watch<NodeCubit>().state),
+                    ...nodeCalendarBlocks(nodeState),
                   ];
                 } catch (_) {}
+                // ── Hoisted per-build tile data (not per tile) ──────────
+                // _eventColor (HSL round-trip + hash), _isMovable (O(F) byId
+                // scan), node scans (O(N) per tile), and assignee joins were
+                // all recomputed inside appointmentBuilder for every tile,
+                // every frame. Compute once here.
+                final colorById = <String, Color>{};
+                for (final e in shown) {
+                  colorById[e.id] = _eventColor(e, feedColors);
+                }
+                final remoteEditableFeedIds = <String>{};
+                for (final f in feeds.state) {
+                  if (f.kind == FeedKind.google &&
+                      f.calendarId != null &&
+                      f.calendarId!.isNotEmpty) {
+                    remoteEditableFeedIds.add(f.id);
+                  }
+                }
+                final nodeById = {for (final n in nodeState) n.id: n};
+                final nodeByEventId = <String, Node>{};
+                final trackingNodeIds = <String>{};
+                for (final n in nodeState) {
+                  final c = n.calendarEventId;
+                  if (c != null) nodeByEventId.putIfAbsent(c, () => n);
+                  final s = n.sourceEventId;
+                  if (s != null) nodeByEventId.putIfAbsent(s, () => n);
+                  if (n.calendarEventId == null && n.sourceEventId == null) {
+                    // plain nodes addressable by taskId link
+                  }
+                  nodeByEventId.putIfAbsent('task:${n.id}', () => n);
+                  if (n.isTracking) trackingNodeIds.add(n.id);
+                }
+                final trackingEventIds = <String>{};
+                for (final e in shown) {
+                  if (e.isTracking) trackingEventIds.add(e.id);
+                }
+                final assigneeLabelById = <String, String>{};
+                for (final e in shown) {
+                  if (e.assignees.isNotEmpty) {
+                    assigneeLabelById[e.id] = e.assignees
+                        .map((a) => a.displayName)
+                        .join(', ');
+                  }
+                }
                 final calendar = SfCalendar(
                   controller: _controller,
                   view: _view,
                   dataSource: PlannerCalendarDataSource(
                     shown,
                     feedColors,
+                    colorById,
                   ),
                   firstDayOfWeek: 7,
                   allowDragAndDrop: true,
@@ -397,6 +585,13 @@ class _CalendarPageState extends State<CalendarPage> {
                     details,
                     sideBySide: sideBySide,
                     reportById: reportById,
+                    colorById: colorById,
+                    remoteEditableFeedIds: remoteEditableFeedIds,
+                    nodeById: nodeById,
+                    nodeByEventId: nodeByEventId,
+                    trackingNodeIds: trackingNodeIds,
+                    trackingEventIds: trackingEventIds,
+                    assigneeLabelById: assigneeLabelById,
                   ),
                   onDragStart: _onDragStart,
                   onDragEnd: _onDragEnd,
@@ -407,10 +602,9 @@ class _CalendarPageState extends State<CalendarPage> {
                         MonthAppointmentDisplayMode.appointment,
                     agendaItemHeight: 44,
                   ),
-                  timeSlotViewSettings: TimeSlotViewSettings(
-                    timeInterval: const Duration(minutes: 30),
-                    startHour: settings.dayStartHour,
-                    endHour: settings.dayEndHour,
+                  timeSlotViewSettings: _slotSettings(
+                    settings.dayStartHour,
+                    settings.dayEndHour,
                   ),
                   todayHighlightColor: Theme.of(context).colorScheme.primary,
                   headerDateFormat: compactHeader ? 'MMM y' : null,
@@ -420,7 +614,7 @@ class _CalendarPageState extends State<CalendarPage> {
                           textStyle: TextStyle(fontSize: 14),
                         )
                       : const CalendarHeaderStyle(),
-                  showNavigationArrow: compactHeader,
+                  showNavigationArrow: true,
                 );
                 final Widget calendarView =
                     (sideBySide && reportById.isEmpty)
@@ -459,6 +653,13 @@ class _CalendarPageState extends State<CalendarPage> {
     CalendarAppointmentDetails details, {
     required bool sideBySide,
     required Map<String, ReportBlock> reportById,
+    Map<String, Color>? colorById,
+    Set<String>? remoteEditableFeedIds,
+    Map<String, Node>? nodeById,
+    Map<String, Node>? nodeByEventId,
+    Set<String>? trackingNodeIds,
+    Set<String>? trackingEventIds,
+    Map<String, String>? assigneeLabelById,
   }) {
     if (details.isMoreAppointmentRegion) {
       return Container(
@@ -479,7 +680,8 @@ class _CalendarPageState extends State<CalendarPage> {
     final report = reportById[event.id];
     final laneSplit = sideBySide && _view != CalendarView.month;
     final isDraft = event.id == calendarDraftEventId;
-    final baseColor = _eventColor(event, feedColors);
+    final baseColor =
+        colorById?[event.id] ?? _eventColor(event, feedColors);
     var color = isDraft ? baseColor.withValues(alpha: 0.55) : baseColor;
     if (event.isTask && event.done) {
       color = color.withValues(alpha: 0.55);
@@ -491,22 +693,29 @@ class _CalendarPageState extends State<CalendarPage> {
     // Resize circles show only on the selected event (tap opens the side
     // drawer and selects). Unselected events stay clean, especially on
     // wide/web where many events are visible at once.
-    final movable =
-        (isDraft || (_isMovable(event) && selected)) && report == null;
+    final bool movable;
+    if (isDraft) {
+      movable = report == null;
+    } else if (!selected || report != null) {
+      movable = false;
+    } else if (remoteEditableFeedIds != null) {
+      movable = _isMovableFast(event, remoteEditableFeedIds);
+    } else {
+      movable = _isMovable(event) && selected;
+    }
     final displaySubject =
         isDraft && event.subject.trim().isEmpty ? 'New event' : event.subject;
-    final timeFormat = DateFormat('h:mm a');
     final String timeLabel;
     if (report == null) {
       timeLabel = event.allDay
           ? 'All day'
-          : '${timeFormat.format(event.start)} – ${timeFormat.format(event.end)}';
+          : '${_calendarTimeFormat.format(event.start)} – ${_calendarTimeFormat.format(event.end)}';
     } else {
       final range =
-          '${timeFormat.format(event.start)} – ${timeFormat.format(event.end)}';
+          '${_calendarTimeFormat.format(event.start)} – ${_calendarTimeFormat.format(event.end)}';
       timeLabel = switch (report.kind) {
         ReportBlockKind.live =>
-          'Recording since ${timeFormat.format(event.start)}',
+          'Recording since ${_calendarTimeFormat.format(event.start)}',
         ReportBlockKind.timer => '$range · timer',
         ReportBlockKind.accepted => '$range · accepted',
       };
@@ -550,13 +759,16 @@ class _CalendarPageState extends State<CalendarPage> {
           final showTime = realHeight.isInfinite || realHeight >= 34;
           final twoLines =
               realHeight.isInfinite || realHeight >= 58;
-          final showHandles = movable &&
-              !event.allDay &&
-              (realHeight.isInfinite || realHeight >= 58);
-          final pxPerMinute = (realHeight.isFinite ? realHeight : details.bounds.height) /
-              durationMinutes.clamp(1.0, 1440.0);
           final maxWidth =
               constraints.maxWidth.isFinite ? constraints.maxWidth : null;
+          final showHandles = movable &&
+              !event.allDay &&
+              (realHeight.isInfinite || realHeight >= 58) &&
+              // Narrow week columns would bury the circles in the title
+              // (and over the play badge): resize those via the form.
+              (maxWidth == null || maxWidth >= 96);
+          final pxPerMinute = (realHeight.isFinite ? realHeight : details.bounds.height) /
+              durationMinutes.clamp(1.0, 1440.0);
           Widget body = Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -606,15 +818,15 @@ class _CalendarPageState extends State<CalendarPage> {
                       child: GestureDetector(
                         onTapDown: (_) => _suppressNextTap(),
                         onDoubleTapDown: (_) => _suppressNextTap(),
-                        child: Theme(
-                          data: Theme.of(context).copyWith(
-                            iconTheme: const IconThemeData(
-                                color: Colors.white),
-                          ),
+                        child: IconTheme(
+                          data: const IconThemeData(color: Colors.white),
                           child: _blockCheckbox(
                             event: event,
                             size: 20,
                             doneColor: Colors.white,
+                            nodeById: nodeById,
+                            nodeByEventId: nodeByEventId,
+                            liveEvent: event,
                           ),
                         ),
                       ),
@@ -640,9 +852,10 @@ class _CalendarPageState extends State<CalendarPage> {
                     Padding(
                       padding: const EdgeInsets.only(left: 3),
                       child: Tooltip(
-                        message: event.assignees
-                            .map((a) => a.displayName)
-                            .join(', '),
+                        message: assigneeLabelById?[event.id] ??
+                            event.assignees
+                                .map((a) => a.displayName)
+                                .join(', '),
                         child: const Icon(
                           Icons.group,
                           size: 12,
@@ -679,22 +892,34 @@ class _CalendarPageState extends State<CalendarPage> {
             );
           }
           return Stack(
-            clipBehavior: Clip.none,
+            // Hard edge: nothing (badge, handles) may paint outside the
+            // tile. With Clip.none a 28px badge on a ~20px 15-min tile
+            // overflowed onto the empty grid and read as a floating ▶
+            // disconnected from any event.
+            clipBehavior: Clip.hardEdge,
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
                 child: showText ? body : const SizedBox.shrink(),
               ),
               if (showHandles)
+                // Narrow grab area centered on the visible circle: a
+                // full-width strip would swallow taps on the header row
+                // (title, checkbox, play button) whenever handles show.
                 Positioned(
                   top: 0,
                   left: 0,
                   right: 0,
-                  child: _resizeHandle(
-                    top: true,
-                    event: event,
-                    color: baseColor,
-                    pxPerMinute: pxPerMinute,
+                  child: Center(
+                    child: SizedBox(
+                      width: 48,
+                      child: _resizeHandle(
+                        top: true,
+                        event: event,
+                        color: baseColor,
+                        pxPerMinute: pxPerMinute,
+                      ),
+                    ),
                   ),
                 ),
               if (showHandles)
@@ -702,11 +927,52 @@ class _CalendarPageState extends State<CalendarPage> {
                   bottom: 0,
                   left: 0,
                   right: 0,
-                  child: _resizeHandle(
-                    top: false,
-                    event: event,
-                    color: baseColor,
-                    pxPerMinute: pxPerMinute,
+                  child: Center(
+                    child: SizedBox(
+                      width: 48,
+                      child: _resizeHandle(
+                        top: false,
+                        event: event,
+                        color: baseColor,
+                        pxPerMinute: pxPerMinute,
+                      ),
+                    ),
+                  ),
+                ),
+              // Toggl-style one-tap recording badge, pinned top-right so it
+              // never shrinks with the title text and always sits above the
+              // resize handles. Covers timed tiles in day/week views that
+              // are big enough to hold it (28px badge + offsets); smaller
+              // tiles (15-min events, thin side-by-side halves, crowded
+              // overlaps) skip it — an overflowing badge reads as a
+              // floating ▶ disconnected from any tile. Month cells stay
+              // clean (too many tiny tiles to tap reliably).
+              if (report == null &&
+                  !isDraft &&
+                  !event.allDay &&
+                  !isReportDisplayId(event.id) &&
+                  !isNodeBlockId(event.id) &&
+                  _view != CalendarView.month &&
+                  (realHeight.isInfinite || realHeight >= 30) &&
+                  (maxWidth == null || maxWidth >= 36))
+                Positioned(
+                  top: 2,
+                  right: 2,
+                  child: _tilePlayBadge(
+                    event,
+                    backing: _backingNodeFor(
+                      context,
+                      event,
+                      nodeByEventId: nodeByEventId,
+                      nodeById: nodeById,
+                    ),
+                    tracking: _tileTrackingFor(
+                      event,
+                      nodeByEventId: nodeByEventId,
+                      nodeById: nodeById,
+                      trackingNodeIds: trackingNodeIds,
+                      trackingEventIds: trackingEventIds,
+                    ),
                   ),
                 ),
             ],
@@ -787,29 +1053,178 @@ class _CalendarPageState extends State<CalendarPage> {
     return context.read<FeedCubit>().isRemoteEditable(event);
   }
 
+  /// Set-based variant used by tiles: O(1) instead of an O(F) `byId` scan
+  /// per tile per frame.
+  bool _isMovableFast(PlannerEvent event, Set<String> remoteEditableFeedIds) {
+    if (isReportDisplayId(event.id)) return false;
+    if (isNodeBlockId(event.id)) return true;
+    if (!event.isFromFeed) return event.recurrenceRule.isEmpty;
+    final feedId = event.feedId;
+    if (feedId == null || event.sourceUid == null) return false;
+    return remoteEditableFeedIds.contains(feedId);
+  }
+
+  /// Toggl-style play/stop badge pinned to the tile's top-right corner.
+  /// Unlike an in-row icon it never shrinks with the title text and it
+  /// sits above the resize handles, so it stays tappable when selected.
+  /// Deliberately chromeless (plain triangle, no bubble): it matches the
+  /// white tile text instead of looking like a sticker.
+  /// Node-backed events drive the node timer, plain events drive the
+  /// event timer. The tap is suppressed so the calendar doesn't also pop
+  /// open the detail sheet (same trick as the checkbox/handles).
+  Widget _tilePlayBadge(PlannerEvent event, {Node? backing, bool? tracking}) {
+    final isTracking = tracking ?? backing?.isTracking ?? event.isTracking;
+    // NB: no onDoubleTapDown here (unlike the checkbox/resize pattern).
+    // Adding any double-tap callback makes the framework hold every tap
+    // for the double-tap timeout, delaying the toggle ~300ms — and in
+    // widget tests the pending tap never resolves at all. A double-tap
+    // on the badge just toggles twice (a no-op blip); onTapDown already
+    // suppresses the calendar tap for both presses.
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) => _suppressNextTap(),
+      onTap: () => _toggleTileTracking(event, backing),
+      child: Tooltip(
+        message: isTracking ? 'Stop recording' : 'Start recording',
+        child: Padding(
+          padding: const EdgeInsets.all(5),
+          child: Icon(
+            isTracking ? Icons.stop : Icons.play_arrow,
+            size: 18,
+            color: isTracking ? const Color(0xFFFF5252) : Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Node backing a calendar event, if any (same triple-match the detail
+  /// sheet uses). Null for plain events.
+  Node? _backingNodeFor(BuildContext context, PlannerEvent event,
+      {Map<String, Node>? nodeByEventId, Map<String, Node>? nodeById}) {
+    // Fast path: hoisted maps from the outer builder (no watch, O(1)).
+    if (nodeByEventId != null) {
+      final hit = nodeByEventId[event.id] ??
+          (event.taskId == null
+              ? null
+              : nodeByEventId['task:${event.taskId}']);
+      if (hit != null) return hit;
+      if (nodeById != null && event.taskId != null) {
+        return nodeById[event.taskId];
+      }
+      return null;
+    }
+    try {
+      // Indexed O(1) lookup via the cubit (no linear scan).
+      final cubit = context.read<NodeCubit>();
+      final hit = cubit.nodeForCalendarEvent(event.id);
+      if (hit != null) return hit;
+      final list = cubit.nodesForEventId(event.id);
+      if (list.isNotEmpty) return list.first;
+      if (event.taskId != null) return cubit.byId(event.taskId!);
+    } catch (_) {}
+    return null;
+  }
+
+  /// O(1) tracking check from hoisted sets (no per-tile cubit scans).
+  bool? _tileTrackingFor(
+    PlannerEvent event, {
+    Map<String, Node>? nodeByEventId,
+    Map<String, Node>? nodeById,
+    Set<String>? trackingNodeIds,
+    Set<String>? trackingEventIds,
+  }) {
+    if (trackingEventIds != null && trackingEventIds.contains(event.id)) {
+      return true;
+    }
+    Node? backing;
+    if (nodeByEventId != null) {
+      backing = nodeByEventId[event.id] ??
+          (event.taskId == null
+              ? null
+              : nodeByEventId['task:${event.taskId}']);
+      backing ??= event.taskId == null ? null : nodeById?[event.taskId!];
+    }
+    if (backing != null) {
+      if (trackingNodeIds != null) return trackingNodeIds.contains(backing.id);
+      return backing.isTracking;
+    }
+    if (trackingEventIds != null) return false;
+    return null;
+  }
+
+  void _toggleTileTracking(PlannerEvent event, Node? backing) {
+    if (backing != null) {
+      if (backing.isTracking) {
+        stopNodeAndFinish(context, backing.id);
+      } else {
+        if (backing.isDone) return;
+        try {
+          context.read<NodeCubit>().startTracking(backing.id);
+        } catch (_) {}
+      }
+      return;
+    }
+    CalendarCubit calendar;
+    try {
+      calendar = context.read<CalendarCubit>();
+    } catch (_) {
+      return;
+    }
+    final live = calendar.byId(event.id) ?? event;
+    if (live.isTracking) {
+      calendar.stopTracking(live.id);
+    } else {
+      if (live.allDay) return;
+      calendar.startTracking(live.id);
+    }
+  }
+
   /// Checkbox for a calendar block: node blocks toggle the node itself,
   /// real events use the event/node link.
   Widget _blockCheckbox({
     required PlannerEvent event,
     required double size,
     required Color doneColor,
+    Map<String, Node>? nodeById,
+    Map<String, Node>? nodeByEventId,
+    PlannerEvent? liveEvent,
   }) {
     if (isNodeBlockId(event.id)) {
       Node? node;
       try {
-        node = context
-            .watch<NodeCubit>()
-            .byId(nodeIdFromBlockId(event.id));
+        final id = nodeIdFromBlockId(event.id);
+        node = nodeById?[id] ?? context.read<NodeCubit>().byId(id);
       } catch (_) {}
       if (node != null) {
         return NodeCheckbox(
             node: node, size: size, doneColor: doneColor);
       }
     }
+    // Pre-resolve backing from hoisted maps so the checkbox itself needs
+    // no cubit subscription (it used to watch both cubits per tile).
+    Node? backing;
+    if (nodeByEventId != null || nodeById != null) {
+      backing = nodeByEventId?[event.id] ??
+          (event.taskId == null
+              ? null
+              : nodeByEventId?['task:${event.taskId}']) ??
+          (event.taskId == null ? null : nodeById?[event.taskId!]);
+    }
+    PlannerEvent? live = liveEvent;
+    live ??= (() {
+      try {
+        return context.read<CalendarCubit>().byId(event.id);
+      } catch (_) {
+        return null;
+      }
+    }());
     return EventNodeCheckbox(
       event: event,
       size: size,
       doneColor: doneColor,
+      backing: backing,
+      liveEvent: live,
     );
   }
 
@@ -820,6 +1235,10 @@ class _CalendarPageState extends State<CalendarPage> {
     if (updated.start == previous.start && updated.end == previous.end) {
       return;
     }
+    // A committed move is newer than the open edit form (native drag path):
+    // drop its stale preview so the tile shows the committed times.
+    // Callers repaint after this returns.
+    _editPreview = null;
     if (isNodeBlockId(previous.id)) {
       Node? node;
       try {
@@ -876,9 +1295,9 @@ class _CalendarPageState extends State<CalendarPage> {
 
   String _movedText(PlannerEvent event) {
     if (event.allDay) {
-      return 'Moved to ${DateFormat('EEE, MMM d').format(event.start)}';
+      return 'Moved to ${_calendarDayFormat.format(event.start)}';
     }
-    return 'Moved to ${DateFormat('EEE, MMM d · h:mm a').format(event.start)}';
+    return 'Moved to ${_calendarMoveFormat.format(event.start)}';
   }
 
   String _blockedMessage(PlannerEvent event) {
@@ -927,6 +1346,9 @@ class _CalendarPageState extends State<CalendarPage> {
         _updateDraftFromCalendar(preview);
         return;
       }
+      // A committed drag is newer than the open edit form: drop its stale
+      // preview so the tile shows the committed times.
+      _editPreview = null;
       setState(() {});
       await _commitReschedule(original, preview);
     } else {
@@ -1070,8 +1492,8 @@ class _CalendarPageState extends State<CalendarPage> {
                           initialTaskId: _draftSeedTaskId,
                           onDraftChanged: _onDraftChanged,
                           autofocusTitle: true,
-                          onFinished: _closeDrawer,
-                          onCancelled: _closeDrawer,
+                          onFinished: () => _finishCreating(saved: true),
+                          onCancelled: () => _finishCreating(saved: false),
                         ),
                       ),
                     ],
@@ -1100,17 +1522,23 @@ class _CalendarPageState extends State<CalendarPage> {
                     key: ValueKey('edit:${event.id}'),
                     existing: event,
                     allowDelete: true,
+                    onDraftChanged: _onEditChanged,
                     onFinished: () {
                       final stillThere =
                           context.read<CalendarCubit>().byId(event!.id);
                       if (stillThere == null) {
                         _closeDrawer();
                       } else {
-                        setState(() => _drawerMode = _DrawerMode.detail);
+                        setState(() {
+                          _drawerMode = _DrawerMode.detail;
+                          _editPreview = null;
+                        });
                       }
                     },
-                    onCancelled: () =>
-                        setState(() => _drawerMode = _DrawerMode.detail),
+                    onCancelled: () => setState(() {
+                      _drawerMode = _DrawerMode.detail;
+                      _editPreview = null;
+                    }),
                   );
                 }
                 final detailEvent = event;
@@ -1167,6 +1595,7 @@ class _CalendarPageState extends State<CalendarPage> {
     setState(() {
       _selectedEventId = event.id;
       _drawerMode = _DrawerMode.detail;
+      _editPreview = null;
       _clearDraft();
     });
   }
@@ -1189,13 +1618,89 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   /// Jumps the calendar back to today, keeping the current Day/Week/Month
-  /// view. Wired to double-tap/click on the view switcher (a re-tap on the
+  /// view. Wired to the Today button, the header arrows' long-press
+  /// fallback, and double-tap/click on the view switcher (a re-tap on the
   /// active segment never reaches `onSelectionChanged`, so the switcher is
   /// wrapped in a `GestureDetector.onDoubleTap` instead).
   void _goToToday() {
     final now = DateTime.now();
     _controller.displayDate = now;
     _controller.selectedDate = now;
+  }
+
+  String get _previousTooltip => switch (_view) {
+        CalendarView.day => 'Previous day',
+        CalendarView.week => 'Previous week',
+        CalendarView.month => 'Previous month',
+        _ => 'Previous',
+      };
+
+  String get _nextTooltip => switch (_view) {
+        CalendarView.day => 'Next day',
+        CalendarView.week => 'Next week',
+        CalendarView.month => 'Next month',
+        _ => 'Next',
+      };
+
+  /// Steps the visible page back by one day/week/month, matching the
+  /// current view. Drives `displayDate` directly — `CalendarController`
+  /// exposes no forward()/backward() API.
+  void _goToPrevious() {
+    final base = _controller.displayDate ??
+        _controller.selectedDate ??
+        DateTime.now();
+    _controller.displayDate = _shiftByView(base, -1);
+  }
+
+  /// Steps the visible page forward by one day/week/month.
+  void _goToNext() {
+    final base = _controller.displayDate ??
+        _controller.selectedDate ??
+        DateTime.now();
+    _controller.displayDate = _shiftByView(base, 1);
+  }
+
+  DateTime _shiftByView(DateTime date, int direction) {
+    switch (_view) {
+      case CalendarView.day:
+        return date.add(Duration(days: direction));
+      case CalendarView.week:
+        return date.add(Duration(days: 7 * direction));
+      case CalendarView.month:
+        return _addMonths(date, direction);
+      case CalendarView.timelineDay:
+        return date.add(Duration(days: direction));
+      case CalendarView.timelineWeek:
+        return date.add(Duration(days: 7 * direction));
+      case CalendarView.timelineWorkWeek:
+        return date.add(Duration(days: 7 * direction));
+      case CalendarView.timelineMonth:
+        return _addMonths(date, direction);
+      case CalendarView.workWeek:
+        return date.add(Duration(days: 7 * direction));
+      case CalendarView.schedule:
+        return _addMonths(date, direction);
+    }
+  }
+
+  /// Month arithmetic clamped to the target month's last day (so Jan 31 →
+  /// Feb lands on Feb 28/29 instead of overflowing into March).
+  DateTime _addMonths(DateTime date, int months) {
+    final monthIndex = (date.month - 1) + months;
+    final year = date.year + monthIndex ~/ 12;
+    final month = monthIndex % 12 + 1;
+    final lastDay = DateTime(year, month + 1, 0).day;
+    final day = date.day > lastDay ? lastDay : date.day;
+    return DateTime(
+      year,
+      month,
+      day,
+      date.hour,
+      date.minute,
+      date.second,
+      date.millisecond,
+      date.microsecond,
+    );
   }
 
   /// Creates (or reuses) the manual report entry for a task-event,
@@ -1357,7 +1862,7 @@ class _CalendarPageState extends State<CalendarPage> {
       _draftSeedClassLabel = draft.classLabel;
       _draftSeedTaskId = draft.taskId;
     });
-    await showEventEditor(
+    final saved = await showEventEditor(
       context,
       initialDate:
           DateTime(draft.start.year, draft.start.month, draft.start.day),
@@ -1373,10 +1878,7 @@ class _CalendarPageState extends State<CalendarPage> {
       onDraftChanged: _onDraftChanged,
     );
     if (!mounted) return;
-    setState(() {
-      _drawerMode = _DrawerMode.closed;
-      _clearDraft();
-    });
+    _finishCreating(saved: saved == true);
   }
 
   void _onDraftChanged(PlannerEvent draft) {
@@ -1388,6 +1890,21 @@ class _CalendarPageState extends State<CalendarPage> {
         previous.start.month != draft.start.month ||
         previous.start.day != draft.start.day) {
       _focusOnDraft(draft.start);
+    }
+  }
+
+  /// Edit-form twin of [_onDraftChanged]: the editing drawer owns its
+  /// field state until Save, so the form pushes a preview here and the
+  /// calendar tile tracks the sidebar live.
+  void _onEditChanged(PlannerEvent preview) {
+    if (!mounted) return;
+    final previous = _editPreview;
+    setState(() => _editPreview = preview);
+    if (previous == null ||
+        previous.start.year != preview.start.year ||
+        previous.start.month != preview.start.month ||
+        previous.start.day != preview.start.day) {
+      _focusOnDraft(preview.start);
     }
   }
 
@@ -1410,8 +1927,29 @@ class _CalendarPageState extends State<CalendarPage> {
     setState(() {
       _drawerMode = _DrawerMode.closed;
       _selectedEventId = null;
+      _editPreview = null;
       _clearDraft();
     });
+  }
+
+  /// Closes the create flow and, when the draft came from the task list
+  /// (Add to calendar) and was actually saved, returns to Tasks so the
+  /// next assignment can be scheduled without extra taps. Plain calendar
+  /// creates (no task link) and cancelled sheets stay on the calendar.
+  void _finishCreating({required bool saved}) {
+    final taskId = _draftSeedTaskId;
+    if (!mounted) return;
+    setState(() {
+      _drawerMode = _DrawerMode.closed;
+      _selectedEventId = null;
+      _editPreview = null;
+      _clearDraft();
+    });
+    if (saved && taskId != null && taskId.isNotEmpty) {
+      try {
+        context.read<NavigationCubit>().setPage(PlannerPage.tasks);
+      } catch (_) {}
+    }
   }
 
   void _onTap(CalendarTapDetails details) {
@@ -1584,6 +2122,10 @@ class _CalendarPageState extends State<CalendarPage> {
       final feedById = {
         for (final feed in feedCubit.state) feed.id: feed,
       };
+      // Set-based visibility (was O(F) byId per event); skip non-recurring
+      // up front — only recurring series need occurrence expansion, and
+      // expansion is the expensive part of this tap path.
+      final enabled = feedCubit.enabledFeedIds;
       final dayStart = DateTime(
         tappedDate.year,
         tappedDate.month,
@@ -1592,9 +2134,16 @@ class _CalendarPageState extends State<CalendarPage> {
       final dayEnd = dayStart.add(const Duration(days: 1));
       final candidates = <PlannerEvent>[];
       for (final event in cubit.state) {
-        if (!feedCubit.isFeedVisible(event.feedId)) continue;
-        if (!visibility.isEventVisible(event, feedById)) continue;
         if (event.recurrenceRule.isEmpty) continue;
+        final feedId = event.feedId;
+        // Unknown feeds stay visible (matches isFeedVisible); only skip
+        // known-but-disabled feeds.
+        if (feedId != null &&
+            feedById.containsKey(feedId) &&
+            !enabled.contains(feedId)) {
+          continue;
+        }
+        if (!visibility.isEventVisible(event, feedById)) continue;
         final occurrences = cubit.occurrencesOf(event, dayStart, dayEnd);
         if (occurrences.isEmpty) continue;
         final exact = occurrences.any(
@@ -1613,8 +2162,9 @@ class _CalendarPageState extends State<CalendarPage> {
 class PlannerCalendarDataSource extends CalendarDataSource {
   final List<PlannerEvent> _events;
   final Map<String, Color> feedColors;
+  final Map<String, Color>? colorCache;
 
-  PlannerCalendarDataSource(this._events, this.feedColors) {
+  PlannerCalendarDataSource(this._events, this.feedColors, [this.colorCache]) {
     appointments = _events;
   }
 
@@ -1666,6 +2216,12 @@ class PlannerCalendarDataSource extends CalendarDataSource {
 
   @override
   Color getColor(int index) {
+    final cached = colorCache;
+    if (cached != null) {
+      final event = _events[index];
+      final hit = cached[event.id];
+      if (hit != null) return hit;
+    }
     final event = _events[index];
     final label = event.classLabel;
     if (label != null && label.isNotEmpty) return courseColor(label);
@@ -1674,5 +2230,145 @@ class PlannerCalendarDataSource extends CalendarDataSource {
     final feedColor = feedColors[event.feedId];
     if (feedColor != null) return mutedCalendarColor(feedColor);
     return const Color(_personalEventColor);
+  }
+}
+
+/// Watches for a running event timer and shows [_RecordingBanner] while
+/// one is active. Collapses to nothing otherwise.
+class _RecordingBannerSlot extends StatelessWidget {
+  final ValueChanged<PlannerEvent> onOpen;
+
+  const _RecordingBannerSlot({required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    // Select only the active tracking event: rebuilds only when it changes,
+    // not on every calendar emit (the old watch rebuilt on any event edit).
+    return BlocSelector<CalendarCubit, List<PlannerEvent>, PlannerEvent?>(
+      selector: (events) {
+        for (final e in events) {
+          if (e.isTracking) return e;
+        }
+        return null;
+      },
+      builder: (context, active) {
+        if (active == null || active.timerStartedAt == null) {
+          return const SizedBox.shrink();
+        }
+        return _RecordingBanner(event: active, onOpen: onOpen);
+      },
+    );
+  }
+}
+
+class _RecordingBanner extends StatefulWidget {
+  final PlannerEvent event;
+  final ValueChanged<PlannerEvent> onOpen;
+
+  const _RecordingBanner({required this.event, required this.onOpen});
+
+  @override
+  State<_RecordingBanner> createState() => _RecordingBannerState();
+}
+
+class _RecordingBannerState extends State<_RecordingBanner> {
+  Timer? _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
+
+  static String _elapsed(DateTime since) {
+    final d = DateTime.now().difference(since);
+    final total = d.inSeconds < 0 ? 0 : d.inSeconds;
+    final h = total ~/ 3600;
+    final m = (total % 3600) ~/ 60;
+    final s = total % 60;
+    final mm = m.toString().padLeft(h > 0 ? 2 : 1, '0');
+    final ss = s.toString().padLeft(2, '0');
+    return h > 0 ? '$h:$mm:$ss' : '$mm:$ss';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final startedAt = widget.event.timerStartedAt ?? widget.event.start;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => widget.onOpen(widget.event),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+          decoration: BoxDecoration(
+            color: scheme.errorContainer,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.fiber_manual_record,
+                size: 14,
+                color: Color(0xFFFF5252),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Recording · ${_elapsed(startedAt)}',
+                      style: Theme.of(context)
+                          .textTheme
+                          .labelMedium
+                          ?.copyWith(
+                            color: scheme.onErrorContainer,
+                            fontWeight: FontWeight.w700,
+                          ),
+                    ),
+                    Text(
+                      widget.event.subject,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: scheme.onErrorContainer,
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                onPressed: () {
+                  try {
+                    context
+                        .read<CalendarCubit>()
+                        .stopTracking(widget.event.id);
+                  } catch (_) {}
+                },
+                style: FilledButton.styleFrom(
+                  backgroundColor: scheme.error,
+                  foregroundColor: scheme.onError,
+                  visualDensity: VisualDensity.compact,
+                ),
+                icon: const Icon(Icons.stop, size: 16),
+                label: const Text('Stop'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }

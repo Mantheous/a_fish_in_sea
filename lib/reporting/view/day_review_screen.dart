@@ -9,6 +9,7 @@ import 'package:latlong2/latlong.dart';
 import '../../common/undo/undo_bar.dart';
 import '../../planner/bloc/calendar_cubit.dart';
 import '../../planner/bloc/feed_cubit.dart';
+import '../../planner/bloc/settings_cubit.dart';
 import '../bloc/places_cubit.dart';
 import '../bloc/reporting_cubit.dart';
 import '../bloc/tracking_cubit.dart';
@@ -18,6 +19,11 @@ import '../model/tracked_point.dart';
 import '../reporting_logic.dart';
 import '../service/location_service.dart';
 import 'places_sheet.dart';
+import 'time_range_dial.dart';
+
+final _reviewTimeFormat = DateFormat('h:mm a');
+final _reviewDayFormat = DateFormat('EEE, MMM d');
+final _reviewDayYearFormat = DateFormat('EEE, MMM d, yyyy');
 
 List<PlannedSlice> daySlices(
   CalendarCubit calendar,
@@ -117,7 +123,7 @@ class _DayReviewScreenState extends State<DayReviewScreen> {
       final feeds = context.read<FeedCubit>();
       final places = context.read<PlacesCubit>().state;
       final points =
-          context.read<TrackingCubit>().state.pointsOnDay(_day);
+          context.read<TrackingCubit>().pointsOnDay(_day);
       context.read<ReportingCubit>().runAutoReport(
             day: _day,
             planned: daySlices(calendar, feeds, _day),
@@ -136,7 +142,9 @@ class _DayReviewScreenState extends State<DayReviewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final points = context.watch<TrackingCubit>().state.pointsOnDay(_day);
+    final trackingCubit = context.watch<TrackingCubit>();
+    // Indexed bucket: O(1) after one O(p) pass per state change.
+    final points = trackingCubit.pointsOnDay(_day);
     final places = context.watch<PlacesCubit>().state;
     final reported = context.watch<ReportingCubit>().entriesForDay(_day);
     final calendar = context.watch<CalendarCubit>();
@@ -349,14 +357,14 @@ class _DayReviewScreenState extends State<DayReviewScreen> {
                     max: 24 * 60 - 1,
                     divisions: 24 * 12,
                     value: _scrubMin.clamp(0, 24 * 60 - 1),
-                    label: DateFormat('h:mm a').format(scrubTime),
+                    label: _reviewTimeFormat.format(scrubTime),
                     onChanged: (v) => setState(() => _scrubMin = v),
                   ),
                 ),
                 SizedBox(
                   width: 72,
                   child: Text(
-                    DateFormat('h:mm a').format(scrubTime),
+                    _reviewTimeFormat.format(scrubTime),
                     style: Theme.of(context).textTheme.labelLarge,
                     textAlign: TextAlign.end,
                   ),
@@ -429,8 +437,8 @@ class DayPicker extends StatelessWidget {
               },
               child: Text(
                 isToday
-                    ? 'Today · ${DateFormat('EEE, MMM d').format(day)}'
-                    : DateFormat('EEE, MMM d, yyyy').format(day),
+                    ? 'Today · ${_reviewDayFormat.format(day)}'
+                    : _reviewDayYearFormat.format(day),
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.titleSmall,
               ),
@@ -461,23 +469,82 @@ class _PlanColumn extends StatelessWidget {
       return const Center(child: Text('No planned events'));
     }
     final byEvent = {for (final r in reported) r.eventId: r};
-    final timeFormat = DateFormat('h:mm a');
+    // Watch so the play/stop buttons flip the moment a timer starts or
+    // stops elsewhere (calendar detail, Tasks page, Home).
+    final calendar = context.watch<CalendarCubit>();
+    // Hoisted: _reviewTimeFormat (was allocated per row per build).
     return ListView.builder(
       itemCount: actionable.length,
       itemBuilder: (context, index) {
         final item = actionable[index];
         final match = byEvent[item.eventId];
+        final live = calendar.byId(item.eventId);
+        // Toggl-style one-tap recording: starting one event auto-stops any
+        // other running timer inside CalendarCubit.
+        final canTrack = live != null && !live.allDay;
+        final isTracking = live?.isTracking ?? false;
         return ListTile(
           dense: true,
           title: Text(item.title,
               style: Theme.of(context).textTheme.bodyMedium),
           subtitle: Text(
-            '${timeFormat.format(item.start)} – ${timeFormat.format(item.end)}',
-            style: Theme.of(context).textTheme.labelSmall,
+            '${_reviewTimeFormat.format(item.start)} – ${_reviewTimeFormat.format(item.end)}'
+            '${isTracking ? ' · recording' : ''}',
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: isTracking
+                      ? Theme.of(context).colorScheme.primary
+                      : null,
+                  fontWeight: isTracking ? FontWeight.w600 : null,
+                ),
           ),
-          trailing: match == null
-              ? const Icon(Icons.help_outline, size: 18)
-              : _StatusDot(status: match.status),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (canTrack)
+                // Chromeless like the calendar tile badge (a grey
+                // IconButton bubble looked out of place next to it).
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    if (isTracking) {
+                      context
+                          .read<CalendarCubit>()
+                          .stopTracking(live.id);
+                    } else {
+                      context
+                          .read<CalendarCubit>()
+                          .startTracking(live.id);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Recording ${live.subject}'),
+                        ),
+                      );
+                    }
+                  },
+                  child: Tooltip(
+                    message:
+                        isTracking ? 'Stop recording' : 'Start recording',
+                    child: Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: Icon(
+                        isTracking ? Icons.stop : Icons.play_arrow,
+                        size: 20,
+                        color: isTracking
+                            ? Theme.of(context).colorScheme.error
+                            : null,
+                      ),
+                    ),
+                  ),
+                ),
+              match == null
+                  ? const Tooltip(
+                      message:
+                          'Not reported yet — run Auto-report to generate an entry',
+                      child: Icon(Icons.help_outline, size: 18),
+                    )
+                  : _StatusDot(status: match.status),
+            ],
+          ),
         );
       },
     );
@@ -532,7 +599,7 @@ class _ReportedColumn extends StatelessWidget {
         ),
       );
     }
-    final timeFormat = DateFormat('h:mm a');
+    // Hoisted: _reviewTimeFormat (was allocated per row per build).
     return ListView.builder(
       itemCount: entries.length,
       itemBuilder: (context, index) {
@@ -542,7 +609,7 @@ class _ReportedColumn extends StatelessWidget {
           title: Text(entry.title,
               style: Theme.of(context).textTheme.bodyMedium),
           subtitle: Text(
-            '${timeFormat.format(entry.start)} – ${timeFormat.format(entry.end)}'
+            '${_reviewTimeFormat.format(entry.start)} – ${_reviewTimeFormat.format(entry.end)}'
             '${entry.auto ? ' · auto' : ''}',
             style: Theme.of(context).textTheme.labelSmall,
           ),
@@ -610,6 +677,10 @@ class _ReportedEditorSheetState extends State<_ReportedEditorSheet> {
   @override
   Widget build(BuildContext context) {
     final places = context.watch<PlacesCubit>().state;
+    var snap = 5;
+    try {
+      snap = context.read<SettingsCubit>().state.snapMinutes;
+    } catch (_) {}
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
@@ -620,6 +691,16 @@ class _ReportedEditorSheetState extends State<_ReportedEditorSheet> {
             Text('Edit reported entry',
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
+            Center(
+              child: TimeRangeDial(
+                start: _start,
+                end: _end,
+                snapMinutes: snap,
+                onStartChanged: (v) => setState(() => _start = v),
+                onEndChanged: (v) => setState(() => _end = v),
+              ),
+            ),
+            const SizedBox(height: 4),
             TextField(
               controller: _title,
               decoration: const InputDecoration(

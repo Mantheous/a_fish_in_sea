@@ -21,6 +21,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
+final _homeTimeFormat = DateFormat('h:mm a');
+final _homeDueFormat = DateFormat('EEE, MMM d');
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -44,15 +47,18 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     final today = DateTime.now();
     final feedCubit = context.watch<FeedCubit>();
+    final calendarCubit = context.watch<CalendarCubit>();
+    // Memoized inside CalendarCubit by (state, day); visibleEvents is now a
+    // set-based single pass with an all-enabled fast path.
     final todayEvents = feedCubit.visibleEvents(
-      context.watch<CalendarCubit>().eventsOnDay(today),
+      calendarCubit.eventsOnDay(today),
     );
     final nodeCubit = context.watch<NodeCubit>();
     final dueNodes = feedCubit.visibleNodes(
-      nodeCubit.overdueAndToday,
+      nodeCubit.overdueAndTodayAt(today),
     );
     final weekNodes = feedCubit.visibleNodes(
-      nodeCubit.dueThisWeek,
+      nodeCubit.dueThisWeekAt(today),
     );
     return Scaffold(
       appBar: AppBar(title: const Text('Home')),
@@ -74,7 +80,8 @@ class _HomePageState extends State<HomePage> {
                 ? const _EmptyLine('Nothing due today')
                 : Column(
                     children: [
-                      for (final node in dueNodes.take(5)) _NodeLine(node: node),
+                      for (final node in dueNodes.take(5))
+                        _NodeLine(node: node, now: today),
                     ],
                   ),
           ),
@@ -100,7 +107,7 @@ class _HomePageState extends State<HomePage> {
                 : Column(
                     children: [
                       for (final node in weekNodes)
-                        _AssignmentLine(node: node),
+                        _AssignmentLine(node: node, now: today),
                     ],
                   ),
           ),
@@ -165,17 +172,21 @@ class _EmptyLine extends StatelessWidget {
 
 class _NodeLine extends StatelessWidget {
   final Node node;
+  final DateTime now;
 
-  const _NodeLine({required this.node});
+  const _NodeLine({required this.node, required this.now});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final live = context.watch<NodeCubit>().byId(node.id) ?? node;
+    // Parent rebuilds on NodeCubit changes; resolve without another
+    // full-list watch per line.
+    final live = context.read<NodeCubit>().byId(node.id) ?? node;
     final failed = live.status == NodeStatus.failed;
+    final overdue = live.isOverdueAt(now);
     final status = failed
         ? 'Failed'
-        : live.isOverdueAt(DateTime.now())
+        : overdue
             ? 'Overdue'
             : 'Due today';
     return ListTile(
@@ -194,7 +205,7 @@ class _NodeLine extends StatelessWidget {
       subtitle: Text(
         status,
         style: theme.textTheme.labelSmall?.copyWith(
-          color: live.isOverdueAt(DateTime.now()) || failed
+          color: overdue || failed
               ? theme.colorScheme.error
               : null,
         ),
@@ -213,7 +224,6 @@ class _EventLine extends StatelessWidget {
     final feed = event.feedId == null
         ? null
         : context.read<FeedCubit>().byId(event.feedId!);
-    final timeFormatter = DateFormat('h:mm a');
     return ListTile(
       dense: true,
       contentPadding: EdgeInsets.zero,
@@ -232,7 +242,7 @@ class _EventLine extends StatelessWidget {
             : null,
       ),
       subtitle: Text(
-        event.allDay ? 'All day' : timeFormatter.format(event.start),
+        event.allDay ? 'All day' : _homeTimeFormat.format(event.start),
         style: Theme.of(context).textTheme.labelSmall,
       ),
       trailing: event.isTask
@@ -247,8 +257,9 @@ class _EventLine extends StatelessWidget {
 
 class _AssignmentLine extends StatelessWidget {
   final Node node;
+  final DateTime now;
 
-  const _AssignmentLine({required this.node});
+  const _AssignmentLine({required this.node, required this.now});
 
   @override
   Widget build(BuildContext context) {
@@ -256,14 +267,13 @@ class _AssignmentLine extends StatelessWidget {
     final Feed? feed = node.classId == null
         ? null
         : feedCubit.byId(node.classId!);
-    final formatter = DateFormat('EEE, MMM d');
     final label = node.classLabel ?? feed?.name ?? 'Node';
-    final live = context.watch<NodeCubit>().byId(node.id) ?? node;
+    final live = context.read<NodeCubit>().byId(node.id) ?? node;
     final failed = live.status == NodeStatus.failed;
     final due = live.schedule?.due;
     final dueLabel = due == null
         ? label
-        : '$label · due ${formatter.format(due)}';
+        : '$label · due ${_homeDueFormat.format(due)}';
     return ListTile(
       dense: true,
       contentPadding: EdgeInsets.zero,
@@ -386,9 +396,11 @@ class _TrackingCardState extends State<_TrackingCard> {
 
   @override
   Widget build(BuildContext context) {
-    final tracking = context.watch<TrackingCubit>().state;
+    final trackingCubit = context.watch<TrackingCubit>();
+    final tracking = trackingCubit.state;
     final settings = context.watch<SettingsCubit>().state;
-    final todayCount = tracking.pointsOnDay(DateTime.now()).length;
+    // Indexed bucket (one O(p) pass per state change, O(1) here).
+    final todayCount = trackingCubit.pointsOnDay(DateTime.now()).length;
     final recording = tracking.isRecording;
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -466,23 +478,42 @@ class _TimeTrackingCard extends StatefulWidget {
 
 class _TimeTrackingCardState extends State<_TimeTrackingCard> {
   Timer? _ticker;
+  StreamSubscription? _nodeSub;
+  List<Node>? _lastNodes;
+  NodeTrackingSelection? _cachedSelection;
+  DateTime? _cachedDayMinute;
 
   @override
   void initState() {
     super.initState();
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      try {
-        if (context.read<NodeCubit>().activeTrackingId != null) {
-          setState(() {});
-        }
-      } catch (_) {}
-    });
+    // Start the 1s ticker only while a timer is actually recording. The old
+    // code woke the isolate every second for Home's whole lifetime even
+    // with zero tracking nodes.
+    try {
+      final cubit = context.read<NodeCubit>();
+      _syncTicker(cubit.state);
+      _nodeSub = cubit.stream.listen(_syncTicker);
+    } catch (_) {}
+  }
+
+  void _syncTicker(List<Node> nodes) {
+    final hasActive = nodes.any((n) => n.isTracking);
+    if (hasActive && _ticker == null) {
+      _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted) return;
+        setState(() {});
+      });
+    } else if (!hasActive && _ticker != null) {
+      _ticker?.cancel();
+      _ticker = null;
+      if (mounted) setState(() {});
+    }
   }
 
   @override
   void dispose() {
     _ticker?.cancel();
+    _nodeSub?.cancel();
     super.dispose();
   }
 
@@ -491,8 +522,24 @@ class _TimeTrackingCardState extends State<_TimeTrackingCard> {
     final nodeCubit = context.watch<NodeCubit>();
     final feedCubit = context.watch<FeedCubit>();
     final now = DateTime.now();
-    final visible = feedCubit.visibleNodes(nodeCubit.state);
-    final selection = selectNodeTracking(visible, now);
+    // Re-run selection only when inputs change or the minute rolls over;
+    // the 1s ticker only needs to advance elapsed labels, not re-sort.
+    final nodes = nodeCubit.state;
+    final minute = DateTime(now.year, now.month, now.day, now.hour, now.minute);
+    NodeTrackingSelection selection;
+    if (identical(nodes, _lastNodes) &&
+        _cachedSelection != null &&
+        minute == _cachedDayMinute) {
+      selection = _cachedSelection!;
+    } else {
+      final visible = feedCubit.visibleNodes(nodes);
+      selection = selectNodeTracking(visible, now);
+      _lastNodes = nodes;
+      _cachedSelection = selection;
+      _cachedDayMinute = minute;
+    }
+    // Resolve liveness once for the handful of displayed lines.
+    final liveById = {for (final n in nodes) n.id: n};
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -521,27 +568,44 @@ class _TimeTrackingCardState extends State<_TimeTrackingCard> {
                   'No nodes to track — add one with the + button.'),
             if (selection.recording != null) ...[
               const _TimeGroupLabel('Recording now'),
-              _NodeTrackLine(node: selection.recording!, highlight: true),
+              _NodeTrackLine(
+                node: liveById[selection.recording!.id] ?? selection.recording!,
+                highlight: true,
+                now: now,
+              ),
             ],
             if (selection.current.isNotEmpty) ...[
               const _TimeGroupLabel('Happening now'),
               for (final node in selection.current)
-                _NodeTrackLine(node: node, highlight: true),
+                _NodeTrackLine(
+                  node: liveById[node.id] ?? node,
+                  highlight: true,
+                  now: now,
+                ),
             ],
             if (selection.previous.isNotEmpty) ...[
               const _TimeGroupLabel('Just before'),
               for (final node in selection.previous)
-                _NodeTrackLine(node: node),
+                _NodeTrackLine(
+                  node: liveById[node.id] ?? node,
+                  now: now,
+                ),
             ],
             if (selection.next.isNotEmpty) ...[
               const _TimeGroupLabel('Up next'),
               for (final node in selection.next)
-                _NodeTrackLine(node: node),
+                _NodeTrackLine(
+                  node: liveById[node.id] ?? node,
+                  now: now,
+                ),
             ],
             if (selection.unscheduled.isNotEmpty) ...[
               const _TimeGroupLabel('No planned time'),
               for (final node in selection.unscheduled)
-                _NodeTrackLine(node: node),
+                _NodeTrackLine(
+                  node: liveById[node.id] ?? node,
+                  now: now,
+                ),
             ],
           ],
         ),
@@ -567,27 +631,33 @@ class _TimeGroupLabel extends StatelessWidget {
 class _NodeTrackLine extends StatelessWidget {
   final Node node;
   final bool highlight;
+  final DateTime now;
 
-  const _NodeTrackLine({required this.node, this.highlight = false});
+  const _NodeTrackLine({
+    required this.node,
+    this.highlight = false,
+    required this.now,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final live = context.watch<NodeCubit>().byId(node.id) ?? node;
+    // `node` is already the live instance from the parent's hoisted map —
+    // no per-line watch (which subscribed every line to the full list).
+    final live = node;
     final failed = live.status == NodeStatus.failed;
     final theme = Theme.of(context);
-    final timeFormat = DateFormat('h:mm a');
     final plannedStart = live.schedule?.start;
     final plannedEnd = live.schedule?.end;
     final plannedLine = plannedStart != null && plannedEnd != null
-        ? 'Planned ${timeFormat.format(plannedStart)} – '
-            '${timeFormat.format(plannedEnd)}'
+        ? 'Planned ${_homeTimeFormat.format(plannedStart)} – '
+            '${_homeTimeFormat.format(plannedEnd)}'
         : (live.schedule?.due != null
-            ? 'Due ${DateFormat('EEE, MMM d').format(live.schedule!.due!)}'
+            ? 'Due ${_homeDueFormat.format(live.schedule!.due!)}'
             : 'No planned time');
     final reported = live.reportedDuration;
     final elapsed = live.timerStartedAt == null
         ? null
-        : DateTime.now().difference(live.timerStartedAt!);
+        : now.difference(live.timerStartedAt!);
     final statusLine = failed
         ? 'Marked as failed'
         : live.isTracking && elapsed != null
@@ -595,8 +665,8 @@ class _NodeTrackLine extends StatelessWidget {
             : reported != null &&
                     live.actualStart != null &&
                     live.actualEnd != null
-                ? 'Reported ${timeFormat.format(live.actualStart!)} – '
-                    '${timeFormat.format(live.actualEnd!)} (${reported.inMinutes}m)'
+                ? 'Reported ${_homeTimeFormat.format(live.actualStart!)} – '
+                    '${_homeTimeFormat.format(live.actualEnd!)} (${reported.inMinutes}m)'
                 : plannedLine;
     return InkWell(
       onTap: () => showNodeEditor(context, existing: live),

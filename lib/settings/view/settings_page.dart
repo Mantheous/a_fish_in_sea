@@ -180,6 +180,43 @@ class _SyncSection extends StatelessWidget {
                 child: const Text('Sync now'),
               ),
             ),
+            ValueListenableBuilder<List<String>>(
+              valueListenable: engine.protectedDeletions,
+              builder: (context, guarded, _) {
+                if (guarded.isEmpty) return const SizedBox.shrink();
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.errorContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Sync held back deletions for: ${guarded.join(', ')}. '
+                        'This device is missing items the cloud still has. '
+                        'That usually means its local app storage was lost — '
+                        'not that you deleted them.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          // Clear the bookkeeping so the next sync
+                          // re-downloads the cloud copy onto this device.
+                          context.read<SyncMetaCubit>().reset();
+                          context.read<SyncEngine>().syncNow();
+                        },
+                        icon: const Icon(Icons.restore),
+                        label: const Text('Restore missing items from cloud'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
             OutlinedButton.icon(
               onPressed: () {
                 context.read<AuthCubit>().logout();

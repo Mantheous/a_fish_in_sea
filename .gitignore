@@ -58,3 +58,7 @@ tools/ls_scrape/.ls-profile/
 tools/ls_scrape/.cookies*
 tools/ls_scrape/raw/
 tools/ls_scrape/tasks.json
+
+.agent-loop-paused
+playwright-report/
+DEBUG_PREFS.md

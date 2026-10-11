@@ -84,7 +84,8 @@ class FakeSyncClient extends SyncClient {
   }
 
   @override
-  Future<List<SyncRecord>> push(List<Map<String, dynamic>> changes) async {
+  Future<({List<SyncRecord> applied, Set<String> guarded})> push(
+      List<Map<String, dynamic>> changes) async {
     final applied = <SyncRecord>[];
     for (final c in changes) {
       final coll =
@@ -104,7 +105,7 @@ class FakeSyncClient extends SyncClient {
         updatedAt: now,
       ));
     }
-    return applied;
+    return (applied: applied, guarded: const <String>{});
   }
 }
 
@@ -228,6 +229,36 @@ void main() {
     await a.engine.syncNow();
     await b.engine.syncNow();
     expect(b.nodes.byId('t1'), isNull);
+  });
+
+  test('mass deletion from a wiped device is withheld, not propagated',
+      () async {
+    final server = FakeSyncClient();
+    final a = _Device(server);
+    final b = _Device(server);
+    await a.signIn();
+    await b.signIn();
+
+    for (var i = 0; i < 6; i++) {
+      a.nodes.addNode(
+          Node(id: 't$i', title: 'n$i', createdAt: DateTime(2026)));
+    }
+    await a.engine.syncNow();
+    await b.engine.syncNow();
+    expect(b.nodes.state.length, 6);
+
+    // Simulate local storage loss on A: the cubit empties while the sync
+    // bookkeeping survives (applyJson emits state without touching meta).
+    a.nodes.applyJson({'nodes': const []});
+    expect(a.nodes.state, isEmpty);
+
+    await a.engine.syncNow();
+
+    // The guard held the tombstones; the server and B keep the data.
+    expect(a.engine.protectedDeletions.value, ['nodes']);
+    await b.engine.syncNow();
+    expect(b.nodes.state.length, 6);
+    expect(server.store['nodes']?.length, 6);
   });
 
   test('settings server URL stays per-device', () async {

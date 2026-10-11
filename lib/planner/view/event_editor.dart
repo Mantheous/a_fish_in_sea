@@ -12,6 +12,7 @@ import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_finish_sheet.dart';
 import '../../reporting/bloc/places_cubit.dart';
 import '../../reporting/model/place.dart';
+import '../../reporting/view/time_range_dial.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/feed_cubit.dart';
@@ -25,7 +26,7 @@ import 'people_field.dart';
 
 const int _personalEventColor = 0xFF6B8F8A;
 
-Future<void> showEventEditor(
+Future<bool?> showEventEditor(
   BuildContext context, {
   PlannerEvent? existing,
   DateTime? initialDate,
@@ -39,7 +40,7 @@ Future<void> showEventEditor(
   ValueChanged<PlannerEvent>? onDraftChanged,
   bool allowDelete = true,
 }) {
-  return showModalBottomSheet<void>(
+  return showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
@@ -143,8 +144,8 @@ class _EventEditorSheet extends StatelessWidget {
             scrollController: scrollController,
             autofocusTitle: existing == null,
             title: existing == null ? 'New event' : 'Edit event',
-            onFinished: () => Navigator.of(context).pop(),
-            onCancelled: () => Navigator.of(context).pop(),
+            onFinished: () => Navigator.of(context).pop(true),
+            onCancelled: () => Navigator.of(context).pop(false),
           ),
         ),
       ],
@@ -281,9 +282,10 @@ class EventEditorFormState extends State<EventEditorForm> {
       initialNotes: widget.initialNotes,
       initialLocation: widget.initialLocation,
     );
-    if (widget.existing == null && widget.onDraftChanged != null) {
+    if (widget.onDraftChanged != null) {
       // Debounced: every keystroke used to rebuild the whole CalendarPage
       // (SfCalendar + ghost) synchronously, which made typing laggy.
+      // Also attached in edit mode so the tile preview tracks the title.
       _subject.addListener(_scheduleDraft);
       _notes.addListener(_scheduleDraft);
       _location.addListener(_scheduleDraft);
@@ -459,7 +461,7 @@ class EventEditorFormState extends State<EventEditorForm> {
 
   void _emitDraft() {
     final onDraftChanged = widget.onDraftChanged;
-    if (onDraftChanged == null || widget.existing != null) return;
+    if (onDraftChanged == null) return;
     if (!mounted) return;
     final snap = context.read<SettingsCubit>().state.snapMinutes;
     final start = _allDay
@@ -486,26 +488,55 @@ class EventEditorFormState extends State<EventEditorForm> {
       count: _count,
       until: _until,
     );
+    final existing = widget.existing;
+    if (existing == null) {
+      onDraftChanged(
+        PlannerEvent(
+          id: calendarDraftEventId,
+          subject: _subject.text.trim(),
+          notes:
+              _notes.text.trim().isEmpty ? null : _notes.text.trim(),
+          location: _location.text.trim().isEmpty
+              ? null
+              : _location.text.trim(),
+          start: start,
+          end: end,
+          allDay: _allDay,
+          recurrenceRule:
+              _customRepeat ? '' : config.ruleFor(start),
+          classLabel: widget.initialClassLabel,
+          taskId: _sourceTaskId,
+          isTask: _isTask,
+          done: _isTask && _done,
+          placeId: _placeId,
+          assignees: _people,
+        ),
+      );
+      return;
+    }
+    // Editing preview: carries the existing id so the calendar swaps the
+    // tile in place. Times/label mirror [_save]'s computation so the
+    // highlight matches what Save would write; the recurrence rule is
+    // preserved so the preview can't re-expand the series.
+    final subject = _subject.text.trim();
+    final notes =
+        _notes.text.trim().isEmpty ? null : _notes.text.trim();
+    final location = _location.text.trim().isEmpty
+        ? null
+        : _location.text.trim();
     onDraftChanged(
-      PlannerEvent(
-        id: calendarDraftEventId,
-        subject: _subject.text.trim(),
-        notes:
-            _notes.text.trim().isEmpty ? null : _notes.text.trim(),
-        location: _location.text.trim().isEmpty
-            ? null
-            : _location.text.trim(),
+      existing.copyWith(
+        subject: subject.isEmpty ? existing.subject : subject,
+        notes: notes,
+        clearNotes: notes == null,
+        location: location,
+        clearLocation: location == null,
         start: start,
         end: end,
         allDay: _allDay,
-        recurrenceRule:
-            _customRepeat ? '' : config.ruleFor(start),
-        classLabel: widget.initialClassLabel,
-        taskId: _sourceTaskId,
         isTask: _isTask,
         done: _isTask && _done,
-        placeId: _placeId,
-        assignees: _people,
+        assignees: List.of(_people),
       ),
     );
   }
@@ -2355,6 +2386,12 @@ class EventDetailView extends StatelessWidget {
             _TaskStatusTile(event: event),
             const SizedBox(height: 8),
             _TaskTimeSection(event: event),
+          ] else if (!event.allDay) ...[
+            // Plain calendar events (Google / personal) can also be timed
+            // like in Toggl: one tap on Start records from now, Stop saves
+            // the reported interval shown in the Plan + Report view.
+            const SizedBox(height: 8),
+            _TimeReportSection(event: event),
           ],
           const SizedBox(height: 8),
           if (event.isFromFeed)
@@ -2586,21 +2623,32 @@ class _TimeReportSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // Resolve the live event so Start/Stop reflect the current timer even
+    // when the parent sheet passes a stale snapshot.
+    PlannerEvent live = event;
+    try {
+      live = context.watch<CalendarCubit>().byId(event.id) ?? event;
+    } catch (_) {}
     final timeFormatter = DateFormat('h:mm a');
-    final plannedMin = event.plannedDuration.inMinutes;
-    final reported = event.reportedDuration;
+    final plannedMin = live.plannedDuration.inMinutes;
+    final reported = live.reportedDuration;
     final lines = <String>[
-      'Planned ${timeFormatter.format(event.start)} – '
-          '${timeFormatter.format(event.end)} (${plannedMin}m)',
-      if (event.isTracking && event.timerStartedAt != null)
-        'Recording since ${timeFormatter.format(event.timerStartedAt!)}',
+      'Planned ${timeFormatter.format(live.start)} – '
+          '${timeFormatter.format(live.end)} (${plannedMin}m)',
+      if (live.isTracking && live.timerStartedAt != null)
+        'Recording since ${timeFormatter.format(live.timerStartedAt!)}',
       if (reported != null &&
-          event.actualStart != null &&
-          event.actualEnd != null)
-        'Reported ${timeFormatter.format(event.actualStart!)} – '
-            '${timeFormatter.format(event.actualEnd!)} (${reported.inMinutes}m)',
-      if (event.failed) 'Marked as failed',
+          live.actualStart != null &&
+          live.actualEnd != null)
+        'Reported ${timeFormatter.format(live.actualStart!)} – '
+            '${timeFormatter.format(live.actualEnd!)} (${reported.inMinutes}m)',
+      if (live.failed) 'Marked as failed',
     ];
+    final eventId = live.id;
+    final isTracking = live.isTracking;
+    final failed = live.failed;
+    final hasReported = live.hasReported;
+    final isTask = live.isTask;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -2630,11 +2678,11 @@ class _TimeReportSection extends StatelessWidget {
             spacing: 8,
             runSpacing: 4,
             children: [
-              if (event.isTracking)
+              if (isTracking)
                 FilledButton.icon(
                   onPressed: () => context
                       .read<CalendarCubit>()
-                      .stopTracking(event.id),
+                      .stopTracking(eventId),
                   icon: const Icon(Icons.stop, size: 16),
                   label: const Text('Stop'),
                 )
@@ -2642,31 +2690,179 @@ class _TimeReportSection extends StatelessWidget {
                 OutlinedButton.icon(
                   onPressed: () => context
                       .read<CalendarCubit>()
-                      .startTracking(event.id),
+                      .startTracking(eventId),
                   icon: const Icon(Icons.play_arrow, size: 16),
                   label: const Text('Start'),
                 ),
-              OutlinedButton(
-                onPressed: () => context
-                    .read<CalendarCubit>()
-                    .setFailed(event.id, !event.failed),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: event.failed
-                      ? null
-                      : theme.colorScheme.error,
+              // "Mark failed" only makes sense for task-events; plain
+              // calendar events just record time.
+              if (isTask)
+                OutlinedButton(
+                  onPressed: () => context
+                      .read<CalendarCubit>()
+                      .setFailed(eventId, !failed),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: failed
+                        ? null
+                        : theme.colorScheme.error,
+                  ),
+                  child: Text(failed ? 'Unfail' : 'Mark failed'),
                 ),
-                child: Text(event.failed ? 'Unfail' : 'Mark failed'),
-              ),
-              if (event.hasReported && !event.isTracking)
+              if (hasReported && !isTracking)
                 TextButton(
                   onPressed: () => context
                       .read<CalendarCubit>()
-                      .clearReported(event.id),
+                      .clearReported(eventId),
                   child: const Text('Clear reported'),
+                ),
+              if (hasReported && !isTracking)
+                TextButton.icon(
+                  onPressed: () =>
+                      showAdjustTimerSheet(context, eventId: eventId),
+                  icon: const Icon(Icons.tune, size: 16),
+                  label: const Text('Adjust'),
                 ),
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Bottom sheet with the circular [TimeRangeDial] for correcting a
+/// timer-logged interval (`actualStart`/`actualEnd`) on a calendar event.
+/// Saves once via [CalendarCubit.updateEvent], so dragging the handles is
+/// a single undoable change.
+Future<void> showAdjustTimerSheet(
+  BuildContext context, {
+  required String eventId,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    builder: (sheetContext) => Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
+      ),
+      child: _AdjustTimerSheet(eventId: eventId),
+    ),
+  );
+}
+
+class _AdjustTimerSheet extends StatefulWidget {
+  final String eventId;
+
+  const _AdjustTimerSheet({required this.eventId});
+
+  @override
+  State<_AdjustTimerSheet> createState() => _AdjustTimerSheetState();
+}
+
+class _AdjustTimerSheetState extends State<_AdjustTimerSheet> {
+  late DateTime _day;
+  late int _dayOffset;
+  late TimeOfDay _start;
+  late TimeOfDay _end;
+  bool _ready = false;
+
+  @override
+  void initState() {
+    super.initState();
+    PlannerEvent? live;
+    try {
+      live = context.read<CalendarCubit>().byId(widget.eventId);
+    } catch (_) {}
+    final actualStart = live?.actualStart ?? live?.start;
+    final actualEnd = live?.actualEnd ?? live?.end;
+    if (actualStart == null || actualEnd == null) {
+      final now = DateTime.now();
+      _day = DateTime(now.year, now.month, now.day);
+      _dayOffset = 0;
+      _start = TimeOfDay.fromDateTime(now);
+      _end = TimeOfDay.fromDateTime(now.add(const Duration(hours: 1)));
+    } else {
+      _day = DateTime(
+        actualStart.year,
+        actualStart.month,
+        actualStart.day,
+      );
+      final endDay = DateTime(actualEnd.year, actualEnd.month, actualEnd.day);
+      _dayOffset = endDay.difference(_day).inDays.clamp(0, 1);
+      _start = TimeOfDay.fromDateTime(actualStart);
+      _end = TimeOfDay.fromDateTime(actualEnd);
+    }
+    _ready = true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_ready) return const SizedBox.shrink();
+    var snap = 5;
+    try {
+      snap = context.read<SettingsCubit>().state.snapMinutes;
+    } catch (_) {}
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Adjust reported time',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            Center(
+              child: TimeRangeDial(
+                start: _start,
+                end: _end,
+                snapMinutes: snap,
+                onStartChanged: (v) => setState(() => _start = v),
+                onEndChanged: (v) => setState(() => _end = v),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: () {
+                    CalendarCubit calendar;
+                    try {
+                      calendar = context.read<CalendarCubit>();
+                    } catch (_) {
+                      Navigator.of(context).pop();
+                      return;
+                    }
+                    final live = calendar.byId(widget.eventId);
+                    if (live == null || !live.hasReported) {
+                      Navigator.of(context).pop();
+                      return;
+                    }
+                    final start = DateTime(_day.year, _day.month, _day.day,
+                        _start.hour, _start.minute);
+                    var end = DateTime(_day.year, _day.month, _day.day,
+                            _end.hour, _end.minute)
+                        .add(Duration(days: _dayOffset));
+                    if (!end.isAfter(start)) {
+                      end = start.add(minEventDuration);
+                    }
+                    calendar.updateEvent(
+                      live.copyWith(actualStart: start, actualEnd: end),
+                    );
+                    Navigator.of(context).pop();
+                  },
+                  child: const Text('Save'),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

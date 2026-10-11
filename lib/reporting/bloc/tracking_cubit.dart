@@ -42,6 +42,26 @@ class TrackingCubit extends HydratedCubit<TrackingState> {
 
   TrackingCubit() : super(const TrackingState());
 
+  // Day-bucketed view of [state.points]: one O(p) pass, then O(1) per day.
+  // Stats builds 7 days per frame; without this it pays 7 full scans.
+  List<TrackedPoint>? _bucketSource;
+  final Map<int, List<TrackedPoint>> _buckets = {};
+
+  List<TrackedPoint> pointsOnDay(DateTime day) {
+    final s = state.points;
+    if (!identical(s, _bucketSource)) {
+      _bucketSource = s;
+      _buckets.clear();
+      for (final p in s) {
+        final t = p.timestamp;
+        final key = t.year * 10000 + t.month * 100 + t.day;
+        (_buckets[key] ??= []).add(p);
+      }
+    }
+    final key = day.year * 10000 + day.month * 100 + day.day;
+    return _buckets[key] ?? const [];
+  }
+
   void startRecording() {
     if (state.isRecording) return;
     emit(state.copyWith(isRecording: true, startedAt: DateTime.now()));

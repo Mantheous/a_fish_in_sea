@@ -52,7 +52,8 @@ class _StatsBodyState extends State<_StatsBody> {
     final calendar = context.read<CalendarCubit>();
     final feeds = context.read<FeedCubit>();
     final places = context.read<PlacesCubit>().state;
-    final points = context.read<TrackingCubit>().state.pointsOnDay(day);
+    // Indexed O(1) per day after one O(p) bucket pass (see TrackingCubit).
+    final points = context.read<TrackingCubit>().pointsOnDay(day);
     final planned = cache.putIfAbsent(
       dayKey(day),
       () => daySlices(calendar, feeds, day),

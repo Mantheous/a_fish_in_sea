@@ -56,6 +56,13 @@ class SyncEngine {
   String? lastError;
   DateTime? lastSyncAt;
 
+  /// Collections whose pending deletions were withheld by the
+  /// mass-deletion guard on the last sync ([_looksLikeDataLoss]). Shown in
+  /// Settings → Sync; a "restore from cloud" clears the sync bookkeeping so
+  /// the next pull re-downloads the items onto this device.
+  final ValueNotifier<List<String>> protectedDeletions =
+      ValueNotifier(const []);
+
   Timer? _timer;
   bool _running = false;
 
@@ -315,9 +322,47 @@ class SyncEngine {
 
   // ── Push diffs ──────────────────────────────────────────────────────
 
+  /// Guard thresholds. A device that lost its local store (hydrate failure,
+  /// evicted browser storage, cleared app data) but kept its sync
+  /// bookkeeping would otherwise tell the server "delete everything" — which
+  /// then propagates the loss to every other device. Ordinary cleanup
+  /// through the UI deletes a handful of items, far below these thresholds.
+  ///
+  /// - Large collection: >= 100 pending deletes AND >= 20% of everything
+  ///   tracked for that collection in one sync.
+  /// - Small collection: >= 5 pending deletes AND >= 90% of everything
+  ///   tracked (e.g. all feeds removed at once without the loss being real
+  ///   is much more likely a wipe than intent).
+  static const int _guardLargeMinItems = 100;
+  static const int _guardSmallMinItems = 5;
+
+  static bool _looksLikeDataLoss(int pendingDeletes, int trackedCount) {
+    if (trackedCount <= 0 || pendingDeletes <= 0) return false;
+    if (pendingDeletes >= _guardLargeMinItems &&
+        pendingDeletes * 5 >= trackedCount) {
+      return true;
+    }
+    if (pendingDeletes >= _guardSmallMinItems &&
+        pendingDeletes * 10 >= trackedCount * 9) {
+      return true;
+    }
+    return false;
+  }
+
   Future<void> _pushDiffs() async {
+    // Group bookkeeping keys per collection so the guard can weigh a
+    // collection's pending deletions against everything it tracks.
+    final metaByCollection = <String, List<String>>{};
+    for (final k in meta.state.items.keys) {
+      final slash = k.indexOf('/');
+      if (slash <= 0) continue;
+      (metaByCollection[k.substring(0, slash)] ??= []).add(
+        k.substring(slash + 1),
+      );
+    }
+
     final changes = <Map<String, dynamic>>[];
-    final metaKeys = meta.state.items.keys;
+    var guarded = <String>[];
     for (final collection in collections) {
       final current = _extract(collection);
       for (final entry in current.entries) {
@@ -332,10 +377,17 @@ class SyncEngine {
           });
         }
       }
-      for (final k in metaKeys) {
-        if (!k.startsWith('$collection/')) continue;
-        final id = k.substring(collection.length + 1);
-        if (!current.containsKey(id)) {
+      final metaIds = metaByCollection[collection] ?? const <String>[];
+      final missing = <String>[
+        for (final id in metaIds)
+          if (!current.containsKey(id)) id,
+      ];
+      if (_looksLikeDataLoss(missing.length, metaIds.length)) {
+        // Keep local meta untouched: the items stay on the server (and on
+        // every other device) instead of being deleted farm-wide.
+        guarded.add(collection);
+      } else {
+        for (final id in missing) {
           changes.add({
             'collection': collection,
             'item_id': id,
@@ -345,6 +397,12 @@ class SyncEngine {
         }
       }
     }
+    if (guarded.isNotEmpty) {
+      debugPrint(
+        '[sync] withheld mass deletion for $guarded — local data looks '
+        'lost; cloud copy kept (see Settings → Sync)',
+      );
+    }
     // 'settings'/'waterfall'/'plaid' singletons always exist locally:
     // never push tombstones for them.
     changes.removeWhere((c) =>
@@ -352,8 +410,20 @@ class SyncEngine {
         (c['item_id'] == 'singleton' ||
             (c['collection'] == 'tracked_points' &&
                 (c['item_id'] as String).isEmpty)));
-    if (changes.isEmpty) return;
-    final applied = await client.push(changes);
+    if (changes.isEmpty) {
+      protectedDeletions.value = guarded;
+      return;
+    }
+    final pushed = await client.push(changes);
+    final applied = pushed.applied;
+    if (pushed.guarded.isNotEmpty) {
+      debugPrint(
+        '[sync] server withheld mass deletion for ${pushed.guarded} — '
+        'cloud copy kept (see Settings → Sync)',
+      );
+      guarded = {...guarded, ...pushed.guarded}.toList();
+    }
+    protectedDeletions.value = guarded;
     final upsertMeta = <String, ItemMeta>{};
     final removeMeta = <String>{};
     for (final r in applied) {

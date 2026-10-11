@@ -1,5 +1,7 @@
 import 'package:equatable/equatable.dart';
 
+import 'package:a_fish_in_sea/common/time/planned_actual.dart';
+
 import 'task_assignee.dart';
 
 class PlannerEvent extends Equatable {
@@ -62,6 +64,18 @@ class PlannerEvent extends Equatable {
   bool get isTracking => timerStartedAt != null;
 
   bool get hasReported => actualStart != null && actualEnd != null;
+
+  /// The plan next to the occurrence, in one object — same comparison
+  /// [Node.plannedActual] exposes, so an event and its backing node can
+  /// be asked the same question. Unlike [Node], an event's planned and
+  /// actual times sit on the same record; the getter puts them behind the
+  /// one interface both sides share.
+  PlannedActual get plannedActual => PlannedActual(
+        plannedStart: start,
+        plannedEnd: end,
+        actualStart: actualStart,
+        actualEnd: actualEnd,
+      );
 
   Duration get plannedDuration =>
       end.isAfter(start) ? end.difference(start) : Duration.zero;
