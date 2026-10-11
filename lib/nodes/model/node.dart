@@ -388,6 +388,12 @@ class RuleFacet extends Equatable {
 /// Unbounded nodes stay out of the priority queue, the leaf list, and
 /// parent progress averages, so an aspiration that never ends cannot pin a
 /// concrete goal below 100%.
+///
+/// This class carries no `tagIds`. The legacy models it replaced
+/// ([Transaction], [Expense], [PlannerEvent], [Task], [Goal],
+/// [ReportedEntry]) still persist one, but nothing reads it: it is
+/// write-only dead data carried for round-trip compatibility. See
+/// [Node.importExpense] for the legacy path.
 class Node extends Equatable {
   static const int storageVersion = 1;
 

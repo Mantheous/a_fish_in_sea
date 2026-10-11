@@ -198,7 +198,19 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   ///  - **Structural relations** ([validateNodeRelations]): everything
   ///    expressed through `instanceOfId` rather than `parentIds`, which
   ///    the cycle walk below cannot see.
-  String? validateParents(Node draft, List<String> parentIds) {
+  ///
+  /// [checkRelations] exists because these rules can refuse a state that
+  /// old data already satisfies. Running them on every write would make
+  /// such a node permanently un-editable — every ordinary edit (toggling
+  /// done, starting the timer) would come back with a structural error the
+  /// caller cannot act on, and the edit would be lost. So the relation
+  /// rules only apply when the structure that *defines* the relation is
+  /// actually being changed.
+  String? validateParents(
+    Node draft,
+    List<String> parentIds, {
+    bool checkRelations = true,
+  }) {
     final seenParents = <String>{};
     for (final p in parentIds) {
       if (p == draft.id) return 'A node cannot be its own parent.';
@@ -213,13 +225,31 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         return 'That parent would create a cycle.';
       }
     }
-    final relationError = validateNodeRelations(
-      draft: draft,
-      all: state,
-      parentIds: parentIds,
-    );
-    if (relationError != null) return relationError;
+    // Structural relations, but only when the caller is actually changing
+    // the structure they describe (see [checkRelations]).
+    if (checkRelations && _relationsChanged(draft, parentIds)) {
+      final relationError = validateNodeRelations(
+        draft: draft,
+        all: state,
+        parentIds: parentIds,
+      );
+      if (relationError != null) return relationError;
+    }
     return null;
+  }
+
+  /// True when [draft]'s parent/instance structure differs from what is
+  /// stored. Identity of the two relations, not their contents: if a node
+  /// was already parented wrongly, editing it is how it gets fixed.
+  bool _relationsChanged(Node draft, List<String> parentIds) {
+    final stored = byId(draft.id);
+    if (stored == null) return true;
+    if (stored.instanceOfId != draft.instanceOfId) return true;
+    if (stored.parentIds.length != parentIds.length) return true;
+    for (var i = 0; i < parentIds.length; i++) {
+      if (stored.parentIds[i] != parentIds[i]) return true;
+    }
+    return false;
   }
 
   // ── CRUD ────────────────────────────────────────────────────────────
@@ -926,6 +956,33 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   // cubits, so old data is never wiped and both systems can coexist
   // while the UI migrates.
 
+  /// Translates legacy [Expense.overriddenFields] keys to node paths.
+  ///
+  /// [Expense.overrideField] records flat field names ("name", "amount",
+  /// "date", "category", "notes") while [Node.overriddenFields] uses
+  /// facet-qualified paths ("money.targetAmount", "schedule.due", "title").
+  /// Passing the legacy set through verbatim — as this importer used to —
+  /// leaves every override inert, because nothing reads a key like
+  /// "amount" off a node: the user's edit is preserved but stops
+  /// signalling ownership, so the next template change silently overwrites
+  /// it.
+  ///
+  /// Keys with no node equivalent are kept verbatim rather than dropped,
+  /// so the fact that the field was overridden survives even though the
+  /// node has nowhere to put the value.
+  static Set<String> _translateLegacyOverrides(Set<String> legacy) {
+    const legacyToNode = {
+      'name': 'title',
+      'notes': 'notes',
+      'amount': 'money.targetAmount',
+      'date': 'schedule.due',
+      'category': 'category',
+    };
+    return {
+      for (final key in legacy) legacyToNode[key] ?? key,
+    };
+  }
+
   String importGoal(Goal goal) {
     final existing = byId('node:${goal.id}');
     if (existing != null) return existing.id;
@@ -1070,7 +1127,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
             ? const []
             : [expense.linkedTransactionId!],
       ),
-      overriddenFields: expense.overriddenFields,
+      overriddenFields: _translateLegacyOverrides(expense.overriddenFields),
     );
     emitChange([...state, node]);
     return node.id;
