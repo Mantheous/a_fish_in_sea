@@ -474,6 +474,7 @@ class _WaterfallLedgerPageState extends State<WaterfallLedgerPage> {
   /// A single row in the waterfall table.
   Widget _buildWaterfallRow(
       BuildContext context, LedgerEntry entry, ThemeData theme) {
+    final isProjected = entry.status != EntryStatus.confirmed;
     final isIncome = entry.amount > 0;
     final colorScheme = theme.colorScheme;
 
