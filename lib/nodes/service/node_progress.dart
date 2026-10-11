@@ -394,25 +394,56 @@ List<Node> goalNodes(List<Node> all) => all.where(isGoalNode).toList();
 /// Unbounded goals are excluded — they are directions, not actionable
 /// steps. Sorted by due date, then creation. This is the actionable bottom
 /// of the tree — the default landing for the Nodes page.
+///
+/// A repeating series collapses to a single row: a template's instances
+/// share one [instanceOfId], so only the next open instance (earliest due,
+/// falling back to earliest overall when none are open) is kept. Without
+/// this a daily habit with a year of generated instances would flood the
+/// list with hundreds of same-titled rows.
 List<Node> leafNodes(List<Node> all) {
   final goals = goalNodes(all);
   final parented = <String>{};
   for (final n in goals) {
     parented.addAll(n.parentIds);
   }
-  final leaves =
+  int compareNodes(Node a, Node b) {
+    final aDue = a.schedule?.due;
+    final bDue = b.schedule?.due;
+    if (aDue == null && bDue == null) {
+      return a.createdAt.compareTo(b.createdAt);
+    }
+    if (aDue == null) return 1;
+    if (bDue == null) return -1;
+    final cmp = aDue.compareTo(bDue);
+    return cmp != 0 ? cmp : a.createdAt.compareTo(b.createdAt);
+  }
+
+  final rawLeaves =
       goals.where((n) => !n.isUnbounded && !parented.contains(n.id)).toList()
-    ..sort((a, b) {
-      final aDue = a.schedule?.due;
-      final bDue = b.schedule?.due;
-      if (aDue == null && bDue == null) {
-        return a.createdAt.compareTo(b.createdAt);
+        ..sort(compareNodes);
+  final plain = <Node>[];
+  final byTemplate = <String, List<Node>>{};
+  for (final n in rawLeaves) {
+    final templateId = n.instanceOfId;
+    if (templateId == null) {
+      plain.add(n);
+    } else {
+      (byTemplate[templateId] ??= []).add(n);
+    }
+  }
+  for (final instances in byTemplate.values) {
+    instances.sort(compareNodes);
+    Node? nextOpen;
+    for (final n in instances) {
+      if (n.isOpen) {
+        nextOpen = n;
+        break;
       }
-      if (aDue == null) return 1;
-      if (bDue == null) return -1;
-      return aDue.compareTo(bDue);
-    });
-  return leaves;
+    }
+    plain.add(nextOpen ?? instances.first);
+  }
+  plain.sort(compareNodes);
+  return plain;
 }
 
 /// Nodes with a calendar block, sorted by start.
