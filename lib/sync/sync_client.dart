@@ -226,6 +226,30 @@ class SyncClient {
     return Map<String, dynamic>.from(_decode(r) as Map);
   }
 
+  // ── Generic authed JSON helpers (feedback + future small endpoints) ──
+
+  /// GET decoded JSON with the shared 401→refresh handling.
+  Future<dynamic> apiGet(String path, [Map<String, String>? query]) =>
+      _getAuthed(path, query);
+
+  /// POST decoded JSON with the shared 401→refresh handling.
+  Future<dynamic> apiPost(String path, Map<String, dynamic> body) =>
+      _postAuthed(path, body);
+
+  /// DELETE with the shared 401→refresh handling. Returns decoded JSON.
+  Future<dynamic> apiDelete(String path) async {
+    var uri = Uri.parse('$_base$path');
+    var r = await _client.delete(uri, headers: _headers());
+    if (r.statusCode == 401) {
+      final fresh = await refreshAccessToken();
+      if (fresh == null || fresh.isEmpty) {
+        throw SyncException(401, 'Signed out');
+      }
+      r = await _client.delete(uri, headers: _headers());
+    }
+    return _decode(r);
+  }
+
   // ── Server-side feed snapshots ───────────────────────────────────────
 
   /// Asks the server to fetch [feedId]'s URL now and cache the ICS.

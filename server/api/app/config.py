@@ -33,6 +33,15 @@ class Settings(BaseSettings):
     # Fernet key (base64). If empty, tokens are stored plaintext (dev only).
     token_fernet_key: str = ""
 
+    # In-app feedback → GitHub issues. The server files issues with its
+    # own token, so reporters need no GitHub account. Empty token =
+    # reports are stored for manual review but nothing is filed.
+    github_token: str = ""
+    github_repo: str = ""  # e.g. "owner/repo"
+    # Comma-separated app-account emails with feedback-admin rights
+    # (review queue + trusted-reporter list). Admins are auto-trusted.
+    admin_emails: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

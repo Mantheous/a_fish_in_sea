@@ -128,3 +128,62 @@ class ItemUpsertIn(BaseModel):
     @classmethod
     def _check_size(cls, data: dict) -> dict:
         return _check_item_size(data)
+
+
+# ── Feedback (in-app bug reports / feature requests) ────────────────────
+
+FEEDBACK_KINDS = ("bug", "feature")
+FEEDBACK_STATUSES = ("pending", "filed", "denied")
+
+
+class FeedbackSubmitIn(BaseModel):
+    kind: str = Field(pattern="^(bug|feature)$")
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=8000)
+    device: str = Field(default="", max_length=4000)
+    extra: str = Field(default="", max_length=8000)
+    app_platform: str = Field(default="", max_length=64)
+    app_version: str = Field(default="", max_length=64)
+
+
+class FeedbackOut(BaseModel):
+    id: int
+    kind: str
+    title: str
+    description: str
+    device: str
+    extra: str
+    status: str
+    github_issue_number: int | None = None
+    github_issue_url: str = ""
+    deny_reason: str = ""
+    created_at: dt.datetime
+
+
+class FeedbackAdminOut(FeedbackOut):
+    email: str
+    reviewed_by: str = ""
+    reviewed_at: dt.datetime | None = None
+
+
+class FeedbackStatusOut(BaseModel):
+    is_admin: bool
+    is_trusted: bool
+
+
+class FeedbackApproveIn(BaseModel):
+    trust_user: bool = False
+
+
+class FeedbackDenyIn(BaseModel):
+    reason: str = Field(default="", max_length=2000)
+
+
+class TrustedAddIn(BaseModel):
+    email: EmailStr
+
+
+class TrustedOut(BaseModel):
+    email: str
+    added_by: str
+    created_at: dt.datetime

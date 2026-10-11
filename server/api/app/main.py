@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
 from .db import init_db
-from .routers import auth, fetch, google, items, plaid, proxy, syllabus, sync, tokens
+from .routers import auth, feedback, fetch, google, items, plaid, proxy, syllabus, sync, tokens
 
 log = logging.getLogger("a_fish_in_sea")
 
@@ -69,6 +69,7 @@ def create_app() -> FastAPI:
     app.include_router(tokens.router, prefix="/api/v1")
     app.include_router(sync.router, prefix="/api/v1")
     app.include_router(items.router, prefix="/api/v1")
+    app.include_router(feedback.router, prefix="/api/v1")
     # Google keeps its legacy /api/google/* paths so the Flutter client
     # needs no changes; tokens are per-user now (was: global on Flask).
     app.include_router(google.router, prefix="/api")

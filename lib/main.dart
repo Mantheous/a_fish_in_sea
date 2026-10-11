@@ -2,6 +2,7 @@ import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
+import 'package:a_fish_in_sea/feedback/view/feedback_page.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/finances_hub.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
@@ -177,6 +178,7 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
                 PlannerPage.nodes => const NodesPage(),
                 PlannerPage.stats => const StatsPage(),
                 PlannerPage.finances => const FinancesHubPage(),
+                PlannerPage.feedback => const FeedbackPage(),
                 PlannerPage.settings => const SettingsPage(),
               };
             },

@@ -183,3 +183,54 @@ class FeedSnapshot(Base):
     )
 
     __table_args__ = (UniqueConstraint("user_id", "feed_id"),)
+
+
+class FeedbackReport(Base):
+    """In-app bug/feature report. Reporters only need an app account —
+    the server files the GitHub issue with its own token.
+
+    Status flow: untrusted submitters land in 'pending' for admin
+    review; trusted reporters (see TrustedReporter) file immediately.
+    'filed' means a GitHub issue exists (github_issue_url set).
+    """
+
+    __tablename__ = "feedback_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    email: Mapped[str] = mapped_column(String(320), default="", index=True)
+    kind: Mapped[str] = mapped_column(String(16), default="bug")  # bug|feature
+    title: Mapped[str] = mapped_column(String(200), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    device: Mapped[str] = mapped_column(Text, default="")
+    extra: Mapped[str] = mapped_column(Text, default="")  # logs | proposal
+    app_platform: Mapped[str] = mapped_column(String(64), default="")
+    app_version: Mapped[str] = mapped_column(String(64), default="")
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    github_issue_number: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    github_issue_url: Mapped[str] = mapped_column(Text, default="")
+    github_error: Mapped[str] = mapped_column(Text, default="")
+    deny_reason: Mapped[str] = mapped_column(Text, default="")
+    reviewed_by: Mapped[str] = mapped_column(String(320), default="")
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
+    )
+    reviewed_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class TrustedReporter(Base):
+    """Allowlist by app-account email. Trusted reporters skip the review
+    queue: their submissions file GitHub issues immediately."""
+
+    __tablename__ = "trusted_reporters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    added_by: Mapped[str] = mapped_column(String(320), default="")
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )

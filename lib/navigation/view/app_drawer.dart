@@ -47,6 +47,11 @@ class AppDrawer extends StatelessWidget {
               label: Text('Finances'),
             ),
             NavigationDrawerDestination(
+              icon: Icon(Icons.feedback_outlined),
+              selectedIcon: Icon(Icons.feedback),
+              label: Text('Feedback'),
+            ),
+            NavigationDrawerDestination(
               icon: Icon(Icons.settings_outlined),
               selectedIcon: Icon(Icons.settings),
               label: Text('Settings'),

@@ -1,6 +1,6 @@
 import 'package:bloc/bloc.dart';
 
-enum PlannerPage { home, calendar, tasks, nodes, stats, finances, settings }
+enum PlannerPage { home, calendar, tasks, nodes, stats, finances, feedback, settings }
 
 class NavigationCubit extends Cubit<PlannerPage> {
   NavigationCubit() : super(PlannerPage.home);
