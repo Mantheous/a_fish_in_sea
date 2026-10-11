@@ -549,7 +549,15 @@ class _GoogleConnectDialogState extends State<_GoogleConnectDialog> {
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _error = e.toString());
+      setState(() {
+        _error = e.toString();
+        if (e is GoogleCalendarException && e.needsReconnect) {
+          // The stored grant is dead (expired/revoked): fall back to the
+          // sign-in step instead of stranding the dialog on the spinner.
+          _calendars = const [];
+          _step = _GoogleConnectStep.needAuth;
+        }
+      });
     }
   }
 
@@ -612,10 +620,30 @@ class _GoogleConnectDialogState extends State<_GoogleConnectDialog> {
       content: SizedBox(
         width: 420,
         child: switch (_step) {
-          _GoogleConnectStep.checking => const Padding(
-              padding: EdgeInsets.symmetric(vertical: 32),
-              child: Center(child: CircularProgressIndicator()),
-            ),
+          _GoogleConnectStep.checking => _error == null
+              ? const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 32),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              : Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _error!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      FilledButton(
+                        onPressed: _checkConnection,
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                ),
           _GoogleConnectStep.needAuth => _buildNeedAuth(),
           _GoogleConnectStep.pickCalendars => _buildCalendarPicker(),
         },
