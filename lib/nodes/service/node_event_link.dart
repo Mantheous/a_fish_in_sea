@@ -269,6 +269,11 @@ class NodeEventLink {
   /// goal [goalId]. Events not yet marked as tasks are marked first so a
   /// backing node exists. Returns the number of newly parented backing
   /// nodes plus the first error encountered, if any.
+  ///
+  /// Batched into at most four emits (one per phase below): the old
+  /// per-member loop snapshotted the whole store, rebuilt, persisted, and
+  /// recorded an undo entry per occurrence — hundreds of full-store
+  /// snapshots that freeze then kill the tab on large stores.
   static ({String? error, int assigned}) assignEventToGoal(
     CalendarCubit calendar,
     NodeCubit nodes,
@@ -295,37 +300,82 @@ class NodeEventLink {
       final members = seriesMembers(calendar, seed);
       if (members.isNotEmpty) targets = members;
     }
-    var assigned = 0;
-    String? firstError;
+    // Phase 1: personal backing nodes, batched. Non-task members are
+    // marked first via the isTask copy, mirroring the single-write lookup
+    // order (taskId link, calendar-event link, create).
+    final personalInputs = <PlannerEvent>[];
     for (final event in targets) {
+      if (event.isFromFeed) continue;
+      final live = calendar.byId(event.id) ?? event;
+      personalInputs.add(event.isTask ? live : live.copyWith(isTask: true));
+    }
+    final linkedIds = nodes.upsertLinkedNodesForEvents(personalInputs);
+    // Phase 2: calendar marks + task links, batched. Mirrors
+    // [CalendarCubit.setTaskLink]'s skip rule (same taskId and already a
+    // task means nothing to do).
+    final calUpdates = <PlannerEvent>[];
+    for (final event in targets) {
+      final live = calendar.byId(event.id) ?? event;
       if (!event.isTask) {
         if (event.isFromFeed) {
-          calendar.updateEvent(event.copyWith(isTask: true));
-          final marked = calendar.byId(event.id) ?? event;
-          nodes.ensureNodeForFeedEvent(marked.copyWith(isTask: true));
+          if (!live.isTask) calUpdates.add(live.copyWith(isTask: true));
         } else {
-          final live = calendar.byId(event.id) ?? event;
-          final nodeId = nodes.upsertLinkedNodeForEvent(
-            live.copyWith(isTask: true),
-          );
-          calendar.setTaskLink(event.id, nodeId);
+          final nodeId = linkedIds[event.id];
+          if (nodeId != null &&
+              !(live.taskId == nodeId && live.isTask)) {
+            calUpdates.add(live.copyWith(isTask: true, taskId: nodeId));
+          }
         }
-      } else if (event.isFromFeed) {
-        nodes.ensureNodeForFeedEvent(event);
-      } else {
-        final live = calendar.byId(event.id) ?? event;
-        final nodeId = nodes.upsertLinkedNodeForEvent(live);
-        if (live.taskId == null) calendar.setTaskLink(event.id, nodeId);
+      } else if (!event.isFromFeed && live.taskId == null) {
+        final nodeId = linkedIds[event.id];
+        if (nodeId != null) {
+          calUpdates.add(live.copyWith(isTask: true, taskId: nodeId));
+        }
       }
+    }
+    calendar.updateEvents(calUpdates);
+    // Phase 3: feed backing shadows, batched.
+    final feedInputs = <PlannerEvent>[];
+    for (final event in targets) {
+      if (!event.isFromFeed) continue;
+      final live = calendar.byId(event.id) ?? event;
+      feedInputs.add(event.isTask ? live : live.copyWith(isTask: true));
+    }
+    nodes.ensureNodesForFeedEvents(feedInputs);
+    // Phase 4: parent every backing under the goal, batched. Same guards
+    // as [assignNodeToGoal], in the same order (self, generated-goal,
+    // already-parented); cycle/relation errors come back from the batch
+    // write's validation, which runs the same validators.
+    var assigned = 0;
+    String? firstError;
+    final toParent = <String, Node>{};
+    for (final event in targets) {
       final backing = backingNodeFor(nodes, calendar, event.id);
       if (backing == null) {
         firstError ??= 'Could not link “${event.subject}”.';
         continue;
       }
+      if (backing.id == goalId) {
+        firstError ??= 'An item cannot be its own parent.';
+        continue;
+      }
+      if (goal.instanceOfId != null) {
+        firstError ??= 'Generated instances cannot have children of their '
+            'own. Parent to the template (${goal.instanceOfId}) instead.';
+        continue;
+      }
       if (backing.parentIds.contains(goalId)) continue;
-      final error = assignNodeToGoal(nodes, backing.id, goalId);
-      if (error != null) {
-        firstError ??= error;
+      toParent.putIfAbsent(
+        backing.id,
+        () => backing.copyWith(parentIds: [...backing.parentIds, goalId]),
+      );
+    }
+    final writeErrors =
+        nodes.writeNodes(upserts: toParent.values.toList());
+    for (final entry in toParent.entries) {
+      final err = writeErrors[entry.key];
+      if (err != null) {
+        firstError ??= err;
         continue;
       }
       assigned++;

@@ -34,6 +34,18 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
         state.map((e) => e.id == event.id ? event : e).toList(),
       );
 
+  /// Replaces each listed event by id as ONE undoable emit: one undo
+  /// record, one rebuild, one persist. Series-wide writes must use this
+  /// (or [replaceFeedEvents]): looping [updateEvent] snapshots the whole
+  /// store, rebuilds, and persists per member, which freezes then kills
+  /// the tab on large calendars (2730 events: one series save emitted
+  /// hundreds of full-store snapshots until the renderer died).
+  void updateEvents(List<PlannerEvent> updated) {
+    if (updated.isEmpty) return;
+    final byId = {for (final e in updated) e.id: e};
+    emitChange([for (final e in state) byId[e.id] ?? e]);
+  }
+
   void deleteEvent(String eventId) =>
       emitChange(state.where((e) => e.id != eventId).toList());
 

@@ -79,6 +79,261 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   /// generation) that must not pollute the user's undo history.
   void emitSilent(List<Node> next) => emit(next);
 
+  // ── Batched writes ────────────────────────────────────────────────
+  //
+  // Series-wide operations (whole-series edit, assign-series-to-goal)
+  // touch every occurrence at once. Looping the single-write methods
+  // above snapshots the whole store, rebuilds, persists, and records an
+  // undo entry per member — hundreds of full-store snapshots that freeze
+  // then kill the tab on large stores (2730 events / 1880 nodes). These
+  // batch every member into ONE undoable emit (one undo record, one
+  // rebuild, one persist). Per-member decisions mirror the single-write
+  // methods exactly (see the equivalence tests); the only difference is
+  // that intermediate states are never emitted, so mid-loop reads below
+  // go through the evolving [pending] map instead of the cubit.
+
+  /// Saves many nodes (updates by id, adds missing) plus removals as ONE
+  /// undoable emit. Nodes failing validation are skipped; their errors
+  /// are returned keyed by node id. This mirrors the single-write
+  /// callers, which ignore those errors and continue with the rest.
+  /// With [silent] the write emits without an undo record, mirroring
+  /// [removeNodesForEvent].
+  Map<String, String> writeNodes({
+    List<Node> upserts = const [],
+    Set<String> removeIds = const {},
+    bool silent = false,
+  }) {
+    final errors = <String, String>{};
+    final valid = <Node>[];
+    for (final n in upserts) {
+      final unboundedError = validateUnbounded(n);
+      if (unboundedError != null) {
+        errors[n.id] = unboundedError;
+        continue;
+      }
+      final error = validateParents(n, n.parentIds);
+      if (error != null) {
+        errors[n.id] = error;
+        continue;
+      }
+      valid.add(n);
+    }
+    if (valid.isEmpty && removeIds.isEmpty) return errors;
+    final byId = {for (final n in valid) n.id: n};
+    final next = <Node>[];
+    for (final n in state) {
+      if (removeIds.contains(n.id)) continue;
+      next.add(byId[n.id] ?? n);
+    }
+    final known = {for (final n in state) n.id};
+    for (final n in valid) {
+      if (!known.contains(n.id)) next.add(n);
+    }
+    if (silent) {
+      emit(next);
+    } else {
+      emitChange(next);
+    }
+    return errors;
+  }
+
+  /// Nodes linked to any of [eventIds] within [byId] (mirrors [_byEventId]
+  /// over an evolving batch map instead of the cubit state).
+  static List<Node> _nodesForEventIn(
+    Map<String, Node> byId,
+    String eventId,
+  ) =>
+      [
+        for (final n in byId.values)
+          if (n.calendarEventId == eventId || n.sourceEventId == eventId) n,
+      ];
+
+  /// Batch version of [ensureNodeForFeedEvent]: ensures a homework-style
+  /// backing node for every event as ONE emit. Mirrors the single-write
+  /// decisions exactly (including the feedId null early-out).
+  void ensureNodesForFeedEvents(List<PlannerEvent> events) {
+    if (events.isEmpty) return;
+    final pending = <String, Node>{for (final n in state) n.id: n};
+    final upserts = <Node>[];
+    void put(Node n) {
+      pending[n.id] = n;
+      upserts.add(n);
+    }
+
+    for (final event in events) {
+      if (event.feedId == null) continue;
+      final existing = _nodesForEventIn(pending, event.id);
+      if (existing.isEmpty) {
+        final now = DateTime.now();
+        put(Node(
+          id: event.id,
+          title: event.subject,
+          notes: event.notes,
+          createdAt: now,
+          status: event.done ? NodeStatus.done : NodeStatus.open,
+          completedAt: event.completedAt,
+          schedule: ScheduleFacet(
+            due: event.start,
+            start: event.start,
+            end: event.end,
+          ),
+          sourceEventId: event.id,
+          feedId: event.feedId,
+          classId: event.feedId,
+          classLabel: event.classLabel,
+          assignees: event.assignees,
+        ));
+        continue;
+      }
+      final want = event.failed
+          ? NodeStatus.failed
+          : (event.done ? NodeStatus.done : NodeStatus.open);
+      for (final node in existing) {
+        if (node.status != want ||
+            node.completedAt != event.completedAt ||
+            !_sameAssignees(node.assignees, event.assignees)) {
+          put(node.copyWith(
+            status: want,
+            completedAt: event.completedAt,
+            clearCompletedAt: !event.done,
+            assignees: event.assignees,
+          ));
+        }
+      }
+    }
+    writeNodes(upserts: upserts);
+  }
+
+  /// Mirrors [upsertLinkedNodeForEvent]'s title/notes/schedule/status sync
+  /// for one personal linked node.
+  static Node _syncLinkedNode(Node linked, PlannerEvent event) {
+    final hasNotes = (event.notes ?? '').trim().isNotEmpty;
+    // Imported homework keeps the due date its feed gave it: the block
+    // says when the user plans to work, which is not when the
+    // assignment is due. Personal nodes have no such date, so their
+    // due stays the event's own start (the previous behaviour).
+    final due = linked.sourceEventId != null
+        ? (linked.schedule?.due ?? event.start)
+        : event.start;
+    return linked.copyWith(
+      title: event.subject,
+      notes: hasNotes ? event.notes!.trim() : null,
+      clearNotes: !hasNotes,
+      schedule: ScheduleFacet(
+        due: due,
+        start: event.start,
+        end: event.end,
+      ),
+      status: event.done ? NodeStatus.done : NodeStatus.open,
+      completedAt: event.completedAt,
+      clearCompletedAt: !event.done || event.completedAt == null,
+      assignees: event.assignees,
+    );
+  }
+
+  /// Batch version of [upsertLinkedNodeForEvent]: resolves or creates the
+  /// personal backing node for every event as ONE emit. Returns the
+  /// event id → node id map. Mirrors the single-write lookup order
+  /// (taskId link, then calendar-event link, then create) exactly.
+  Map<String, String> upsertLinkedNodesForEvents(List<PlannerEvent> events) {
+    final ids = <String, String>{};
+    if (events.isEmpty) return ids;
+    final pending = <String, Node>{for (final n in state) n.id: n};
+    final upserts = <Node>[];
+    void put(Node n) {
+      pending[n.id] = n;
+      upserts.add(n);
+    }
+
+    for (final event in events) {
+      if (event.taskId != null) {
+        final linked = pending[event.taskId!];
+        if (linked != null) {
+          put(_syncLinkedNode(linked, event));
+          ids[event.id] = linked.id;
+          continue;
+        }
+      }
+      Node? byCalendar;
+      for (final n in pending.values) {
+        if (n.calendarEventId == event.id) {
+          byCalendar = n;
+          break;
+        }
+      }
+      if (byCalendar != null) {
+        put(_syncLinkedNode(byCalendar, event));
+        ids[event.id] = byCalendar.id;
+        continue;
+      }
+      final id = 'node:${event.id}';
+      put(Node(
+        id: id,
+        title: event.subject,
+        notes: event.notes,
+        createdAt: DateTime.now(),
+        status: event.done ? NodeStatus.done : NodeStatus.open,
+        completedAt: event.completedAt,
+        schedule: ScheduleFacet(
+          due: event.start,
+          start: event.start,
+          end: event.end,
+        ),
+        classLabel: event.classLabel,
+        calendarEventId: event.id,
+        assignees: event.assignees,
+      ));
+      ids[event.id] = id;
+    }
+    writeNodes(upserts: upserts);
+    return ids;
+  }
+
+  /// Batch version of [setDoneForEvent]: mirrors completion onto every
+  /// backing node of every listed event as ONE emit. Same skip rules.
+  void setDoneForEventIds(
+    Set<String> eventIds, {
+    required bool done,
+    DateTime? completedAt,
+  }) {
+    if (eventIds.isEmpty) return;
+    final pending = <String, Node>{for (final n in state) n.id: n};
+    final upserts = <Node>[];
+    for (final eventId in eventIds) {
+      for (final node in _nodesForEventIn(pending, eventId)) {
+        if (node.isDone == done &&
+            (done || node.completedAt == null) &&
+            (node.completedAt == completedAt ||
+                (!done && completedAt == null))) {
+          continue;
+        }
+        final next = node.copyWith(
+          status: done ? NodeStatus.done : NodeStatus.open,
+          completedAt: completedAt,
+          clearCompletedAt: !done,
+        );
+        pending[next.id] = next;
+        upserts.add(next);
+      }
+    }
+    writeNodes(upserts: upserts);
+  }
+
+  /// Batch version of [removeNodesForEvent]: deletes every node backing
+  /// any listed event as ONE emit. Pass [silent] to skip the undo
+  /// record, exactly like the single version.
+  void removeNodesForEventIds(Set<String> eventIds, {bool silent = false}) {
+    if (eventIds.isEmpty) return;
+    final pending = <String, Node>{for (final n in state) n.id: n};
+    final remove = <String>{};
+    for (final eventId in eventIds) {
+      for (final node in _nodesForEventIn(pending, eventId)) {
+        remove.add(node.id);
+      }
+    }
+    writeNodes(removeIds: remove, silent: silent);
+  }
+
   // ── Queue getters (mirror the old TaskCubit home/queue semantics) ───
 
   DateTime? _queueDate(Node n) => n.schedule?.due ?? n.schedule?.start;

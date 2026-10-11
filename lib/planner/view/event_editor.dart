@@ -1694,6 +1694,10 @@ class EventEditorFormState extends State<EventEditorForm> {
   /// Local-only series update: applies the editor's task/people/place
   /// state to every cached occurrence of the series and mirrors each
   /// into its backing node. No Google write.
+  ///
+  /// Batched into a handful of emits (one per cubit): looping the
+  /// single-write methods snapshots the whole store per occurrence and
+  /// kills the tab on large calendars.
   void _applySeriesLocal(PlannerEvent master, {required bool done}) {
     CalendarCubit calendar;
     NodeCubit nodes;
@@ -1707,35 +1711,54 @@ class EventEditorFormState extends State<EventEditorForm> {
         FeedCubit.seriesRemoteId(master) ?? FeedCubit.seriesKeyFor(master);
     if (key == null) return;
     final completedAt = done ? DateTime.now() : null;
-    for (final event in List.of(calendar.state)) {
-      if (FeedCubit.seriesKeyFor(event) != key) continue;
-      final updated = event.copyWith(
-        isTask: _isTask,
-        done: done,
-        completedAt: completedAt,
-        clearCompletedAt: !done,
-        placeId: _placeId,
-        clearPlaceId: _placeId == null,
-        assignees: List.of(_people),
-        reminderMinutesBefore: _reminderMinutesBefore,
-        clearReminder: _reminderMinutesBefore == null,
-      );
-      calendar.updateEvent(updated);
-      if (!_isTask) {
-        nodes.removeNodesForEvent(event.id);
-      } else {
-        nodes.ensureNodeForFeedEvent(updated.copyWith(isTask: true));
-        nodes.setDoneForEvent(
-          event.id,
+    final members = [
+      for (final event in calendar.state)
+        if (FeedCubit.seriesKeyFor(event) == key) event,
+    ];
+    if (members.isEmpty) return;
+    calendar.updateEvents([
+      for (final event in members)
+        event.copyWith(
+          isTask: _isTask,
           done: done,
           completedAt: completedAt,
-        );
-      }
+          clearCompletedAt: !done,
+          placeId: _placeId,
+          clearPlaceId: _placeId == null,
+          assignees: List.of(_people),
+          reminderMinutesBefore: _reminderMinutesBefore,
+          clearReminder: _reminderMinutesBefore == null,
+        ),
+    ]);
+    final ids = {for (final e in members) e.id};
+    if (!_isTask) {
+      nodes.removeNodesForEventIds(ids, silent: true);
+      return;
     }
+    nodes.ensureNodesForFeedEvents([
+      for (final event in members)
+        event.copyWith(
+          isTask: true,
+          done: done,
+          completedAt: completedAt,
+          clearCompletedAt: !done,
+          placeId: _placeId,
+          clearPlaceId: _placeId == null,
+          assignees: List.of(_people),
+          reminderMinutesBefore: _reminderMinutesBefore,
+          clearReminder: _reminderMinutesBefore == null,
+        ),
+    ]);
+    nodes.setDoneForEventIds(
+      ids,
+      done: done,
+      completedAt: completedAt,
+    );
   }
 
   /// Post-push series fix-up: the Google re-sync drops local-only state,
   /// so re-assert node/people/place on every occurrence of the series.
+  /// Batched like [_applySeriesLocal] for the same storm reason.
   void _applySeriesPostPush(PlannerEvent master, {required bool done}) {
     CalendarCubit calendar;
     NodeCubit nodes;
@@ -1749,44 +1772,60 @@ class EventEditorFormState extends State<EventEditorForm> {
         FeedCubit.seriesRemoteId(master) ?? FeedCubit.seriesKeyFor(master);
     if (key == null) return;
     final completedAt = done ? DateTime.now() : null;
-    for (final event in List.of(calendar.state)) {
-      if (FeedCubit.seriesKeyFor(event) != key) continue;
-      if (!_sameAssignees(event.assignees, _people)) {
-        calendar.updateEvent(event.copyWith(assignees: List.of(_people)));
+    final members = [
+      for (final event in calendar.state)
+        if (FeedCubit.seriesKeyFor(event) == key) event,
+    ];
+    if (members.isEmpty) return;
+    final calUpdates = <PlannerEvent>[];
+    for (final event in members) {
+      var current = event;
+      if (!_sameAssignees(current.assignees, _people)) {
+        current = current.copyWith(assignees: List.of(_people));
       }
-      final current = calendar.byId(event.id) ?? event;
       if (!_isTask) {
         if (current.isTask) {
-          calendar.updateEvent(
-            current.copyWith(
-              isTask: false,
-              done: false,
-              clearCompletedAt: true,
-            ),
+          current = current.copyWith(
+            isTask: false,
+            done: false,
+            clearCompletedAt: true,
           );
         }
-        nodes.removeNodesForEvent(event.id);
-        continue;
+      } else {
+        final marked = current.copyWith(
+          isTask: true,
+          done: done,
+          completedAt: completedAt,
+          clearCompletedAt: !done,
+          placeId: _placeId,
+          clearPlaceId: _placeId == null,
+          assignees: List.of(_people),
+          reminderMinutesBefore: _reminderMinutesBefore,
+          clearReminder: _reminderMinutesBefore == null,
+        );
+        if (marked != current) current = marked;
       }
-      final marked = current.copyWith(
-        isTask: true,
-        done: done,
-        completedAt: completedAt,
-        clearCompletedAt: !done,
-        placeId: _placeId,
-        clearPlaceId: _placeId == null,
-        assignees: List.of(_people),
-        reminderMinutesBefore: _reminderMinutesBefore,
-        clearReminder: _reminderMinutesBefore == null,
-      );
-      if (marked != current) calendar.updateEvent(marked);
-      nodes.ensureNodeForFeedEvent(marked);
-      nodes.setDoneForEvent(
-        event.id,
-        done: done,
-        completedAt: completedAt,
-      );
+      if (current != event) calUpdates.add(current);
     }
+    calendar.updateEvents(calUpdates);
+    final ids = {for (final e in members) e.id};
+    if (!_isTask) {
+      nodes.removeNodesForEventIds(ids, silent: true);
+      return;
+    }
+    // The re-sync may have dropped the mark the push just set, so the
+    // ensure input carries the full local state (mirrors the old
+    // per-member `marked` exactly, including members needing no
+    // calendar change).
+    final markedById = {for (final e in calUpdates) e.id: e};
+    nodes.ensureNodesForFeedEvents([
+      for (final event in members) markedById[event.id] ?? event,
+    ]);
+    nodes.setDoneForEventIds(
+      ids,
+      done: done,
+      completedAt: completedAt,
+    );
   }
 
   /// Mirrors a locally saved event's task flag into [NodeCubit]: creates or
