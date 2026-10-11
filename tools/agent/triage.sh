@@ -45,7 +45,7 @@ Files to touch: <list of paths, or TBD with why>
 Risk: <low|high> — <one-line reason>
 Test idea: <one line: what test would prove it>
 Persistence impact: <none | description + migration gating per AGENTS.md>
-UX check: <needed (touches user-visible UI — builder must run ux-walker pre-merge per AGENTS.md) | not needed — <why>>
+UX check: <needed (touches user-visible UI — builder must add the ux-walk label + scope per AGENTS.md; the loop walks it post-deploy, never pre-merge) | not needed — <why>>
 Effort: <S|M|L>"
   PLAN_FILE="$(mktemp)"
   if ! opencode run --title "triage-#$N" "$PROMPT" >"$PLAN_FILE" 2>"$PLAN_FILE.err"; then

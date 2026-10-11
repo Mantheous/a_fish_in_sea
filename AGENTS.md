@@ -10,17 +10,23 @@ writer (ad-hoc sessions too), commit WIP often, and `git stash` is
 banned in shared clones (commit instead). Merges happen in a
 throwaway worktree on `main`, verified before push.
 
-## UX check: user-visible changes must be walked
+## UX check: label it, don't walk it
 
 If your change touches anything a user can see or tap — screens under
 `lib/*/view/`, navigation, dialogs/sheets, button behavior, auth flow,
-empty states, copy — it is not done until the `ux-walker` subagent has
-walked it in a real browser and its findings are addressed or filed.
-Launch it with the parameters from `tools/agent/ux-walk.sh` (APP_URL,
-SHOT_DIR, REPORT, UX_EMAIL/UX_PASSWORD) plus a SCOPE limiting it to your
-feature, then stop. No code reading is needed on your part; report back
-the verdict line. The nightly loop walks the whole app anyway — this rule
-is about YOUR change, BEFORE merge.
+empty states, copy — do NOT run the walker yourself. The agent loop
+walks each deploy exactly once (`tools/agent/ux-walk.sh`, queued in
+`poll.sh`), so per-branch walks only duplicate that work and contend
+for the same machine/browser. Instead, before opening your PR:
+
+1. `gh issue edit <N> --add-label ux-walk` (or, if there is no issue,
+   put a `UX scope:` section in the PR body).
+2. Record the scope in 1–2 lines: which screens/flows you touched and
+   how to reach them.
+
+The post-deploy walk covers labeled scopes and files findings as new
+issues. Never gate a PR or merge on a walk verdict. The loop's
+heartbeat walk still covers the whole app regularly.
 
 ## Persisted state: never wipe device data
 

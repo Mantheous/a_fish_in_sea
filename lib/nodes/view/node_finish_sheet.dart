@@ -63,10 +63,23 @@ class _FinishSheet extends StatelessWidget {
       node = context.watch<NodeCubit>().byId(nodeId);
     } catch (_) {}
     if (node == null) {
-      return const SafeArea(
+      // The sheet can outlive its node (deleted elsewhere / synced away):
+      // offer an explicit way out — there is no swipe on desktop/web.
+      return SafeArea(
         child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text('This node was deleted.'),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('This node was deleted.'),
+              const SizedBox(height: 16),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
         ),
       );
     }

@@ -633,24 +633,46 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   }
 
   void _delete(BuildContext context, Node existing) {
+    // Capture everything up front: the dialog is popped BEFORE the banner
+    // shows. Showing an action SnackBar from a dialog and popping in the
+    // same frame leaves it up forever (its auto-dismiss never fires), so
+    // the old order stuck a permanent 'Node deleted' banner on screen.
+    // The old code also read UndoCubit through this (soon unmounted)
+    // context, which threw on Undo.
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final nodes = context.read<NodeCubit>();
+    final undo = context.read<UndoCubit>();
+    CalendarCubit? calendar;
+    try {
+      calendar = context.read<CalendarCubit>();
+    } catch (_) {}
     final eventId =
         existing.calendarEventId ?? existing.sourceEventId;
-    context.read<NodeCubit>().deleteNode(existing.id);
+    nodes.deleteNode(existing.id);
     if (eventId != null) {
       try {
-        context.read<CalendarCubit>().clearTaskLink(eventId);
+        calendar?.clearTaskLink(eventId);
       } catch (_) {}
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text('Node deleted'),
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: () => context.read<UndoCubit>().undo(),
+    navigator.pop();
+    // Replace any banner still up from an earlier delete: queued
+    // snackbars each linger 4s and stack into one that won't go away.
+    // persist: false is required: a SnackBar with an action persists
+    // forever by default, which stuck this banner on screen.
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: const Text('Node deleted'),
+          duration: const Duration(seconds: 4),
+          persist: false,
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: undo.undo,
+          ),
         ),
-      ),
-    );
-    Navigator.of(context).pop();
+      );
   }
 }
 

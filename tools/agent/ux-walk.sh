@@ -60,6 +60,13 @@ REPORT="$OUT/report.md"
 BUILD_DESC="unknown"
 [ -f "$BUILD_MARKER" ] && BUILD_DESC="$(cat "$BUILD_MARKER")"
 
+# Scope: feature authors add the ux-walk label (AGENTS.md UX rule) instead
+# of running per-branch walks. Collect their scopes so this single queued
+# walk covers them; fall back to the full tour when nobody asked.
+SCOPE="$(gh issue list --label ux-walk --state open --limit 10 \
+  --json number,title --jq '.[] | "#\(.number): \(.title)"' 2>/dev/null || true)"
+[ -z "$SCOPE" ] && SCOPE="full app tour (no specific requests this run)"
+
 if ! curl -s -o /dev/null --max-time 10 "$APP_URL"; then
   echo "[ux-walk] app not reachable at $APP_URL — skipping (deploy first)"
   exit 1
@@ -72,6 +79,9 @@ REPORT: $REPORT
 Build: $BUILD_DESC
 UX_EMAIL: ux-walker@example.com
 UX_PASSWORD: ux-walker-dev-pass-1
+CONTEXT: ux-$STAMP
+SCOPE:
+$SCOPE
 Save every screenshot under SHOT_DIR, write the report to REPORT, then stop."
 
 if ! opencode run --agent ux-walker --title "ux-walk-$STAMP" "$PROMPT" >"$OUT/run.log" 2>&1; then

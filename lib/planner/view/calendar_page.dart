@@ -281,12 +281,6 @@ class _CalendarPageState extends State<CalendarPage> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 mainAxisSize: MainAxisSize.max,
                 children: [
-                  IconButton(
-                    tooltip: _previousTooltip,
-                    icon: const Icon(Icons.chevron_left),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: _goToPrevious,
-                  ),
                   TextButton(
                     onPressed: _goToToday,
                     style: const ButtonStyle(
@@ -294,12 +288,6 @@ class _CalendarPageState extends State<CalendarPage> {
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
                     child: const Text('Today'),
-                  ),
-                  IconButton(
-                    tooltip: _nextTooltip,
-                    icon: const Icon(Icons.chevron_right),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: _goToNext,
                   ),
                 ],
               ),
@@ -309,12 +297,6 @@ class _CalendarPageState extends State<CalendarPage> {
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
               child: Row(
                 children: [
-                  IconButton(
-                    tooltip: _previousTooltip,
-                    icon: const Icon(Icons.chevron_left),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: _goToPrevious,
-                  ),
                   TextButton(
                     onPressed: _goToToday,
                     style: const ButtonStyle(
@@ -322,12 +304,6 @@ class _CalendarPageState extends State<CalendarPage> {
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
                     child: const Text('Today'),
-                  ),
-                  IconButton(
-                    tooltip: _nextTooltip,
-                    icon: const Icon(Icons.chevron_right),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: _goToNext,
                   ),
                   Expanded(
                     child: Align(
@@ -761,12 +737,28 @@ class _CalendarPageState extends State<CalendarPage> {
               realHeight.isInfinite || realHeight >= 58;
           final maxWidth =
               constraints.maxWidth.isFinite ? constraints.maxWidth : null;
+          // A 15-min event measures ~15px tall here (40px per 30-min
+          // interval minus the calendar's appointment insets), so the
+          // floor sits just under that: anything shorter can't show two
+          // tappable circles and falls back to the edit form.
           final showHandles = movable &&
               !event.allDay &&
-              (realHeight.isInfinite || realHeight >= 58) &&
-              // Narrow week columns would bury the circles in the title
-              // (and over the play badge): resize those via the form.
-              (maxWidth == null || maxWidth >= 96);
+              (realHeight.isInfinite || realHeight >= 12) &&
+              (maxWidth == null || maxWidth >= 48);
+          // Full-size circles need room (both 28px grabs stacked plus the
+          // title row). Below that — e.g. a 15-min event is ~25px at the
+          // 30-min/50px interval — fall back to compact circles so a
+          // shortened event can still be dragged long again. Without this
+          // the handles vanished the moment a drag made the tile short.
+          final compactHandles = showHandles &&
+              !((realHeight.isInfinite || realHeight >= 58) &&
+                  (maxWidth == null || maxWidth >= 96));
+          // Very short tiles can't stack two grabs vertically without the
+          // circles landing on top of each other, so offset them to
+          // opposite corners (start = top-left, end = bottom-right).
+          final tightHandles = compactHandles &&
+              realHeight.isFinite &&
+              realHeight < 40;
           final pxPerMinute = (realHeight.isFinite ? realHeight : details.bounds.height) /
               durationMinutes.clamp(1.0, 1440.0);
           Widget body = Column(
@@ -906,18 +898,22 @@ class _CalendarPageState extends State<CalendarPage> {
                 // Narrow grab area centered on the visible circle: a
                 // full-width strip would swallow taps on the header row
                 // (title, checkbox, play button) whenever handles show.
+                // Compact tiles use a slimmer strip so the smaller circle
+                // stays clear of the title on narrow week columns.
                 Positioned(
                   top: 0,
                   left: 0,
                   right: 0,
                   child: Center(
                     child: SizedBox(
-                      width: 48,
+                      width: compactHandles ? 40 : 48,
                       child: _resizeHandle(
                         top: true,
                         event: event,
                         color: baseColor,
                         pxPerMinute: pxPerMinute,
+                        compact: compactHandles,
+                        tight: tightHandles,
                       ),
                     ),
                   ),
@@ -929,19 +925,24 @@ class _CalendarPageState extends State<CalendarPage> {
                   right: 0,
                   child: Center(
                     child: SizedBox(
-                      width: 48,
+                      width: compactHandles ? 40 : 48,
                       child: _resizeHandle(
                         top: false,
                         event: event,
                         color: baseColor,
                         pxPerMinute: pxPerMinute,
+                        compact: compactHandles,
+                        tight: tightHandles,
                       ),
                     ),
                   ),
                 ),
               // Toggl-style one-tap recording badge, pinned top-right so it
               // never shrinks with the title text and always sits above the
-              // resize handles. Covers timed tiles in day/week views that
+              // full-size resize handles. Compact handles (short selected
+              // tiles) take priority instead: the badge would bury the
+              // smaller circle — start recording from the open detail view.
+              // Covers timed tiles in day/week views that
               // are big enough to hold it (28px badge + offsets); smaller
               // tiles (15-min events, thin side-by-side halves, crowded
               // overlaps) skip it — an overflowing badge reads as a
@@ -952,6 +953,7 @@ class _CalendarPageState extends State<CalendarPage> {
                   !event.allDay &&
                   !isReportDisplayId(event.id) &&
                   !isNodeBlockId(event.id) &&
+                  !compactHandles &&
                   _view != CalendarView.month &&
                   (realHeight.isInfinite || realHeight >= 30) &&
                   (maxWidth == null || maxWidth >= 36))
@@ -1000,9 +1002,22 @@ class _CalendarPageState extends State<CalendarPage> {
     required PlannerEvent event,
     required Color color,
     required double pxPerMinute,
+    bool compact = false,
+    bool tight = false,
   }) {
+    // Compact circles (14px in a 20px grab) fit short tiles where two
+    // full-size grabs would fully overlap. Only the painted circle takes
+    // hits (deferToChild): near-misses fall through to the tile so taps
+    // near a handle still select/open the event, and overlapping grabs
+    // resolve to whichever circle is on top. On very short tiles the
+    // circles also split to opposite corners so both stay tappable.
+    final grabHeight = compact ? 20.0 : 28.0;
+    final diameter = compact ? 14.0 : 18.0;
+    final alignment = top
+        ? (tight ? Alignment.topLeft : Alignment.topCenter)
+        : (tight ? Alignment.bottomRight : Alignment.bottomCenter);
     return GestureDetector(
-      behavior: HitTestBehavior.opaque,
+      behavior: HitTestBehavior.deferToChild,
       onVerticalDragStart: (_) =>
           _onHandleDragStart(event, top, pxPerMinute),
       onVerticalDragUpdate: _onHandleDragUpdate,
@@ -1011,20 +1026,25 @@ class _CalendarPageState extends State<CalendarPage> {
       child: MouseRegion(
         cursor: SystemMouseCursors.resizeUpDown,
         child: Container(
-          height: 28,
-          alignment: top ? Alignment.topCenter : Alignment.bottomCenter,
-          padding: const EdgeInsets.only(top: 2, bottom: 2),
+          height: grabHeight,
+          alignment: alignment,
+          padding: EdgeInsets.only(
+            top: 2,
+            bottom: 2,
+            left: tight ? 6 : 0,
+            right: tight ? 6 : 0,
+          ),
           child: Semantics(
             label: top ? 'Drag to change start time' : 'Drag to change end time',
             child: Container(
-              width: 18,
-              height: 18,
+              width: diameter,
+              height: diameter,
               decoration: BoxDecoration(
                 color: Colors.white,
                 shape: BoxShape.circle,
                 border: Border.all(
                   color: color.withValues(alpha: 0.9),
-                  width: 3,
+                  width: compact ? 2.5 : 3,
                 ),
                 boxShadow: const [
                   BoxShadow(color: Colors.black38, blurRadius: 3),
@@ -1618,89 +1638,15 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   /// Jumps the calendar back to today, keeping the current Day/Week/Month
-  /// view. Wired to the Today button, the header arrows' long-press
-  /// fallback, and double-tap/click on the view switcher (a re-tap on the
-  /// active segment never reaches `onSelectionChanged`, so the switcher is
-  /// wrapped in a `GestureDetector.onDoubleTap` instead).
+  /// view. Wired to the Today button and double-tap/click on the view
+  /// switcher (a re-tap on the active segment never reaches
+  /// `onSelectionChanged`, so the switcher is wrapped in a
+  /// `GestureDetector.onDoubleTap` instead). Prev/next stepping is the
+  /// SfCalendar header's own navigation arrows.
   void _goToToday() {
     final now = DateTime.now();
     _controller.displayDate = now;
     _controller.selectedDate = now;
-  }
-
-  String get _previousTooltip => switch (_view) {
-        CalendarView.day => 'Previous day',
-        CalendarView.week => 'Previous week',
-        CalendarView.month => 'Previous month',
-        _ => 'Previous',
-      };
-
-  String get _nextTooltip => switch (_view) {
-        CalendarView.day => 'Next day',
-        CalendarView.week => 'Next week',
-        CalendarView.month => 'Next month',
-        _ => 'Next',
-      };
-
-  /// Steps the visible page back by one day/week/month, matching the
-  /// current view. Drives `displayDate` directly — `CalendarController`
-  /// exposes no forward()/backward() API.
-  void _goToPrevious() {
-    final base = _controller.displayDate ??
-        _controller.selectedDate ??
-        DateTime.now();
-    _controller.displayDate = _shiftByView(base, -1);
-  }
-
-  /// Steps the visible page forward by one day/week/month.
-  void _goToNext() {
-    final base = _controller.displayDate ??
-        _controller.selectedDate ??
-        DateTime.now();
-    _controller.displayDate = _shiftByView(base, 1);
-  }
-
-  DateTime _shiftByView(DateTime date, int direction) {
-    switch (_view) {
-      case CalendarView.day:
-        return date.add(Duration(days: direction));
-      case CalendarView.week:
-        return date.add(Duration(days: 7 * direction));
-      case CalendarView.month:
-        return _addMonths(date, direction);
-      case CalendarView.timelineDay:
-        return date.add(Duration(days: direction));
-      case CalendarView.timelineWeek:
-        return date.add(Duration(days: 7 * direction));
-      case CalendarView.timelineWorkWeek:
-        return date.add(Duration(days: 7 * direction));
-      case CalendarView.timelineMonth:
-        return _addMonths(date, direction);
-      case CalendarView.workWeek:
-        return date.add(Duration(days: 7 * direction));
-      case CalendarView.schedule:
-        return _addMonths(date, direction);
-    }
-  }
-
-  /// Month arithmetic clamped to the target month's last day (so Jan 31 →
-  /// Feb lands on Feb 28/29 instead of overflowing into March).
-  DateTime _addMonths(DateTime date, int months) {
-    final monthIndex = (date.month - 1) + months;
-    final year = date.year + monthIndex ~/ 12;
-    final month = monthIndex % 12 + 1;
-    final lastDay = DateTime(year, month + 1, 0).day;
-    final day = date.day > lastDay ? lastDay : date.day;
-    return DateTime(
-      year,
-      month,
-      day,
-      date.hour,
-      date.minute,
-      date.second,
-      date.millisecond,
-      date.microsecond,
-    );
   }
 
   /// Creates (or reuses) the manual report entry for a task-event,

@@ -771,15 +771,20 @@ class _NodeTile extends StatelessWidget {
             context.read<CalendarCubit>().clearTaskLink(eventId);
           } catch (_) {}
         }
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Node deleted'),
-            action: SnackBarAction(
-              label: 'Undo',
-              onPressed: () => context.read<UndoCubit>().undo(),
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: const Text('Node deleted'),
+              duration: const Duration(seconds: 4),
+              // Action snackbars persist forever by default; this one must go.
+              persist: false,
+              action: SnackBarAction(
+                label: 'Undo',
+                onPressed: () => context.read<UndoCubit>().undo(),
+              ),
             ),
-          ),
-        );
+          );
     }
   }
 

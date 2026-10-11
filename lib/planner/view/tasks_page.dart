@@ -15,60 +15,223 @@ import '../../nodes/view/node_finish_sheet.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/feed_cubit.dart';
+import '../bloc/tasks_tab_cubit.dart';
+import '../bloc/tasks_view_options_cubit.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../model/task_assignee.dart';
 import 'feed_manager.dart';
 import 'syllabus_import_sheet.dart';
+import 'tasks_view_options_sheet.dart';
 
 class TasksPage extends StatelessWidget {
   const TasksPage({super.key});
+
+  /// Tab the user was last on (0 = To-Do, 1 = Homework). Falls back to 0
+  /// when the cubit isn't provided (widget tests pump TasksPage standalone).
+  static int _initialTab(BuildContext context) {
+    try {
+      final i = context.read<TasksTabCubit>().state;
+      if (i < 0 || i > 1) return 0;
+      return i;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  static void _saveTab(BuildContext context, int index) {
+    try {
+      context.read<TasksTabCubit>().setTab(index);
+    } catch (_) {}
+  }
 
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
       length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Tasks'),
-          actions: [
-            IconButton(
-              tooltip: 'Import from syllabus',
-              icon: const Icon(Icons.auto_awesome),
-              onPressed: () => showSyllabusImport(context),
+      initialIndex: _initialTab(context),
+      child: Builder(
+        builder: (context) {
+          return Scaffold(
+            appBar: AppBar(
+              title: const Text('Tasks'),
+              actions: [
+                Builder(
+                  builder: (buttonContext) {
+                    var active = false;
+                    try {
+                      active = buttonContext
+                          .watch<TasksViewOptionsCubit>()
+                          .state
+                          .hasActiveOptions;
+                    } catch (_) {}
+                    return Badge(
+                      isLabelVisible: active,
+                      child: IconButton(
+                        tooltip: 'View options',
+                        icon: const Icon(Icons.layers_outlined),
+                        onPressed: () =>
+                            showTasksViewOptions(buttonContext),
+                      ),
+                    );
+                  },
+                ),
+                IconButton(
+                  tooltip: 'Import from syllabus',
+                  icon: const Icon(Icons.auto_awesome),
+                  onPressed: () => showSyllabusImport(context),
+                ),
+                IconButton(
+                  tooltip: 'Manage classes',
+                  icon: const Icon(Icons.sync),
+                  onPressed: () => showFeedManager(context),
+                ),
+                const UndoRedoActions(),
+              ],
+              bottom: TabBar(
+                onTap: (i) => _saveTab(context, i),
+                tabs: const [
+                  Tab(text: 'To-Do'),
+                  Tab(text: 'Homework'),
+                ],
+              ),
             ),
-            IconButton(
-              tooltip: 'Manage classes',
-              icon: const Icon(Icons.sync),
-              onPressed: () => showFeedManager(context),
+            drawer: const AppDrawer(),
+            floatingActionButton: FloatingActionButton(
+              onPressed: () => showNodeEditor(context),
+              child: const Icon(Icons.add),
             ),
-            const UndoRedoActions(),
-          ],
-          bottom: const TabBar(
-            tabs: [
-              Tab(text: 'To-Do'),
-              Tab(text: 'Homework'),
-            ],
-          ),
-        ),
-        drawer: const AppDrawer(),
-        floatingActionButton: FloatingActionButton(
-          onPressed: () => showNodeEditor(context),
-          child: const Icon(Icons.add),
-        ),
-        body: TabBarView(
-          children: [
-            const _TodoTab(),
-            const _HomeworkTab(),
-          ],
-        ),
+            body: _TabSaver(
+              child: TabBarView(
+                children: const [
+                  _TodoTab(),
+                  _HomeworkTab(),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
 }
 
+/// Persists swipe-driven tab changes (TabBar.onTap only fires on taps, not
+/// on TabBarView swipes). Listens to the DefaultTabController and records
+/// the settled index in [TasksTabCubit]; tolerates a missing cubit so
+/// standalone widget tests keep working.
+class _TabSaver extends StatefulWidget {
+  final Widget child;
+
+  const _TabSaver({required this.child});
+
+  @override
+  State<_TabSaver> createState() => _TabSaverState();
+}
+
+class _TabSaverState extends State<_TabSaver> {
+  TabController? _controller;
+
+  void _onTabChanged() {
+    final controller = _controller;
+    if (controller == null || controller.indexIsChanging) return;
+    try {
+      context.read<TasksTabCubit>().setTab(controller.index);
+    } catch (_) {}
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final next = DefaultTabController.of(context);
+    if (_controller != next) {
+      _controller?.removeListener(_onTabChanged);
+      _controller = next;
+      _controller?.addListener(_onTabChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.removeListener(_onTabChanged);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 final _timeFormat = DateFormat('h:mm a');
 final _dueFormat = DateFormat('EEE, MMM d');
+
+/// Reads the Tasks view options, falling back to defaults when the cubit
+/// isn't provided (widget tests pump TasksPage standalone).
+TasksViewOptionsState _viewOptions(BuildContext context) {
+  try {
+    return context.watch<TasksViewOptionsCubit>().state;
+  } catch (_) {
+    return const TasksViewOptionsState();
+  }
+}
+
+/// Ids matching the active date filter, or null when no filter is on.
+/// Filter sets only ever contain open nodes ([NodeCubit.dueTodayAt] /
+/// [NodeCubit.overdueAt] are open-only), so completed items are hidden
+/// while a filter is active.
+Set<String>? _filterIds(
+  NodeCubit nodeCubit,
+  TasksDueFilter filter,
+  DateTime now,
+) {
+  switch (filter) {
+    case TasksDueFilter.all:
+      return null;
+    case TasksDueFilter.today:
+      return {for (final n in nodeCubit.dueTodayAt(now)) n.id};
+    case TasksDueFilter.overdue:
+      return {for (final n in nodeCubit.overdueAt(now)) n.id};
+  }
+}
+
+/// Empty state shown when a date filter hides every row. Offers a way
+/// back to the full list.
+class _FilteredEmpty extends StatelessWidget {
+  final TasksDueFilter filter;
+
+  const _FilteredEmpty({required this.filter});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = switch (filter) {
+      TasksDueFilter.today => 'Nothing due today',
+      TasksDueFilter.overdue => 'Nothing overdue',
+      TasksDueFilter.all => 'Nothing to do!',
+    };
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.check_circle_outline, size: 48),
+          const SizedBox(height: 8),
+          Text(label, style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          const Text('Try a different filter, or add a node with +'),
+          const SizedBox(height: 12),
+          OutlinedButton(
+            onPressed: () {
+              try {
+                context
+                    .read<TasksViewOptionsCubit>()
+                    .setDueFilter(TasksDueFilter.all);
+              } catch (_) {}
+            },
+            child: const Text('Show everything'),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _TodoTab extends StatelessWidget {
   const _TodoTab();
@@ -78,15 +241,28 @@ class _TodoTab extends StatelessWidget {
     return BlocBuilder<NodeCubit, List<Node>>(
       builder: (context, nodes) {
         final feedCubit = context.watch<FeedCubit>();
-        final open = feedCubit.visibleNodes(
-          context.read<NodeCubit>().openNodes,
-        );
-        if (open.isEmpty) return const _EmptyTodo();
+        final nodeCubit = context.read<NodeCubit>();
+        final viewOptions = _viewOptions(context);
+        final now = DateTime.now();
+        final weekDueIds = viewOptions.highlightDueThisWeek
+            ? {
+                for (final n in nodeCubit.dueThisWeekAt(now)) n.id,
+              }
+            : const <String>{};
+        final filter = _filterIds(nodeCubit, viewOptions.dueFilter, now);
+        var open = feedCubit.visibleNodes(nodeCubit.openNodes);
+        if (filter != null) {
+          open = open.where((n) => filter.contains(n.id)).toList();
+        }
+        if (open.isEmpty) {
+          return viewOptions.isFiltering
+              ? _FilteredEmpty(filter: viewOptions.dueFilter)
+              : const _EmptyTodo();
+        }
         // Precompute once per list build (not per tile): calendar link set,
         // feed map, node indexes, and a single `now`. Tiles receive plain
         // data and use `read` — no per-tile full-state watches.
         final calendarState = context.watch<CalendarCubit>().state;
-        final now = DateTime.now();
         final linkedEventIds = <String>{};
         final linkedTaskIds = <String>{};
         for (final e in calendarState) {
@@ -105,6 +281,7 @@ class _TodoTab extends StatelessWidget {
               node: node,
               showClass: true,
               now: now,
+              highlightDueThisWeek: weekDueIds.contains(node.id),
               feedById: feedById,
               nodeById: nodeById,
               indexById: indexes.byId,
@@ -168,9 +345,22 @@ class _HomeworkTabState extends State<_HomeworkTab>
     super.build(context);
     final nodeCubit = context.watch<NodeCubit>();
     final feedCubit = context.watch<FeedCubit>();
-    final imported = feedCubit.visibleNodes(
+    final viewOptions = _viewOptions(context);
+    final now = DateTime.now();
+    final filter = _filterIds(nodeCubit, viewOptions.dueFilter, now);
+    final weekDueIds = viewOptions.highlightDueThisWeek
+        ? {for (final n in nodeCubit.dueThisWeekAt(now)) n.id}
+        : const <String>{};
+    var imported = feedCubit.visibleNodes(
         nodeCubit.state.where((n) => n.isHomework).toList());
+    if (filter != null) {
+      imported =
+          imported.where((n) => filter.contains(n.id)).toList();
+    }
     if (imported.isEmpty) {
+      if (viewOptions.isFiltering) {
+        return _FilteredEmpty(filter: viewOptions.dueFilter);
+      }
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -209,10 +399,11 @@ class _HomeworkTabState extends State<_HomeworkTab>
     // state never jumps to the wrong class.
     final groupKeys = byClass.keys.toList()..sort();
     // Hoisted per-build (not per-tile/per-group): feed map, node liveness
-    // map, shared money indexes, calendar link sets, one `now`. Sort each
+    // map, shared money indexes, calendar link sets. Sort each
     // group once up front instead of inside the itemBuilder on every
     // rebuild (the old `..sort` mutated the list during build).
-    final now = DateTime.now();
+    // (`now` is hoisted at the top of build so highlight + filter share
+    // one clock reading.)
     final feedById = {for (final f in feedCubit.state) f.id: f};
     final allNodes = nodeCubit.state;
     final nodeById = {for (final n in allNodes) n.id: n};
@@ -312,6 +503,7 @@ class _HomeworkTabState extends State<_HomeworkTab>
                         node: node,
                         showClass: false,
                         now: now,
+                        highlightDueThisWeek: weekDueIds.contains(node.id),
                         feedById: feedById,
                         nodeById: nodeById,
                         indexById: indexes.byId,
@@ -345,9 +537,19 @@ bool _isDueToday(DateTime due, DateTime now) {
   return day == today;
 }
 
+/// Readable orange for "due today" cues in either brightness.
+Color _dueTodayColor(ThemeData theme) =>
+    theme.brightness == Brightness.dark
+        ? Colors.orange.shade300
+        : Colors.orange.shade800;
+
 class _NodeTile extends StatelessWidget {
   final Node node;
   final bool showClass;
+
+  /// True when the "highlight due this week" view option is on and this
+  /// node is open with a due date inside the calendar-week window.
+  final bool highlightDueThisWeek;
   // Hoisted per-list data (all optional for backwards compat): when
   // supplied the tile avoids per-tile `watch` subscriptions and O(n) scans.
   final DateTime? now;
@@ -361,6 +563,7 @@ class _NodeTile extends StatelessWidget {
   const _NodeTile({
     required this.node,
     required this.showClass,
+    this.highlightDueThisWeek = false,
     this.now,
     this.feedById,
     this.nodeById,
@@ -437,7 +640,13 @@ class _NodeTile extends StatelessWidget {
           '\$${actual.toStringAsFixed(2)} / \$${live.money!.effectiveTarget.toStringAsFixed(2)}';
     }
     final due = live.schedule?.due;
-    return ListTile(
+    // Due today outranks the week tint: same highlight option, hotter
+    // color. (A highlighted row is always open — the week set is
+    // open-only — so no extra status check is needed.)
+    final isDueTodayHighlight = highlightDueThisWeek &&
+        due != null &&
+        _isDueToday(due, effectiveNow);
+    final tile = ListTile(
       leading: NodeCheckbox(node: live),
       title: Text(
         live.title,
@@ -489,10 +698,15 @@ class _NodeTile extends StatelessWidget {
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: live.isOverdueAt(effectiveNow)
                         ? theme.colorScheme.error
-                        : null,
-                    fontWeight: _isDueToday(due, effectiveNow)
-                        ? FontWeight.bold
-                        : null,
+                        : isDueTodayHighlight
+                            ? _dueTodayColor(theme)
+                            : highlightDueThisWeek
+                                ? theme.colorScheme.tertiary
+                                : null,
+                    fontWeight:
+                        _isDueToday(due, effectiveNow) || highlightDueThisWeek
+                            ? FontWeight.bold
+                            : null,
                   ),
                 ),
             ],
@@ -578,6 +792,50 @@ class _NodeTile extends StatelessWidget {
       ),
       onTap: () => showNodeEditor(context, existing: live),
     );
+    if (isDueTodayHighlight) {
+      // Due today: hotter orange row and edge so today's work jumps out
+      // from the rest of the week. Same transparent-Material trick as
+      // below keeps ink splashes above the tint.
+      return Semantics(
+        container: true,
+        label: 'Due today',
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.orange.withAlpha(41),
+            border: const Border(
+              left: BorderSide(color: Colors.orange, width: 4),
+            ),
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: tile,
+          ),
+        ),
+      );
+    }
+    if (!highlightDueThisWeek) return tile;
+    // Tinted row plus a colored edge: this item is due inside the
+    // calendar-week window and the option is on. The transparent Material
+    // keeps the tile's ink splashes above the tint while the container
+    // paints the background and the edge (a Material would cover the
+    // border). The semantics label surfaces the same cue to screen
+    // readers.
+    return Semantics(
+      container: true,
+      label: 'Due this week',
+      child: Container(
+        decoration: BoxDecoration(
+          color: theme.colorScheme.tertiaryContainer,
+          border: Border(
+            left: BorderSide(color: theme.colorScheme.tertiary, width: 4),
+          ),
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: tile,
+        ),
+      ),
+    );
   }
 
   /// O(1) link check against hoisted sets. Returns null when the sets
@@ -630,15 +888,20 @@ class _NodeTile extends StatelessWidget {
         context.read<CalendarCubit>().clearTaskLink(eventId);
       } catch (_) {}
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text('Node deleted'),
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: () => context.read<UndoCubit>().undo(),
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: const Text('Node deleted'),
+          duration: const Duration(seconds: 4),
+          // Action snackbars persist forever by default; this one must go.
+          persist: false,
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () => context.read<UndoCubit>().undo(),
+          ),
         ),
-      ),
-    );
+      );
   }
 }
 

@@ -129,13 +129,54 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       ..sort(_byDueThenCreated);
   }
 
-  /// Open nodes due in the next 7 days (start of today through the end of
-  /// the 7th day out). Used by the Home dashboard's week section.
+  /// Open, non-template nodes with a due date strictly before the start
+  /// of today. Powers the Tasks page "Overdue" filter.
+  List<Node> get overdue => overdueAt(DateTime.now());
+
+  List<Node> overdueAt(DateTime now) {
+    final today = DateTime(now.year, now.month, now.day);
+    return state.where((n) {
+      if (!n.isOpen || n.isTemplate) return false;
+      final due = n.schedule?.due;
+      if (due == null) return false;
+      return due.isBefore(today);
+    }).toList()
+      ..sort(_byDueThenCreated);
+  }
+
+  /// Open, non-template nodes due on today's calendar day. Powers the
+  /// Tasks page "Today" filter. Overdue items are excluded — they have
+  /// their own filter — so nothing is counted twice.
+  List<Node> get dueToday => dueTodayAt(DateTime.now());
+
+  List<Node> dueTodayAt(DateTime now) {
+    final today = DateTime(now.year, now.month, now.day);
+    final tomorrow = today.add(const Duration(days: 1));
+    return state.where((n) {
+      if (!n.isOpen || n.isTemplate) return false;
+      final due = n.schedule?.due;
+      if (due == null) return false;
+      return !due.isBefore(today) && due.isBefore(tomorrow);
+    }).toList()
+      ..sort(_byDueThenCreated);
+  }
+
+  /// Open nodes due in the rest of the calendar week: start of today
+  /// through Sunday (inclusive). The window shrinks as the week runs
+  /// out — on Sunday it spans to next Sunday, on Saturday it covers
+  /// just the weekend. Overdue items are excluded; they belong to the
+  /// past, not to this week. Used by the Home dashboard's week section
+  /// and the Tasks page week highlight.
   List<Node> get dueThisWeek => dueThisWeekAt(DateTime.now());
 
   List<Node> dueThisWeekAt(DateTime now) {
     final today = DateTime(now.year, now.month, now.day);
-    final endExclusive = today.add(const Duration(days: 8));
+    // DateTime.weekday: Monday = 1 … Sunday = 7. Days until Sunday;
+    // Sunday itself rolls forward to next Sunday.
+    var daysToSunday = DateTime.sunday - now.weekday;
+    if (daysToSunday <= 0) daysToSunday += 7;
+    // +1 so a due date on Sunday itself is still inside the window.
+    final endExclusive = today.add(Duration(days: daysToSunday + 1));
     return state.where((n) {
       if (!n.isOpen || n.isTemplate || n.isUnbounded) return false;
       final due = n.schedule?.due;
