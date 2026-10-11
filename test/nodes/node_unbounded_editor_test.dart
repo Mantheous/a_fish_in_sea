@@ -74,10 +74,8 @@ void main() {
     final saved = nodes.state.single;
     expect(saved.title, 'Serve others');
     expect(saved.isUnbounded, isTrue);
-    // Unbounded goals live in the tree, not the Leaves view.
-    await tester.tap(find.widgetWithText(ChoiceChip, 'All'));
-    await tester.pumpAndSettle();
-    // Tile shows the ongoing marker, infinity icon, and no bar.
+    // The page lands on the tree by itself: unbounded goals are not in
+    // the default Leaves view, so staying there would read as failure.
     expect(find.text('unbounded'), findsOneWidget);
     expect(find.byIcon(Icons.all_inclusive), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsNothing);

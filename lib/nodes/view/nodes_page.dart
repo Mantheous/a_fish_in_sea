@@ -49,7 +49,16 @@ class _NodesPageState extends State<NodesPage> {
       ),
       drawer: const AppDrawer(),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => showNodeEditor(context),
+        onPressed: () async {
+          final created = await showNodeEditor(context);
+          // A brand-new unbounded goal is invisible in the default Leaves
+          // view, which would read as "nothing happened". Land on the
+          // tree instead so the goal is on screen right after saving.
+          if (!mounted) return;
+          if (created != null && created.isUnbounded) {
+            setState(() => _view = _NodeView.all);
+          }
+        },
         child: const Icon(Icons.add),
       ),
       body: Column(
