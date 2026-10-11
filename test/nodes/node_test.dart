@@ -622,6 +622,37 @@ void main() {
       expect(shadow?.sourceEventId, 'evt:2');
       expect(shadow?.classLabel, 'Physics');
     });
+
+    test('scheduling an imported assignment keeps its due date', () {
+      final cubit = NodeCubit();
+      cubit.addNode(Node(
+        id: 'hw:f1:evt',
+        title: 'AI Plan',
+        createdAt: DateTime(2026, 9, 12, 8),
+        schedule: ScheduleFacet(
+          due: DateTime(2026, 9, 16, 15),
+          start: DateTime(2026, 9, 16, 15),
+          end: DateTime(2026, 9, 16, 15),
+        ),
+        sourceEventId: 'hw:f1:evt',
+        feedId: 'f1',
+        classId: 'f1',
+        classLabel: 'C S 291',
+      ));
+      final id = cubit.upsertLinkedNodeForEvent(PlannerEvent(
+        id: 'evt:1',
+        subject: 'AI Plan',
+        start: DateTime(2026, 9, 14, 9),
+        end: DateTime(2026, 9, 14, 10),
+        taskId: 'hw:f1:evt',
+      ));
+      final node = cubit.byId(id)!;
+      // The block is when the user plans to work; the due date came from
+      // the class feed and must survive being scheduled.
+      expect(node.schedule?.start, DateTime(2026, 9, 14, 9));
+      expect(node.schedule?.end, DateTime(2026, 9, 14, 10));
+      expect(node.schedule?.due, DateTime(2026, 9, 16, 15));
+    });
   });
 
   group('tracking selection', () {

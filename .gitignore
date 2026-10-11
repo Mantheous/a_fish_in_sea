@@ -66,3 +66,6 @@ tools/ls_scrape/tasks.json
 .agent-loop-paused
 playwright-report/
 DEBUG_PREFS.md
+
+# Server DB backups (real user data; produced by tools/agent/backup-db.sh)
+server/api/data/backups/

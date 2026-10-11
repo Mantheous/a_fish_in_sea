@@ -388,22 +388,37 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
     return '$difference day${difference > 1 ? 's' : ''}';
   }
 
+  /// Tolerant numeric parse: a wrongly-typed stored value must not throw.
+  ///
+  /// `as int?` on a string (or a bool) throws, and a throw out of
+  /// `fromJson` makes `HydratedMixin` reset the state *and overwrite the
+  /// stored payload* — the documented data-loss shape in AGENTS.md. Every
+  /// value here falls back to its default instead, so a corrupt field
+  /// costs that one field rather than the whole waterfall config.
+  static int _asInt(Object? raw, int fallback) =>
+      raw is num ? raw.toInt() : fallback;
+
+  static double _asDouble(Object? raw, double fallback) =>
+      raw is num ? raw.toDouble() : fallback;
+
   @override
   WaterfallState? fromJson(Map<String, dynamic> json) {
     try {
+      final horizonRaw = json['projectionHorizon'];
       return WaterfallState(
-        startingBalance: (json['startingBalance'] as num?)?.toDouble() ?? 0.0,
-        projectionHorizon: json['projectionHorizon'] != null
-            ? DateTime.parse(json['projectionHorizon'] as String)
-            : DateTime.now().add(const Duration(days: 365)),
+        startingBalance: _asDouble(json['startingBalance'], 0.0),
+        projectionHorizon:
+            horizonRaw is String && DateTime.tryParse(horizonRaw) != null
+                ? DateTime.parse(horizonRaw)
+                : DateTime.now().add(const Duration(days: 365)),
         viewScale: json['viewScale'] != null
             ? TimeScale.values.firstWhere(
                 (e) => e.name == json['viewScale'],
                 orElse: () => TimeScale.monthly,
               )
             : null,
-        monthlyThresholdDays: json['monthlyThresholdDays'] as int? ?? 60,
-        weeklyThresholdDays: json['weeklyThresholdDays'] as int? ?? 7,
+        monthlyThresholdDays: _asInt(json['monthlyThresholdDays'], 60),
+        weeklyThresholdDays: _asInt(json['weeklyThresholdDays'], 7),
       );
     } catch (_) {
       return null;
