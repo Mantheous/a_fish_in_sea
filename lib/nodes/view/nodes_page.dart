@@ -279,8 +279,7 @@ class _NodeTile extends StatelessWidget {
         context.watch<NodeCubit>().byId(node.id) ?? node;
     final kids = flat
         ? const <Node>[]
-        : _children(live)
-          ..sort((a, b) => _compareKids(a, b));
+        : (_children(live)..sort((a, b) => _compareKids(a, b)));
     final value = progress[live.id] ?? 0;
     final theme = Theme.of(context);
     final subtitle = _subtitle(context, live, value);
