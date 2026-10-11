@@ -35,16 +35,17 @@ void main() {
 
     test('addPoint + pointsOnDay', () {
       final cubit = TrackingCubit();
-      final day = DateTime(2026, 9, 5);
+      final now = DateTime.now();
+      final day = DateTime(now.year, now.month, now.day);
       cubit.addPoint(TrackedPoint(
         id: 'a',
-        timestamp: DateTime(2026, 9, 5, 9),
+        timestamp: day.add(const Duration(hours: 9)),
         lat: 40,
         lng: -111,
       ));
       cubit.addPoint(TrackedPoint(
         id: 'b',
-        timestamp: DateTime(2026, 9, 6, 9),
+        timestamp: day.subtract(const Duration(days: 1)).add(const Duration(hours: 9)),
         lat: 40,
         lng: -111,
       ));
@@ -55,7 +56,7 @@ void main() {
       final cubit = TrackingCubit();
       final point = TrackedPoint(
         id: 'a',
-        timestamp: DateTime(2026, 9, 5, 9),
+        timestamp: DateTime.now().subtract(const Duration(hours: 1)),
         lat: 40,
         lng: -111,
       );
