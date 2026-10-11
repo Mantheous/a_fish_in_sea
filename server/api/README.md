@@ -21,7 +21,9 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt
 ## Endpoints (`/api/v1`)
 
 - `POST /auth/register|login|refresh`, `GET /auth/me` — JWT (15min access, 30d refresh)
-- `POST /tokens`, `GET /tokens`, `DELETE /tokens/{id}` — scoped `afm_…` tokens for MCP agents
+- `POST /tokens`, `GET /tokens`, `DELETE /tokens/{id}` — scoped `afm_…` tokens for MCP agents. `POST /tokens` takes optional `review: bool` (default false): review tokens draft `POST /imports` into the approval queue instead of writing directly.
+- `POST /imports {items:[{collection,item_id,data}], source?}` — staged third-party import. Trusted writers (JWT, or token without review) apply straight into the envelope (`{"status":"applied"}`); review tokens stage a batch (`{"status":"pending","batch_id"}`). Only `nodes` + `events` are importable (the retired `tasks` collection no longer syncs; rejected with 400). Max 200 items/call.
+- `GET /imports/pending`, `POST /imports/{id}/approve {item_ids?}`, `POST /imports/{id}/discard {item_ids}`, `POST /imports/{id}/reject` — JWT-only inbox review. Approval upserts through the same path as PUT /items (write-only, never tombstones); unapproved rows live in `import_batches`/`import_items` and never sync. Batches older than 30 days stop appearing (filter, no sweeper).
 - `GET /sync/pull?since=&collections=&limit=` — incremental pull, `has_more` paging
 - `POST /sync/push {changes:[{collection,item_id,data,deleted}]}` — batch upsert, last-write-wins, tombstones retained
 - `/items/{collection}[/{id}]` — CRUD convenience over the same envelope for MCP (`tasks`, `events`, …)

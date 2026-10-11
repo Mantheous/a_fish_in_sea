@@ -41,12 +41,18 @@ async def create_token(
         token_hash=digest,
         prefix=prefix,
         scopes=scopes,
+        review=bool(body.review),
     )
     session.add(row)
     await session.commit()
     await session.refresh(row)
     return ApiTokenCreated(
-        id=row.id, name=row.name, prefix=row.prefix, scopes=row.scopes, token=plaintext
+        id=row.id,
+        name=row.name,
+        prefix=row.prefix,
+        scopes=row.scopes,
+        review=bool(row.review),
+        token=plaintext,
     )
 
 
@@ -63,7 +69,14 @@ async def list_tokens(
         )
     ).scalars()
     return [
-        ApiTokenOut(id=r.id, name=r.name, prefix=r.prefix, scopes=r.scopes) for r in rows
+        ApiTokenOut(
+            id=r.id,
+            name=r.name,
+            prefix=r.prefix,
+            scopes=r.scopes,
+            review=bool(getattr(r, "review", False) or False),
+        )
+        for r in rows
     ]
 
 

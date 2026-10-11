@@ -69,7 +69,12 @@ class User(Base):
 
 
 class ApiToken(Base):
-    """Long-lived scoped token for MCP agents / secondary devices."""
+    """Long-lived scoped token for MCP agents / secondary devices.
+
+    `review` marks third-party writers: their POST /imports drafts into
+    the approval queue instead of writing the sync envelope directly.
+    Additive column (see init_db backfill); defaults to trusted.
+    """
 
     __tablename__ = "api_tokens"
 
@@ -79,6 +84,7 @@ class ApiToken(Base):
     token_hash: Mapped[str] = mapped_column(String(128), unique=True)
     prefix: Mapped[str] = mapped_column(String(16), index=True)
     scopes: Mapped[list] = mapped_column(JSON, default=list)
+    review: Mapped[bool] = mapped_column(Boolean, default=False)
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
@@ -233,4 +239,48 @@ class TrustedReporter(Base):
     added_by: Mapped[str] = mapped_column(String(320), default="")
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
+    )
+
+
+class ImportBatch(Base):
+    """Staged third-party import awaiting in-app approval.
+
+    Unapproved items NEVER touch sync_items, so no device can see
+    not-yet-approved data. Approving writes each item through the same
+    upsert path as a manual edit (last-write-wins, rev bump, no
+    tombstones) — the mass-deletion guard is structurally untouched.
+    New tables only: no sync_items change, no client model change.
+    """
+
+    __tablename__ = "import_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    source: Mapped[str] = mapped_column(String(120), default="")
+    status: Mapped[str] = mapped_column(
+        String(16), default="pending", index=True
+    )  # pending|approved|rejected
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
+    )
+
+
+class ImportItem(Base):
+    """One staged row inside a batch. `status` tracks the per-item
+    decision so batches can be approved one-by-one."""
+
+    __tablename__ = "import_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    batch_id: Mapped[int] = mapped_column(
+        ForeignKey("import_batches.id"), index=True
+    )
+    collection: Mapped[str] = mapped_column(String(64), index=True)
+    item_id: Mapped[str] = mapped_column(String(256), index=True)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(
+        String(16), default="pending"
+    )  # pending|approved|rejected
+    decided_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )

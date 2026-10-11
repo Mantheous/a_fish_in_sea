@@ -60,6 +60,10 @@ class ApiTokenCreateIn(BaseModel):
     # e.g. ["sync", "tasks:read", "tasks:write", "events:read", "events:write"]
     # "sync" implies full sync pull/push; collection scopes gate /items/*.
     scopes: list[str] = Field(default_factory=lambda: ["sync"])
+    # review=True marks a third-party writer: its POST /imports drafts
+    # into the in-app approval queue instead of writing sync directly.
+    # Default False (trusted) so existing mint flows are unchanged.
+    review: bool = False
 
 
 class ApiTokenOut(BaseModel):
@@ -67,6 +71,7 @@ class ApiTokenOut(BaseModel):
     name: str
     prefix: str
     scopes: list[str]
+    review: bool = False
 
 
 class ApiTokenCreated(ApiTokenOut):
@@ -197,3 +202,59 @@ class TrustedOut(BaseModel):
     email: str
     added_by: str
     created_at: dt.datetime
+
+
+# ── Staged imports (third-party writers + in-app approval) ─────────────
+
+class ImportItemIn(BaseModel):
+    collection: str
+    item_id: str = Field(min_length=1, max_length=256)
+    data: dict = Field(default_factory=dict)
+
+    model_config = {"extra": "ignore"}
+
+    @field_validator("data", mode="after")
+    @classmethod
+    def _check_size(cls, data: dict) -> dict:
+        return _check_item_size(data)
+
+
+class ImportCreateIn(BaseModel):
+    items: list[ImportItemIn] = Field(min_length=1, max_length=200)
+    source: str = Field(default="", max_length=120)
+
+
+class ImportItemOut(BaseModel):
+    collection: str
+    item_id: str
+    data: dict
+    status: str = "pending"
+    # Snapshot of the live sync row with the same collection+item_id,
+    # so reviewers see "updates existing" instead of a silent overwrite.
+    existing: dict | None = None
+    # True when that live row is a tombstone (user deleted it in the
+    # app): approving restores it. Surfaced so resurrection is explicit.
+    existing_deleted: bool = False
+
+
+class ImportBatchOut(BaseModel):
+    id: int
+    source: str
+    status: str
+    created_at: dt.datetime
+    items: list[ImportItemOut] = Field(default_factory=list)
+
+
+class ImportCreateOut(BaseModel):
+    status: str  # "applied" | "pending"
+    batch_id: int | None = None
+    applied: list[SyncRecord] = Field(default_factory=list)
+
+
+class ImportApproveIn(BaseModel):
+    # None/empty means "approve every still-pending item".
+    item_ids: list[str] | None = None
+
+
+class ImportDiscardIn(BaseModel):
+    item_ids: list[str] = Field(min_length=1)

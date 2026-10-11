@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
+import 'package:a_fish_in_sea/imports/view/import_inbox_card.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_tracking.dart';
@@ -70,6 +71,7 @@ class _HomePageState extends State<HomePage> {
       body: ListView(
         padding: const EdgeInsets.all(12),
         children: [
+          const ImportInboxCard(),
           const _TimeTrackingCard(),
           const _TrackingCard(),
           _SectionCard(

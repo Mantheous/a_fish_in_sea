@@ -51,6 +51,11 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Unknown user")
     # stash scopes for downstream scope checks
     user._scopes = list(row.scopes or [])  # type: ignore[attr-defined]
+    # stash the review flag + label so POST /imports can route this token
+    # into the approval queue without another lookup. getattr-guarded
+    # reads keep old rows (pre-review-column) working.
+    user._token_review = bool(getattr(row, "review", False) or False)  # type: ignore[attr-defined]
+    user._token_name = row.name or ""  # type: ignore[attr-defined]
     return user
 
 
