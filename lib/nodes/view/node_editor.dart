@@ -59,9 +59,6 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   bool _isUnbounded = false;
 
   DateTime? _due;
-  DateTime? _blockStart;
-  DateTime? _blockEnd;
-  bool _allDay = false;
   bool _dateFixed = false;
 
   bool _hasMoney = false;
@@ -96,9 +93,6 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _parents = List.of(e?.parentIds ?? widget.initialParentIds);
     _isUnbounded = e?.isUnbounded ?? false;
     _due = e?.schedule?.due;
-    _blockStart = e?.schedule?.start;
-    _blockEnd = e?.schedule?.end;
-    _allDay = e?.schedule?.allDay ?? false;
     _dateFixed = e?.schedule?.isFixed ?? false;
     _hasMoney = e?.money != null || widget.enableMoney;
     _amount = TextEditingController(
@@ -207,16 +201,6 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
               onClear:
                   _due == null ? null : () => setState(() => _due = null),
             ),
-            _BlockField(
-              start: _blockStart,
-              end: _blockEnd,
-              allDay: _allDay,
-              onChanged: (start, end, allDay) => setState(() {
-                _blockStart = start;
-                _blockEnd = end;
-                _allDay = allDay;
-              }),
-            ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               dense: true,
@@ -225,6 +209,18 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
               value: _dateFixed,
               onChanged: (v) => setState(() => _dateFixed = v),
             ),
+            // Calendar time now comes from assigned events, not the goal
+            // itself: the old block picker was removed. A stored block
+            // from before is dropped on save (the due date is kept).
+            if ((widget.existing?.schedule?.hasCalendarBlock ?? false))
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'This goal has an old calendar block — saving removes '
+                  'it. Assign an event to put it on the calendar instead.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
             const SizedBox(height: 8),
             _sectionTitle(context, 'Money'),
             SwitchListTile(
@@ -511,7 +507,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     // save clears stored facets — one tap back to safety.
     if (_isUnbounded) {
       final dropping = <String>[];
-      if (_due != null || _blockStart != null || _blockEnd != null) {
+      if (_due != null) {
         dropping.add('schedule');
       }
       if (_hasMoney) dropping.add('money target');
@@ -531,20 +527,11 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         _notes.text.trim().isEmpty ? null : _notes.text.trim();
 
     ScheduleFacet? schedule;
-    if (_due != null ||
-        _blockStart != null ||
-        _blockEnd != null ||
-        _dateFixed) {
-      var end = _blockEnd;
-      var start = _blockStart;
-      if (start != null && end != null && !end.isAfter(start)) {
-        end = start.add(const Duration(hours: 1));
-      }
+    // Goals carry a due date at most — calendar time comes from assigned
+    // events. Any stored block (start/end) from before is dropped here.
+    if (_due != null || _dateFixed) {
       schedule = ScheduleFacet(
         due: _due,
-        start: start,
-        end: end,
-        allDay: _allDay,
         isFixed: _dateFixed,
       );
     }
@@ -848,124 +835,5 @@ class _DateRow extends StatelessWidget {
           ),
       ],
     );
-  }
-}
-
-class _BlockField extends StatelessWidget {
-  final DateTime? start;
-  final DateTime? end;
-  final bool allDay;
-  final void Function(DateTime? start, DateTime? end, bool allDay)
-      onChanged;
-
-  const _BlockField({
-    required this.start,
-    required this.end,
-    required this.allDay,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final s = start;
-    final e = end;
-    final label = s != null && e != null && !allDay
-        ? '${DateFormat('EEE, MMM d').format(s)} · '
-            '${TimeOfDay.fromDateTime(s).format(context)} – '
-            '${TimeOfDay.fromDateTime(e).format(context)}'
-        : s != null && allDay
-            ? '${DateFormat('EEE, MMM d').format(s)} · all day'
-            : 'No calendar block';
-    return Column(
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Calendar block',
-                      style:
-                          Theme.of(context).textTheme.labelLarge),
-                  Text(label,
-                      style: Theme.of(context).textTheme.bodySmall),
-                ],
-              ),
-            ),
-            IconButton(
-              tooltip: 'Pick block',
-              icon: const Icon(Icons.schedule),
-              onPressed: () => _pick(context),
-            ),
-            if (s != null || e != null)
-              IconButton(
-                tooltip: 'Clear block',
-                icon: const Icon(Icons.event_busy),
-                onPressed: () => onChanged(null, null, false),
-              ),
-          ],
-        ),
-        Row(
-          children: [
-            const Expanded(child: Text('All day')),
-            Switch(
-              value: allDay,
-              onChanged: s == null
-                  ? null
-                  : (v) => onChanged(s, e, v),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Future<void> _pick(BuildContext context) async {
-    final now = DateTime.now();
-    final initialDate = start ?? now.add(const Duration(days: 1));
-    final pickedDate = await showDatePicker(
-      context: context,
-      initialDate: initialDate,
-      firstDate: DateTime(2000),
-      lastDate: DateTime(2100),
-    );
-    if (pickedDate == null || !context.mounted) return;
-    final initialStart = start != null
-        ? TimeOfDay.fromDateTime(start!)
-        : const TimeOfDay(hour: 9, minute: 0);
-    final pickedStart = await showTimePicker(
-      context: context,
-      initialTime: initialStart,
-    );
-    if (pickedStart == null || !context.mounted) return;
-    final initialEnd = end != null
-        ? TimeOfDay.fromDateTime(end!)
-        : TimeOfDay(
-            hour: (pickedStart.hour + 1) % 24,
-            minute: pickedStart.minute,
-          );
-    final pickedEnd = await showTimePicker(
-      context: context,
-      initialTime: initialEnd,
-    );
-    if (pickedEnd == null || !context.mounted) return;
-    var blockStart = DateTime(
-      pickedDate.year,
-      pickedDate.month,
-      pickedDate.day,
-      pickedStart.hour,
-      pickedStart.minute,
-    );
-    var blockEnd = DateTime(
-      pickedDate.year,
-      pickedDate.month,
-      pickedDate.day,
-      pickedEnd.hour,
-      pickedEnd.minute,
-    );
-    if (!blockEnd.isAfter(blockStart)) {
-      blockEnd = blockStart.add(const Duration(hours: 1));
-    }
-    onChanged(blockStart, blockEnd, allDay);
   }
 }
