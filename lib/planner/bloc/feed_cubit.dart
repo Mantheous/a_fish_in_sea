@@ -9,6 +9,7 @@ import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_feed.dart';
 import '../../sync/sync_client.dart';
+import '../model/assignment_rule.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../service/canvas_service.dart';
@@ -31,6 +32,11 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   /// out (or in tests) — [_syncIcal] then falls back to direct fetch.
   final SyncClient? syncClient;
 
+  /// Current assignment rules for fresh homework imports. A provider
+  /// (rather than a cubit reference) so tests can omit it; null means
+  /// no shifts, exactly as before rules existed.
+  final List<AssignmentRule> Function()? assignmentRulesProvider;
+
   final ValueNotifier<bool> isSyncing = ValueNotifier(false);
   DateTime? _lastAutoSync;
   Timer? _autoResyncTimer;
@@ -51,6 +57,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     required String Function() proxyBase,
     this.syncClient,
     CanvasService? canvasService,
+    this.assignmentRulesProvider,
   })  : _calendarCubit = calendarCubit,
         _nodeCubit = nodeCubit,
         _icalService = icalService,
@@ -505,6 +512,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
           events,
           feed,
           taskOptOutIds: optOuts,
+          assignmentRules: assignmentRulesProvider?.call() ?? const [],
         );
       }
       _updateFeedStatus(

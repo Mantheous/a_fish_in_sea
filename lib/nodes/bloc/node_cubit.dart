@@ -4,6 +4,8 @@ import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:a_fish_in_sea/finances/model/recurring_rule.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/goals/model/goal.dart';
+import 'package:a_fish_in_sea/planner/model/assignment_rule.dart';
+import 'package:a_fish_in_sea/planner/model/assignment_template.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/model/task.dart';
@@ -1771,6 +1773,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     List<PlannerEvent> events,
     Feed feed, {
     Set<String> taskOptOutIds = const {},
+    List<AssignmentRule> assignmentRules = const [],
   }) {
     final now = DateTime.now();
     var base = state;
@@ -1802,6 +1805,14 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       final isWindow = feed.kind == FeedKind.learningSuite &&
           event.allDay &&
           event.end.difference(event.start) > const Duration(days: 1);
+      final baseDue = isWindow ? event.end : event.start;
+      // Assignment rules shift the planned deadline (e.g. video quizzes
+      // due 2 days early); the feed window stays in start/end as truth.
+      final shift = assignmentOffsetFor(
+        assignmentRules,
+        feedId: feed.id,
+        title: event.subject,
+      );
       imported.add(Node(
         id: event.id,
         title: event.subject,
@@ -1810,7 +1821,9 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         status: event.done ? NodeStatus.done : NodeStatus.open,
         completedAt: event.completedAt,
         schedule: ScheduleFacet(
-          due: isWindow ? event.end : event.start,
+          due: shift == 0
+              ? baseDue
+              : baseDue.add(Duration(days: shift)),
           start: event.start,
           end: event.end,
         ),
@@ -1825,6 +1838,61 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     if (imported.isNotEmpty || next.length != state.length) {
       emitSilent(next);
     }
+  }
+
+  /// Re-targets open homework dues for one repeating type as ONE
+  /// undoable emit. Only items currently sitting at one of [fromOffsets]
+  /// (whole days from their own feed window) move to [newOffsetDays]:
+  /// never-shifted items sit at 0, rule-shifted ones at the old offset,
+  /// and hand-edited items sit anywhere else and are left alone.
+  /// Returns the number changed; emits nothing when zero.
+  ///
+  /// - New rule (offset N): retarget(newOffset: N, from: [0]).
+  /// - Edit old → new: retarget(newOffset: new, from: [0, old]).
+  /// - Delete (move back): retarget(newOffset: 0, from: [old]).
+  int retargetAssignmentDues({
+    required String feedId,
+    required String templateKey,
+    required int newOffsetDays,
+    List<int> fromOffsets = const [0],
+  }) {
+    final from = fromOffsets.toSet();
+    var changed = 0;
+    final next = <Node>[];
+    for (final n in state) {
+      if (n.sourceEventId == null ||
+          !n.isOpen ||
+          (n.feedId ?? n.classId) != feedId ||
+          assignmentTemplateKey(n.title) != templateKey) {
+        next.add(n);
+        continue;
+      }
+      final s = n.schedule;
+      final base = assignmentBaseDue(
+        start: s?.start,
+        end: s?.end,
+        allDay: s?.allDay ?? false,
+      );
+      final shift =
+          assignmentShiftOf(due: s?.due, base: base);
+      if (base == null || shift == null || !from.contains(shift)) {
+        next.add(n);
+        continue;
+      }
+      if (shift == newOffsetDays) {
+        next.add(n);
+        continue;
+      }
+      changed++;
+      next.add(n.copyWith(
+        schedule: s!.copyWith(
+          due: base.add(Duration(days: newOffsetDays)),
+        ),
+      ));
+    }
+    if (changed == 0) return 0;
+    emitChange(next);
+    return changed;
   }
 
   /// Deletes every homework node imported from [feedId]. Silent: feed

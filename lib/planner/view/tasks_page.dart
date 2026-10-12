@@ -23,6 +23,7 @@ import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../model/task_assignee.dart';
 import 'feed_manager.dart';
+import 'assignment_rules_sheet.dart';
 import 'syllabus_import_sheet.dart';
 import 'tasks_view_options_sheet.dart';
 
@@ -229,6 +230,40 @@ class _TasksPageState extends State<TasksPage> {
                         tooltip: 'Manage classes',
                         icon: const Icon(Icons.sync),
                         onPressed: () => showFeedManager(context),
+                      ),
+                      PopupMenuButton<String>(
+                        tooltip: 'More actions',
+                        icon: const Icon(Icons.more_vert),
+                        onSelected: (value) {
+                          switch (value) {
+                            case 'rules':
+                              showAssignmentRules(context);
+                            case 'view':
+                              showTasksViewOptions(context);
+                            case 'syllabus':
+                              showSyllabusImport(context);
+                            case 'classes':
+                              showFeedManager(context);
+                          }
+                        },
+                        itemBuilder: (menuContext) => const [
+                          PopupMenuItem(
+                            value: 'rules',
+                            child: Text('Repeating assignment rules'),
+                          ),
+                          PopupMenuItem(
+                            value: 'view',
+                            child: Text('View options'),
+                          ),
+                          PopupMenuItem(
+                            value: 'syllabus',
+                            child: Text('Import from syllabus'),
+                          ),
+                          PopupMenuItem(
+                            value: 'classes',
+                            child: Text('Manage classes'),
+                          ),
+                        ],
                       ),
                       const UndoRedoActions(),
                     ],

@@ -14,6 +14,8 @@ import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/tasks_tab_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/assignment_rules_cubit.dart';
+import 'package:a_fish_in_sea/planner/model/assignment_rule.dart';
 import 'package:a_fish_in_sea/planner/bloc/tasks_view_options_cubit.dart';
 import 'package:a_fish_in_sea/planner/service/canvas_service.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
@@ -88,6 +90,7 @@ class MyApp extends StatelessWidget {
         BlocProvider(create: (_) => CalendarVisibilityCubit()),
         BlocProvider(create: (_) => CalendarDraftCubit()),
         BlocProvider(create: (_) => TasksTabCubit()),
+        BlocProvider(create: (_) => AssignmentRulesCubit()),
         BlocProvider(create: (_) => TasksViewOptionsCubit()),
         BlocProvider(create: (_) => PlacesCubit()),
         BlocProvider(create: (_) => TrackingCubit()),
@@ -109,6 +112,13 @@ class MyApp extends StatelessWidget {
             proxyBase: () =>
                 context.read<SettingsCubit>().state.icalProxyBase,
             syncClient: context.read<AuthCubit>().syncClient,
+            assignmentRulesProvider: () {
+              try {
+                return context.read<AssignmentRulesCubit>().state;
+              } catch (_) {
+                return const <AssignmentRule>[];
+              }
+            },
             canvasService: CanvasService(
               baseUrl: () =>
                   context.read<SettingsCubit>().state.icalProxyBase,
