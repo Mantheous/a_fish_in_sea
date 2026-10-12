@@ -348,6 +348,72 @@ void main() {
     expect(a.nodes.byId('t1')?.title, 'B edit');
   });
 
+  test('a remote stop lands even under a conflicting local edit', () async {
+    final server = FakeSyncClient();
+    final a = _Device(server);
+    final b = _Device(server);
+    await a.signIn();
+    await b.signIn();
+
+    a.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
+    await a.engine.syncNow();
+    await b.engine.syncNow();
+
+    // The run roams to B, B stops it, and the stop reaches the server.
+    a.nodes.startTracking('t1', now: DateTime(2026, 9, 12, 9));
+    await a.engine.syncNow();
+    await b.engine.syncNow();
+    b.nodes.stopTracking('t1', now: DateTime(2026, 9, 12, 9, 30));
+    await b.engine.syncNow();
+
+    // A renames mid-run (local change), then pulls the stop: conflict,
+    // server wins the title, and the stop — which ended after A's start
+    // — clears the local timer instead of resurrecting it.
+    a.nodes.updateNode(a.nodes.byId('t1')!.copyWith(title: 'A edit'));
+    await a.engine.syncNow();
+
+    final live = a.nodes.byId('t1')!;
+    expect(live.title, 'v1');
+    expect(live.isTracking, isFalse);
+    expect(live.actualStart, DateTime(2026, 9, 12, 9));
+    expect(live.actualEnd, DateTime(2026, 9, 12, 9, 30));
+  });
+
+  test('old remote actuals never stop a restarted timer', () async {
+    final server = FakeSyncClient();
+    final a = _Device(server);
+    final b = _Device(server);
+    await a.signIn();
+    await b.signIn();
+
+    a.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
+    await a.engine.syncNow();
+    await b.engine.syncNow();
+
+    // Session one runs and stops on B; A adopts the stop cleanly.
+    b.nodes.startTracking('t1', now: DateTime(2026, 9, 12, 8, 30));
+    await b.engine.syncNow();
+    await a.engine.syncNow();
+    b.nodes.stopTracking('t1', now: DateTime(2026, 9, 12, 9, 30));
+    await b.engine.syncNow();
+    await a.engine.syncNow();
+    expect(a.nodes.byId('t1')?.hasReported, isTrue);
+
+    // Session two starts on A; B renames and syncs. A's conflicting pull
+    // meets a server copy whose actuals predate the new run — the live
+    // timer survives while the rename still lands.
+    final t0 = DateTime(2026, 9, 12, 10);
+    a.nodes.startTracking('t1', now: t0);
+    b.nodes.updateNode(b.nodes.byId('t1')!.copyWith(title: 'B edit'));
+    await b.engine.syncNow();
+    await a.engine.syncNow();
+
+    final live = a.nodes.byId('t1')!;
+    expect(live.title, 'B edit');
+    expect(live.isTracking, isTrue);
+    expect(live.timerStartedAt, t0);
+  });
+
   test('contentHash is stable and sensitive', () {
     expect(
       contentHash(const {'a': 1}),
