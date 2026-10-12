@@ -381,4 +381,147 @@ void main() {
       expect(nodes.byId('task')?.parentIds, isNot(contains('goal')));
     });
   });
+
+  group('assignEventToGoal includeSeries=false', () {
+    test('single occurrence only parents the seed', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      expect(nodes.addNode(goal('goal')), isNull);
+      calendar.addEvent(event(
+        'gcal:f:m',
+        recurrenceRule: 'FREQ=WEEKLY',
+        feedId: 'f',
+        sourceUid: 'master-1',
+        start: DateTime(2026, 9, 20, 9),
+      ));
+      calendar.addEvent(event(
+        'gcal:f:i1',
+        seriesId: 'master-1',
+        feedId: 'f',
+        sourceUid: 'master-1_20260920T090000',
+        isTask: false,
+        start: DateTime(2026, 9, 20, 9),
+      ));
+      calendar.addEvent(event(
+        'gcal:f:i2',
+        seriesId: 'master-1',
+        feedId: 'f',
+        sourceUid: 'master-1_20260927T090000',
+        isTask: false,
+        start: DateTime(2026, 9, 27, 9),
+      ));
+      final result = NodeEventLink.assignEventToGoal(
+        calendar,
+        nodes,
+        'gcal:f:i1',
+        'goal',
+        includeSeries: false,
+        now: DateTime(2026, 9, 12),
+      );
+      expect(result.error, isNull);
+      expect(result.assigned, 1);
+      expect(nodes.byId('gcal:f:i1')?.parentIds, contains('goal'));
+      expect(nodes.byId('gcal:f:i2'), isNull);
+    });
+  });
+
+  group('unassignEventFromGoal', () {
+    test('single occurrence removes only the seed', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      expect(nodes.addNode(goal('goal')), isNull);
+      calendar.addEvent(event(
+        'gcal:f:i1',
+        seriesId: 'master-1',
+        feedId: 'f',
+        sourceUid: 'master-1_20260920T090000',
+        start: DateTime(2026, 9, 20, 9),
+      ));
+      calendar.addEvent(event(
+        'gcal:f:i2',
+        seriesId: 'master-1',
+        feedId: 'f',
+        sourceUid: 'master-1_20260927T090000',
+        start: DateTime(2026, 9, 27, 9),
+      ));
+      expect(
+        NodeEventLink.assignEventToGoal(
+          calendar,
+          nodes,
+          'gcal:f:i1',
+          'goal',
+          now: DateTime(2026, 9, 12),
+        ).assigned,
+        2,
+      );
+      final removed = NodeEventLink.unassignEventFromGoal(
+        calendar,
+        nodes,
+        'gcal:f:i1',
+        'goal',
+        includeSeries: false,
+      );
+      expect(removed.error, isNull);
+      expect(removed.removed, 1);
+      expect(nodes.byId('gcal:f:i1')?.parentIds, isNot(contains('goal')));
+      expect(nodes.byId('gcal:f:i2')?.parentIds, contains('goal'));
+    });
+
+    test('series removes this and future instances', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      expect(nodes.addNode(goal('goal')), isNull);
+      calendar.addEvent(event(
+        'gcal:f:i1',
+        seriesId: 'master-1',
+        feedId: 'f',
+        sourceUid: 'master-1_20260920T090000',
+        start: DateTime(2026, 9, 20, 9),
+      ));
+      calendar.addEvent(event(
+        'gcal:f:i2',
+        seriesId: 'master-1',
+        feedId: 'f',
+        sourceUid: 'master-1_20260927T090000',
+        start: DateTime(2026, 9, 27, 9),
+      ));
+      expect(
+        NodeEventLink.assignEventToGoal(
+          calendar,
+          nodes,
+          'gcal:f:i1',
+          'goal',
+          now: DateTime(2026, 9, 12),
+        ).assigned,
+        2,
+      );
+      final removed = NodeEventLink.unassignEventFromGoal(
+        calendar,
+        nodes,
+        'gcal:f:i1',
+        'goal',
+        includeSeries: true,
+        now: DateTime(2026, 9, 12),
+      );
+      expect(removed.error, isNull);
+      expect(removed.removed, 2);
+      expect(nodes.byId('gcal:f:i1')?.parentIds, isNot(contains('goal')));
+      expect(nodes.byId('gcal:f:i2')?.parentIds, isNot(contains('goal')));
+    });
+
+    test('already-removed is a no-op success', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      expect(nodes.addNode(goal('goal')), isNull);
+      calendar.addEvent(event('evt:1'));
+      final removed = NodeEventLink.unassignEventFromGoal(
+        calendar,
+        nodes,
+        'evt:1',
+        'goal',
+      );
+      expect(removed.error, isNull);
+      expect(removed.removed, 0);
+    });
+  });
 }

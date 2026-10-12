@@ -389,6 +389,56 @@ class NodeEventLink {
     );
   }
 
+  /// Removes [goalId] from the backing node(s) of [eventId]. With
+  /// [includeSeries] the removal covers the seed plus its future series
+  /// members (mirroring [assignEventToGoal]'s targets); otherwise only
+  /// this occurrence. Batched into one emit. Returns the number of
+  /// backing nodes actually unparented plus the first error, if any.
+  static ({String? error, int removed}) unassignEventFromGoal(
+    CalendarCubit calendar,
+    NodeCubit nodes,
+    String eventId,
+    String goalId, {
+    bool includeSeries = true,
+    DateTime? now,
+  }) {
+    final seed = calendar.byId(eventId);
+    if (seed == null) return (error: 'Event not found.', removed: 0);
+    var targets = [seed];
+    if (includeSeries) {
+      final members = futureSeriesMembers(calendar, seed, now: now);
+      if (members.isNotEmpty) targets = members;
+    }
+    final toUnparent = <String, Node>{};
+    for (final event in targets) {
+      final backing = backingNodeFor(nodes, calendar, event.id);
+      if (backing == null) continue;
+      if (!backing.parentIds.contains(goalId)) continue;
+      toUnparent.putIfAbsent(
+        backing.id,
+        () => backing.copyWith(
+          parentIds:
+              backing.parentIds.where((p) => p != goalId).toList(),
+        ),
+      );
+    }
+    if (toUnparent.isEmpty) return (error: null, removed: 0);
+    final writeErrors =
+        nodes.writeNodes(upserts: toUnparent.values.toList());
+    var removed = 0;
+    String? firstError;
+    for (final entry in toUnparent.entries) {
+      final err = writeErrors[entry.key];
+      if (err != null) {
+        firstError ??= err;
+        continue;
+      }
+      removed++;
+    }
+    if (removed == 0) return (error: firstError, removed: 0);
+    return (error: firstError, removed: removed);
+  }
+
   /// Assigns [eventId] (plus its future series members when
   /// [includeSeries]) to the goal [goalId]. Events not yet marked as tasks
   /// are marked first so a backing node exists. Past occurrences are

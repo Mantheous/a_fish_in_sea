@@ -2776,7 +2776,7 @@ class _GoalAssignmentSection extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                     deleteIcon: const Icon(Icons.close, size: 16),
-                    onDeleted: () => _unassign(context, backing!.id, p.id),
+                    onDeleted: () => _unassign(context, p.id),
                   ),
               ],
             ),
@@ -2804,6 +2804,7 @@ class _GoalAssignmentSection extends StatelessWidget {
     } catch (_) {
       return;
     }
+    final live = calendar.byId(event.id) ?? event;
     final liveBacking =
         NodeEventLink.backingNodeFor(nodes, calendar, event.id);
     final goal = await showGoalPicker(
@@ -2811,33 +2812,152 @@ class _GoalAssignmentSection extends StatelessWidget {
       excludeNodeId: liveBacking?.id,
     );
     if (goal == null || !context.mounted) return;
+    // Repeating events offer a scope choice: just this occurrence, or
+    // this plus all future instances (the seed is always included so an
+    // explicitly picked past occurrence still acts on itself).
+    var includeSeries = false;
+    if (NodeEventLink.isRepeatingEvent(live)) {
+      final futureMembers =
+          NodeEventLink.futureSeriesMembers(calendar, live);
+      if (futureMembers.length > 1) {
+        final scope = await showDialog<_GoalAssignScope>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Assign repeating event'),
+            content: Text(
+              'Apply “${goal.title}” to just this occurrence, or to '
+              'this and all future instances (${futureMembers.length})?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext)
+                    .pop(_GoalAssignScope.cancel),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext)
+                    .pop(_GoalAssignScope.occurrence),
+                child: const Text('This occurrence'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext)
+                    .pop(_GoalAssignScope.series),
+                child: Text('This + future (${futureMembers.length})'),
+              ),
+            ],
+          ),
+        );
+        if (scope == null || scope == _GoalAssignScope.cancel) return;
+        includeSeries = scope == _GoalAssignScope.series;
+        if (!context.mounted) return;
+      }
+    }
     final result = NodeEventLink.assignEventToGoal(
       calendar,
       nodes,
       event.id,
       goal.id,
-      includeSeries: false,
+      includeSeries: includeSeries,
     );
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          result.assigned > 0
-              ? 'Assigned to “${goal.title}”'
-              : (result.error ?? 'Already assigned to “${goal.title}”.'),
+          result.assigned > 1
+              ? 'Assigned ${result.assigned} items to “${goal.title}”'
+              : result.assigned == 1
+                  ? 'Assigned to “${goal.title}”'
+                  : (result.error ?? 'Already assigned to “${goal.title}”.'),
         ),
       ),
     );
   }
 
-  void _unassign(BuildContext context, String nodeId, String goalId) {
+  Future<void> _unassign(BuildContext context, String goalId) async {
     NodeCubit nodes;
+    CalendarCubit calendar;
     try {
       nodes = context.read<NodeCubit>();
+      calendar = context.read<CalendarCubit>();
     } catch (_) {
       return;
     }
-    final error = NodeEventLink.unassignNodeFromGoal(nodes, nodeId, goalId);
+    final live = calendar.byId(event.id) ?? event;
+    // When several future occurrences share this goal, offer to remove
+    // just this one or this plus all future instances.
+    var includeSeries = false;
+    if (NodeEventLink.isRepeatingEvent(live)) {
+      final futureMembers =
+          NodeEventLink.futureSeriesMembers(calendar, live);
+      if (futureMembers.length > 1) {
+        var assignedCount = 0;
+        for (final m in futureMembers) {
+          final backing =
+              NodeEventLink.backingNodeFor(nodes, calendar, m.id);
+          if (backing?.parentIds.contains(goalId) ?? false) {
+            assignedCount++;
+          }
+        }
+        if (assignedCount > 1) {
+          final scope = await showDialog<_GoalAssignScope>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              title: const Text('Remove from goal'),
+              content: Text(
+                'Remove just this occurrence, or this and all future '
+                'instances ($assignedCount assigned)?',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext)
+                      .pop(_GoalAssignScope.cancel),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext)
+                      .pop(_GoalAssignScope.occurrence),
+                  child: const Text('This occurrence'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(dialogContext)
+                      .pop(_GoalAssignScope.series),
+                  child: const Text('This + future'),
+                ),
+              ],
+            ),
+          );
+          if (scope == null || scope == _GoalAssignScope.cancel) return;
+          includeSeries = scope == _GoalAssignScope.series;
+          if (!context.mounted) return;
+        }
+      }
+    }
+    if (includeSeries) {
+      final result = NodeEventLink.unassignEventFromGoal(
+        calendar,
+        nodes,
+        event.id,
+        goalId,
+        includeSeries: true,
+      );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.removed > 1
+                ? 'Removed ${result.removed} items from goal'
+                : result.removed == 1
+                    ? 'Removed from goal'
+                    : (result.error ?? 'Already removed from goal'),
+          ),
+        ),
+      );
+      return;
+    }
+    final backing = NodeEventLink.backingNodeFor(nodes, calendar, event.id);
+    if (backing == null) return;
+    final error =
+        NodeEventLink.unassignNodeFromGoal(nodes, backing.id, goalId);
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -2846,6 +2966,8 @@ class _GoalAssignmentSection extends StatelessWidget {
     );
   }
 }
+
+enum _GoalAssignScope { cancel, occurrence, series }
 
 class _TaskTimeSection extends StatelessWidget {
   final PlannerEvent event;
