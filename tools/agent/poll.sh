@@ -28,6 +28,7 @@ fi
 "$REPO/tools/agent/build.sh"
 "$REPO/tools/agent/review.sh"
 "$REPO/tools/agent/data-guard.sh"
+"$REPO/tools/agent/security-guard.sh"
 "$REPO/tools/agent/deploy.sh"
 "$REPO/tools/agent/ux-walk.sh"
 "$REPO/tools/agent/perf-walk.sh"

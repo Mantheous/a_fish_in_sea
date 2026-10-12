@@ -221,6 +221,12 @@ async def approve(
         ).scalar_one_or_none()
         if exists is None:
             session.add(TrustedReporter(email=email, added_by=user.email))
+            log.warning(
+                "feedback trust granted: %s by admin %s (via approve #%d)",
+                email,
+                user.email,
+                row.id,
+            )
     row.reviewed_by = user.email
     row.reviewed_at = dt.datetime.now(dt.timezone.utc)
     await session.commit()
@@ -288,6 +294,7 @@ async def trusted_add(
     session.add(row)
     await session.commit()
     await session.refresh(row)
+    log.warning("feedback trust granted: %s by admin %s (direct add)", email, user.email)
     return TrustedOut(
         email=row.email, added_by=row.added_by, created_at=row.created_at
     )
@@ -311,4 +318,7 @@ async def trusted_remove(
         raise HTTPException(status_code=404, detail="Not a trusted reporter")
     await session.delete(row)
     await session.commit()
+    log.warning(
+        "feedback trust revoked: %s by admin %s", row.email, user.email
+    )
     return {"status": "removed"}

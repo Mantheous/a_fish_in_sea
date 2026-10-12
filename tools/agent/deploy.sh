@@ -66,6 +66,29 @@ Fix the findings or touch .agent-data-override to ship anyway." || true
   fi
 fi
 
+# Security guardian gate: security-guard.sh (run earlier in poll.sh) blocks
+# the revision when pending changes open an untrusted-user → GitHub →
+# builder path or weaken auth/SSRF/access-control.
+SEC_BLOCK_MARKER="build/web/.agent-sec-blocked"
+SEC_OVERRIDE=".agent-sec-override"
+SEC_ALERT_MARKER="build/web/.agent-sec-alerted"
+if [ -f "$SEC_BLOCK_MARKER" ] && [ "$(cat "$SEC_BLOCK_MARKER")" = "$DESC" ]; then
+  if [ -f "$SEC_OVERRIDE" ] && { [ ! -s "$SEC_OVERRIDE" ] || [ "$(cat "$SEC_OVERRIDE")" = "$DESC" ]; }; then
+    echo "[deploy] security guardian blocked $DESC but override is present — proceeding"
+    [ -s "$SEC_OVERRIDE" ] || rm -f "$SEC_OVERRIDE" # one-shot empty-file override
+  else
+    echo "[deploy] security guardian BLOCKED $DESC — not building this revision"
+    echo "[deploy] see build/web/.agent-sec-report.md; override: touch .agent-sec-override"
+    if [ ! -f "$SEC_ALERT_MARKER" ] || [ "$(cat "$SEC_ALERT_MARKER")" != "$DESC" ]; then
+      echo "$DESC" > "$SEC_ALERT_MARKER"
+      "$DIR/tg.sh" "🛑 Web deploy held back by the security guardian ($DESC)
+Report: build/web/.agent-sec-report.md
+Fix the findings or touch .agent-sec-override to ship anyway." || true
+    fi
+    exit 0
+  fi
+fi
+
 # Data insurance before every deploy: snapshot the sync DB (kept if the
 # deploy goes bad; cheap and skipped when nothing changed).
 "$DIR/backup-db.sh" || echo "[deploy] backup-db failed (continuing)"

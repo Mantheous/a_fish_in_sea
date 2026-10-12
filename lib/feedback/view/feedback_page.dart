@@ -143,7 +143,11 @@ class _FeedbackPageState extends State<FeedbackPage> {
   }
 
   Future<void> _approve(FeedbackReport report) async {
-    var trust = report.status == 'pending' && !_isKnownReporter(report.email);
+    // Trust is never implied: one approval files THIS report only. Granting
+    // direct-file rights (future bugs auto-file as agent-approved and the
+    // builder runs code automatically) requires an explicit checkbox tick.
+    // Default off so a hurried tap cannot promote a stranger to RCE.
+    var trust = false;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -158,12 +162,21 @@ class _FeedbackPageState extends State<FeedbackPage> {
                     ? 'Files as auto-approved — the builder fixes it automatically.'
                     : 'Files for triage — still needs manual approval before building.',
               ),
+              const SizedBox(height: 4),
+              Text(
+                _isKnownReporter(report.email)
+                    ? '${report.email} is already trusted (direct filing).'
+                    : '${report.email} is NOT trusted — approving files this report only unless you tick Trust below.',
+                style: Theme.of(dialogContext).textTheme.bodySmall,
+              ),
               const SizedBox(height: 12),
               CheckboxListTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('Trust this reporter'),
                 subtitle: const Text(
-                    'Future submissions file immediately, no review.'),
+                    'Off = this report only. On = their future bugs file '
+                    'directly to GitHub and auto-build with no review. '
+                    'Only tick for people you would give code-execution rights.'),
                 value: trust,
                 onChanged: (v) => setDialogState(() => trust = v ?? false),
               ),
@@ -368,10 +381,10 @@ class _PolicyCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final line = status.isAdmin
-        ? 'You are an admin — review the queue below.'
+        ? 'You are an admin (ADMIN_EMAILS) — review the queue below. Only you see the review queue + trusted-reporter list.'
         : status.isTrusted
-            ? 'You are a trusted reporter — your submissions file on GitHub immediately, no review.'
-            : 'New reporters are reviewed once — after approval your future submissions file immediately.';
+            ? 'You are a trusted reporter — your submissions file on GitHub immediately, no review. Bugs auto-build: only submit your own verified bugs.'
+            : 'First report? An admin reviews it before anything reaches GitHub. Direct filing is allowlist-only — ask an admin to trust you.';
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -383,7 +396,7 @@ class _PolicyCard extends StatelessWidget {
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 4),
             const Text(
-                'Bugs are approved + fixed automatically. Features go through triage and need manual approval. No GitHub account needed — the server files the issue for you.'),
+                'Bugs are approved + fixed automatically (builder runs code from the issue). Features go through triage and need manual approval. No GitHub account needed — the server files the issue for you. Only admins and explicitly trusted reporters file directly; everyone else waits for review.'),
             const SizedBox(height: 4),
             Text(line, style: Theme.of(context).textTheme.bodySmall),
           ],
@@ -711,7 +724,7 @@ class _TrustedCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              'Trusted reporters skip the review queue — their bugs auto-file as approved, their features go straight to triage.',
+              'Allowlist for direct GitHub filing (admin-only). Trusted reporters skip the review queue — their bugs auto-file as approved and the builder runs code automatically; their features go straight to triage. Only add people you would give code-execution rights.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             if (trusted.isEmpty)
