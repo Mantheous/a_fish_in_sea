@@ -108,7 +108,12 @@ if [ -f "$DESC_MARKER" ] && [ "$(cat "$DESC_MARKER")" = "$DESC" ]; then
 fi
 
 echo "[sec-guard] preflight for $DESC"
-if ! python3 -m pytest server/api/tests/test_security.py server/api/tests/test_feedback.py server/api/tests/test_feedback_security.py server/api/tests/test_auth_sync.py server/api/tests/test_auth_refresh.py server/api/tests/test_sync_guard.py >/tmp/opencode/sec-guard-tests.log 2>&1; then
+# Server deps (incl. pytest) live in server/api/.venv per server/api/README.md;
+# system python3 has no pytest, so prefer the venv and fail with a clear
+# infra message instead of a misleading security block.
+PYTEST_PY="$REPO/server/api/.venv/bin/python"
+[ -x "$PYTEST_PY" ] || PYTEST_PY="python3"
+if ! "$PYTEST_PY" -m pytest server/api/tests/test_security.py server/api/tests/test_feedback.py server/api/tests/test_feedback_security.py server/api/tests/test_auth_sync.py server/api/tests/test_auth_refresh.py server/api/tests/test_sync_guard.py >/tmp/opencode/sec-guard-tests.log 2>&1; then
   {
     echo "# Security guard preflight — deterministic tests FAILED"
     echo "Revision: $DESC"
