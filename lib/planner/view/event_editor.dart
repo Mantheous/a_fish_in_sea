@@ -1634,6 +1634,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       _applySeriesLocal(
         master,
         done: done,
+        editedId: base.id,
       );
       widget.onFinished?.call();
       return;
@@ -1658,7 +1659,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       messenger.showSnackBar(SnackBar(content: Text(error)));
       return;
     }
-    _applySeriesPostPush(master, done: done);
+    _applySeriesPostPush(master, done: done, editedId: base.id);
     widget.onFinished?.call();
   }
 
@@ -1693,13 +1694,17 @@ class EventEditorFormState extends State<EventEditorForm> {
   }
 
   /// Local-only series update: applies the editor's task/people/place
-  /// state to every cached occurrence of the series and mirrors each
-  /// into its backing node. No Google write.
+  /// state to the series' future occurrences and mirrors each into its
+  /// backing node. Past occurrences stay plain calendar events (no backing
+  /// nodes): marking a series that has been repeating for a while must not
+  /// flood the Tasks list with an overdue todo per past occurrence. No
+  /// Google write.
   ///
   /// Batched into a handful of emits (one per cubit): looping the
   /// single-write methods snapshots the whole store per occurrence and
   /// kills the tab on large calendars.
-  void _applySeriesLocal(PlannerEvent master, {required bool done}) {
+  void _applySeriesLocal(PlannerEvent master,
+      {required bool done, String? editedId}) {
     CalendarCubit calendar;
     NodeCubit nodes;
     try {
@@ -1717,8 +1722,17 @@ class EventEditorFormState extends State<EventEditorForm> {
         if (FeedCubit.seriesKeyFor(event) == key) event,
     ];
     if (members.isEmpty) return;
+    final now = DateTime.now();
+    // The occurrence the user edited is always a target, even when it is
+    // itself in the past — the toggle was flipped on it explicitly. Every
+    // other past occurrence is left out of the task set.
+    bool isTarget(PlannerEvent event) =>
+        event.id == editedId ||
+        NodeEventLink.isFutureOccurrence(event, now);
+    final targets = [for (final event in members) if (isTarget(event)) event];
+    final past = [for (final event in members) if (!isTarget(event)) event];
     calendar.updateEvents([
-      for (final event in members)
+      for (final event in targets)
         event.copyWith(
           isTask: _isTask,
           done: done,
@@ -1730,14 +1744,34 @@ class EventEditorFormState extends State<EventEditorForm> {
           reminderMinutesBefore: _reminderMinutesBefore,
           clearReminder: _reminderMinutesBefore == null,
         ),
+      // Past occurrences keep people/place in sync but never stay tasks,
+      // so a series marked today can't leave overdue todos behind — even
+      // ones created by an earlier whole-series mark.
+      for (final event in past)
+        if (event.isTask ||
+            event.done ||
+            event.completedAt != null ||
+            !_sameAssignees(event.assignees, _people))
+          event.copyWith(
+            isTask: false,
+            done: false,
+            clearCompletedAt: true,
+            placeId: _placeId,
+            clearPlaceId: _placeId == null,
+            assignees: List.of(_people),
+            reminderMinutesBefore: _reminderMinutesBefore,
+            clearReminder: _reminderMinutesBefore == null,
+          ),
     ]);
-    final ids = {for (final e in members) e.id};
+    final pastIds = {for (final e in past) e.id};
     if (!_isTask) {
-      nodes.removeNodesForEventIds(ids, silent: true);
+      nodes.removeNodesForEventIds(
+          {for (final e in members) e.id},
+          silent: true);
       return;
     }
     nodes.ensureNodesForFeedEvents([
-      for (final event in members)
+      for (final event in targets)
         event.copyWith(
           isTask: true,
           done: done,
@@ -1751,16 +1785,20 @@ class EventEditorFormState extends State<EventEditorForm> {
         ),
     ]);
     nodes.setDoneForEventIds(
-      ids,
+      {for (final e in targets) e.id},
       done: done,
       completedAt: completedAt,
     );
+    nodes.removeNodesForEventIds(pastIds, silent: true);
   }
 
   /// Post-push series fix-up: the Google re-sync drops local-only state,
-  /// so re-assert node/people/place on every occurrence of the series.
-  /// Batched like [_applySeriesLocal] for the same storm reason.
-  void _applySeriesPostPush(PlannerEvent master, {required bool done}) {
+  /// so re-assert node/people/place on the series' future occurrences.
+  /// Past occurrences are un-marked for the same reason as in
+  /// [_applySeriesLocal]. Batched like [_applySeriesLocal] for the same
+  /// storm reason.
+  void _applySeriesPostPush(PlannerEvent master,
+      {required bool done, String? editedId}) {
     CalendarCubit calendar;
     NodeCubit nodes;
     try {
@@ -1778,13 +1816,21 @@ class EventEditorFormState extends State<EventEditorForm> {
         if (FeedCubit.seriesKeyFor(event) == key) event,
     ];
     if (members.isEmpty) return;
+    final now = DateTime.now();
+    bool isTarget(PlannerEvent event) =>
+        event.id == editedId ||
+        NodeEventLink.isFutureOccurrence(event, now);
+    final targets = [for (final event in members) if (isTarget(event)) event];
+    final past = [for (final event in members) if (!isTarget(event)) event];
+    final targetIds = {for (final e in targets) e.id};
     final calUpdates = <PlannerEvent>[];
     for (final event in members) {
+      final pastEvent = !targetIds.contains(event.id);
       var current = event;
       if (!_sameAssignees(current.assignees, _people)) {
         current = current.copyWith(assignees: List.of(_people));
       }
-      if (!_isTask) {
+      if (!_isTask || pastEvent) {
         if (current.isTask) {
           current = current.copyWith(
             isTask: false,
@@ -1809,9 +1855,10 @@ class EventEditorFormState extends State<EventEditorForm> {
       if (current != event) calUpdates.add(current);
     }
     calendar.updateEvents(calUpdates);
-    final ids = {for (final e in members) e.id};
     if (!_isTask) {
-      nodes.removeNodesForEventIds(ids, silent: true);
+      nodes.removeNodesForEventIds(
+          {for (final e in members) e.id},
+          silent: true);
       return;
     }
     // The re-sync may have dropped the mark the push just set, so the
@@ -1820,13 +1867,16 @@ class EventEditorFormState extends State<EventEditorForm> {
     // calendar change).
     final markedById = {for (final e in calUpdates) e.id: e};
     nodes.ensureNodesForFeedEvents([
-      for (final event in members) markedById[event.id] ?? event,
+      for (final event in targets) markedById[event.id] ?? event,
     ]);
     nodes.setDoneForEventIds(
-      ids,
+      targetIds,
       done: done,
       completedAt: completedAt,
     );
+    nodes.removeNodesForEventIds(
+        {for (final e in past) e.id},
+        silent: true);
   }
 
   /// Mirrors a locally saved event's task flag into [NodeCubit]: creates or

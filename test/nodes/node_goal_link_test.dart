@@ -23,12 +23,14 @@ PlannerEvent event(
   String? seriesId,
   String? feedId,
   String? sourceUid,
+  DateTime? start,
 }) =>
     PlannerEvent(
       id: id,
       subject: 'Event $id',
-      start: DateTime(2026, 9, 12, 9),
-      end: DateTime(2026, 9, 12, 10),
+      start: start ?? DateTime(2026, 9, 12, 9),
+      end: (start ?? DateTime(2026, 9, 12, 9))
+          .add(const Duration(hours: 1)),
       recurrenceRule: recurrenceRule,
       seriesId: seriesId,
       feedId: feedId,
@@ -150,12 +152,107 @@ void main() {
         nodes,
         'gcal:f:i1',
         'goal',
+        // Before every occurrence: the whole series is future.
+        now: DateTime(2026, 9, 1),
       );
       expect(result.error, isNull);
       expect(result.assigned, 3);
       for (final id in ['gcal:f:m', 'gcal:f:i1', 'gcal:f:i2']) {
         expect(nodes.byId(id)?.parentIds, contains('goal'));
       }
+    });
+
+    test('series assign skips past occurrences', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      expect(nodes.addNode(goal('goal')), isNull);
+      final past = DateTime(2026, 9, 10, 9);
+      final futureSeed = DateTime(2026, 9, 20, 9);
+      final futureLater = DateTime(2026, 9, 27, 9);
+      calendar.addEvent(event(
+        'gcal:f:m',
+        recurrenceRule: 'FREQ=WEEKLY',
+        feedId: 'f',
+        sourceUid: 'master-1',
+        isTask: false,
+        start: past,
+      ));
+      calendar.addEvent(event(
+        'gcal:f:past',
+        seriesId: 'master-1',
+        feedId: 'f',
+        sourceUid: 'master-1_20260910T090000',
+        isTask: false,
+        start: past,
+      ));
+      calendar.addEvent(event(
+        'gcal:f:seed',
+        seriesId: 'master-1',
+        feedId: 'f',
+        sourceUid: 'master-1_20260920T090000',
+        isTask: false,
+        start: futureSeed,
+      ));
+      calendar.addEvent(event(
+        'gcal:f:later',
+        seriesId: 'master-1',
+        feedId: 'f',
+        sourceUid: 'master-1_20260927T090000',
+        isTask: false,
+        start: futureLater,
+      ));
+      final result = NodeEventLink.assignEventToGoal(
+        calendar,
+        nodes,
+        'gcal:f:seed',
+        'goal',
+        now: DateTime(2026, 9, 12),
+      );
+      expect(result.error, isNull);
+      // Seed + later future occurrence only: past master/instance untouched.
+      expect(result.assigned, 2);
+      expect(calendar.byId('gcal:f:seed')?.isTask, isTrue);
+      expect(calendar.byId('gcal:f:later')?.isTask, isTrue);
+      expect(calendar.byId('gcal:f:past')?.isTask, isFalse);
+      expect(calendar.byId('gcal:f:m')?.isTask, isFalse);
+      expect(nodes.byId('gcal:f:seed')?.parentIds, contains('goal'));
+      expect(nodes.byId('gcal:f:later')?.parentIds, contains('goal'));
+      expect(nodes.byId('gcal:f:past'), isNull);
+    });
+
+    test('past seed still assigns itself plus future occurrences', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      expect(nodes.addNode(goal('goal')), isNull);
+      final past = DateTime(2026, 9, 10, 9);
+      final future = DateTime(2026, 9, 20, 9);
+      calendar.addEvent(event(
+        'gcal:f:past',
+        seriesId: 'master-1',
+        feedId: 'f',
+        sourceUid: 'master-1_20260910T090000',
+        isTask: false,
+        start: past,
+      ));
+      calendar.addEvent(event(
+        'gcal:f:future',
+        seriesId: 'master-1',
+        feedId: 'f',
+        sourceUid: 'master-1_20260920T090000',
+        isTask: false,
+        start: future,
+      ));
+      final result = NodeEventLink.assignEventToGoal(
+        calendar,
+        nodes,
+        'gcal:f:past',
+        'goal',
+        now: DateTime(2026, 9, 12),
+      );
+      expect(result.error, isNull);
+      expect(result.assigned, 2);
+      expect(calendar.byId('gcal:f:past')?.isTask, isTrue);
+      expect(calendar.byId('gcal:f:future')?.isTask, isTrue);
     });
 
     test('cycle is rejected', () {
@@ -230,6 +327,46 @@ void main() {
             .error,
         isNotNull,
       );
+    });
+  });
+
+  group('futureSeriesMembers', () {
+    test('non-series event targets itself alone', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      calendar.addEvent(event('evt:1', isTask: false));
+      final seed = calendar.byId('evt:1')!;
+      expect(
+        NodeEventLink.futureSeriesMembers(
+          calendar,
+          seed,
+          now: DateTime(2026, 9, 12),
+        ).map((e) => e.id),
+        ['evt:1'],
+      );
+      expect(nodes.state, isEmpty);
+    });
+
+    test('isFutureOccurrence treats today as future', () {
+      final now = DateTime(2026, 9, 12, 15);
+      final todayMorning = event(
+        'today',
+        isTask: false,
+        start: DateTime(2026, 9, 12, 9),
+      );
+      final yesterday = event(
+        'yesterday',
+        isTask: false,
+        start: DateTime(2026, 9, 11, 9),
+      );
+      final tomorrow = event(
+        'tomorrow',
+        isTask: false,
+        start: DateTime(2026, 9, 13, 9),
+      );
+      expect(NodeEventLink.isFutureOccurrence(todayMorning, now), isTrue);
+      expect(NodeEventLink.isFutureOccurrence(tomorrow, now), isTrue);
+      expect(NodeEventLink.isFutureOccurrence(yesterday, now), isFalse);
     });
   });
 

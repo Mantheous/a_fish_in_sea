@@ -305,6 +305,38 @@ class NodeEventLink {
     ];
   }
 
+  /// Start of [now]'s calendar day (local). Series tasking treats anything
+  /// starting today or later as "future"; anything before is past.
+  static DateTime startOfDay(DateTime now) =>
+      DateTime(now.year, now.month, now.day);
+
+  /// True when [event]'s occurrence has not yet passed: it starts on or
+  /// after [now]'s calendar day. Task due dates land on the occurrence's
+  /// own start day, so this matches the Tasks page's own past/today split
+  /// (overdue = due before the start of today).
+  static bool isFutureOccurrence(PlannerEvent event, DateTime now) =>
+      !event.start.isBefore(startOfDay(now));
+
+  /// The series members that become tasks when a repeating event is marked
+  /// as a task: every future occurrence plus the seed itself. The seed is
+  /// always included so explicitly picking a past occurrence still acts on
+  /// it; the rest of the past is skipped so marking a series that has been
+  /// repeating for a while doesn't spam the Tasks list with overdue todos
+  /// for every past occurrence.
+  static List<PlannerEvent> futureSeriesMembers(
+    CalendarCubit calendar,
+    PlannerEvent seed, {
+    DateTime? now,
+  }) {
+    final members = seriesMembers(calendar, seed);
+    if (members.length <= 1) return members;
+    final at = now ?? DateTime.now();
+    return [
+      for (final e in members)
+        if (e.id == seed.id || isFutureOccurrence(e, at)) e,
+    ];
+  }
+
   /// The backing node for [eventId]: personal links, homework shadows, or
   /// the `taskId` target. Null when the event was never marked as a task.
   static Node? backingNodeFor(
@@ -357,10 +389,13 @@ class NodeEventLink {
     );
   }
 
-  /// Assigns [eventId] (plus its whole series when [includeSeries]) to the
-  /// goal [goalId]. Events not yet marked as tasks are marked first so a
-  /// backing node exists. Returns the number of newly parented backing
-  /// nodes plus the first error encountered, if any.
+  /// Assigns [eventId] (plus its future series members when
+  /// [includeSeries]) to the goal [goalId]. Events not yet marked as tasks
+  /// are marked first so a backing node exists. Past occurrences are
+  /// skipped (the seed itself is always included): assigning a series that
+  /// has been repeating for a while must not flood the Tasks list with an
+  /// overdue todo per past occurrence. Returns the number of newly
+  /// parented backing nodes plus the first error encountered, if any.
   ///
   /// Batched into at most four emits (one per phase below): the old
   /// per-member loop snapshotted the whole store, rebuilt, persisted, and
@@ -372,6 +407,7 @@ class NodeEventLink {
     String eventId,
     String goalId, {
     bool includeSeries = true,
+    DateTime? now,
   }) {
     final seed = calendar.byId(eventId);
     if (seed == null) return (error: 'Event not found.', assigned: 0);
@@ -389,7 +425,7 @@ class NodeEventLink {
     }
     var targets = [seed];
     if (includeSeries) {
-      final members = seriesMembers(calendar, seed);
+      final members = futureSeriesMembers(calendar, seed, now: now);
       if (members.isNotEmpty) targets = members;
     }
     // Phase 1: personal backing nodes, batched. Non-task members are

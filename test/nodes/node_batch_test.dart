@@ -225,6 +225,8 @@ void main() {
         nodes,
         'gcal:f:m_0',
         'goal',
+        // Before every occurrence: the whole series is future.
+        now: DateTime(2026, 9, 1),
       );
       await flushEvents();
       await sub1.cancel();
@@ -262,6 +264,8 @@ void main() {
         nodes,
         'gcal:f:m_0',
         'goal',
+        // Before every occurrence: the whole series is future.
+        now: DateTime(2026, 9, 1),
       );
       await flushEvents();
       await sub1.cancel();
