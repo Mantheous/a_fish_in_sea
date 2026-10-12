@@ -8,6 +8,7 @@ import '../../navigation/bloc/navigation_cubit.dart';
 import '../../navigation/view/app_drawer.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
+import '../../nodes/service/node_event_link.dart';
 import '../../nodes/service/node_progress.dart';
 import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_editor.dart';
@@ -24,7 +25,7 @@ import 'feed_manager.dart';
 import 'syllabus_import_sheet.dart';
 import 'tasks_view_options_sheet.dart';
 
-class TasksPage extends StatelessWidget {
+class TasksPage extends StatefulWidget {
   const TasksPage({super.key});
 
   /// Tab the user was last on (0 = To-Do, 1 = Homework). Falls back to 0
@@ -46,66 +47,255 @@ class TasksPage extends StatelessWidget {
   }
 
   @override
+  State<TasksPage> createState() => _TasksPageState();
+}
+
+/// Multi-select lives here so one selection spans both tabs: long-press
+/// a task to start selecting, tap to add more, then mark the bunch done
+/// (or delete them) from the bottom bar in a single undoable step.
+class _TasksPageState extends State<TasksPage> {
+  /// Selected node ids. Empty means normal (non-selecting) mode.
+  final Set<String> _selected = {};
+
+  bool get _selecting => _selected.isNotEmpty;
+
+  void _toggleSelection(String id) {
+    setState(() {
+      if (!_selected.remove(id)) _selected.add(id);
+    });
+  }
+
+  void _enterSelection(String id) {
+    setState(() {
+      _selected.add(id);
+    });
+  }
+
+  void _clearSelection() {
+    if (_selected.isEmpty) return;
+    setState(() {
+      _selected.clear();
+    });
+  }
+
+  void _selectAll(Iterable<String> ids) {
+    setState(() {
+      _selected.addAll(ids);
+    });
+  }
+
+  void _deselectAll(Iterable<String> ids) {
+    if (_selected.isEmpty) return;
+    setState(() {
+      _selected.removeAll(ids);
+    });
+  }
+
+  /// Selection restricted to nodes that still exist, so bulk actions
+  /// never reference nodes deleted elsewhere.
+  Set<String> _liveSelection(NodeCubit nodes) =>
+      _selected.where((id) => nodes.byId(id) != null).toSet();
+
+  void _markSelectedDone() {
+    NodeCubit nodes;
+    try {
+      nodes = context.read<NodeCubit>();
+    } catch (_) {
+      return;
+    }
+    CalendarCubit? calendar;
+    try {
+      calendar = context.read<CalendarCubit>();
+    } catch (_) {}
+    final ids = _liveSelection(nodes);
+    if (ids.isEmpty) {
+      _clearSelection();
+      return;
+    }
+    final changed = calendar == null
+        ? nodes.setDoneMany(ids, done: true)
+        : NodeEventLink.setNodesDone(nodes, calendar, ids, done: true);
+    setState(() {
+      _selected.clear();
+    });
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(changed == 1
+              ? '1 task marked done'
+              : '$changed tasks marked done'),
+          duration: const Duration(seconds: 4),
+          // Action snackbars persist forever by default; this one must go.
+          persist: false,
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () => context.read<UndoCubit>().undo(),
+          ),
+        ),
+      );
+  }
+
+  void _deleteSelected() {
+    NodeCubit nodes;
+    try {
+      nodes = context.read<NodeCubit>();
+    } catch (_) {
+      return;
+    }
+    CalendarCubit? calendar;
+    try {
+      calendar = context.read<CalendarCubit>();
+    } catch (_) {}
+    final ids = _liveSelection(nodes);
+    if (ids.isEmpty) {
+      _clearSelection();
+      return;
+    }
+    final removed = calendar == null
+        ? nodes.deleteNodes(ids)
+        : NodeEventLink.deleteNodesAndUnlink(nodes, calendar, ids);
+    setState(() {
+      _selected.clear();
+    });
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+              removed == 1 ? '1 task deleted' : '$removed tasks deleted'),
+          duration: const Duration(seconds: 4),
+          // Action snackbars persist forever by default; this one must go.
+          persist: false,
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () => context.read<UndoCubit>().undo(),
+          ),
+        ),
+      );
+  }
+
+  @override
   Widget build(BuildContext context) {
     return DefaultTabController(
       length: 2,
-      initialIndex: _initialTab(context),
+      initialIndex: TasksPage._initialTab(context),
       child: Builder(
         builder: (context) {
           return Scaffold(
             appBar: AppBar(
-              title: const Text('Tasks'),
-              actions: [
-                Builder(
-                  builder: (buttonContext) {
-                    var active = false;
-                    try {
-                      active = buttonContext
-                          .watch<TasksViewOptionsCubit>()
-                          .state
-                          .hasActiveOptions;
-                    } catch (_) {}
-                    return Badge(
-                      isLabelVisible: active,
-                      child: IconButton(
-                        tooltip: 'View options',
-                        icon: const Icon(Icons.layers_outlined),
-                        onPressed: () =>
-                            showTasksViewOptions(buttonContext),
+              leading: _selecting
+                  ? IconButton(
+                      tooltip: 'Clear selection',
+                      icon: const Icon(Icons.close),
+                      onPressed: _clearSelection,
+                    )
+                  : null,
+              title: _selecting
+                  ? Text('${_selected.length} selected')
+                  : const Text('Tasks'),
+              actions: _selecting
+                  ? const [UndoRedoActions()]
+                  : [
+                      Builder(
+                        builder: (buttonContext) {
+                          var active = false;
+                          try {
+                            active = buttonContext
+                                .watch<TasksViewOptionsCubit>()
+                                .state
+                                .hasActiveOptions;
+                          } catch (_) {}
+                          return Badge(
+                            isLabelVisible: active,
+                            child: IconButton(
+                              tooltip: 'View options',
+                              icon: const Icon(Icons.layers_outlined),
+                              onPressed: () =>
+                                  showTasksViewOptions(buttonContext),
+                            ),
+                          );
+                        },
                       ),
-                    );
-                  },
-                ),
-                IconButton(
-                  tooltip: 'Import from syllabus',
-                  icon: const Icon(Icons.auto_awesome),
-                  onPressed: () => showSyllabusImport(context),
-                ),
-                IconButton(
-                  tooltip: 'Manage classes',
-                  icon: const Icon(Icons.sync),
-                  onPressed: () => showFeedManager(context),
-                ),
-                const UndoRedoActions(),
-              ],
+                      IconButton(
+                        tooltip: 'Import from syllabus',
+                        icon: const Icon(Icons.auto_awesome),
+                        onPressed: () => showSyllabusImport(context),
+                      ),
+                      IconButton(
+                        tooltip: 'Manage classes',
+                        icon: const Icon(Icons.sync),
+                        onPressed: () => showFeedManager(context),
+                      ),
+                      const UndoRedoActions(),
+                    ],
               bottom: TabBar(
-                onTap: (i) => _saveTab(context, i),
+                onTap: (i) => TasksPage._saveTab(context, i),
                 tabs: const [
                   Tab(text: 'To-Do'),
                   Tab(text: 'Homework'),
                 ],
               ),
             ),
-            drawer: const AppDrawer(),
-            floatingActionButton: FloatingActionButton(
-              onPressed: () => showNodeEditor(context),
-              child: const Icon(Icons.add),
-            ),
+            drawer: _selecting ? null : const AppDrawer(),
+            floatingActionButton: _selecting
+                ? null
+                : FloatingActionButton(
+                    onPressed: () => showNodeEditor(context),
+                    child: const Icon(Icons.add),
+                  ),
+            bottomNavigationBar: _selecting
+                ? SafeArea(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              _selected.length == 1
+                                  ? '1 selected'
+                                  : '${_selected.length} selected',
+                              style:
+                                  Theme.of(context).textTheme.titleSmall,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Delete selected',
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: _deleteSelected,
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton.icon(
+                            onPressed: _markSelectedDone,
+                            icon: const Icon(Icons.check),
+                            label: const Text('Mark done'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : null,
             body: _TabSaver(
               child: TabBarView(
-                children: const [
-                  _TodoTab(),
-                  _HomeworkTab(),
+                children: [
+                  _TodoTab(
+                    selected: _selected,
+                    selecting: _selecting,
+                    onToggleSelection: _toggleSelection,
+                    onEnterSelection: _enterSelection,
+                    onSelectAll: _selectAll,
+                    onDeselectAll: _deselectAll,
+                  ),
+                  _HomeworkTab(
+                    selected: _selected,
+                    selecting: _selecting,
+                    onToggleSelection: _toggleSelection,
+                    onEnterSelection: _enterSelection,
+                    onSelectAll: _selectAll,
+                    onDeselectAll: _deselectAll,
+                  ),
                 ],
               ),
             ),
@@ -233,8 +423,60 @@ class _FilteredEmpty extends StatelessWidget {
   }
 }
 
+/// "Select all" header shown above a task list while multi-selecting.
+class _SelectAllRow extends StatelessWidget {
+  final bool allSelected;
+  final int count;
+  final ValueChanged<bool> onChanged;
+
+  const _SelectAllRow({
+    required this.allSelected,
+    required this.count,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => onChanged(!allSelected),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Row(
+          children: [
+            Checkbox(
+              value: allSelected,
+              onChanged: (v) => onChanged(v ?? false),
+            ),
+            const Text('Select all'),
+            const Spacer(),
+            Text(
+              '$count selected',
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+            const SizedBox(width: 16),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _TodoTab extends StatelessWidget {
-  const _TodoTab();
+  final Set<String> selected;
+  final bool selecting;
+  final void Function(String id) onToggleSelection;
+  final void Function(String id) onEnterSelection;
+  final void Function(Iterable<String> ids) onSelectAll;
+  final void Function(Iterable<String> ids) onDeselectAll;
+
+  const _TodoTab({
+    required this.selected,
+    required this.selecting,
+    required this.onToggleSelection,
+    required this.onEnterSelection,
+    required this.onSelectAll,
+    required this.onDeselectAll,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -273,7 +515,7 @@ class _TodoTab extends StatelessWidget {
         final feedById = {for (final f in feedCubit.state) f.id: f};
         final nodeById = {for (final n in nodes) n.id: n};
         final indexes = buildNodeIndexes(nodes);
-        return ListView.builder(
+        Widget list = ListView.builder(
           itemCount: open.length,
           itemBuilder: (context, index) {
             final node = open[index];
@@ -288,8 +530,28 @@ class _TodoTab extends StatelessWidget {
               indexByParent: indexes.byParent,
               linkedEventIds: linkedEventIds,
               linkedTaskIds: linkedTaskIds,
+              selected: selected.contains(node.id),
+              selecting: selecting,
+              onToggleSelection: () => onToggleSelection(node.id),
+              onEnterSelection: () => onEnterSelection(node.id),
             );
           },
+        );
+        if (!selecting) return list;
+        final allIds = [for (final n in open) n.id];
+        final allSelected = allIds.every(selected.contains);
+        final count = allIds.where(selected.contains).length;
+        return Column(
+          children: [
+            _SelectAllRow(
+              allSelected: allSelected,
+              count: count,
+              onChanged: (select) => select
+                  ? onSelectAll(allIds)
+                  : onDeselectAll(allIds),
+            ),
+            Expanded(child: list),
+          ],
         );
       },
     );
@@ -326,7 +588,21 @@ class _EmptyTodo extends StatelessWidget {
 }
 
 class _HomeworkTab extends StatefulWidget {
-  const _HomeworkTab();
+  final Set<String> selected;
+  final bool selecting;
+  final void Function(String id) onToggleSelection;
+  final void Function(String id) onEnterSelection;
+  final void Function(Iterable<String> ids) onSelectAll;
+  final void Function(Iterable<String> ids) onDeselectAll;
+
+  const _HomeworkTab({
+    required this.selected,
+    required this.selecting,
+    required this.onToggleSelection,
+    required this.onEnterSelection,
+    required this.onSelectAll,
+    required this.onDeselectAll,
+  });
 
   @override
   State<_HomeworkTab> createState() => _HomeworkTabState();
@@ -463,6 +739,22 @@ class _HomeworkTabState extends State<_HomeworkTab>
             ),
           ),
         ),
+        if (widget.selecting)
+          Builder(
+            builder: (context) {
+              final allIds = [for (final n in imported) n.id];
+              final allSelected = allIds.every(widget.selected.contains);
+              final count =
+                  allIds.where(widget.selected.contains).length;
+              return _SelectAllRow(
+                allSelected: allSelected,
+                count: count,
+                onChanged: (select) => select
+                    ? widget.onSelectAll(allIds)
+                    : widget.onDeselectAll(allIds),
+              );
+            },
+          ),
         Expanded(
           child: ListView.builder(
             itemCount: groupKeys.length,
@@ -510,6 +802,12 @@ class _HomeworkTabState extends State<_HomeworkTab>
                         indexByParent: indexes.byParent,
                         linkedEventIds: linkedEventIds,
                         linkedTaskIds: linkedTaskIds,
+                        selected: widget.selected.contains(node.id),
+                        selecting: widget.selecting,
+                        onToggleSelection: () =>
+                            widget.onToggleSelection(node.id),
+                        onEnterSelection: () =>
+                            widget.onEnterSelection(node.id),
                       ),
                   ],
                 ),
@@ -559,6 +857,13 @@ class _NodeTile extends StatelessWidget {
   final Map<String, List<Node>>? indexByParent;
   final Set<String>? linkedEventIds;
   final Set<String>? linkedTaskIds;
+  // Multi-select state. While [selecting], the leading checkbox becomes
+  // a selection box and taps toggle selection instead of opening the
+  // editor; long-press is what enters selection mode.
+  final bool selected;
+  final bool selecting;
+  final VoidCallback? onToggleSelection;
+  final VoidCallback? onEnterSelection;
 
   const _NodeTile({
     required this.node,
@@ -571,6 +876,10 @@ class _NodeTile extends StatelessWidget {
     this.indexByParent,
     this.linkedEventIds,
     this.linkedTaskIds,
+    this.selected = false,
+    this.selecting = false,
+    this.onToggleSelection,
+    this.onEnterSelection,
   });
   @override
   Widget build(BuildContext context) {
@@ -647,7 +956,14 @@ class _NodeTile extends StatelessWidget {
         due != null &&
         _isDueToday(due, effectiveNow);
     final tile = ListTile(
-      leading: NodeCheckbox(node: live),
+      selected: selecting && selected,
+      selectedTileColor: theme.colorScheme.secondaryContainer,
+      leading: selecting
+          ? Checkbox(
+              value: selected,
+              onChanged: (_) => onToggleSelection?.call(),
+            )
+          : NodeCheckbox(node: live),
       title: Text(
         live.title,
         style: TextStyle(
@@ -790,7 +1106,10 @@ class _NodeTile extends StatelessWidget {
           ),
         ],
       ),
-      onTap: () => showNodeEditor(context, existing: live),
+      onTap: selecting
+          ? onToggleSelection
+          : () => showNodeEditor(context, existing: live),
+      onLongPress: selecting ? onToggleSelection : onEnterSelection,
     );
     if (isDueTodayHighlight) {
       // Due today: hotter orange row and edge so today's work jumps out

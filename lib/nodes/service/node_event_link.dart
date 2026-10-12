@@ -116,6 +116,79 @@ class NodeEventLink {
     }
   }
 
+  /// Marks many nodes done/open and mirrors completion onto their linked
+  /// calendar events, batched into two emits (one per store) so a bulk
+  /// check-off stays a single undo step per store. Returns the number of
+  /// nodes changed.
+  static int setNodesDone(
+    NodeCubit nodes,
+    CalendarCubit calendar,
+    Set<String> ids, {
+    required bool done,
+    DateTime? now,
+  }) {
+    if (ids.isEmpty) return 0;
+    final changed = nodes.setDoneMany(ids, done: done, now: now);
+    if (changed == 0) return 0;
+    final calUpdates = <PlannerEvent>[];
+    for (final id in ids) {
+      final node = nodes.byId(id);
+      if (node == null) continue;
+      final eventId = node.calendarEventId ?? node.sourceEventId;
+      if (eventId == null) continue;
+      final event = calendar.byId(eventId);
+      if (event == null || !event.isTask) continue;
+      if (event.done == node.isDone &&
+          event.completedAt == node.completedAt &&
+          event.failed == (node.status == NodeStatus.failed)) {
+        continue;
+      }
+      calUpdates.add(event.copyWith(
+        done: node.isDone,
+        completedAt: node.completedAt,
+        clearCompletedAt: !node.isDone,
+        failed: node.status == NodeStatus.failed,
+      ));
+    }
+    if (calUpdates.isNotEmpty) calendar.updateEvents(calUpdates);
+    return changed;
+  }
+
+  /// Deletes many nodes and clears their calendar task links, batched
+  /// into two emits (one per store). Mirrors the single-delete behaviour
+  /// ([NodeCubit.deleteNode] + [CalendarCubit.clearTaskLink]): events are
+  /// kept and unlinked, never deleted. Returns the number removed.
+  static int deleteNodesAndUnlink(
+    NodeCubit nodes,
+    CalendarCubit calendar,
+    Set<String> ids,
+  ) {
+    if (ids.isEmpty) return 0;
+    final eventIds = <String>{};
+    for (final id in ids) {
+      final node = nodes.byId(id);
+      if (node == null) continue;
+      final eventId = node.calendarEventId ?? node.sourceEventId;
+      if (eventId != null) eventIds.add(eventId);
+    }
+    final removed = nodes.deleteNodes(ids);
+    if (removed == 0) return 0;
+    final calUpdates = <PlannerEvent>[];
+    for (final eventId in eventIds) {
+      final event = calendar.byId(eventId);
+      if (event == null) continue;
+      if (!event.isTask && event.taskId == null && !event.done) continue;
+      calUpdates.add(event.copyWith(
+        isTask: false,
+        clearTaskId: true,
+        done: false,
+        clearCompletedAt: true,
+      ));
+    }
+    if (calUpdates.isNotEmpty) calendar.updateEvents(calUpdates);
+    return removed;
+  }
+
   /// Marks an event as actionable, creating its backing node.
   static void markEventAsNode(
     CalendarCubit calendar,
