@@ -173,8 +173,14 @@ class RepeatConfig extends Equatable {
     return null;
   }
 
-  static String _dayCodes(Set<int> days) =>
-      days.map(_dayCode).join(',');
+  /// Weekday codes in canonical MO→SU order. Google rejects rules whose
+  /// BYDAY follows chip-tap (insertion) order instead, e.g.
+  /// `BYDAY=SA,FR,TH,WE,TU,MO` fails the insert with a misleading
+  /// "Missing time zone definition for start time" 400.
+  static String _dayCodes(Set<int> days) {
+    final sorted = days.toList()..sort();
+    return sorted.map(_dayCode).join(',');
+  }
 
   static String _dayCode(int weekday) => switch (weekday) {
         DateTime.monday => 'MO',

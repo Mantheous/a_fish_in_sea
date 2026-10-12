@@ -33,6 +33,20 @@ void main() {
       );
     });
 
+    test('weekly sorts BYDAY canonically regardless of pick order', () {
+      // Chip-tap order lands in the set in insertion order; Google
+      // rejects non-canonical BYDAY with a misleading "Missing time zone
+      // definition" 400, so the rule must always emit MO→SU.
+      const config = RepeatConfig(
+        kind: RepeatKind.weekly,
+        weekDays: {6, 5, 4, 3, 2, 1},
+      );
+      expect(
+        config.ruleFor(DateTime(2026, 10, 12)),
+        'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR,SA',
+      );
+    });
+
     test('biweekly', () {
       const config = RepeatConfig(
         kind: RepeatKind.biweekly,
