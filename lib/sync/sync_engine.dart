@@ -284,6 +284,12 @@ class SyncEngine {
   /// When the local copy is recording, its start survives the merge; when
   /// both sides record, the earliest start wins (the true start). A remote
   /// stop still lands its reported interval — only the live start is kept.
+  ///
+  /// One exception: the remote record stopped *after* the local run
+  /// started ([actualEnd] later than the local start). That stop targets
+  /// this run (e.g. stopped on another device), so it wins and the local
+  /// timer clears. Older remote actuals predate the run — a previous
+  /// session — and never stop it.
   static void _preserveRunningTimer(String collection,
       Map<String, dynamic>? local, Map<String, dynamic> merged) {
     if (collection != 'nodes' && collection != 'events') return;
@@ -296,10 +302,21 @@ class SyncEngine {
         remoteStart is String && remoteStart.isNotEmpty
             ? DateTime.tryParse(remoteStart)
             : null;
-    // Remote not running: keep the live local start. Both running: the
-    // earliest start is the true one (ISO strings alone are not safe to
-    // compare across local/UTC forms, so compare parsed instants).
-    if (remoteDt == null || localDt.isBefore(remoteDt)) {
+    // Both running: the earliest start is the true one (ISO strings alone
+    // are not safe to compare across local/UTC forms, so compare parsed
+    // instants).
+    if (remoteDt != null) {
+      if (localDt.isBefore(remoteDt)) {
+        merged['timerStartedAt'] = localStart;
+      }
+      return;
+    }
+    final remoteEndRaw = merged['actualEnd'];
+    final remoteEnd =
+        remoteEndRaw is String && remoteEndRaw.isNotEmpty
+            ? DateTime.tryParse(remoteEndRaw)
+            : null;
+    if (remoteEnd == null || !remoteEnd.isAfter(localDt)) {
       merged['timerStartedAt'] = localStart;
     }
   }
