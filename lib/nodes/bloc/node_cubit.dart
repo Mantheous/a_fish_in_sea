@@ -974,6 +974,33 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     updateNode(node.copyWith(clearTimerStartedAt: true));
   }
 
+  /// Moves a running timer's start (Toggl-style correction). Recording
+  /// continues — only the start moves, so a late press or a restart gap
+  /// is fixable without losing the session. Starts in the future clamp
+  /// to [now]; no-op when not tracking.
+  void setTimerStart(String id, DateTime start, {DateTime? now}) {
+    final node = byId(id);
+    if (node == null || !node.isTracking) return;
+    final at = now ?? DateTime.now();
+    updateNode(node.copyWith(
+        timerStartedAt: start.isAfter(at) ? at : start));
+  }
+
+  /// Sets the reported interval directly (manual entry + post-stop
+  /// correction). Takes manual control: a running timer is cleared and
+  /// the given start/end become the record. A non-positive range is
+  /// floored to one minute.
+  void setReported(String id, DateTime start, DateTime end) {
+    final node = byId(id);
+    if (node == null) return;
+    updateNode(node.copyWith(
+      actualStart: start,
+      actualEnd:
+          end.isAfter(start) ? end : start.add(const Duration(minutes: 1)),
+      clearTimerStartedAt: true,
+    ));
+  }
+
   void clearReported(String id) {
     final node = byId(id);
     if (node == null) return;

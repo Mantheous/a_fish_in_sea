@@ -276,6 +276,78 @@ void main() {
     expect(pushed.containsKey('icalProxyBase'), isFalse);
   });
 
+  test('a running timer survives a conflicting pull (server-wins except timers)',
+      () async {
+    final server = FakeSyncClient();
+    final a = _Device(server);
+    final b = _Device(server);
+    await a.signIn();
+    await b.signIn();
+
+    a.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
+    await a.engine.syncNow();
+    await b.engine.syncNow(); // B baselines on v1
+
+    // A starts a timer but has not pushed yet (e.g. rebuilt before sync).
+    final t0 = DateTime(2026, 9, 12, 9);
+    a.nodes.startTracking('t1', now: t0);
+
+    // B renames the node and syncs: the server copy advances without the
+    // timer, so A's next pull is a true conflict.
+    b.nodes.updateNode(b.nodes.byId('t1')!.copyWith(title: 'B edit'));
+    await b.engine.syncNow();
+
+    await a.engine.syncNow();
+
+    // The rename lands (server wins), but the live timer is not stopped.
+    final live = a.nodes.byId('t1')!;
+    expect(live.title, 'B edit');
+    expect(live.isTracking, isTrue);
+    expect(live.timerStartedAt, t0);
+  });
+
+  test('conflicting running timers keep the earliest start', () async {
+    final server = FakeSyncClient();
+    final a = _Device(server);
+    final b = _Device(server);
+    await a.signIn();
+    await b.signIn();
+
+    a.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
+    await a.engine.syncNow();
+    await b.engine.syncNow(); // B baselines on v1
+
+    // A starts at 9:00 and pushes; B started earlier at 8:30 offline.
+    a.nodes.startTracking('t1', now: DateTime(2026, 9, 12, 9));
+    await a.engine.syncNow();
+    b.nodes.startTracking('t1', now: DateTime(2026, 9, 12, 8, 30));
+    await b.engine.syncNow();
+
+    // The true (earliest) start wins on both sides.
+    expect(b.nodes.byId('t1')?.timerStartedAt, DateTime(2026, 9, 12, 8, 30));
+    await a.engine.syncNow();
+    expect(a.nodes.byId('t1')?.timerStartedAt, DateTime(2026, 9, 12, 8, 30));
+  });
+
+  test('remote edit propagates to a device with no local changes', () async {
+    final server = FakeSyncClient();
+    final a = _Device(server);
+    final b = _Device(server);
+    await a.signIn();
+    await b.signIn();
+
+    a.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
+    await a.engine.syncNow();
+    await b.engine.syncNow();
+
+    b.nodes.updateNode(b.nodes.byId('t1')!.copyWith(title: 'B edit'));
+    await b.engine.syncNow();
+
+    // A never touched the node: the remote rename must land.
+    await a.engine.syncNow();
+    expect(a.nodes.byId('t1')?.title, 'B edit');
+  });
+
   test('contentHash is stable and sensitive', () {
     expect(
       contentHash(const {'a': 1}),
