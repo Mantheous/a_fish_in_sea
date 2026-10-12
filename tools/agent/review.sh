@@ -78,6 +78,7 @@ Verdict: <pass | changes-requested>
 Plan fidelity: <one line: does the diff implement exactly the triage plan scope?>
 Correctness: <one line: bugs, edge cases, or wrong behavior you can see>
 Persistence: <ok | violation — cite the AGENTS.md rule>
+Security: <ok | changes-requested — untrusted-user → GitHub/builder path, auth/scope/SSRF/secrets weakening, or attacker-controlled input executed; cite file:line>
 Tests: <one line: do the tests cover the change, including goldens for screens?>
 Behavioral: <one line: does a patrol_test cover the changed user flow, or is one needed?>
 Walker: <for any user-visible change (lib/*/view, navigation, dialogs, copy): walked pre-merge with report path in the PR body, or CHANGES-REQUESTED listing the exact walk to run. Pass only if walked or provably not user-visible.>
