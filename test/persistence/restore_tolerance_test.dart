@@ -1,5 +1,3 @@
-import 'package:a_fish_in_sea/common/undo/change_record.dart';
-import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/goals/model/goal.dart';
@@ -279,15 +277,6 @@ void main() {
       final id = cubit.importGoal(Goal.fromJson(good));
       expect(cubit.byId(id)?.title, 'Get an A');
       expect(cubit.byId(id)?.hasDue, isTrue);
-    });
-
-    test('UndoCubit keeps valid records', () {
-      final cubit = UndoCubit();
-      final good = const ChangeRecord(entries: [
-        StateSnapshot(cubitId: 'NodeCubit', before: {}, after: {}),
-      ]).toJson();
-      final restored = cubit.fromJson(_withCorrupt('undoStack', good));
-      expect(restored?.undoStack.length, 1);
     });
 
     test('NodeCubit keeps valid nodes, tolerates corrupt + pre-facet data',

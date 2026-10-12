@@ -523,11 +523,34 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     if (byId(updated.id) == null) return 'Node not found.';
     final unboundedError = validateUnbounded(updated);
     if (unboundedError != null) return unboundedError;
-    final error = validateParents(updated, updated.parentIds);
-    if (error != null) return error;
+    // Fast path: status/completion/content edits leave the DAG structure
+    // untouched. Re-running validateParents here rebuilds the full parent
+    // index plus a descendant walk (O(n)) on every checkbox tap.
+    final current = byId(updated.id)!;
+    if (!_sameStructure(current, updated)) {
+      final error = validateParents(updated, updated.parentIds);
+      if (error != null) return error;
+    }
     emitChange(
         state.map((n) => n.id == updated.id ? updated : n).toList());
     return null;
+  }
+
+  /// Structural fields guarded by [validateParents]: parent links, the
+  /// template link, and the recurrence that makes a node a template.
+  /// Everything else (status, dates, money, text) cannot introduce a cycle.
+  static bool _sameStructure(Node a, Node b) {
+    if (a.instanceOfId != b.instanceOfId) return false;
+    if (a.recurrence != b.recurrence) return false;
+    final pa = a.parentIds;
+    final pb = b.parentIds;
+    if (!identical(pa, pb)) {
+      if (pa.length != pb.length) return false;
+      for (var i = 0; i < pa.length; i++) {
+        if (pa[i] != pb[i]) return false;
+      }
+    }
+    return true;
   }
 
   String? reparent(String id, List<String> parentIds) {
@@ -1499,20 +1522,32 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     return id;
   }
 
-  /// Mirrors an event's completion onto every backing node.
+  /// Backing-node check matching [_byEventId]: personal links plus feed
+  /// shadows. Used by the batched mirrors below so they can fold a whole
+  /// event's nodes into one emit instead of one emit per node.
+  static bool _backsEvent(Node node, String eventId) =>
+      node.calendarEventId == eventId || node.sourceEventId == eventId;
+
+  /// Mirrors an event's completion onto every backing node in ONE emit
+  /// (one undo record, one rebuild) instead of one emit per node.
   void setDoneForEvent(
     String eventId, {
     required bool done,
     DateTime? completedAt,
   }) {
-    for (final node in nodesForEventId(eventId)) {
-      if (node.isDone == done &&
-          (done || node.completedAt == null) &&
-          (node.completedAt == completedAt ||
-              (!done && completedAt == null))) {
+    var changed = false;
+    final next = <Node>[];
+    for (final node in state) {
+      if (!_backsEvent(node, eventId) ||
+          (node.isDone == done &&
+              (done || node.completedAt == null) &&
+              (node.completedAt == completedAt ||
+                  (!done && completedAt == null)))) {
+        next.add(node);
         continue;
       }
-      updateNode(
+      changed = true;
+      next.add(
         node.copyWith(
           status: done ? NodeStatus.done : NodeStatus.open,
           completedAt: completedAt,
@@ -1520,17 +1555,45 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         ),
       );
     }
+    if (changed) emitChange(next);
   }
 
+  /// Mirrors an event's failed flag onto backing nodes in ONE emit.
+  /// Clearing (`failed: false`) only re-opens nodes that are actually
+  /// failed — done nodes keep their completion. (Previously every non-open
+  /// node was flipped to open, so completing a mirrored task immediately
+  /// undid the just-applied completion.)
   void setFailedForEvent(String eventId, bool failed) {
-    for (final node in nodesForEventId(eventId)) {
-      final next = failed ? NodeStatus.failed : NodeStatus.open;
-      if (node.status == next) continue;
-      updateNode(node.copyWith(
-        status: next,
-        clearCompletedAt: true,
-      ));
+    var changed = false;
+    final next = <Node>[];
+    for (final node in state) {
+      if (!_backsEvent(node, eventId)) {
+        next.add(node);
+        continue;
+      }
+      if (failed) {
+        if (node.status == NodeStatus.failed) {
+          next.add(node);
+          continue;
+        }
+        changed = true;
+        next.add(node.copyWith(
+          status: NodeStatus.failed,
+          clearCompletedAt: true,
+        ));
+      } else {
+        if (node.status != NodeStatus.failed) {
+          next.add(node);
+          continue;
+        }
+        changed = true;
+        next.add(node.copyWith(
+          status: NodeStatus.open,
+          clearCompletedAt: true,
+        ));
+      }
     }
+    if (changed) emitChange(next);
   }
 
   /// Ensures a homework-style node exists for a feed event that was
@@ -1581,7 +1644,9 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
 
   /// Deletes every node backing [eventId] (personal link and/or homework
   /// node). Used when an event is deleted or un-marked as actionable.
-  /// Silent: callers deleting events already record their own undo.
+  /// Silent (plain emit, no undo record of its own): callers deleting
+  /// events fold the removal into their own undo step via
+  /// [RevertableHydratedCubit.atomic], so undo restores both sides.
   void removeNodesForEvent(String eventId) {
     final ids = nodesForEventId(eventId).map((n) => n.id).toSet();
     if (ids.isEmpty) return;

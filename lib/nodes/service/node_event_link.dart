@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
@@ -16,6 +17,7 @@ class NodeEventLink {
   const NodeEventLink._();
 
   /// Toggles an event's completion and mirrors it onto backing nodes.
+  /// One user gesture = one undo step (see [RevertableHydratedCubit.atomic]).
   static void toggleEventDone(
     CalendarCubit calendar,
     NodeCubit nodes,
@@ -23,18 +25,21 @@ class NodeEventLink {
   ) {
     final event = calendar.byId(eventId);
     if (event == null || !event.isTask) return;
-    calendar.toggleDone(eventId);
-    final updated = calendar.byId(eventId);
-    if (updated == null) return;
-    nodes.setDoneForEvent(
-      eventId,
-      done: updated.done,
-      completedAt: updated.completedAt,
-    );
-    if (updated.done) nodes.setFailedForEvent(eventId, false);
+    RevertableHydratedCubit.atomic([calendar, nodes], () {
+      calendar.toggleDone(eventId);
+      final updated = calendar.byId(eventId);
+      if (updated == null) return;
+      nodes.setDoneForEvent(
+        eventId,
+        done: updated.done,
+        completedAt: updated.completedAt,
+      );
+      if (updated.done) nodes.setFailedForEvent(eventId, false);
+    });
   }
 
   /// Toggles a node's completion and mirrors it onto its event, if any.
+  /// One user gesture = one undo step.
   static void toggleNodeDone(
     NodeCubit nodes,
     CalendarCubit calendar,
@@ -42,27 +47,29 @@ class NodeEventLink {
   ) {
     final node = nodes.byId(nodeId);
     if (node == null) return;
-    nodes.toggleDone(nodeId);
-    final updated = nodes.byId(nodeId);
-    if (updated == null) return;
-    final eventId =
-        updated.calendarEventId ?? updated.sourceEventId;
-    if (eventId == null) return;
-    final event = calendar.byId(eventId);
-    if (event == null || !event.isTask) return;
-    if (event.done == updated.isDone &&
-        event.completedAt == updated.completedAt &&
-        event.failed == (updated.status == NodeStatus.failed)) {
-      return;
-    }
-    calendar.updateEvent(
-      event.copyWith(
-        done: updated.isDone,
-        completedAt: updated.completedAt,
-        clearCompletedAt: !updated.isDone,
-        failed: updated.status == NodeStatus.failed,
-      ),
-    );
+    RevertableHydratedCubit.atomic([nodes, calendar], () {
+      nodes.toggleDone(nodeId);
+      final updated = nodes.byId(nodeId);
+      if (updated == null) return;
+      final eventId =
+          updated.calendarEventId ?? updated.sourceEventId;
+      if (eventId == null) return;
+      final event = calendar.byId(eventId);
+      if (event == null || !event.isTask) return;
+      if (event.done == updated.isDone &&
+          event.completedAt == updated.completedAt &&
+          event.failed == (updated.status == NodeStatus.failed)) {
+        return;
+      }
+      calendar.updateEvent(
+        event.copyWith(
+          done: updated.isDone,
+          completedAt: updated.completedAt,
+          clearCompletedAt: !updated.isDone,
+          failed: updated.status == NodeStatus.failed,
+        ),
+      );
+    });
   }
 
   static void setNodeFailed(
@@ -73,28 +80,30 @@ class NodeEventLink {
   ) {
     final node = nodes.byId(nodeId);
     if (node == null) return;
-    nodes.setStatus(
-        nodeId, failed ? NodeStatus.failed : NodeStatus.open);
-    final updated = nodes.byId(nodeId);
-    if (updated == null) return;
-    final eventId =
-        updated.calendarEventId ?? updated.sourceEventId;
-    if (eventId == null) return;
-    final event = calendar.byId(eventId);
-    if (event == null || !event.isTask) return;
-    if (event.failed == failed &&
-        event.done == updated.isDone &&
-        event.completedAt == updated.completedAt) {
-      return;
-    }
-    calendar.updateEvent(
-      event.copyWith(
-        done: updated.isDone,
-        completedAt: updated.completedAt,
-        clearCompletedAt: !updated.isDone,
-        failed: failed,
-      ),
-    );
+    RevertableHydratedCubit.atomic([nodes, calendar], () {
+      nodes.setStatus(
+          nodeId, failed ? NodeStatus.failed : NodeStatus.open);
+      final updated = nodes.byId(nodeId);
+      if (updated == null) return;
+      final eventId =
+          updated.calendarEventId ?? updated.sourceEventId;
+      if (eventId == null) return;
+      final event = calendar.byId(eventId);
+      if (event == null || !event.isTask) return;
+      if (event.failed == failed &&
+          event.done == updated.isDone &&
+          event.completedAt == updated.completedAt) {
+        return;
+      }
+      calendar.updateEvent(
+        event.copyWith(
+          done: updated.isDone,
+          completedAt: updated.completedAt,
+          clearCompletedAt: !updated.isDone,
+          failed: failed,
+        ),
+      );
+    });
   }
 
   static void setEventFailed(
@@ -105,15 +114,17 @@ class NodeEventLink {
   ) {
     final event = calendar.byId(eventId);
     if (event == null || !event.isTask) return;
-    calendar.setFailed(eventId, failed);
-    nodes.setFailedForEvent(eventId, failed);
-    if (failed) {
-      nodes.setDoneForEvent(
-        eventId,
-        done: false,
-        completedAt: null,
-      );
-    }
+    RevertableHydratedCubit.atomic([calendar, nodes], () {
+      calendar.setFailed(eventId, failed);
+      nodes.setFailedForEvent(eventId, failed);
+      if (failed) {
+        nodes.setDoneForEvent(
+          eventId,
+          done: false,
+          completedAt: null,
+        );
+      }
+    });
   }
 
   /// Marks an event as actionable, creating its backing node.
@@ -124,16 +135,18 @@ class NodeEventLink {
   ) {
     final event = calendar.byId(eventId);
     if (event == null || event.isTask) return;
-    if (event.isFromFeed) {
-      calendar.updateEvent(event.copyWith(isTask: true));
-      final marked = calendar.byId(eventId) ?? event;
-      nodes.ensureNodeForFeedEvent(marked.copyWith(isTask: true));
-      return;
-    }
-    final nodeId = nodes.upsertLinkedNodeForEvent(
-      event.copyWith(isTask: true),
-    );
-    calendar.setTaskLink(eventId, nodeId);
+    RevertableHydratedCubit.atomic([calendar, nodes], () {
+      if (event.isFromFeed) {
+        calendar.updateEvent(event.copyWith(isTask: true));
+        final marked = calendar.byId(eventId) ?? event;
+        nodes.ensureNodeForFeedEvent(marked.copyWith(isTask: true));
+        return;
+      }
+      final nodeId = nodes.upsertLinkedNodeForEvent(
+        event.copyWith(isTask: true),
+      );
+      calendar.setTaskLink(eventId, nodeId);
+    });
   }
 
   /// Un-marks an event. The event is kept; backing nodes are deleted
@@ -145,8 +158,10 @@ class NodeEventLink {
   ) {
     final event = calendar.byId(eventId);
     if (event == null || !event.isTask) return;
-    nodes.removeNodesForEvent(eventId);
-    calendar.clearTaskLink(eventId);
+    RevertableHydratedCubit.atomic([calendar, nodes], () {
+      nodes.removeNodesForEvent(eventId);
+      calendar.clearTaskLink(eventId);
+    });
   }
 
   /// Pushes an event's title/notes/time into its personal linked node.
@@ -162,13 +177,17 @@ class NodeEventLink {
   }
 
   /// Deletes an event together with its backing nodes.
+  /// One user gesture = one undo step (the silent node removal is folded
+  /// into the same record, so undo restores both).
   static void deleteEventAndNodes(
     CalendarCubit calendar,
     NodeCubit nodes,
     String eventId,
   ) {
-    nodes.removeNodesForEvent(eventId);
-    calendar.deleteEvent(eventId);
+    RevertableHydratedCubit.atomic([calendar, nodes], () {
+      nodes.removeNodesForEvent(eventId);
+      calendar.deleteEvent(eventId);
+    });
   }
 
   // ── Goal assignment ─────────────────────────────────────────────────
