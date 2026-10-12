@@ -781,6 +781,87 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         : node.copyWith(status: status, clearCompletedAt: true));
   }
 
+  /// Marks many nodes done/open as ONE undoable emit (one undo record,
+  /// one rebuild, one persist). Per-node decisions mirror [toggleDone]:
+  /// done stamps [completedAt], reopening clears it, and nodes already
+  /// in the target state are left untouched. Returns the number changed.
+  int setDoneMany(Set<String> ids, {required bool done, DateTime? now}) {
+    if (ids.isEmpty) return 0;
+    final at = now ?? DateTime.now();
+    final next = <Node>[];
+    var changed = 0;
+    for (final n in state) {
+      if (!ids.contains(n.id)) {
+        next.add(n);
+        continue;
+      }
+      if (n.isDone == done && (done || n.completedAt == null)) {
+        next.add(n);
+        continue;
+      }
+      changed++;
+      next.add(done
+          ? n.copyWith(status: NodeStatus.done, completedAt: at)
+          : n.copyWith(status: NodeStatus.open, clearCompletedAt: true));
+    }
+    if (changed == 0) return 0;
+    emitChange(next);
+    return changed;
+  }
+
+  /// Deletes many nodes as ONE undoable emit. Cascade rules mirror
+  /// [deleteNode]: generated instances of removed nodes go too, a child
+  /// is cascaded only when ALL its parents are removed, and survivors
+  /// keep their remaining parents. Returns the total removed, including
+  /// cascaded nodes.
+  int deleteNodes(Set<String> ids) {
+    final targets = ids.where((id) => _byIdMap.containsKey(id)).toSet();
+    if (targets.isEmpty) return 0;
+    final byParent = <String, List<String>>{};
+    final byInstanceOf = <String, List<String>>{};
+    for (final n in state) {
+      for (final p in n.parentIds) {
+        (byParent[p] ??= []).add(n.id);
+      }
+      final t = n.instanceOfId;
+      if (t != null) (byInstanceOf[t] ??= []).add(n.id);
+    }
+    final doomed = Set<String>.of(targets);
+    final queue = List<String>.of(targets);
+    while (queue.isNotEmpty) {
+      final current = queue.removeLast();
+      final instances = byInstanceOf[current];
+      if (instances != null) {
+        for (final child in instances) {
+          if (doomed.add(child)) queue.add(child);
+        }
+      }
+      final children = byParent[current];
+      if (children == null) continue;
+      for (final child in children) {
+        if (doomed.contains(child)) continue;
+        final node = _byIdMap[child];
+        if (node == null) continue;
+        if (node.parentIds.isNotEmpty &&
+            node.parentIds.every(doomed.contains)) {
+          if (doomed.add(child)) queue.add(child);
+        }
+      }
+    }
+    final before = state.length;
+    final next = <Node>[];
+    for (final n in state) {
+      if (doomed.contains(n.id)) continue;
+      final keptParents =
+          n.parentIds.where((p) => !doomed.contains(p)).toList();
+      next.add(keptParents.length == n.parentIds.length
+          ? n
+          : n.copyWith(parentIds: keptParents));
+    }
+    emitChange(next);
+    return before - next.length;
+  }
+
   /// Sets the calendar/planned work block, preserving the rest of the
   /// schedule (due date, fixed flag). Used by the follow-up scheduler.
   void setScheduleBlock(String id, DateTime start, DateTime end) {
