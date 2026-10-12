@@ -9,6 +9,7 @@ import 'package:a_fish_in_sea/nodes/service/node_tracking.dart';
 import 'package:a_fish_in_sea/nodes/view/node_checkbox.dart';
 import 'package:a_fish_in_sea/nodes/view/node_editor.dart';
 import 'package:a_fish_in_sea/nodes/view/node_finish_sheet.dart';
+import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
@@ -660,16 +661,21 @@ class _NodeTrackLine extends StatelessWidget {
     final elapsed = live.timerStartedAt == null
         ? null
         : now.difference(live.timerStartedAt!);
+    final isReportedShown = reported != null &&
+        live.actualStart != null &&
+        live.actualEnd != null;
     final statusLine = failed
         ? 'Marked as failed'
         : live.isTracking && elapsed != null
             ? 'Recording ${formatStopwatch(elapsed)}'
-            : reported != null &&
-                    live.actualStart != null &&
-                    live.actualEnd != null
+            : isReportedShown
                 ? 'Reported ${_homeTimeFormat.format(live.actualStart!)} – '
                     '${_homeTimeFormat.format(live.actualEnd!)} (${reported.inMinutes}m)'
                 : plannedLine;
+    // Toggl-style: the status line opens the correction sheet — a late
+    // press is fixed by moving the start, a finished session by editing
+    // the interval. Only when there is something to correct.
+    final canEditTimer = live.isTracking || isReportedShown;
     return InkWell(
       onTap: () => showNodeEditor(context, existing: live),
       child: Padding(
@@ -695,19 +701,53 @@ class _NodeTrackLine extends StatelessWidget {
                     ),
                   ),
                   Text(plannedLine, style: theme.textTheme.labelSmall),
-                  Text(
-                    statusLine,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: failed
-                          ? theme.colorScheme.error
-                          : live.isTracking
-                              ? theme.colorScheme.primary
-                              : null,
-                      fontWeight: live.isTracking || failed
-                          ? FontWeight.w600
-                          : null,
+                  if (canEditTimer)
+                    InkWell(
+                      onTap: () => showEditNodeTimerSheet(
+                        context,
+                        nodeId: live.id,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              statusLine,
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: failed
+                                    ? theme.colorScheme.error
+                                    : live.isTracking
+                                        ? theme.colorScheme.primary
+                                        : null,
+                                fontWeight: live.isTracking || failed
+                                    ? FontWeight.w600
+                                    : null,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Icon(
+                            Icons.edit,
+                            size: 12,
+                            color: theme.colorScheme.outline,
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    Text(
+                      statusLine,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: failed
+                            ? theme.colorScheme.error
+                            : live.isTracking
+                                ? theme.colorScheme.primary
+                                : null,
+                        fontWeight: live.isTracking || failed
+                            ? FontWeight.w600
+                            : null,
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),
