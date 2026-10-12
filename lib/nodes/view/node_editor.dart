@@ -7,6 +7,7 @@ import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
+import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/task_assignee.dart';
 import 'package:a_fish_in_sea/planner/view/people_field.dart';
@@ -433,14 +434,63 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
-            if (e != null && e.hasReported && e.reportedDuration != null) ...[
+            if (e != null &&
+                (e.hasReported && e.reportedDuration != null ||
+                    e.isTracking)) ...[
               const SizedBox(height: 8),
-              Text(
-                'Reported ${e.reportedDuration!.inMinutes}m '
-                '(${DateFormat('h:mm a').format(e.actualStart!)} – '
-                '${DateFormat('h:mm a').format(e.actualEnd!)})',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
+              Builder(builder: (context) {
+                // Live copy: a timer correction made in the edit sheet
+                // (opened below) shows here without reopening the editor.
+                Node live = e;
+                try {
+                  live = context.watch<NodeCubit>().byId(e.id) ?? e;
+                } catch (_) {}
+                final trackingLine = live.isTracking &&
+                        live.timerStartedAt != null
+                    ? 'Recording since ${DateFormat('h:mm a').format(live.timerStartedAt!)}'
+                    : null;
+                final reportedLine = live.hasReported &&
+                        live.reportedDuration != null &&
+                        live.actualStart != null &&
+                        live.actualEnd != null
+                    ? 'Reported ${live.reportedDuration!.inMinutes}m '
+                        '(${DateFormat('h:mm a').format(live.actualStart!)} – '
+                        '${DateFormat('h:mm a').format(live.actualEnd!)})'
+                    : null;
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (trackingLine != null)
+                            Text(
+                              trackingLine,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(fontWeight: FontWeight.w600),
+                            ),
+                          if (reportedLine != null) Text(
+                            reportedLine,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => showEditNodeTimerSheet(
+                        context,
+                        nodeId: e.id,
+                      ),
+                      child: Text(trackingLine != null
+                          ? 'Edit start'
+                          : 'Adjust'),
+                    ),
+                  ],
+                );
+              }),
             ],
             if (e != null && e.status == NodeStatus.failed) ...[
               const SizedBox(height: 4),
@@ -525,6 +575,15 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     if (title.isEmpty) return; // guarded in [_save]; re-check after await.
     final notes =
         _notes.text.trim().isEmpty ? null : _notes.text.trim();
+    final opening = widget.existing;
+    // Re-read live: a timer correction (start edit / manual entry) or a
+    // background link made while the editor was open must survive this
+    // save — the snapshot from open time would otherwise clobber it.
+    // Form-owned fields below still come from the controllers, so only
+    // non-form state refreshes.
+    final existing = opening == null
+        ? null
+        : cubit.byId(opening.id) ?? opening;
 
     ScheduleFacet? schedule;
     // Goals carry a due date at most — calendar time comes from assigned
@@ -541,10 +600,10 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       final target = double.tryParse(_amount.text.trim()) ?? 0.0;
       money = MoneyFacet(
         targetAmount: target,
-        actualAmount: widget.existing?.money?.actualAmount,
+        actualAmount: existing?.money?.actualAmount,
         direction: _direction,
         status:
-            widget.existing?.money?.status ?? MoneyStatus.projected,
+            existing?.money?.status ?? MoneyStatus.projected,
         period: _period,
         customPeriodDays: _period == TimeScale.custom
             ? int.tryParse(_customDaysCtrl.text.trim())
@@ -552,10 +611,10 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         isRecurring: _moneyRecurring,
         autoRollover: _autoRollover,
         rolloverAmount:
-            widget.existing?.money?.rolloverAmount ?? 0.0,
+            existing?.money?.rolloverAmount ?? 0.0,
         isFixed: _moneyFixed,
         linkedTransactionIds:
-            widget.existing?.money?.linkedTransactionIds ?? const [],
+            existing?.money?.linkedTransactionIds ?? const [],
       );
     }
 
@@ -595,7 +654,6 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       rule = null;
     }
 
-    final existing = widget.existing;
     String? error;
     Node? result;
     if (existing == null) {
@@ -625,6 +683,9 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         }
       }
     } else {
+      // Built on the live copy so timer/reported edits made while the
+      // editor was open survive (see above); every form-owned field is
+      // still set explicitly from the controllers.
       final updated = existing.copyWith(
         title: title,
         notes: notes,

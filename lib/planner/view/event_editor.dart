@@ -11,6 +11,7 @@ import '../../nodes/service/node_event_link.dart';
 import '../../nodes/view/goal_picker.dart';
 import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_finish_sheet.dart';
+import '../../nodes/view/timer_edit_sheet.dart';
 import '../../reporting/bloc/places_cubit.dart';
 import '../../reporting/model/place.dart';
 import '../../reporting/view/time_range_dial.dart';
@@ -1136,7 +1137,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       widget.onFinished?.call();
       return;
     }
-    final base = widget.existing!;
+    final base = calendarCubit.byId(widget.existing!.id) ?? widget.existing!;
     final ruleForMove =
         _customRepeat ? base.recurrenceRule : config.ruleFor(start);
     if (_canChangeCalendar(base, feedCubit)) {
@@ -2889,6 +2890,15 @@ class _TaskTimeSection extends StatelessWidget {
                   icon: const Icon(Icons.play_arrow, size: 16),
                   label: const Text('Start'),
                 ),
+              if (node.isTracking)
+                TextButton.icon(
+                  onPressed: () => showEditNodeTimerSheet(
+                    context,
+                    nodeId: nodeId,
+                  ),
+                  icon: const Icon(Icons.edit, size: 16),
+                  label: const Text('Edit start'),
+                ),
               OutlinedButton(
                 onPressed: () {
                   try {
@@ -2919,6 +2929,15 @@ class _TaskTimeSection extends StatelessWidget {
                     } catch (_) {}
                   },
                   child: const Text('Clear reported'),
+                ),
+              if (node.hasReported && !node.isTracking)
+                TextButton.icon(
+                  onPressed: () => showEditNodeTimerSheet(
+                    context,
+                    nodeId: nodeId,
+                  ),
+                  icon: const Icon(Icons.tune, size: 16),
+                  label: const Text('Adjust'),
                 ),
             ],
           ),
@@ -3006,6 +3025,15 @@ class _TimeReportSection extends StatelessWidget {
                       .startTracking(eventId),
                   icon: const Icon(Icons.play_arrow, size: 16),
                   label: const Text('Start'),
+                ),
+              if (isTracking)
+                TextButton.icon(
+                  onPressed: () => showEditEventTimerSheet(
+                    context,
+                    eventId: eventId,
+                  ),
+                  icon: const Icon(Icons.edit, size: 16),
+                  label: const Text('Edit start'),
                 ),
               // "Mark failed" only makes sense for task-events; plain
               // calendar events just record time.

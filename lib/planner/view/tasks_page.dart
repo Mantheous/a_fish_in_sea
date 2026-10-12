@@ -13,6 +13,7 @@ import '../../nodes/service/node_progress.dart';
 import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_editor.dart';
 import '../../nodes/view/node_finish_sheet.dart';
+import '../../nodes/view/timer_edit_sheet.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/feed_cubit.dart';
@@ -1027,20 +1028,58 @@ class _NodeTile extends StatelessWidget {
                 ),
             ],
           ),
+          // Toggl-style: tap a recording/reported line to correct it
+          // (move the start while running, edit the interval after).
           if (workLine != null)
-            Text(
-              workLine,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: failed
-                    ? theme.colorScheme.error
-                    : live.isTracking
-                        ? theme.colorScheme.primary
-                        : null,
-                fontWeight: failed || live.isTracking
-                    ? FontWeight.w600
-                    : null,
-              ),
-            ),
+            live.isTracking ||
+                    (!failed &&
+                        live.hasReported &&
+                        live.reportedDuration != null)
+                ? InkWell(
+                    onTap: () => showEditNodeTimerSheet(
+                      context,
+                      nodeId: live.id,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            workLine,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: failed
+                                  ? theme.colorScheme.error
+                                  : live.isTracking
+                                      ? theme.colorScheme.primary
+                                      : null,
+                              fontWeight: failed || live.isTracking
+                                  ? FontWeight.w600
+                                  : null,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Icon(
+                          Icons.edit,
+                          size: 12,
+                          color: theme.colorScheme.outline,
+                        ),
+                      ],
+                    ),
+                  )
+                : Text(
+                    workLine,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: failed
+                          ? theme.colorScheme.error
+                          : live.isTracking
+                              ? theme.colorScheme.primary
+                              : null,
+                      fontWeight: failed || live.isTracking
+                          ? FontWeight.w600
+                          : null,
+                    ),
+                  ),
           if (live.assignees.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 2),
