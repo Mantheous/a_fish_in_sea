@@ -21,11 +21,14 @@ PlannerEvent evt(String id,
       taskId: taskId,
     );
 
-Node taskNode(String id, {String? calendarEventId}) => Node(
+Node taskNode(String id,
+        {String? calendarEventId, String? sourceEventId}) =>
+    Node(
       id: id,
       title: 'Scripture study',
       createdAt: DateTime(2026, 10, 1),
       calendarEventId: calendarEventId,
+      sourceEventId: sourceEventId,
     );
 
 void main() {
@@ -149,6 +152,79 @@ void main() {
       NodeEventLink.stopEventTrackingAligned(nodes, calendar, 'plain',
           now: DateTime(2026, 10, 13, 7, 20));
       expect(calendar.byId('plain')?.hasReported, isTrue);
+    });
+  });
+
+  group('node -> event completion mirror heals plain linked events', () {
+    test('calendarEventId link mirrors even when the block is plain', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      // "Add to calendar" block saved as a plain event: the Task switch
+      // describes the event, so the link survives with isTask off.
+      calendar.addEvent(evt('e1', taskId: 'n1', isTask: false));
+      nodes.addNode(taskNode('n1', calendarEventId: 'e1'));
+      NodeEventLink.toggleNodeDone(nodes, calendar, 'n1');
+      expect(nodes.byId('n1')?.isDone, isTrue);
+      expect(calendar.byId('e1')?.done, isTrue);
+      expect(calendar.byId('e1')?.isTask, isTrue);
+    });
+
+    test('sourceEventId homework link mirrors even when plain', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      calendar.addEvent(evt('hw', isTask: false));
+      nodes.addNode(taskNode('n1', sourceEventId: 'hw'));
+      NodeEventLink.toggleNodeDone(nodes, calendar, 'n1');
+      expect(nodes.byId('n1')?.isDone, isTrue);
+      expect(calendar.byId('hw')?.done, isTrue);
+      expect(calendar.byId('hw')?.isTask, isTrue);
+    });
+
+    test('taskId-only reverse link mirrors even when plain', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      calendar.addEvent(evt('e1', taskId: 'n1', isTask: false));
+      nodes.addNode(taskNode('n1'));
+      NodeEventLink.toggleNodeDone(nodes, calendar, 'n1');
+      expect(calendar.byId('e1')?.done, isTrue);
+      expect(calendar.byId('e1')?.isTask, isTrue);
+    });
+
+    test('un-toggling re-opens the healed event', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      calendar.addEvent(evt('e1', taskId: 'n1', isTask: false));
+      nodes.addNode(taskNode('n1', calendarEventId: 'e1'));
+      NodeEventLink.toggleNodeDone(nodes, calendar, 'n1');
+      NodeEventLink.toggleNodeDone(nodes, calendar, 'n1');
+      expect(nodes.byId('n1')?.isDone, isFalse);
+      expect(calendar.byId('e1')?.done, isFalse);
+    });
+
+    test('setNodesDone mirrors onto plain linked events', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      calendar.addEvent(evt('e1', taskId: 'n1', isTask: false));
+      nodes.addNode(taskNode('n1', calendarEventId: 'e1'));
+      final changed = NodeEventLink.setNodesDone(
+        nodes,
+        calendar,
+        {'n1'},
+        done: true,
+      );
+      expect(changed, 1);
+      expect(calendar.byId('e1')?.done, isTrue);
+      expect(calendar.byId('e1')?.isTask, isTrue);
+    });
+
+    test('unlinked plain events are left alone', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      calendar.addEvent(evt('plain', isTask: false));
+      nodes.addNode(taskNode('n1'));
+      NodeEventLink.toggleNodeDone(nodes, calendar, 'n1');
+      expect(calendar.byId('plain')?.done, isFalse);
+      expect(calendar.byId('plain')?.isTask, isFalse);
     });
   });
 }

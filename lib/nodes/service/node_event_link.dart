@@ -62,22 +62,31 @@ class NodeEventLink {
     });
   }
 
-  /// Writes [node]'s completion onto every linked task-event: the direct
+  /// Writes [node]'s completion onto every linked event: the direct
   /// `calendarEventId`/`sourceEventId` target plus every event whose
   /// `taskId` points at the node. Skips events already in agreement so the
   /// mirror stays a no-op emit when nothing changed.
+  ///
+  /// Linked events are included even when their `isTask` flag is off: a
+  /// surviving link means the event is still the node's schedule (the
+  /// editor supports saving a task-seeded block as a plain event without
+  /// deleting the task), and leaving it open desyncs the calendar from
+  /// the Tasks list. Mirroring heals `isTask` back on so the tile reads
+  /// as done and later calendar toggles route through the backing node.
   static void _mirrorNodeCompletion(
     CalendarCubit calendar,
     Node node,
   ) {
     final updates = <PlannerEvent>[];
-    for (final event in _linkedTaskEvents(calendar, node)) {
+    for (final event in _linkedEvents(calendar, node)) {
       if (event.done == node.isDone &&
           event.completedAt == node.completedAt &&
-          event.failed == (node.status == NodeStatus.failed)) {
+          event.failed == (node.status == NodeStatus.failed) &&
+          event.isTask) {
         continue;
       }
       updates.add(event.copyWith(
+        isTask: true,
         done: node.isDone,
         completedAt: node.completedAt,
         clearCompletedAt: !node.isDone,
@@ -152,13 +161,15 @@ class NodeEventLink {
     final seen = <String>{};
     final calUpdates = <PlannerEvent>[];
     void consider(PlannerEvent event, Node node) {
-      if (!event.isTask || !seen.add(event.id)) return;
+      if (!seen.add(event.id)) return;
       if (event.done == node.isDone &&
           event.completedAt == node.completedAt &&
-          event.failed == (node.status == NodeStatus.failed)) {
+          event.failed == (node.status == NodeStatus.failed) &&
+          event.isTask) {
         return;
       }
       calUpdates.add(event.copyWith(
+        isTask: true,
         done: node.isDone,
         completedAt: node.completedAt,
         clearCompletedAt: !node.isDone,
@@ -710,6 +721,8 @@ class NodeEventLink {
 
   /// Every task-event linked to [node]: the direct `calendarEventId` /
   /// `sourceEventId` targets plus events whose `taskId` points at it.
+  /// Used by the time-tracking paths, where only actionable task-events
+  /// carry timers.
   static List<PlannerEvent> _linkedTaskEvents(
     CalendarCubit calendar,
     Node node,
@@ -723,6 +736,29 @@ class NodeEventLink {
     }
     for (final event in calendar.state) {
       if (event.isTask && event.taskId == node.id && seen.add(event.id)) {
+        out.add(event);
+      }
+    }
+    return out;
+  }
+
+  /// Every event linked to [node], including ones whose `isTask` flag is
+  /// off. A surviving link (direct id or `taskId`) means the event is
+  /// still the node's schedule, so completion mirrors onto it (healing
+  /// `isTask`) instead of silently desyncing the calendar tile.
+  static List<PlannerEvent> _linkedEvents(
+    CalendarCubit calendar,
+    Node node,
+  ) {
+    final seen = <String>{};
+    final out = <PlannerEvent>[];
+    for (final eventId in [node.calendarEventId, node.sourceEventId]) {
+      if (eventId == null || !seen.add(eventId)) continue;
+      final event = calendar.byId(eventId);
+      if (event != null) out.add(event);
+    }
+    for (final event in calendar.state) {
+      if (event.taskId == node.id && seen.add(event.id)) {
         out.add(event);
       }
     }

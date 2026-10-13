@@ -788,13 +788,27 @@ class _NodeTile extends StatelessWidget {
               content: Text(error ?? 'Duplicated “${live.title}”')),
         );
       case 'toggle':
-        cubit.toggleDone(live.id);
+        try {
+          NodeEventLink.toggleNodeDone(
+              cubit, context.read<CalendarCubit>(), live.id);
+        } catch (_) {
+          cubit.toggleDone(live.id);
+        }
       case 'fail':
-        cubit.setStatus(
+        try {
+          NodeEventLink.setNodeFailed(
+            cubit,
+            context.read<CalendarCubit>(),
             live.id,
-            live.status == NodeStatus.failed
-                ? NodeStatus.open
-                : NodeStatus.failed);
+            live.status != NodeStatus.failed,
+          );
+        } catch (_) {
+          cubit.setStatus(
+              live.id,
+              live.status == NodeStatus.failed
+                  ? NodeStatus.open
+                  : NodeStatus.failed);
+        }
       case 'generate':
         final made = cubit.generateInstances(
           templateId: live.id,
