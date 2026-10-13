@@ -103,17 +103,34 @@ void main() {
   });
 
   group('feed-truth due math', () {
-    test('point items are due at start, windows at end', () {
+    test('point items are due at start, windows at inclusive end', () {
       final start = DateTime(2030, 1, 7, 9);
       final end = DateTime(2030, 1, 7, 10);
       expect(
           assignmentBaseDue(start: start, end: end, allDay: false), start);
+      // All-day DTEND is exclusive per RFC 5545: Oct 12..15 means due
+      // Oct 14 (end minus one day).
       expect(
           assignmentBaseDue(
               start: start,
               end: start.add(const Duration(days: 5)),
               allDay: true),
-          start.add(const Duration(days: 5)));
+          start.add(const Duration(days: 4)));
+    });
+
+    test('math 290 window: Oct 12..15 is due Oct 14', () {
+      final start = DateTime(2026, 10, 12);
+      final end = DateTime(2026, 10, 15);
+      expect(
+          assignmentBaseDue(start: start, end: end, allDay: true),
+          DateTime(2026, 10, 14));
+    });
+
+    test('timed windows keep the exact end', () {
+      final start = DateTime(2030, 1, 7, 9);
+      final end = DateTime(2030, 1, 12, 10);
+      expect(
+          assignmentBaseDue(start: start, end: end, allDay: false), start);
     });
 
     test('shiftOf measures whole days from base', () {

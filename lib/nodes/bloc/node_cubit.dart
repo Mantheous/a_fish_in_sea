@@ -1846,6 +1846,59 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         .map((n) => n.sourceEventId)
         .whereType<String>()
         .toSet();
+    final byEventId = {for (final e in events) e.id: e};
+    // One-time healing for the pre-fix exclusive-end bug: LS all-day
+    // DTENDs are exclusive per RFC 5545 (DTSTART Oct 12 DTEND Oct 15 is
+    // due Oct 14), but imports used to stamp due = DTEND (Oct 15). Move
+    // open nodes still sitting exactly on the old base (or old base +
+    // their rule shift) to the inclusive base. Hand-edited dues sit
+    // anywhere else and are left alone.
+    var healed = 0;
+    final healedBase = <Node>[];
+    for (final n in base) {
+      final eventId = n.sourceEventId;
+      final s = n.schedule;
+      final event = eventId == null ? null : byEventId[eventId];
+      if (feed.kind != FeedKind.learningSuite ||
+          event == null ||
+          s?.due == null ||
+          !n.isOpen) {
+        healedBase.add(n);
+        continue;
+      }
+      final isWindow = event.allDay &&
+          event.end.difference(event.start) > const Duration(days: 1);
+      if (!isWindow) {
+        healedBase.add(n);
+        continue;
+      }
+      final shift = assignmentOffsetFor(
+        assignmentRules,
+        feedId: feed.id,
+        title: n.title,
+      );
+      final oldBaseDue = shift == 0
+          ? event.end
+          : event.end.add(Duration(days: shift));
+      if (s!.due != oldBaseDue) {
+        healedBase.add(n);
+        continue;
+      }
+      final newBaseDue = shift == 0
+          ? event.end.subtract(const Duration(days: 1))
+          : event.end
+              .subtract(const Duration(days: 1))
+              .add(Duration(days: shift));
+      healed++;
+      healedBase.add(n.copyWith(
+        schedule: s.copyWith(
+          due: newBaseDue,
+          start: event.start,
+          end: event.end,
+        ),
+      ));
+    }
+    base = healedBase;
     final imported = <Node>[];
     for (final event in events) {
       if (taskOptOutIds.contains(event.id)) continue;
@@ -1853,12 +1906,18 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       if (existingSource.contains(event.id)) continue;
       if (existing.contains(event.id)) continue;
       // Learning Suite open..due windows (DTSTART..DTEND) are due at the
-      // end of the window: without this every window node would be due
-      // (and instantly overdue) on its open date.
+      // inclusive end of the window: without this every window node would
+      // be due (and instantly overdue) on its open date. All-day DTENDs
+      // are exclusive per RFC 5545, so the due date is end minus one day
+      // (DTSTART Oct 12 DTEND Oct 15 → due Oct 14); timed windows keep
+      // the exact end instant. The feed window stays in start/end as
+      // truth.
       final isWindow = feed.kind == FeedKind.learningSuite &&
           event.allDay &&
           event.end.difference(event.start) > const Duration(days: 1);
-      final baseDue = isWindow ? event.end : event.start;
+      final baseDue = isWindow
+          ? event.end.subtract(const Duration(days: 1))
+          : event.start;
       // Assignment rules shift the planned deadline (e.g. video quizzes
       // due 2 days early); the feed window stays in start/end as truth.
       final shift = assignmentOffsetFor(
@@ -1888,7 +1947,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       ));
     }
     final next = [...base, ...imported];
-    if (imported.isNotEmpty || next.length != state.length) {
+    if (imported.isNotEmpty || healed > 0 || next.length != state.length) {
       emitSilent(next);
     }
   }

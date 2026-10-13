@@ -14,11 +14,13 @@ import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_editor.dart';
 import '../../nodes/view/node_finish_sheet.dart';
 import '../../nodes/view/timer_edit_sheet.dart';
+import '../bloc/assignment_rules_cubit.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/feed_cubit.dart';
 import '../bloc/tasks_tab_cubit.dart';
 import '../bloc/tasks_view_options_cubit.dart';
+import '../model/assignment_template.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../model/task_assignee.dart';
@@ -756,24 +758,96 @@ class _HomeworkTabState extends State<_HomeworkTab>
       children: [
         ValueListenableBuilder<bool>(
           valueListenable: feedCubit.isSyncing,
-          builder: (context, syncing, _) => ListTile(
-            dense: true,
-            title: Text(
-              syncing ? 'Syncing…' : 'Assignments by class',
-              style: Theme.of(context).textTheme.labelMedium,
-            ),
-            trailing: IconButton(
-              icon: syncing
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.refresh),
-              onPressed:
-                  syncing ? null : () => feedCubit.syncAll(force: true),
-            ),
-          ),
+          builder: (context, syncing, _) {
+            // Repeating-type candidates for the rules entry point. Same
+            // inputs as the rules sheet so the badge/banner match what the
+            // sheet will show. Cheap (a few hundred nodes at most).
+            var unruledRepeating = 0;
+            try {
+              final rules = context.watch<AssignmentRulesCubit>().state;
+              final samples = <TemplateSample>[
+                for (final n in nodeCubit.state)
+                  if (n.sourceEventId != null &&
+                      n.schedule?.due != null &&
+                      (n.feedId ?? n.classId ?? '').isNotEmpty)
+                    TemplateSample(
+                      feedId: (n.feedId ?? n.classId)!,
+                      title: n.title,
+                      classLabel: n.classLabel,
+                      due: n.schedule!.due,
+                    ),
+              ];
+              final rued =
+                  {for (final r in rules) r.groupKey};
+              unruledRepeating = detectRepeatingGroups(samples)
+                  .where((g) =>
+                      g.isRepeating &&
+                      !rued.contains('${g.feedId}|${g.templateKey}'))
+                  .length;
+            } catch (_) {}
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  dense: true,
+                  title: Text(
+                    syncing ? 'Syncing…' : 'Assignments by class',
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Badge(
+                        isLabelVisible: unruledRepeating > 0,
+                        label: Text('$unruledRepeating'),
+                        child: IconButton(
+                          tooltip: 'Repeating assignment rules',
+                          icon: const Icon(Icons.tune_outlined),
+                          onPressed: () => showAssignmentRules(context),
+                        ),
+                      ),
+                      IconButton(
+                        icon: syncing
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2),
+                              )
+                            : const Icon(Icons.refresh),
+                        onPressed: syncing
+                            ? null
+                            : () => feedCubit.syncAll(force: true),
+                      ),
+                    ],
+                  ),
+                ),
+                if (unruledRepeating > 0)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+                    child: Card(
+                      child: ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.auto_awesome_outlined),
+                        title: Text(
+                          unruledRepeating == 1
+                              ? '1 repeating type detected'
+                              : '$unruledRepeating repeating types detected',
+                        ),
+                        subtitle: const Text(
+                          'Weekly quizzes and problem sets can be due '
+                          'earlier or later in your plan.',
+                        ),
+                        trailing: TextButton(
+                          onPressed: () => showAssignmentRules(context),
+                          child: const Text('View'),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
         ),
         if (widget.selecting)
           Builder(

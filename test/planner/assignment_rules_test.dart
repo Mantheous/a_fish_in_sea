@@ -230,4 +230,71 @@ void main() {
           base);
     });
   });
+
+  group('Learning Suite exclusive-end windows', () {
+    const lsFeed = Feed(
+      id: 'math290',
+      name: 'MATH 290',
+      url: 'https://example.com/feed.ics',
+      kind: FeedKind.learningSuite,
+    );
+
+    PlannerEvent window(String uid, String subject) => PlannerEvent(
+          id: 'hw:math290:$uid',
+          subject: subject,
+          notes: 'Before doing the quiz, watch the video',
+          start: DateTime(2026, 10, 12),
+          end: DateTime(2026, 10, 15),
+          allDay: true,
+          sourceUid: uid,
+        );
+
+    test('fresh window imports are due on the inclusive end', () {
+      UndoCubit();
+      final nodes = NodeCubit();
+      nodes.importFromFeed(
+        [window('wq-17-18', 'Video Quiz Sections 17 and 18')],
+        lsFeed,
+      );
+      expect(nodes.state, hasLength(1));
+      // DTSTART Oct 12 DTEND Oct 15 (exclusive) → due Oct 14.
+      expect(nodes.state.single.schedule?.due, DateTime(2026, 10, 14));
+      expect(nodes.state.single.schedule?.start, DateTime(2026, 10, 12));
+      expect(nodes.state.single.schedule?.end, DateTime(2026, 10, 15));
+    });
+
+    test('resync heals old exclusive-end dues, spares hand edits', () {
+      UndoCubit();
+      final nodes = NodeCubit();
+      final ev = window('wq-17-18', 'Video Quiz Sections 17 and 18');
+      nodes.importFromFeed([ev], lsFeed);
+      // Simulate a pre-fix import sitting on the exclusive end (Oct 15).
+      final wrong = nodes.byId('hw:math290:wq-17-18')!;
+      nodes.updateNode(wrong.copyWith(
+        schedule: wrong.schedule!.copyWith(due: DateTime(2026, 10, 15)),
+      ));
+      // Hand-edited item far from either base.
+      final hand = PlannerEvent(
+        id: 'hw:math290:hand-1',
+        subject: 'Video Quiz Section 19',
+        notes: 'Before doing the quiz, watch the video',
+        start: DateTime(2026, 10, 14),
+        end: DateTime(2026, 10, 17),
+        allDay: true,
+        sourceUid: 'hand-1',
+      );
+      nodes.importFromFeed([hand], lsFeed);
+      final handNode = nodes.byId('hw:math290:hand-1')!;
+      nodes.updateNode(handNode.copyWith(
+        schedule: handNode.schedule!
+            .copyWith(due: DateTime(2026, 11, 1)),
+      ));
+
+      nodes.importFromFeed([ev, hand], lsFeed);
+      expect(nodes.byId('hw:math290:wq-17-18')?.schedule?.due,
+          DateTime(2026, 10, 14));
+      expect(nodes.byId('hw:math290:hand-1')?.schedule?.due,
+          DateTime(2026, 11, 1));
+    });
+  });
 }
