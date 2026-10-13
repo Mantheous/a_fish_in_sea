@@ -640,6 +640,10 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         money: n.money?.copyWith(
             status: MoneyStatus.projected, clearActual: true),
         effort: n.effort,
+        // A copy is a fresh goal: same deck and target, but the review
+        // count starts over (like money actuals, which are cleared too).
+        anki: n.anki?.copyWith(
+            clearReviewsActual: true, clearLastSyncedAt: true),
         recurrence: n.recurrence,
         rule: n.rule,
         instanceOfId: n.instanceOfId == null
@@ -1328,6 +1332,11 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       schedule: schedule,
       money: money,
       effort: template.effort,
+      // Instances inherit the deck and target but start unreviewed: the
+      // template's cached count belongs to its own period, not the new
+      // instance's.
+      anki: template.anki?.copyWith(
+          clearReviewsActual: true, clearLastSyncedAt: true),
       instanceOfId: template.id,
       sourceEventId: template.sourceEventId,
       calendarEventId: template.calendarEventId,

@@ -1,4 +1,5 @@
 import 'package:a_fish_in_sea/common/undo/undo_bar.dart';
+import 'package:a_fish_in_sea/anki/anki_connect.dart';
 import 'package:a_fish_in_sea/demo/demo_coordinator.dart';
 import 'package:a_fish_in_sea/demo/demo_mode.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
@@ -15,9 +16,11 @@ import 'package:a_fish_in_sea/sync/auth_cubit.dart';
 import 'package:a_fish_in_sea/sync/sync_client.dart';
 import 'package:a_fish_in_sea/sync/sync_engine.dart';
 import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:http/http.dart' as http;
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
 /// Configuration hub: classes, calendars, plus the bank connection.
@@ -113,6 +116,13 @@ class _SettingsPageState extends State<SettingsPage> {
             title: 'Bank connection',            subtitle: 'Connect a bank with Plaid to pull balances and '
                 'transactions into Finances.',
             child: _BankSection(),
+          ),
+          const _SettingsSection(
+            title: 'Anki',
+            subtitle: 'Where memorization goals read review counts from. '
+                'Desktop Anki with the AnkiConnect add-on; browsers cannot '
+                'reach it, so the web build uses manual entry instead.',
+            child: _AnkiSection(),
           ),
         ],
       ),
@@ -977,6 +987,125 @@ class _BankSection extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+/// AnkiConnect endpoint (per-device) plus a connection test. On the web
+/// the test is hidden: browsers cannot reach a desktop AnkiConnect, so
+/// there is nothing to test — goals there use manual entry.
+class _AnkiSection extends StatefulWidget {
+  const _AnkiSection();
+
+  @override
+  State<_AnkiSection> createState() => _AnkiSectionState();
+}
+
+class _AnkiSectionState extends State<_AnkiSection> {
+  late final TextEditingController _host;
+  bool _testing = false;
+  String? _status;
+
+  @override
+  void initState() {
+    super.initState();
+    _host = TextEditingController(
+        text: context.read<SettingsCubit>().state.ankiConnectHost);
+  }
+
+  @override
+  void dispose() {
+    _host.dispose();
+    super.dispose();
+  }
+
+  Future<void> _test(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final host = _host.text;
+    setState(() {
+      _testing = true;
+      _status = null;
+    });
+    final client = AnkiConnectClient(host: host, httpClient: http.Client());
+    try {
+      final decks = await client.deckNames();
+      if (!context.mounted) return;
+      setState(() {
+        _status = 'Connected — ${decks.length} deck'
+            '${decks.length == 1 ? '' : 's'} found.';
+      });
+    } on AnkiException catch (e) {
+      if (!context.mounted) return;
+      setState(() => _status = null);
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      client.close();
+      if (context.mounted) setState(() => _testing = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final saved = context.watch<SettingsCubit>().state.ankiConnectHost;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: _host,
+          keyboardType: TextInputType.url,
+          decoration: const InputDecoration(
+            labelText: 'AnkiConnect address',
+            hintText: 'http://127.0.0.1:8765',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (v) => context.read<SettingsCubit>().setAnkiConnectHost(v),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Saved: $saved · per-device, never synced.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            FilledButton(
+              onPressed: () {
+                context.read<SettingsCubit>().setAnkiConnectHost(_host.text);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Anki address saved')),
+                );
+              },
+              child: const Text('Save'),
+            ),
+            const SizedBox(width: 8),
+            if (!kIsWeb)
+              OutlinedButton.icon(
+                onPressed:
+                    _testing ? null : () => _test(context),
+                icon: _testing
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.link),
+                label: const Text('Test connection'),
+              ),
+          ],
+        ),
+        if (_status != null) ...[
+          const SizedBox(height: 4),
+          Text(_status!, style: Theme.of(context).textTheme.bodySmall),
+        ],
+        if (kIsWeb) ...[
+          const SizedBox(height: 4),
+          Text(
+            'This browser cannot reach Anki on your computer — '
+            'memorization goals here use manual counts. Sync from the '
+            'desktop app instead.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ],
     );
   }
 }
