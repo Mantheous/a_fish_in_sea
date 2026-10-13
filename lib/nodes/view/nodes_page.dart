@@ -665,6 +665,9 @@ class _NodeTile extends StatelessWidget {
     if (live.effort != null || live.hasCalendarBlock) {
       return const Icon(Icons.timer_outlined);
     }
+    if (live.anki != null) {
+      return const Icon(Icons.school_outlined);
+    }
     return NodeCheckbox(node: live);
   }
 
@@ -721,6 +724,15 @@ class _NodeTile extends StatelessWidget {
           : timeActualForNode(live, nodes);
       parts.add(
           '${actual.toStringAsFixed(0)}m / ${live.effort!.targetMinutes}m');
+    } else if (live.anki != null) {
+      final actual = byParent != null && nodeById != null
+          ? ankiActualForNodeIndexed(
+              live, byId: nodeById!, byParent: byParent!)
+          : ankiActualForNode(live, nodes);
+      final deck =
+          live.anki!.deckName == null ? '' : ' (${live.anki!.deckName})';
+      parts.add(
+          '${actual.toStringAsFixed(0)} / ${live.anki!.targetReviews} reviews$deck');
     }
     if (live.rule != null &&
         live.rule!.kind == NodeRuleKind.homeworkAhead) {

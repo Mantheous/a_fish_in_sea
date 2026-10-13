@@ -294,13 +294,36 @@ void main() {
       final legacy = Map<String, dynamic>.from(good)
         ..remove('schedule')
         ..remove('money')
+        ..remove('anki')
         ..remove('parentIds');
       final restoredLegacy = cubit.fromJson({
         'nodes': [legacy],
       });
       expect(restoredLegacy?.single.schedule, isNull);
       expect(restoredLegacy?.single.money, isNull);
+      expect(restoredLegacy?.single.anki, isNull);
       expect(restoredLegacy?.single.parentIds, isEmpty);
+    });
+
+    test('NodeCubit tolerates corrupt anki facets, keeps the node', () {
+      final cubit = NodeCubit();
+      final good = Node(
+        id: 'n9',
+        title: 'Memorize',
+        createdAt: _day,
+        anki: const AnkiFacet(targetReviews: 50, deckName: 'Japanese'),
+      ).toJson();
+      final restored = cubit.fromJson({
+        'nodes': [
+          good,
+          {...good, 'id': 'n10', 'anki': 'garbage'},
+          {...good, 'id': 'n11', 'anki': {'targetReviews': 'lots'}},
+        ],
+      });
+      expect(restored?.map((n) => n.id), ['n9', 'n10', 'n11']);
+      expect(restored?[0].anki?.targetReviews, 50);
+      expect(restored?[1].anki, isNull);
+      expect(restored?[2].anki, isNull);
     });
 
     test('NodeCubit loads pre-flag nodes as bounded', () {
@@ -443,6 +466,7 @@ void main() {
           isRecurring: true,
         ),
         effort: const EffortFacet(targetMinutes: 30),
+        anki: const AnkiFacet(targetReviews: 50, deckName: 'Japanese'),
       );
       expect(Node.fromJson(node.toJson()), node);
     });

@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 
+import 'package:a_fish_in_sea/anki/anki_connect.dart';
+import 'package:a_fish_in_sea/anki/anki_import.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
@@ -9,6 +13,7 @@ import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
 import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/task_assignee.dart';
 import 'package:a_fish_in_sea/planner/view/people_field.dart';
 
@@ -75,6 +80,15 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   late final TextEditingController _minutes;
   bool _effortFixed = false;
 
+  bool _hasAnki = false;
+  late final TextEditingController _deck;
+  late final TextEditingController _targetReviews;
+  TimeScale? _ankiPeriod;
+  late final TextEditingController _ankiCustomDays;
+  late final TextEditingController _manualReviews;
+  DateTime? _ankiSyncedAt;
+  bool _ankiSyncing = false;
+
   bool _hasRecurrence = false;
   TimeScale _frequency = TimeScale.daily;
   DateTime? _recurEnd;
@@ -111,6 +125,18 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _minutes = TextEditingController(
         text: e?.effort != null ? e!.effort!.targetMinutes.toString() : '');
     _effortFixed = e?.effort?.isFixed ?? false;
+    _hasAnki = e?.anki != null;
+    _deck = TextEditingController(text: e?.anki?.deckName ?? '');
+    _targetReviews = TextEditingController(
+        text: e?.anki != null ? e!.anki!.targetReviews.toString() : '');
+    _ankiPeriod = e?.anki?.period;
+    _ankiCustomDays = TextEditingController(
+        text: e?.anki?.customPeriodDays?.toString() ?? '30');
+    _manualReviews = TextEditingController(
+        text: e?.anki?.reviewsActual != null
+            ? e!.anki!.reviewsActual.toString()
+            : '');
+    _ankiSyncedAt = e?.anki?.lastSyncedAt;
     _hasRecurrence = e?.recurrence != null || widget.enableRecurrence;
     _frequency = e?.recurrence?.frequency ?? TimeScale.daily;
     _recurEnd = e?.recurrence?.endDate;
@@ -129,6 +155,10 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _amount.dispose();
     _customDaysCtrl.dispose();
     _minutes.dispose();
+    _deck.dispose();
+    _targetReviews.dispose();
+    _ankiCustomDays.dispose();
+    _manualReviews.dispose();
     _horizon.dispose();
     _minBalance.dispose();
     super.dispose();
@@ -342,6 +372,104 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                 onChanged: (v) =>
                     setState(() => _effortFixed = v),
               ),
+            ],
+            const SizedBox(height: 8),
+            _sectionTitle(context, 'Memorization (Anki)'),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text('Has memorization target'),
+              subtitle: const Text(
+                  'Review N Anki cards per period — progress feeds from '
+                  'AnkiConnect or manual counts'),
+              value: _hasAnki,
+              onChanged: (v) => setState(() => _hasAnki = v),
+            ),
+            if (_hasAnki) ...[
+              TextField(
+                controller: _deck,
+                decoration: const InputDecoration(
+                  labelText: 'Deck (blank = all decks)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _targetReviews,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Target reviews',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<TimeScale?>(
+                initialValue: _ankiPeriod,
+                decoration:
+                    const InputDecoration(labelText: 'Period (optional)'),
+                items: [
+                  const DropdownMenuItem(
+                      value: null, child: Text('One-time')),
+                  for (final s in TimeScale.values)
+                    DropdownMenuItem(value: s, child: Text(s.displayName)),
+                ],
+                onChanged: (v) => setState(() => _ankiPeriod = v),
+              ),
+              if (_ankiPeriod == TimeScale.custom) ...[
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _ankiCustomDays,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                      labelText: 'Custom period (days)'),
+                ),
+              ],
+              const SizedBox(height: 8),
+              TextField(
+                controller: _manualReviews,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Reviews so far (this period)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 4),
+              if (_ankiSyncedAt != null)
+                Text(
+                  'Last counted '
+                  '${MaterialLocalizations.of(context).formatFullDate(_ankiSyncedAt!)}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              Row(
+                children: [
+                  if (!kIsWeb)
+                    TextButton.icon(
+                      onPressed: _ankiSyncing
+                          ? null
+                          : () => _syncAnki(context),
+                      icon: _ankiSyncing
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2))
+                          : const Icon(Icons.sync, size: 16),
+                      label: const Text('Sync from Anki'),
+                    ),
+                  TextButton.icon(
+                    onPressed: () => _importAnki(context),
+                    icon: const Icon(Icons.upload_outlined, size: 16),
+                    label: const Text('Paste stats'),
+                  ),
+                ],
+              ),
+              if (kIsWeb)
+                Text(
+                  'This browser cannot reach Anki on your computer — '
+                  'enter the count by hand, paste stats, or sync from '
+                  'the desktop app.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
             ],
             const SizedBox(height: 8),
             _sectionTitle(context, 'Repeats'),
@@ -562,6 +690,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       }
       if (_hasMoney) dropping.add('money target');
       if (_hasEffort) dropping.add('time target');
+      if (_hasAnki) dropping.add('memorization target');
       if (_hasRecurrence) dropping.add('repeats');
       if (_ruleKind != NodeRuleKind.none) dropping.add('rule');
       if (dropping.isNotEmpty) {
@@ -626,6 +755,24 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       );
     }
 
+    AnkiFacet? anki;
+    if (_hasAnki) {
+      final deck = _deck.text.trim();
+      final manual = int.tryParse(_manualReviews.text.trim());
+      anki = AnkiFacet(
+        deckName: deck.isEmpty ? null : deck,
+        targetReviews: int.tryParse(_targetReviews.text.trim()) ?? 0,
+        period: _ankiPeriod,
+        customPeriodDays: _ankiPeriod == TimeScale.custom
+            ? int.tryParse(_ankiCustomDays.text.trim())
+            : null,
+        // A blank count keeps the previously synced number (or nothing
+        // on a new goal) instead of zeroing it.
+        reviewsActual: manual ?? existing?.anki?.reviewsActual,
+        lastSyncedAt: manual != null ? DateTime.now() : _ankiSyncedAt,
+      );
+    }
+
     NodeRecurrence? recurrence;
     if (_hasRecurrence) {
       recurrence = NodeRecurrence(
@@ -650,6 +797,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       schedule = null;
       money = null;
       effort = null;
+      anki = null;
       recurrence = null;
       rule = null;
     }
@@ -667,6 +815,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         schedule: schedule,
         money: money,
         effort: effort,
+        anki: anki,
         recurrence: recurrence,
         rule: rule,
         assignees: _people,
@@ -698,6 +847,8 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         clearMoney: money == null,
         effort: effort,
         clearEffort: effort == null,
+        anki: anki,
+        clearAnki: anki == null,
         recurrence: recurrence,
         clearRecurrence: recurrence == null,
         rule: rule,
@@ -714,6 +865,96 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       return;
     }
     Navigator.of(context).pop(result);
+  }
+
+  /// Pulls today's review count from AnkiConnect into the manual field.
+  /// Native only — the button is hidden on web (see build).
+  Future<void> _syncAnki(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    String host = '';
+    try {
+      host = context.read<SettingsCubit>().state.ankiConnectHost;
+    } catch (_) {}
+    final deck = _deck.text.trim();
+    setState(() => _ankiSyncing = true);
+    final client = AnkiConnectClient(host: host, httpClient: http.Client());
+    try {
+      final count =
+          await client.reviewsToday(deck: deck.isEmpty ? null : deck);
+      if (!context.mounted) return;
+      setState(() {
+        _manualReviews.text = count.toString();
+        _ankiSyncedAt = DateTime.now();
+      });
+      messenger.showSnackBar(
+        SnackBar(content: Text('Anki: $count card${count == 1 ? '' : 's'} reviewed today')),
+      );
+    } on AnkiException catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      client.close();
+      if (context.mounted) setState(() => _ankiSyncing = false);
+    }
+  }
+
+  /// Pastes "deck,count per line" stats (see parseAnkiReviewCounts) into
+  /// the manual field. The fallback for web and mobile-only users.
+  Future<void> _importAnki(BuildContext context) async {
+    final pasted = TextEditingController();
+    final result = await showDialog<AnkiImportResult>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Paste Anki stats'),
+        content: TextField(
+          controller: pasted,
+          maxLines: 6,
+          decoration: const InputDecoration(
+            hintText: '42\nJapanese, 30',
+            helperText: 'One count per line: "42" or "Deck, 42". '
+                'Lines starting with # are ignored.',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              try {
+                Navigator.of(ctx).pop(parseAnkiReviewCounts(pasted.text));
+              } on FormatException catch (e) {
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  SnackBar(content: Text(e.message)),
+                );
+              }
+            },
+            child: const Text('Apply'),
+          ),
+        ],
+      ),
+    );
+    pasted.dispose();
+    if (result == null || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() {
+      // A single named deck fills the deck field too (when blank); mixed
+      // pastes apply the total and leave the deck alone.
+      final named =
+          result.byDeck.keys.where((k) => k != '*').toList();
+      if (named.length == 1 && _deck.text.trim().isEmpty) {
+        _deck.text = named.single;
+        _manualReviews.text = result.byDeck[named.single].toString();
+      } else {
+        _manualReviews.text = result.total.toString();
+      }
+      _ankiSyncedAt = DateTime.now();
+    });
+    messenger.showSnackBar(
+      SnackBar(content: Text('Pasted ${result.total} reviews')),
+    );
   }
 
   /// Confirm gate before an unbounded save clears dates/targets. Returns
