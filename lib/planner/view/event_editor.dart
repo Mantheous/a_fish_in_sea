@@ -1788,6 +1788,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       {for (final e in targets) e.id},
       done: done,
       completedAt: completedAt,
+      taskIdsByEvent: {for (final e in targets) e.id: e.taskId},
     );
     nodes.removeNodesForEventIds(pastIds, silent: true);
   }
@@ -1873,6 +1874,9 @@ class EventEditorFormState extends State<EventEditorForm> {
       targetIds,
       done: done,
       completedAt: completedAt,
+      taskIdsByEvent: {
+        for (final id in targetIds) id: calendar.byId(id)?.taskId,
+      },
     );
     nodes.removeNodesForEventIds(
         {for (final e in past) e.id},
@@ -1909,6 +1913,7 @@ class EventEditorFormState extends State<EventEditorForm> {
         saved.id,
         done: saved.done,
         completedAt: saved.completedAt,
+        taskId: saved.taskId,
       );
       return;
     }
@@ -1918,6 +1923,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       saved.id,
       done: saved.done,
       completedAt: saved.completedAt,
+      taskId: saved.taskId ?? nodeId,
     );
   }
 
@@ -3054,9 +3060,11 @@ class _TaskTimeSection extends StatelessWidget {
                       ? null
                       : () {
                           try {
-                            context
-                                .read<NodeCubit>()
-                                .startTracking(nodeId);
+                            NodeEventLink.startNodeTracking(
+                              context.read<NodeCubit>(),
+                              context.read<CalendarCubit>(),
+                              nodeId,
+                            );
                           } catch (_) {}
                         },
                   icon: const Icon(Icons.play_arrow, size: 16),

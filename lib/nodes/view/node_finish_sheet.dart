@@ -8,6 +8,8 @@ import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 
 /// Stops a recording timer (if running) and asks what to do next.
+/// The stop settles both stores: a linked calendar event's timer stops
+/// with the same reported interval, so the sheet and the calendar agree.
 Future<void> stopNodeAndFinish(BuildContext context, String nodeId) async {
   Node? node;
   try {
@@ -18,8 +20,16 @@ Future<void> stopNodeAndFinish(BuildContext context, String nodeId) async {
   if (node == null) return;
   if (node.isTracking) {
     try {
-      context.read<NodeCubit>().stopTracking(nodeId);
-    } catch (_) {}
+      NodeEventLink.stopNodeTrackingAligned(
+        context.read<NodeCubit>(),
+        context.read<CalendarCubit>(),
+        nodeId,
+      );
+    } catch (_) {
+      try {
+        context.read<NodeCubit>().stopTracking(nodeId);
+      } catch (_) {}
+    }
   }
   if (!context.mounted) return;
   await showNodeFinishSheet(context, nodeId: nodeId);

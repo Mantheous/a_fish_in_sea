@@ -1142,7 +1142,11 @@ class _NodeTile extends StatelessWidget {
                       stopNodeAndFinish(context, live.id);
                     } else {
                       try {
-                        nodeCubit.startTracking(live.id);
+                        NodeEventLink.startNodeTracking(
+                          nodeCubit,
+                          context.read<CalendarCubit>(),
+                          live.id,
+                        );
                       } catch (_) {}
                     }
                   },

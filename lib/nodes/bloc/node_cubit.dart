@@ -150,6 +150,19 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
           if (n.calendarEventId == eventId || n.sourceEventId == eventId) n,
       ];
 
+  /// The node an event's `taskId` points at, if present in [byId]. Events
+  /// seeded from a task ("Add to calendar") carry this link before — and
+  /// sometimes without — the node's `calendarEventId` back-link, so
+  /// completion mirrors must follow it too.
+  static List<Node> _taskIdNodesIn(
+    Map<String, Node> byId,
+    String? taskId,
+  ) {
+    if (taskId == null || taskId.isEmpty) return const [];
+    final node = byId[taskId];
+    return node == null ? const [] : [node];
+  }
+
   /// Batch version of [ensureNodeForFeedEvent]: ensures a homework-style
   /// backing node for every event as ONE emit. Mirrors the single-write
   /// decisions exactly (including the feedId null early-out).
@@ -206,8 +219,14 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     writeNodes(upserts: upserts);
   }
 
-  /// Mirrors [upsertLinkedNodeForEvent]'s title/notes/schedule/status sync
-  /// for one personal linked node.
+  /// Mirrors [upsertLinkedNodeForEvent]'s title/notes/schedule sync for
+  /// one personal linked node.
+  ///
+  /// Completion is deliberately NOT synced here: the node owns completion
+  /// for linked pairs and the event mirrors it through [NodeEventLink]
+  /// (toggle/setDone paths). Overwriting status from the event on every
+  /// save re-opens a node the stop-tracking sheet just marked done whenever
+  /// the saved event snapshot still carries the old `done: false`.
   static Node _syncLinkedNode(Node linked, PlannerEvent event) {
     final hasNotes = (event.notes ?? '').trim().isNotEmpty;
     // Imported homework keeps the due date its feed gave it: the block
@@ -226,9 +245,6 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         start: event.start,
         end: event.end,
       ),
-      status: event.done ? NodeStatus.done : NodeStatus.open,
-      completedAt: event.completedAt,
-      clearCompletedAt: !event.done || event.completedAt == null,
       assignees: event.assignees,
     );
   }
@@ -237,6 +253,8 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   /// personal backing node for every event as ONE emit. Returns the
   /// event id → node id map. Mirrors the single-write lookup order
   /// (taskId link, then calendar-event link, then create) exactly.
+  /// Existing nodes keep their completion (see [_syncLinkedNode]): only
+  /// newly created nodes take the event's `done` state.
   Map<String, String> upsertLinkedNodesForEvents(List<PlannerEvent> events) {
     final ids = <String, String>{};
     if (events.isEmpty) return ids;
@@ -293,16 +311,29 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
 
   /// Batch version of [setDoneForEvent]: mirrors completion onto every
   /// backing node of every listed event as ONE emit. Same skip rules.
+  /// [taskIdsByEvent] carries each event's `taskId` link so nodes that
+  /// are only reachable through it (no `calendarEventId` back-link yet)
+  /// mirror too — the single-write version takes the same link.
   void setDoneForEventIds(
     Set<String> eventIds, {
     required bool done,
     DateTime? completedAt,
+    Map<String, String?>? taskIdsByEvent,
   }) {
     if (eventIds.isEmpty) return;
     final pending = <String, Node>{for (final n in state) n.id: n};
     final upserts = <Node>[];
     for (final eventId in eventIds) {
+      final seen = <String>{};
+      final targets = <Node>[];
       for (final node in _nodesForEventIn(pending, eventId)) {
+        if (seen.add(node.id)) targets.add(pending[node.id] ?? node);
+      }
+      for (final node
+          in _taskIdNodesIn(pending, taskIdsByEvent?[eventId])) {
+        if (seen.add(node.id)) targets.add(pending[node.id] ?? node);
+      }
+      for (final node in targets) {
         if (node.isDone == done &&
             (done || node.completedAt == null) &&
             (node.completedAt == completedAt ||
@@ -1581,8 +1612,12 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   }
 
   /// Creates or refreshes the personal linked node for [event] so the
-  /// event shows up in the queue. Returns the node id. Title/notes/due/
-  /// done mirror the event; completion is kept in sync both ways.
+  /// event shows up in the queue. Returns the node id. Title/notes/due
+  /// mirror the event; completion is kept in sync through the explicit
+  /// mirror calls ([setDoneForEvent] / [NodeEventLink]), never here, so a
+  /// save carrying a stale `done: false` cannot re-open a node the
+  /// stop-tracking sheet just marked done. New nodes take the event's
+  /// completion once, at creation.
   String upsertLinkedNodeForEvent(PlannerEvent event) {
     Node syncLinked(Node linked) {
       final hasNotes = (event.notes ?? '').trim().isNotEmpty;
@@ -1602,9 +1637,6 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
           start: event.start,
           end: event.end,
         ),
-        status: event.done ? NodeStatus.done : NodeStatus.open,
-        completedAt: event.completedAt,
-        clearCompletedAt: !event.done || event.completedAt == null,
         assignees: event.assignees,
       );
     }
@@ -1641,23 +1673,30 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     return id;
   }
 
-  /// Backing-node check matching [_byEventId]: personal links plus feed
-  /// shadows. Used by the batched mirrors below so they can fold a whole
-  /// event's nodes into one emit instead of one emit per node.
-  static bool _backsEvent(Node node, String eventId) =>
-      node.calendarEventId == eventId || node.sourceEventId == eventId;
+  /// Backing-node check: personal links plus feed shadows, plus the node
+  /// an event's `taskId` points at (seeded tasks carry that link before —
+  /// and sometimes without — the `calendarEventId` back-link). Used by the
+  /// mirrors below so they can fold a whole event's nodes into one emit
+  /// instead of one emit per node.
+  static bool _backsEvent(Node node, String eventId, [String? taskId]) =>
+      node.calendarEventId == eventId ||
+      node.sourceEventId == eventId ||
+      (taskId != null && taskId.isNotEmpty && node.id == taskId);
 
   /// Mirrors an event's completion onto every backing node in ONE emit
   /// (one undo record, one rebuild) instead of one emit per node.
+  /// [taskId] is the event's `taskId` link: nodes reachable only through
+  /// it mirror too.
   void setDoneForEvent(
     String eventId, {
     required bool done,
     DateTime? completedAt,
+    String? taskId,
   }) {
     var changed = false;
     final next = <Node>[];
     for (final node in state) {
-      if (!_backsEvent(node, eventId) ||
+      if (!_backsEvent(node, eventId, taskId) ||
           (node.isDone == done &&
               (done || node.completedAt == null) &&
               (node.completedAt == completedAt ||
@@ -1682,11 +1721,13 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   /// failed — done nodes keep their completion. (Previously every non-open
   /// node was flipped to open, so completing a mirrored task immediately
   /// undid the just-applied completion.)
-  void setFailedForEvent(String eventId, bool failed) {
+  /// [taskId] is the event's `taskId` link: nodes reachable only through
+  /// it mirror too.
+  void setFailedForEvent(String eventId, bool failed, {String? taskId}) {
     var changed = false;
     final next = <Node>[];
     for (final node in state) {
-      if (!_backsEvent(node, eventId)) {
+      if (!_backsEvent(node, eventId, taskId)) {
         next.add(node);
         continue;
       }
@@ -1766,6 +1807,9 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   /// Silent (plain emit, no undo record of its own): callers deleting
   /// events fold the removal into their own undo step via
   /// [RevertableHydratedCubit.atomic], so undo restores both sides.
+  /// Deliberately index-only (no `taskId` follow): a task-seeded event
+  /// points at a standalone task that must survive un-marking — the event
+  /// editor's task-link sync protects it the same way.
   void removeNodesForEvent(String eventId) {
     final ids = nodesForEventId(eventId).map((n) => n.id).toSet();
     if (ids.isEmpty) return;

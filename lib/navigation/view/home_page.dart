@@ -7,6 +7,7 @@ import 'package:a_fish_in_sea/demo/demo_tour_card.dart';
 import 'package:a_fish_in_sea/imports/view/import_inbox_card.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/service/node_tracking.dart';
 import 'package:a_fish_in_sea/nodes/view/node_checkbox.dart';
 import 'package:a_fish_in_sea/nodes/view/node_editor.dart';
@@ -768,9 +769,11 @@ class _NodeTrackLine extends StatelessWidget {
                     ? null
                     : () {
                         try {
-                          context
-                              .read<NodeCubit>()
-                              .startTracking(live.id);
+                          NodeEventLink.startNodeTracking(
+                            context.read<NodeCubit>(),
+                            context.read<CalendarCubit>(),
+                            live.id,
+                          );
                         } catch (_) {}
                       },
                 icon: const Icon(Icons.play_arrow, size: 16),
