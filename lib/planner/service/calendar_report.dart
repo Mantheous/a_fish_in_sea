@@ -107,6 +107,9 @@ List<ReportBlock> buildReportBlocks({
   }
   final nodesById = {for (final node in nodes) node.id: node};
 
+  final visibleEventIds = {for (final e in visibleEvents) e.id};
+  final handledNodeIds = <String>{};
+
   final blocks = <ReportBlock>[];
   for (final event in visibleEvents) {
     if (event.allDay) continue;
@@ -118,7 +121,10 @@ List<ReportBlock> buildReportBlocks({
         [nodesById[event.taskId]!],
     ]) {
       for (final node in list) {
-        if (seen.add(node.id)) linked.add(node);
+        if (seen.add(node.id)) {
+          linked.add(node);
+          handledNodeIds.add(node.id);
+        }
       }
     }
 
@@ -173,6 +179,54 @@ List<ReportBlock> buildReportBlocks({
           status: entry.status,
         ));
       }
+    }
+  }
+  // Node-only pass: tasks recorded off the calendar (no linked visible
+  // event) still produce report blocks, so tracking/reported time shows
+  // up in the Plan + Report view instead of being dropped.
+  for (final node in nodes) {
+    if (handledNodeIds.contains(node.id)) continue;
+    final linkedToVisible =
+        (node.calendarEventId != null &&
+            visibleEventIds.contains(node.calendarEventId)) ||
+        (node.sourceEventId != null &&
+            visibleEventIds.contains(node.sourceEventId));
+    if (linkedToVisible) continue;
+
+    final liveStart = node.timerStartedAt;
+    if (liveStart != null) {
+      var end = at;
+      if (!end.isAfter(liveStart)) {
+        end = liveStart.add(const Duration(minutes: 1));
+      }
+      if (end.difference(liveStart) < const Duration(minutes: 1)) {
+        end = liveStart.add(const Duration(minutes: 1));
+      }
+      blocks.add(ReportBlock(
+        displayId: 'report:live:${node.id}',
+        title: node.title,
+        start: liveStart,
+        end: end,
+        kind: ReportBlockKind.live,
+        eventId: null,
+      ));
+      continue;
+    }
+    final actualStart = node.actualStart;
+    final actualEnd = node.actualEnd;
+    if (actualStart != null && actualEnd != null) {
+      var end = actualEnd;
+      if (!end.isAfter(actualStart)) {
+        end = actualStart.add(const Duration(minutes: 1));
+      }
+      blocks.add(ReportBlock(
+        displayId: 'report:timer:${node.id}',
+        title: node.title,
+        start: actualStart,
+        end: end,
+        kind: ReportBlockKind.timer,
+        eventId: null,
+      ));
     }
   }
 
