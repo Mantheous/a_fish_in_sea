@@ -4,10 +4,13 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../common/undo/undo_cubit.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
+import '../bloc/assignment_estimates_cubit.dart';
 import '../bloc/assignment_rules_cubit.dart';
 import '../bloc/feed_cubit.dart';
+import '../model/assignment_estimate.dart';
 import '../model/assignment_rule.dart';
 import '../model/assignment_template.dart';
+import '../model/feed.dart';
 
 /// Repeating-assignment rules, opened from the ⋮ menu on the Tasks page.
 ///
@@ -37,7 +40,11 @@ class _AssignmentRulesSheet extends StatelessWidget {
     final rulesCubit = context.watch<AssignmentRulesCubit>();
     final rules = rulesCubit.state;
     final nodes = context.watch<NodeCubit>().state;
-    final feeds = context.watch<FeedCubit>().state;
+    // Feeds are optional (the sheet opens from anywhere).
+    var feeds = const <Feed>[];
+    try {
+      feeds = context.watch<FeedCubit>().state;
+    } catch (_) {}
     final feedNames = {for (final f in feeds) f.id: f.name};
 
     final samples = <TemplateSample>[
@@ -147,6 +154,20 @@ class _SectionLabel extends StatelessWidget {
       );
 }
 
+/// "45 min each · usually 7 PM" / "45 min each" / "no recordings yet".
+String _effortHint({
+  required int? ruleMinutes,
+  required AssignmentTypeEffort? effort,
+}) {
+  final learned = effort?.estimateMinutes;
+  final minutes = ruleMinutes ?? learned;
+  if (minutes == null) return 'No recordings yet — estimated as 1h.';
+  final start = effort?.preferredStartMinute;
+  final each = '$minutes min each';
+  if (start == null) return each;
+  return '$each · ${describeTimeOfDay(start)}';
+}
+
 String _classDisplay(String? classLabel, String? feedName) =>
     classLabel ?? feedName ?? 'Unknown class';
 
@@ -174,6 +195,35 @@ String _classDisplay(String? classLabel, String? feedName) =>
     }
   }
   return (pending: pending, applied: applied);
+}
+
+/// Learned time knowledge for one rule's classified type, or null when
+/// nothing has been recorded yet. Tolerates a missing cubit.
+AssignmentTypeEffort? _learnedEffort(
+  BuildContext context,
+  AssignmentRule rule,
+) {
+  try {
+    return context
+        .read<AssignmentEstimatesCubit>()
+        .forType(feedId: rule.feedId, classId: null, title: rule.templateKey);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Learned time knowledge for one detected group key (`feedId|templateKey`).
+AssignmentTypeEffort? _learnedEffortForGroup(
+  BuildContext context,
+  String groupKey,
+) {
+  try {
+    final efforts = context.read<AssignmentEstimatesCubit>().state;
+    for (final e in efforts) {
+      if (e.groupKey == groupKey) return e;
+    }
+  } catch (_) {}
+  return null;
 }
 
 void _showUndoneSnack(BuildContext context, String message) {
@@ -208,6 +258,7 @@ class _RuleRow extends StatelessWidget {
     final cubit = context.read<AssignmentRulesCubit>();
     final nodeCubit = context.read<NodeCubit>();
     final counts = _ruleCounts(rule, nodes);
+    final learned = _learnedEffort(context, rule);
     return Card(
       margin: const EdgeInsets.fromLTRB(16, 4, 16, 4),
       child: Padding(
@@ -260,6 +311,14 @@ class _RuleRow extends StatelessWidget {
                       context, 'Moved $moved existing to ${describeDueOffset(v)}');
                 }
               },
+            ),
+            _EffortFields(
+              minutes: rule.estimateMinutes,
+              learned: learned,
+              onChanged: (v) => cubit.upsertRule(rule.copyWith(
+                estimateMinutes: v,
+                clearEstimateMinutes: v == null,
+              )),
             ),
             if (counts.pending > 0)
               Align(
@@ -360,6 +419,9 @@ class _GroupRowState extends State<_GroupRow> {
   bool _adding = false;
   int _draft = -1;
 
+  /// Explicit override entered while adding the rule; null = learn it.
+  int? _draftMinutes;
+
   @override
   Widget build(BuildContext context) {
     final group = widget.group;
@@ -403,6 +465,12 @@ class _GroupRowState extends State<_GroupRow> {
                 value: _draft,
                 onChanged: (v) => setState(() => _draft = v),
               ),
+              _EffortFields(
+                minutes: _draftMinutes,
+                learned:
+                    _learnedEffortForGroup(context, '${group.feedId}|${group.templateKey}'),
+                onChanged: (v) => setState(() => _draftMinutes = v),
+              ),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
@@ -425,6 +493,11 @@ class _GroupRowState extends State<_GroupRow> {
                               dueOffsetDays: _draft,
                               classLabel: group.classLabel,
                             );
+                            if (_draftMinutes != null) {
+                              rulesCubit.upsertRule(rule.copyWith(
+                                estimateMinutes: _draftMinutes,
+                              ));
+                            }
                             final moved =
                                 nodeCubit.retargetAssignmentDues(
                               feedId: rule.feedId,
@@ -464,6 +537,89 @@ class _OffsetChip extends StatelessWidget {
       label: Text(compactDueOffset(days)),
       visualDensity: VisualDensity.compact,
       backgroundColor: days == 0 ? null : scheme.secondaryContainer,
+    );
+  }
+}
+
+/// Expected-time row for one rule: the number the schedule will use, the
+/// learned average beside it, and a stepper to override.
+///
+/// The learned value is data the app already has from the user's own
+/// recordings (`AssignmentEstimatesCubit`), so the default shown is a fact
+/// about their habits rather than a guess. Clearing the override falls
+/// back to the learned number, or to an hour when nothing is known.
+class _EffortFields extends StatelessWidget {
+  final int? minutes;
+  final AssignmentTypeEffort? learned;
+  final ValueChanged<int?> onChanged;
+
+  const _EffortFields({
+    required this.minutes,
+    required this.learned,
+    required this.onChanged,
+  });
+
+  static const int _step = 5;
+  static const int _min = 5;
+  static const int _max = 240;
+
+  int get _value => minutes ?? learned?.estimateMinutes ?? 60;
+
+  @override
+  Widget build(BuildContext context) {
+    final hint = _effortHint(
+      ruleMinutes: minutes,
+      effort: learned,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.timer_outlined, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Expected time',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+            ),
+            if (minutes != null && minutes != learned?.estimateMinutes)
+              TextButton(
+                onPressed: () => onChanged(null),
+                child: const Text('Use learned'),
+              ),
+          ],
+        ),
+        Row(
+          children: [
+            IconButton(
+              tooltip: 'Less time',
+              icon: const Icon(Icons.remove),
+              onPressed: _value > _min ? () => onChanged(_value - _step) : null,
+            ),
+            Expanded(
+              child: Text(
+                describeMinutes(_value),
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+            IconButton(
+              tooltip: 'More time',
+              icon: const Icon(Icons.add),
+              onPressed: _value < _max ? () => onChanged(_value + _step) : null,
+            ),
+          ],
+        ),
+        Padding(
+          padding: const EdgeInsets.only(left: 32, right: 8),
+          child: Text(
+            hint,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+      ],
     );
   }
 }

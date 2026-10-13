@@ -47,6 +47,8 @@ List<PlannedSlice> daySlices(
           start: dayStart,
           end: dayStart,
           allDay: true,
+          classLabel: event.classLabel,
+          taskId: event.taskId,
         ));
       }
       continue;
@@ -61,6 +63,8 @@ List<PlannedSlice> daySlices(
         placeId: event.placeId,
         start: occ,
         end: occ.add(duration),
+        classLabel: event.classLabel,
+        taskId: event.taskId,
       ));
     }
   }

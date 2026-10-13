@@ -8,6 +8,7 @@ import 'package:a_fish_in_sea/feedback/view/feedback_page.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/finances_hub.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
+import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/navigation/view/home_page.dart';
 import 'package:a_fish_in_sea/nodes/view/nodes_page.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
@@ -16,6 +17,7 @@ import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/tasks_tab_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/assignment_estimates_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/assignment_rules_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/assignment_rule.dart';
 import 'package:a_fish_in_sea/planner/bloc/tasks_view_options_cubit.dart';
@@ -95,6 +97,7 @@ class MyApp extends StatelessWidget {
         BlocProvider(create: (_) => CalendarDraftCubit()),
         BlocProvider(create: (_) => TasksTabCubit()),
         BlocProvider(create: (_) => AssignmentRulesCubit()),
+        BlocProvider(create: (_) => AssignmentEstimatesCubit(), lazy: false),
         BlocProvider(create: (_) => TasksViewOptionsCubit()),
         BlocProvider(create: (_) => PlacesCubit()),
         BlocProvider(create: (_) => TrackingCubit()),
@@ -192,6 +195,10 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
   // element is deactivated (crashed test teardown and hot restart).
   SyncEngine? _engine;
 
+  /// Feed ids seen on the last node/feed change, so a removed class can
+  /// be dropped from the learned assignment data.
+  Set<String> _knownFeedIds = const {};
+
   @override
   void initState() {
     super.initState();
@@ -208,49 +215,78 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'a fish in sea',
-      theme: ThemeData(
-        colorSchemeSeed: Colors.teal,
-        useMaterial3: true,
-        brightness: Brightness.light,
-      ),
-      darkTheme: ThemeData(
-        colorSchemeSeed: Colors.teal,
-        useMaterial3: true,
-        brightness: Brightness.dark,
-      ),
-      home: BlocBuilder<AuthCubit, AuthState>(
-        builder: (context, auth) {
-          final demo = context.watch<DemoCubit>().state;
-          if (!auth.isSignedIn && !demo) return const AuthPage();
-          final content = BlocBuilder<NavigationCubit, PlannerPage>(
-            builder: (context, page) {
-              return switch (page) {
-                PlannerPage.home => const HomePage(),
-                PlannerPage.calendar => const CalendarPage(),
-                PlannerPage.tasks => const TasksPage(),
-                PlannerPage.nodes => const NodesPage(),
-                PlannerPage.stats => const StatsPage(),
-                PlannerPage.finances => const FinancesHubPage(),
-                PlannerPage.feedback => const FeedbackPage(),
-                PlannerPage.settings => const SettingsPage(),
-              };
-            },
-          );
-          if (!demo) return content;
-          // Demo shell: persistent mock-data banner above every page.
-          // Inner pages keep their own Scaffolds (drawers keep working).
-          return const Scaffold(
-            body: Column(
-              children: [
-                DemoBanner(),
-                Expanded(child: _DemoContent()),
-              ],
-            ),
-          );
-        },
+    // Keep the learned "how long does this kind of assignment take, and
+    // when do I usually start it" index in step with the node list. The
+    // rebuild is a pure function of the nodes, so it is idempotent and
+    // safe to run on every change.
+    //
+    // A removed class drops its learned rows too: the estimate index is
+    // derived from nodes, so deleting coursework would otherwise leave an
+    // orphan row in the stats forever.
+    final feeds = context.watch<FeedCubit>().state;
+    final feedIds = {for (final f in feeds) f.id};
+    final goneFeeds = _knownFeedIds.difference(feedIds);
+    _knownFeedIds = feedIds;
+    if (goneFeeds.isNotEmpty) {
+      final estimates = context.read<AssignmentEstimatesCubit>();
+      for (final id in goneFeeds) {
+        estimates.forgetFeed(id);
+      }
+    }
+
+    return MultiBlocListener(
+      listeners: [
+        BlocListener<NodeCubit, List<Node>>(
+          listenWhen: (a, b) => !identical(a, b),
+          listener: (context, nodes) {
+            context.read<AssignmentEstimatesCubit>().rebuildFrom(nodes);
+          },
+        ),
+      ],
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'a fish in sea',
+        theme: ThemeData(
+          colorSchemeSeed: Colors.teal,
+          useMaterial3: true,
+          brightness: Brightness.light,
+        ),
+        darkTheme: ThemeData(
+          colorSchemeSeed: Colors.teal,
+          useMaterial3: true,
+          brightness: Brightness.dark,
+        ),
+        home: BlocBuilder<AuthCubit, AuthState>(
+          builder: (context, auth) {
+            final demo = context.watch<DemoCubit>().state;
+            if (!auth.isSignedIn && !demo) return const AuthPage();
+            final content = BlocBuilder<NavigationCubit, PlannerPage>(
+              builder: (context, page) {
+                return switch (page) {
+                  PlannerPage.home => const HomePage(),
+                  PlannerPage.calendar => const CalendarPage(),
+                  PlannerPage.tasks => const TasksPage(),
+                  PlannerPage.nodes => const NodesPage(),
+                  PlannerPage.stats => const StatsPage(),
+                  PlannerPage.finances => const FinancesHubPage(),
+                  PlannerPage.feedback => const FeedbackPage(),
+                  PlannerPage.settings => const SettingsPage(),
+                };
+              },
+            );
+            if (!demo) return content;
+            // Demo shell: persistent mock-data banner above every page.
+            // Inner pages keep their own Scaffolds (drawers keep working).
+            return const Scaffold(
+              body: Column(
+                children: [
+                  DemoBanner(),
+                  Expanded(child: _DemoContent()),
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }

@@ -7,7 +7,10 @@ import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:a_fish_in_sea/finances/model/recurring_rule.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
+import 'package:a_fish_in_sea/planner/bloc/assignment_estimates_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
+import 'package:a_fish_in_sea/planner/model/assignment_estimate.dart';
+import 'package:a_fish_in_sea/planner/model/assignment_rule.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/tasks_view_options_cubit.dart';
@@ -59,6 +62,53 @@ void main() {
       );
 
   group('restore tolerates corrupt entries', () {
+    test('AssignmentEstimatesCubit keeps valid learned rows', () {
+      final cubit = AssignmentEstimatesCubit();
+      final good = AssignmentTypeEffort(
+        feedId: 'math290',
+        templateKey: 'video quiz',
+        samples: 4,
+        totalMinutes: 180,
+        minutes: const [30, 45, 60, 45],
+        startMinutes: const [19 * 60, 19 * 60, 18 * 60, 19 * 60],
+        minMinutes: 30,
+        maxMinutes: 60,
+        updatedAt: DateTime(2026, 10, 1),
+      );
+      final restored = cubit.fromJson(_withCorrupt('efforts', good.toJson()));
+      expect(restored, hasLength(1));
+      expect(restored!.single.groupKey, 'math290|video quiz');
+      expect(restored.single.estimateMinutes, 45);
+      expect(restored.single.preferredStartMinute, 19 * 60);
+    });
+
+    test('AssignmentEstimatesCubit starts empty with no stored payload', () {
+      // The learned index is derived data: no stored payload must mean
+      // "nothing learned yet", never "refuse to boot".
+      final cubit = AssignmentEstimatesCubit();
+      expect(cubit.fromJson({}), isNull);
+      expect(cubit.fromJson({'efforts': []}), isEmpty);
+      expect(cubit.fromJson({'efforts': ['nope', 42, {}]}), isEmpty);
+    });
+
+    test('AssignmentRule payloads without estimateMinutes still load', () {
+      final rule = AssignmentRule(
+        id: 'r1',
+        feedId: 'math290',
+        templateKey: 'video quiz',
+        displayName: 'Video Quiz',
+        dueOffsetDays: -2,
+        estimateMinutes: 45,
+        createdAt: DateTime(2026, 10, 1),
+      ).toJson();
+      // The payload the app wrote before expected-time existed.
+      rule.remove('estimateMinutes');
+      final loaded = AssignmentRule.fromJson(rule);
+      expect(loaded.estimateMinutes, isNull);
+      expect(loaded.dueOffsetDays, -2);
+      expect(loaded.id, 'r1');
+    });
+
     test('CalendarCubit keeps valid events', () {
       final cubit = CalendarCubit();
       final good = PlannerEvent(

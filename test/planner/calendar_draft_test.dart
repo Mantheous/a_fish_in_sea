@@ -64,7 +64,25 @@ void main() {
             createdAt: DateTime(2026)),
         now: now,
       );
+      expect(seed.start.year, 2026);
+      expect(seed.start.month, 9);
+      expect(seed.start.day, 5);
+      // The default 9am slot has already passed, so the block starts at
+      // the current slot instead of in the past.
+      expect(seed.start, DateTime(2026, 9, 5, 15, 30));
+    });
+
+    test('keeps the default morning slot when it is still ahead', () {
+      final now = DateTime(2026, 9, 5, 7, 30);
+      final seed = draftSeedFromNode(
+        Node(
+            id: 'node:t1',
+            title: 'Read me',
+            createdAt: DateTime(2026)),
+        now: now,
+      );
       expect(seed.start, DateTime(2026, 9, 5, 9));
+      expect(seed.end, DateTime(2026, 9, 5, 10));
     });
   });
 
