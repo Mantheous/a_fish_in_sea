@@ -70,12 +70,12 @@ $(gh pr view "$N" --json url --jq .url)" || true
   echo "[review] #$N reviewing diff vs plan..."
   PROMPT="You are the reviewer agent. READ-ONLY on code: do NOT modify, create or delete any files. Do NOT run builds or tests. Do NOT commit or push. You may only use gh to READ.
 1. Run: gh pr view $N --json number,title,body,comments and: gh pr diff $N
-2. Find the linked issue (Closes #<n> in the PR body) and read its <!-- agent-plan --> triage comment: gh issue view <n> --comments --json comments
+2. Find the linked issue (Closes #<n> in the PR body) and read its LATEST <!-- agent-plan --> triage comment PLUS any tester follow-ups after it: gh issue view <n> --json number,title,body,comments. The builder was told the contract is latest plan + follow-up clarifications (newest tester comment wins on conflict) — judge fidelity against that combined scope, not the first plan alone.
 3. Explore the repo read-only (read/grep/glob) to check the diff against the plan. Read AGENTS.md first for persistence rules.
 4. Output ONLY the markdown below, no extra prose before or after:
 ## Review #$N
 Verdict: <pass | changes-requested>
-Plan fidelity: <one line: does the diff implement exactly the triage plan scope?>
+Plan fidelity: <one line: does the diff implement exactly the latest triage plan scope plus tester follow-up clarifications?>
 Correctness: <one line: bugs, edge cases, or wrong behavior you can see>
 Persistence: <ok | violation — cite the AGENTS.md rule>
 Security: <ok | changes-requested — untrusted-user → GitHub/builder path, auth/scope/SSRF/secrets weakening, or attacker-controlled input executed; cite file:line>

@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# Triage agent-pending issues: verify tester, draft plan via headless opencode,
-# post plan comment, ping Telegram. Safe to re-run: skips already-triaged issues.
-# Read-only except: GitHub comments/labels + Telegram sends. Never touches code.
+# Triage agent-pending issues: verify tester, draft/revise plan via headless
+# opencode, post plan comment, ping Telegram. Safe to re-run.
+# Two paths per issue:
+#   1. No plan yet -> draft initial plan (with screenshots).
+#   2. Plan exists + human tester feedback after it -> revise the plan and
+#      reply in-thread, so the human can converse until the plan is right.
+# Read-only except: GitHub comments/labels + Telegram sends + /tmp image
+# downloads. Never touches code.
 set -euo pipefail
 REPO="$HOME/Repos/a_fish_in_sea"
 cd "$REPO"
@@ -27,17 +32,30 @@ echo "$ISSUES_JSON" | python3 -c 'import json,sys; [print(i["number"]) for i in 
     continue
   fi
 
+  # Pre-download issue screenshots so the agent can VIEW them (headless
+  # agents can read local images via the read tool but cannot view remote
+  # URLs — never report a screenshot as unloadable, read the download).
+  IMGDIR="/tmp/opencode/issue-$N-imgs"
+  "$DIR/fetch-issue-images.sh" "$N" "$IMGDIR" >/dev/null 2>&1 || true
+  IMGS="$(ls "$IMGDIR"/img*.* 2>/dev/null | tr '\n' ' ' || true)"
+  [ -z "${IMGS// /}" ] && IMGS="(none — no image attachments found)"
+
+  HAS_PLAN=0
   if gh issue view "$N" --comments --json comments --jq '.comments[].body' 2>/dev/null | grep -qF "$MARKER"; then
-    echo "[triage] #$N already has a plan — skipping (approval handled separately)"
-    continue
+    HAS_PLAN=1
   fi
 
-  echo "[triage] #$N ($TITLE) drafting plan via headless opencode..."
-  PROMPT="You are the triage agent for the repo you are already inside (a_fish_in_sea on branch main).
-READ-ONLY task. Do NOT modify, create or delete any files. Do NOT run builds or tests. Do NOT commit.
-1. Run: gh issue view $N --json number,title,body,author,labels
-2. Explore the repo read-only (read/grep/glob) to ground the plan. Read AGENTS.md first for persistence rules.
-3. Output ONLY the markdown below, no extra prose before or after:
+  if [ "$HAS_PLAN" = "0" ]; then
+    echo "[triage] #$N ($TITLE) drafting plan via headless opencode..."
+    PROMPT="You are the triage agent for the repo you are already inside (a_fish_in_sea on branch main).
+READ-ONLY task. Do NOT modify, create, delete, or commit any repo files. Do NOT run builds or tests. You MAY download files under /tmp/opencode/ for viewing only.
+1. Run: gh issue view $N --json number,title,body,comments (the full spec — body plus every comment).
+2. Screenshots are part of the spec — never say an image could not be loaded:
+   - Pre-downloaded issue images (if any) are in $IMGDIR (found: $IMGS). List that dir and READ each image file with the read tool to VIEW it.
+   - If the issue body/comments mention /tmp/opencode/... paths (ux-walk screenshots/reports live on this loop host), read those files directly.
+   - If you see any other image URL in the thread you have not viewed, download it with: curl -sL \"<url>\" -o /tmp/opencode/issue-$N-extra-<i>.png then READ it. Use what you see to name the exact screen and widget.
+3. Explore the repo read-only (read/grep/glob) to ground the plan. Read AGENTS.md first for persistence rules.
+4. Output ONLY the markdown below, no extra prose before or after:
 ## Triage plan #$N
 Severity: <critical|high|medium|low>
 Summary: <exactly 2 lines: line1 what is asked, line2 proposed approach>
@@ -47,25 +65,26 @@ Test idea: <one line: what test would prove it>
 Persistence impact: <none | description + migration gating per AGENTS.md>
 UX check: <needed (touches user-visible UI — builder must add the ux-walk label + scope per AGENTS.md; the loop walks it post-deploy, never pre-merge) | not needed — <why>>
 Effort: <S|M|L>"
-  PLAN_FILE="$(mktemp)"
-  if ! opencode run --title "triage-#$N" "$PROMPT" >"$PLAN_FILE" 2>"$PLAN_FILE.err"; then
-    echo "[triage] #$N plan draft failed: $(tail -n 3 "$PLAN_FILE.err")"
-    rm -f "$PLAN_FILE" "$PLAN_FILE.err"
-    continue
-  fi
-  rm -f "$PLAN_FILE.err"
-  PLAN="$(cat "$PLAN_FILE"; rm -f "$PLAN_FILE")"
+    PLAN_FILE="$(mktemp)"
+    if ! opencode run --title "triage-#$N" "$PROMPT" >"$PLAN_FILE" 2>"$PLAN_FILE.err"; then
+      echo "[triage] #$N plan draft failed: $(tail -n 3 "$PLAN_FILE.err")"
+      rm -f "$PLAN_FILE" "$PLAN_FILE.err"
+      continue
+    fi
+    rm -f "$PLAN_FILE.err"
+    PLAN="$(cat "$PLAN_FILE"; rm -f "$PLAN_FILE")"
 
-  COMMENT="$PLAN
+    COMMENT="$PLAN
 
 ---
 Approve: comment \`approve\` (or \`agent approved\`) on this issue (builder picks it up automatically).
 Deny: comment \`deny <reason>\` (issue is closed).
+To question or correct the plan, just comment in-thread — the triage agent revises the plan on the next poll.
 $MARKER"
-  gh issue comment "$N" --body "$COMMENT" >/dev/null
-  echo "[triage] #$N plan posted"
+    gh issue comment "$N" --body "$COMMENT" >/dev/null
+    echo "[triage] #$N plan posted"
 
-  SUMMARY="$(echo "$PLAN" | python3 -c "
+    SUMMARY="$(echo "$PLAN" | python3 -c "
 import sys
 lines = sys.stdin.read().splitlines()
 for i, l in enumerate(lines):
@@ -75,11 +94,104 @@ for i, l in enumerate(lines):
             print(lines[i+1].strip())
         break
 " | head -n 2)"
-  RISK="$(echo "$PLAN" | grep -m1 '^Risk:' || echo 'Risk: unknown')"
-  "$DIR/tg.sh" "🆕 Triage plan #$N: $TITLE
+    RISK="$(echo "$PLAN" | grep -m1 '^Risk:' || echo 'Risk: unknown')"
+    "$DIR/tg.sh" "🆕 Triage plan #$N: $TITLE
 $SUMMARY
 $RISK
 $URL
 Approve: comment \`approve\` (or \`agent approved\`) on the issue / Deny: comment \`deny <reason>\`" || echo "[triage] #$N telegram ping failed (plan comment still posted)"
+    continue
+  fi
+
+  # --- plan exists: look for human tester feedback after the latest plan ---
+  FEEDBACK="$(gh issue view "$N" --comments --json comments \
+    | python3 -c "
+import json, sys
+testers = json.load(open('$REPO/tools/testers.json'))['testers']
+comments = json.load(sys.stdin)['comments']
+def is_agent(body):
+    b = (body or '')
+    if '<!-- agent-' in b:
+        return True
+    s = b.strip().lower()
+    for p in ('approved by @', 'denied by', 'not a verified tester', 'ux walk'):
+        if s.startswith(p):
+            return True
+    return False
+def is_decision(body):
+    lines = (body or '').strip().splitlines()
+    first = lines[0].strip().lower() if lines else ''
+    return first == 'approve' or 'agent approved' in first or first.startswith('deny')
+last_plan = max((i for i, c in enumerate(comments) if '<!-- agent-plan' in (c.get('body') or '')), default=-1)
+out = []
+for i in range(last_plan + 1, len(comments)):
+    c = comments[i]
+    login = (c.get('author') or {}).get('login', '')
+    body = c.get('body') or ''
+    if login not in testers:
+        continue
+    if is_agent(body):
+        continue
+    if is_decision(body):
+        continue
+    out.append(f\"{login}: \" + body.strip()[:1500])
+print('\n---\n'.join(out), end='')
+")"
+  if [ -z "$FEEDBACK" ]; then
+    # Self-heal: a plan that gave up on screenshots ("could not be loaded")
+    # is stale once fetch-issue-images.sh actually has the files — revise
+    # without waiting for the human to repeat themselves (e.g. issue #32).
+    LATEST_PLAN="$(gh issue view "$N" --comments --json comments --jq '[.comments[].body | select(contains("<!-- agent-plan"))] | last // empty' 2>/dev/null || true)"
+    if echo "${LATEST_PLAN:-}" | grep -qiE 'could not be (loaded|read)|could not load|unable to (load|view|read)|screenshot.*(unavailable|missing|unknown)|specific .* (unidentified|unknown)' \
+      && ls "$IMGDIR"/img*.* >/dev/null 2>&1; then
+      FEEDBACK="system: previous plan reported screenshot as unloadable, but images are now available — re-examine them"
+      echo "[triage] #$N previous plan missed screenshots but images now exist — revising..."
+    else
+      echo "[triage] #$N already has a plan and no new human feedback — skipping (approval handled separately)"
+      continue
+    fi
+  else
+    echo "[triage] #$N human feedback after plan — revising..."
+  fi
+  REVPROMPT="You are the triage agent revising the plan for issue #$N after human feedback. Repo: a_fish_in_sea on branch main.
+READ-ONLY task. Do NOT modify, create, delete, or commit any repo files. Do NOT run builds or tests. You MAY download files under /tmp/opencode/ for viewing only.
+1. Run: gh issue view $N --json number,title,body,comments (full thread: previous plan plus the human follow-ups after it).
+2. Screenshots are part of the spec — never say an image could not be loaded:
+   - Pre-downloaded issue images (if any) are in $IMGDIR (found: $IMGS). List that dir and READ each image file with the read tool to VIEW it.
+   - If the thread mentions /tmp/opencode/... paths (ux-walk screenshots/reports on this loop host), read those files directly.
+   - Any other image URL you have not viewed: curl -sL \"<url>\" -o /tmp/opencode/issue-$N-rev-<i>.png then READ it.
+3. Explore the repo read-only (read/grep/glob) as needed. Read AGENTS.md first for persistence rules.
+4. Address EVERY human follow-up point after the previous plan: answer questions, incorporate corrections into the revised scope. If feedback is ambiguous, pick the safest interpretation AND note the assumption plus what to confirm.
+5. Output ONLY the markdown below, no extra prose before or after:
+## Triage plan #$N (rev)
+Replies: <one short line per follow-up point: what you changed or answered>
+Severity: <critical|high|medium|low>
+Summary: <exactly 2 lines: line1 what is asked (as clarified), line2 revised approach>
+Files to touch: <list of paths, or TBD with why>
+Risk: <low|high> — <one-line reason>
+Test idea: <one line: what test would prove it>
+Persistence impact: <none | description + migration gating per AGENTS.md>
+UX check: <needed (touches user-visible UI — builder must add the ux-walk label + scope per AGENTS.md; the loop walks it post-deploy, never pre-merge) | not needed — <why>>
+Effort: <S|M|L>"
+  REV_FILE="$(mktemp)"
+  if ! opencode run --title "triage-rev-#$N" "$REVPROMPT" >"$REV_FILE" 2>"$REV_FILE.err"; then
+    echo "[triage] #$N revision failed: $(tail -n 3 "$REV_FILE.err")"
+    rm -f "$REV_FILE" "$REV_FILE.err"
+    continue
+  fi
+  rm -f "$REV_FILE.err"
+  REVPLAN="$(cat "$REV_FILE"; rm -f "$REV_FILE")"
+  REVCOMMENT="$REVPLAN
+
+---
+Approve: comment \`approve\` when the latest plan looks right (builder picks it up automatically).
+Deny: comment \`deny <reason>\` (issue is closed).
+Further feedback in-thread will be revised again on the next poll.
+$MARKER"
+  gh issue comment "$N" --body "$REVCOMMENT" >/dev/null
+  echo "[triage] #$N revised plan posted"
+  "$DIR/tg.sh" "🔄 Triage plan #$N revised after human feedback: $TITLE
+$URL
+Comment \`approve\` when the latest plan looks right" || echo "[triage] #$N telegram ping failed (revision still posted)"
 done
 echo "[triage] done"

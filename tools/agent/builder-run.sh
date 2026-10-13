@@ -22,18 +22,26 @@ fi
 git worktree add "$WT" -b "$BRANCH" origin/main
 echo "[builder] #$N worktree $WT branch $BRANCH"
 
+# Pre-download issue screenshots so the builder can VIEW them (same reason
+# as triage: headless agents read local images, not remote URLs).
+IMGDIR="/tmp/opencode/issue-$N-imgs"
+"$DIR/fetch-issue-images.sh" "$N" "$IMGDIR" >/dev/null 2>&1 || true
+IMGS="$(ls "$IMGDIR"/img*.* 2>/dev/null | tr '\n' ' ' || true)"
+[ -z "${IMGS// /}" ] && IMGS="(none — no image attachments found)"
+
 PROMPT="You are the builder agent. Work ONLY inside this worktree: $WT (branch $BRANCH, based on origin/main).
-Issue: gh issue view $N --json number,title,body,comments (run it to get the spec).
+Spec: gh issue view $N --json number,title,body,comments (run it to get the FULL thread — body plus every comment).
 Rules:
-1. The triage plan lives in the <!-- agent-plan --> comment on the issue — that scope is the contract. Implement the plan, nothing more. If the plan is wrong, say so in the PR body instead of freelancing.
-2. Keep the diff SMALL and focused: the issue and nothing else. No drive-by refactors, no unrelated cleanups, no formatting churn. If the change naturally exceeds ~300 lines, stop and explain why in the PR body instead of ballooning it.
-3. Follow AGENTS.md persistence rules exactly (additive-only models, orElse enum fallback, gated migrations with Migration.removeAfter, extend tolerance tests).
-4. NEVER push to main, NEVER commit to main.
-5. Gates (must both pass): ~/flutter/bin/flutter analyze (0 issues) and ~/flutter/bin/flutter test (all pass, add/update tests for the change, including goldens under test/goldens/ if you touched a screen).
-6. If you touched a user flow (auth, navigation, create/edit/delete, sync), add or extend a patrol_test and run it headless against the dev API server: export PATH="$HOME/.local/bin:$HOME/.pub-cache/bin:$PATH" PATROL_ANALYTICS_ENABLED=false; patrol test --device chrome --web-headless --target patrol_test/<file>.dart --dart-define=SERVER_URL=http://127.0.0.1:8000 (needs the API server on :8000; uses a unique test account per run).
-7. UX check (AGENTS.md rule): do NOT run the ux-walker yourself — the agent loop walks each deploy exactly once (tools/agent/ux-walk.sh via poll.sh), and per-branch walks duplicate that work while contending for the same browser. If the triage plan says UX check: needed OR you touched lib/*/view, navigation, dialogs/sheets, or user-facing copy: run gh issue edit $N --add-label ux-walk and record the scope (screens/flows touched + how to reach them, 1-2 lines) in the PR body under a 'UX scope:' heading. The post-deploy walk covers it and files findings as new issues. Never gate your PR on a walk verdict.
-8. Commit on $BRANCH, push origin $BRANCH, open PR with: gh pr create --base main --head $BRANCH --title \"[agent #$N] <title>\" --body \"Closes #$N. Scope: <one line, matches the triage plan>. UX scope: <screens/flows touched + how to reach them, or 'none — no user-visible change'>. Test log: <paste tail of flutter test>. Risk notes: <...>. Screenshots: <host paths under /tmp/opencode/ you verified against, for UX-filed issues>\"
-9. If the gates fail and you cannot fix within reason, push the branch anyway and report FAIL status in the PR body.
+1. The contract is the LATEST <!-- agent-plan --> comment PLUS any tester clarifications posted after it. Read the whole thread newest-to-oldest: follow-up tester comments override or narrow the plan. If plan + follow-ups conflict, follow the newest tester comment. Do NOT freelance beyond plan + follow-ups. If both together are still wrong or unimplementable, say so in the PR body instead of inventing scope.
+2. Screenshots are part of the spec — never say an image could not be loaded: pre-downloaded issue images (if any) are in $IMGDIR (found: $IMGS) — list that dir and READ each image with the read tool to VIEW it. If the thread mentions /tmp/opencode/... paths (ux-walk screenshots/reports on this loop host), read those directly. Any other image URL you have not viewed: curl -sL \"<url>\" -o /tmp/opencode/issue-$N-build-<i>.png then READ it, and use what you see to locate the exact screen/widget.
+3. Keep the diff SMALL and focused: the issue and nothing else. No drive-by refactors, no unrelated cleanups, no formatting churn. If the change naturally exceeds ~300 lines, stop and explain why in the PR body instead of ballooning it.
+4. Follow AGENTS.md persistence rules exactly (additive-only models, orElse enum fallback, gated migrations with Migration.removeAfter, extend tolerance tests).
+5. NEVER push to main, NEVER commit to main.
+6. Gates (must both pass): ~/flutter/bin/flutter analyze (0 issues) and ~/flutter/bin/flutter test (all pass, add/update tests for the change, including goldens under test/goldens/ if you touched a screen).
+7. If you touched a user flow (auth, navigation, create/edit/delete, sync), add or extend a patrol_test and run it headless against the dev API server: export PATH="$HOME/.local/bin:$HOME/.pub-cache/bin:$PATH" PATROL_ANALYTICS_ENABLED=false; patrol test --device chrome --web-headless --target patrol_test/<file>.dart --dart-define=SERVER_URL=http://127.0.0.1:8000 (needs the API server on :8000; uses a unique test account per run).
+8. UX check (AGENTS.md rule): do NOT run the ux-walker yourself — the agent loop walks each deploy exactly once (tools/agent/ux-walk.sh via poll.sh), and per-branch walks duplicate that work while contending for the same browser. If the triage plan says UX check: needed OR you touched lib/*/view, navigation, dialogs/sheets, or user-facing copy: run gh issue edit $N --add-label ux-walk and record the scope (screens/flows touched + how to reach them, 1-2 lines) in the PR body under a 'UX scope:' heading. The post-deploy walk covers it and files findings as new issues. Never gate your PR on a walk verdict.
+9. Commit on $BRANCH, push origin $BRANCH, open PR with: gh pr create --base main --head $BRANCH --title \"[agent #$N] <title>\" --body \"Closes #$N. Scope: <one line, matches the latest triage plan + tester follow-ups>. UX scope: <screens/flows touched + how to reach them, or 'none — no user-visible change'>. Test log: <paste tail of flutter test>. Risk notes: <...>. Screenshots: <host paths under /tmp/opencode/ you verified against, for UX-filed issues>\"
+10. If the gates fail and you cannot fix within reason, push the branch anyway and report FAIL status in the PR body.
 A separate reviewer agent will read your diff against the plan — write the PR body for a skeptical reader.
 Report at the end: PR_URL=<url or NONE> STATUS=<ready|failed>."
 if opencode run --auto --title "builder-#$N" "$PROMPT" >"$WT/.agent-build.log" 2>&1; then
