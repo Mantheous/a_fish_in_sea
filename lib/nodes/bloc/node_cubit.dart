@@ -1018,6 +1018,73 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     ));
   }
 
+  /// Marks a goal as part of the curated set shown on the time-tracking
+  /// card. Additive toggle; no-op when unchanged.
+  void setTracked(String id, bool tracked) {
+    final node = byId(id);
+    if (node == null || node.isTracked == tracked) return;
+    updateNode(node.copyWith(isTracked: tracked));
+  }
+
+  /// Moves a recorded chunk (reported interval and/or running timer) from
+  /// [fromId] to [toId], clearing it from the source. Powers the goal
+  /// picker on a time chunk: the time follows the newly chosen goal.
+  void reassignTime(String fromId, String toId) {
+    _moveRecordedTime(fromId, toId);
+  }
+
+  void reassignTracking(String fromId, String toId) =>
+      _moveRecordedTime(fromId, toId);
+
+  void reassignReported(String fromId, String toId) =>
+      _moveRecordedTime(fromId, toId);
+
+  void reassignChunk(String fromId, String toId) =>
+      _moveRecordedTime(fromId, toId);
+
+  void moveReported(String fromId, String toId) =>
+      _moveRecordedTime(fromId, toId);
+
+  void moveTracking(String fromId, String toId) =>
+      _moveRecordedTime(fromId, toId);
+
+  void moveTimer(String fromId, String toId) =>
+      _moveRecordedTime(fromId, toId);
+
+  void _moveRecordedTime(String fromId, String toId) {
+    if (fromId == toId) return;
+    final from = byId(fromId);
+    final to = byId(toId);
+    if (from == null || to == null) return;
+    final hasRunning = from.timerStartedAt != null;
+    final hasReported =
+        from.actualStart != null || from.actualEnd != null;
+    if (!hasRunning && !hasReported) return;
+    final next = <Node>[];
+    for (final n in state) {
+      if (n.id == toId) {
+        next.add(n.copyWith(
+          timerStartedAt: hasRunning
+              ? from.timerStartedAt
+              : n.timerStartedAt,
+          actualStart:
+              hasReported ? (from.actualStart ?? n.actualStart) : n.actualStart,
+          actualEnd:
+              hasReported ? (from.actualEnd ?? n.actualEnd) : n.actualEnd,
+        ));
+      } else if (n.id == fromId) {
+        next.add(n.copyWith(
+          clearTimerStartedAt: hasRunning,
+          clearActualStart: hasReported && from.actualStart != null,
+          clearActualEnd: hasReported && from.actualEnd != null,
+        ));
+      } else {
+        next.add(n);
+      }
+    }
+    emitChange(next);
+  }
+
   // ── Money: subdivide / merge / link transaction ─────────────────────
 
   /// Split [id] into a part of [splitAmount] (keeps the id) plus a
