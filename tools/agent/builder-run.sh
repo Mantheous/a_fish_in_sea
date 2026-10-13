@@ -19,7 +19,35 @@ if git ls-remote --heads origin "$BRANCH" | grep -q .; then
   echo "[builder] #$N branch $BRANCH already exists — skipping"
   exit 0
 fi
-git worktree add "$WT" -b "$BRANCH" origin/main
+if [ -e "$WT" ]; then
+  echo "[builder] #$N worktree path $WT already exists — skipping (remove it to retry)"
+  exit 1
+fi
+# A previous run may have created the local branch but lost its worktree
+# (then every relaunch died in `worktree add -b`, which refuses an existing
+# branch name). Recover instead of crashing: resume a branch that holds
+# unique work, recreate one that is empty.
+if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+  IN_USE="$(git worktree list --porcelain | awk -v b="$BRANCH" 'BEGIN{dir=""} /^worktree /{dir=$2} $0=="branch refs/heads/"b {print dir; exit}')"
+  if [ -n "${IN_USE:-}" ]; then
+    echo "[builder] #$N branch $BRANCH is already checked out in $IN_USE — skipping"
+    exit 0
+  fi
+  if [ -z "$(git log --oneline "origin/main..$BRANCH" 2>/dev/null)" ]; then
+    echo "[builder] #$N local branch $BRANCH is empty (nothing past origin/main) — recreating from origin/main"
+    git branch -D "$BRANCH"
+    git worktree add "$WT" -b "$BRANCH" origin/main
+  else
+    echo "[builder] #$N resuming local branch $BRANCH with unpushed work"
+    git worktree add "$WT" "$BRANCH"
+  fi
+else
+  git worktree add "$WT" -b "$BRANCH" origin/main
+fi
+if [ ! -d "$WT" ]; then
+  echo "[builder] #$N worktree $WT missing after add — aborting"
+  exit 1
+fi
 echo "[builder] #$N worktree $WT branch $BRANCH"
 
 # Pre-download issue screenshots so the builder can VIEW them (same reason

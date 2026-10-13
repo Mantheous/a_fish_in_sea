@@ -20,7 +20,12 @@ gh issue list --label agent-approved --state open --limit 20 --json number,title
   TITLE="$(gh issue view "$N" --json title --jq .title)"
   SLUG="$(echo "$TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g' | cut -c1-40 | sed 's/-$//')"
   if git ls-remote --heads origin "agent/$N-$SLUG" | grep -q .; then
-    echo "[build] #$N branch already pushed — skipping (PR presumably open)"
+    if gh pr list --head "agent/$N-$SLUG" --state open --limit 1 --json number \
+      --jq '.[0].number // empty' 2>/dev/null | grep -q .; then
+      echo "[build] #$N branch already pushed — skipping (PR presumably open)"
+    else
+      echo "[build] #$N branch pushed but NO open PR — stuck, needs a human (open a PR or delete the branch; close.sh reports this too)"
+    fi
     continue
   fi
   echo "[build] #$N launching tmux session agent-$N"

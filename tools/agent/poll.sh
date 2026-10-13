@@ -23,6 +23,7 @@ if gh issue list --state open --search "AGENT LOOPS: PAUSED in:title" --limit 5 
   echo "[agent-poll] paused via AGENT LOOPS: PAUSED issue — skipping"
   exit 0
 fi
+"$REPO/tools/agent/close.sh"
 "$REPO/tools/agent/triage.sh"
 "$REPO/tools/agent/approve.sh"
 "$REPO/tools/agent/build.sh"
