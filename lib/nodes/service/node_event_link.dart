@@ -18,6 +18,8 @@ class NodeEventLink {
 
   /// Toggles an event's completion and mirrors it onto backing nodes.
   /// One user gesture = one undo step (see [RevertableHydratedCubit.atomic]).
+  /// The event's `taskId` target mirrors too, so nodes reachable only
+  /// through it (no `calendarEventId` back-link yet) stay in sync.
   static void toggleEventDone(
     CalendarCubit calendar,
     NodeCubit nodes,
@@ -33,13 +35,18 @@ class NodeEventLink {
         eventId,
         done: updated.done,
         completedAt: updated.completedAt,
+        taskId: updated.taskId,
       );
-      if (updated.done) nodes.setFailedForEvent(eventId, false);
+      if (updated.done) {
+        nodes.setFailedForEvent(eventId, false, taskId: updated.taskId);
+      }
     });
   }
 
   /// Toggles a node's completion and mirrors it onto its event, if any.
-  /// One user gesture = one undo step.
+  /// One user gesture = one undo step. Events pointing at the node through
+  /// `taskId` mirror too, so a task-seeded event cannot keep a stale
+  /// `done: false` that the next calendar save writes back onto the node.
   static void toggleNodeDone(
     NodeCubit nodes,
     CalendarCubit calendar,
@@ -51,25 +58,33 @@ class NodeEventLink {
       nodes.toggleDone(nodeId);
       final updated = nodes.byId(nodeId);
       if (updated == null) return;
-      final eventId =
-          updated.calendarEventId ?? updated.sourceEventId;
-      if (eventId == null) return;
-      final event = calendar.byId(eventId);
-      if (event == null || !event.isTask) return;
-      if (event.done == updated.isDone &&
-          event.completedAt == updated.completedAt &&
-          event.failed == (updated.status == NodeStatus.failed)) {
-        return;
-      }
-      calendar.updateEvent(
-        event.copyWith(
-          done: updated.isDone,
-          completedAt: updated.completedAt,
-          clearCompletedAt: !updated.isDone,
-          failed: updated.status == NodeStatus.failed,
-        ),
-      );
+      _mirrorNodeCompletion(calendar, updated);
     });
+  }
+
+  /// Writes [node]'s completion onto every linked task-event: the direct
+  /// `calendarEventId`/`sourceEventId` target plus every event whose
+  /// `taskId` points at the node. Skips events already in agreement so the
+  /// mirror stays a no-op emit when nothing changed.
+  static void _mirrorNodeCompletion(
+    CalendarCubit calendar,
+    Node node,
+  ) {
+    final updates = <PlannerEvent>[];
+    for (final event in _linkedTaskEvents(calendar, node)) {
+      if (event.done == node.isDone &&
+          event.completedAt == node.completedAt &&
+          event.failed == (node.status == NodeStatus.failed)) {
+        continue;
+      }
+      updates.add(event.copyWith(
+        done: node.isDone,
+        completedAt: node.completedAt,
+        clearCompletedAt: !node.isDone,
+        failed: node.status == NodeStatus.failed,
+      ));
+    }
+    if (updates.isNotEmpty) calendar.updateEvents(updates);
   }
 
   static void setNodeFailed(
@@ -85,24 +100,7 @@ class NodeEventLink {
           nodeId, failed ? NodeStatus.failed : NodeStatus.open);
       final updated = nodes.byId(nodeId);
       if (updated == null) return;
-      final eventId =
-          updated.calendarEventId ?? updated.sourceEventId;
-      if (eventId == null) return;
-      final event = calendar.byId(eventId);
-      if (event == null || !event.isTask) return;
-      if (event.failed == failed &&
-          event.done == updated.isDone &&
-          event.completedAt == updated.completedAt) {
-        return;
-      }
-      calendar.updateEvent(
-        event.copyWith(
-          done: updated.isDone,
-          completedAt: updated.completedAt,
-          clearCompletedAt: !updated.isDone,
-          failed: failed,
-        ),
-      );
+      _mirrorNodeCompletion(calendar, updated);
     });
   }
 
@@ -116,12 +114,13 @@ class NodeEventLink {
     if (event == null || !event.isTask) return;
     RevertableHydratedCubit.atomic([calendar, nodes], () {
       calendar.setFailed(eventId, failed);
-      nodes.setFailedForEvent(eventId, failed);
+      nodes.setFailedForEvent(eventId, failed, taskId: event.taskId);
       if (failed) {
         nodes.setDoneForEvent(
           eventId,
           done: false,
           completedAt: null,
+          taskId: event.taskId,
         );
       }
     });
@@ -141,18 +140,23 @@ class NodeEventLink {
     if (ids.isEmpty) return 0;
     final changed = nodes.setDoneMany(ids, done: done, now: now);
     if (changed == 0) return 0;
+    // Reverse `taskId` index built once: events seeded from a task point
+    // at it without a `calendarEventId` back-link, and must mirror too.
+    final byTaskId = <String, List<PlannerEvent>>{};
+    for (final event in calendar.state) {
+      final taskId = event.taskId;
+      if (taskId != null && ids.contains(taskId)) {
+        (byTaskId[taskId] ??= []).add(event);
+      }
+    }
+    final seen = <String>{};
     final calUpdates = <PlannerEvent>[];
-    for (final id in ids) {
-      final node = nodes.byId(id);
-      if (node == null) continue;
-      final eventId = node.calendarEventId ?? node.sourceEventId;
-      if (eventId == null) continue;
-      final event = calendar.byId(eventId);
-      if (event == null || !event.isTask) continue;
+    void consider(PlannerEvent event, Node node) {
+      if (!event.isTask || !seen.add(event.id)) return;
       if (event.done == node.isDone &&
           event.completedAt == node.completedAt &&
           event.failed == (node.status == NodeStatus.failed)) {
-        continue;
+        return;
       }
       calUpdates.add(event.copyWith(
         done: node.isDone,
@@ -160,6 +164,19 @@ class NodeEventLink {
         clearCompletedAt: !node.isDone,
         failed: node.status == NodeStatus.failed,
       ));
+    }
+
+    for (final id in ids) {
+      final node = nodes.byId(id);
+      if (node == null) continue;
+      for (final eventId in [node.calendarEventId, node.sourceEventId]) {
+        if (eventId == null) continue;
+        final event = calendar.byId(eventId);
+        if (event != null) consider(event, node);
+      }
+      for (final event in byTaskId[id] ?? const <PlannerEvent>[]) {
+        consider(event, node);
+      }
     }
     if (calUpdates.isNotEmpty) calendar.updateEvents(calUpdates);
     return changed;
@@ -179,13 +196,24 @@ class NodeEventLink {
     for (final id in ids) {
       final node = nodes.byId(id);
       if (node == null) continue;
-      final eventId = node.calendarEventId ?? node.sourceEventId;
-      if (eventId != null) eventIds.add(eventId);
+      for (final eventId in [node.calendarEventId, node.sourceEventId]) {
+        if (eventId != null) eventIds.add(eventId);
+      }
+    }
+    // Events seeded from a deleted task point at it through `taskId`.
+    // They are kept and unlinked, never deleted — same as directly linked
+    // events below.
+    final reverseIds = <String>{};
+    for (final event in calendar.state) {
+      final taskId = event.taskId;
+      if (taskId != null && ids.contains(taskId)) {
+        reverseIds.add(event.id);
+      }
     }
     final removed = nodes.deleteNodes(ids);
     if (removed == 0) return 0;
     final calUpdates = <PlannerEvent>[];
-    for (final eventId in eventIds) {
+    for (final eventId in {...eventIds, ...reverseIds}) {
       final event = calendar.byId(eventId);
       if (event == null) continue;
       if (!event.isTask && event.taskId == null && !event.done) continue;
@@ -235,18 +263,6 @@ class NodeEventLink {
       nodes.removeNodesForEvent(eventId);
       calendar.clearTaskLink(eventId);
     });
-  }
-
-  /// Pushes an event's title/notes/time into its personal linked node.
-  /// Homework nodes keep their originally imported values.
-  static void syncEventEditToNode(
-    NodeCubit nodes,
-    CalendarCubit calendar,
-    String eventId,
-  ) {
-    final event = calendar.byId(eventId);
-    if (event == null || !event.isTask || event.isFromFeed) return;
-    nodes.upsertLinkedNodeForEvent(event);
   }
 
   /// Deletes an event together with its backing nodes.
@@ -563,5 +579,153 @@ class NodeEventLink {
     }
     if (assigned == 0) return (error: firstError, assigned: 0);
     return (error: firstError, assigned: assigned);
+  }
+
+  // ── Time tracking (single path for tasks) ──────────────────────────
+  //
+  // A task-event pair records one session, not two: the backing node owns
+  // the timer and the event mirrors it for display. Every start/stop below
+  // runs as one undo step across both cubits and keeps a single active
+  // timer across both stores (Toggl-style: starting one saves whatever
+  // else was recording). Plain events without a backing node record on
+  // the event itself, exactly as before.
+
+  /// Starts [nodeId]'s timer, first saving + stopping any running event
+  /// timer so the two stores never record at once.
+  static void startNodeTracking(
+    NodeCubit nodes,
+    CalendarCubit calendar,
+    String nodeId, {
+    DateTime? now,
+  }) {
+    final node = nodes.byId(nodeId);
+    if (node == null || node.isDone || node.isTracking) return;
+    final at = now ?? DateTime.now();
+    RevertableHydratedCubit.atomic([nodes, calendar], () {
+      final activeEvent = calendar.activeTrackingEvent;
+      if (activeEvent != null) {
+        calendar.stopTracking(activeEvent.id, now: at);
+      }
+      nodes.startTracking(nodeId, now: at);
+    });
+  }
+
+  /// Starts [eventId]'s timer. Task-events with a backing node record on
+  /// the node ([startNodeTracking]); plain events record on the event,
+  /// first saving + stopping any running node timer.
+  static void startEventTracking(
+    NodeCubit nodes,
+    CalendarCubit calendar,
+    String eventId, {
+    DateTime? now,
+  }) {
+    final event = calendar.byId(eventId);
+    if (event == null || event.allDay || event.isTracking) return;
+    final backing =
+        event.isTask ? backingNodeFor(nodes, calendar, eventId) : null;
+    if (backing != null) {
+      startNodeTracking(nodes, calendar, backing.id, now: now);
+      return;
+    }
+    final at = now ?? DateTime.now();
+    RevertableHydratedCubit.atomic([nodes, calendar], () {
+      final activeId = nodes.activeTrackingId;
+      if (activeId != null) nodes.stopTracking(activeId, now: at);
+      calendar.startTracking(eventId, now: at);
+    });
+  }
+
+  /// Stops [nodeId]'s timer and mirrors the reported interval onto every
+  /// linked task-event (clearing their timers). When the node was idle
+  /// but a linked event is still recording, the event's own interval is
+  /// saved instead so the session is never lost.
+  static void stopNodeTrackingAligned(
+    NodeCubit nodes,
+    CalendarCubit calendar,
+    String nodeId, {
+    DateTime? now,
+  }) {
+    final node = nodes.byId(nodeId);
+    if (node == null) return;
+    final at = now ?? DateTime.now();
+    RevertableHydratedCubit.atomic([nodes, calendar], () {
+      final wasTracking = node.isTracking;
+      if (wasTracking) nodes.stopTracking(nodeId, now: at);
+      final settled = nodes.byId(nodeId) ?? node;
+      final linked = _linkedTaskEvents(calendar, settled);
+      if (linked.isEmpty) return;
+      if (wasTracking &&
+          settled.actualStart != null &&
+          settled.actualEnd != null) {
+        calendar.updateEvents([
+          for (final event in linked)
+            event.copyWith(
+              actualStart: settled.actualStart,
+              actualEnd: settled.actualEnd,
+              clearTimerStartedAt: true,
+            ),
+        ]);
+        return;
+      }
+      for (final event in linked) {
+        if (event.isTracking) calendar.stopTracking(event.id, now: at);
+      }
+    });
+  }
+
+  /// Stops [eventId]'s timer. Task-events with a tracking backing node
+  /// stop through the node ([stopNodeTrackingAligned], which mirrors back
+  /// onto the event); a divergent event-only run on a linked pair is
+  /// copied onto the idle node so reports (which prefer the node) keep
+  /// the session. Plain events stop on the event itself.
+  static void stopEventTrackingAligned(
+    NodeCubit nodes,
+    CalendarCubit calendar,
+    String eventId, {
+    DateTime? now,
+  }) {
+    final event = calendar.byId(eventId);
+    if (event == null || !event.isTracking) return;
+    final backing =
+        event.isTask ? backingNodeFor(nodes, calendar, eventId) : null;
+    if (backing != null && backing.isTracking) {
+      stopNodeTrackingAligned(nodes, calendar, backing.id, now: now);
+      return;
+    }
+    final at = now ?? DateTime.now();
+    RevertableHydratedCubit.atomic([nodes, calendar], () {
+      calendar.stopTracking(eventId, now: at);
+      final stopped = calendar.byId(eventId) ?? event;
+      if (backing != null &&
+          stopped.actualStart != null &&
+          stopped.actualEnd != null) {
+        nodes.setReported(
+          backing.id,
+          stopped.actualStart!,
+          stopped.actualEnd!,
+        );
+      }
+    });
+  }
+
+  /// Every task-event linked to [node]: the direct `calendarEventId` /
+  /// `sourceEventId` targets plus events whose `taskId` points at it.
+  static List<PlannerEvent> _linkedTaskEvents(
+    CalendarCubit calendar,
+    Node node,
+  ) {
+    final seen = <String>{};
+    final out = <PlannerEvent>[];
+    for (final eventId in [node.calendarEventId, node.sourceEventId]) {
+      if (eventId == null || !seen.add(eventId)) continue;
+      final event = calendar.byId(eventId);
+      if (event != null && event.isTask) out.add(event);
+    }
+    for (final event in calendar.state) {
+      if (event.isTask && event.taskId == node.id && seen.add(event.id)) {
+        out.add(event);
+      }
+    }
+    return out;
   }
 }

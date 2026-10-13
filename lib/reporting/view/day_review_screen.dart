@@ -7,6 +7,8 @@ import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../common/undo/undo_bar.dart';
+import '../../nodes/bloc/node_cubit.dart';
+import '../../nodes/service/node_event_link.dart';
 import '../../planner/bloc/calendar_cubit.dart';
 import '../../planner/bloc/feed_cubit.dart';
 import '../../planner/bloc/settings_cubit.dart';
@@ -482,7 +484,19 @@ class _PlanColumn extends StatelessWidget {
         // Toggl-style one-tap recording: starting one event auto-stops any
         // other running timer inside CalendarCubit.
         final canTrack = live != null && !live.allDay;
-        final isTracking = live?.isTracking ?? false;
+        // A task-event with a backing node records on the node: reflect
+        // that timer here so this row never starts a second, divergent
+        // event-side timer for the same work.
+        var backingTracking = false;
+        try {
+          final nodes = context.read<NodeCubit>();
+          final backing = (live?.isTask ?? false)
+              ? NodeEventLink.backingNodeFor(
+                  nodes, calendar, item.eventId)
+              : null;
+          backingTracking = backing?.isTracking ?? false;
+        } catch (_) {}
+        final isTracking = (live?.isTracking ?? false) || backingTracking;
         return ListTile(
           dense: true,
           title: Text(item.title,
@@ -506,19 +520,37 @@ class _PlanColumn extends StatelessWidget {
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () {
-                    if (isTracking) {
-                      context
-                          .read<CalendarCubit>()
-                          .stopTracking(live.id);
-                    } else {
-                      context
-                          .read<CalendarCubit>()
-                          .startTracking(live.id);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Recording ${live.subject}'),
-                        ),
-                      );
+                    try {
+                      final nodes = context.read<NodeCubit>();
+                      final calendar = context.read<CalendarCubit>();
+                      if (isTracking) {
+                        NodeEventLink.stopEventTrackingAligned(
+                            nodes, calendar, live.id);
+                      } else {
+                        NodeEventLink.startEventTracking(
+                            nodes, calendar, live.id);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Recording ${live.subject}'),
+                          ),
+                        );
+                      }
+                    } catch (_) {
+                      // Standalone contexts without a NodeCubit keep the
+                      // previous calendar-only behaviour.
+                      try {
+                        final calendar = context.read<CalendarCubit>();
+                        if (live.isTracking) {
+                          calendar.stopTracking(live.id);
+                        } else {
+                          calendar.startTracking(live.id);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Recording ${live.subject}'),
+                            ),
+                          );
+                        }
+                      } catch (_) {}
                     }
                   },
                   child: Tooltip(

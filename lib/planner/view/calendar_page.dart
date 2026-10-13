@@ -12,6 +12,7 @@ import '../../navigation/bloc/navigation_cubit.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_calendar.dart';
+import '../../nodes/service/node_event_link.dart';
 import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_editor.dart';
 import '../../nodes/view/node_finish_sheet.dart';
@@ -1154,23 +1155,29 @@ class _CalendarPageState extends State<CalendarPage> {
       } else {
         if (backing.isDone) return;
         try {
-          context.read<NodeCubit>().startTracking(backing.id);
+          NodeEventLink.startNodeTracking(
+            context.read<NodeCubit>(),
+            context.read<CalendarCubit>(),
+            backing.id,
+          );
         } catch (_) {}
       }
       return;
     }
+    NodeCubit? nodes;
     CalendarCubit calendar;
     try {
+      nodes = context.read<NodeCubit>();
       calendar = context.read<CalendarCubit>();
     } catch (_) {
       return;
     }
     final live = calendar.byId(event.id) ?? event;
     if (live.isTracking) {
-      calendar.stopTracking(live.id);
+      NodeEventLink.stopEventTrackingAligned(nodes, calendar, live.id);
     } else {
       if (live.allDay) return;
-      calendar.startTracking(live.id);
+      NodeEventLink.startEventTracking(nodes, calendar, live.id);
     }
   }
 
@@ -2270,9 +2277,11 @@ class _RecordingBannerState extends State<_RecordingBanner> {
               FilledButton.icon(
                 onPressed: () {
                   try {
-                    context
-                        .read<CalendarCubit>()
-                        .stopTracking(widget.event.id);
+                    NodeEventLink.stopEventTrackingAligned(
+                      context.read<NodeCubit>(),
+                      context.read<CalendarCubit>(),
+                      widget.event.id,
+                    );
                   } catch (_) {}
                 },
                 style: FilledButton.styleFrom(

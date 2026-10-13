@@ -555,7 +555,11 @@ class _NodeTile extends StatelessWidget {
           icon: const Icon(Icons.play_arrow),
           onPressed: () {
             try {
-              context.read<NodeCubit>().startTracking(live.id);
+              NodeEventLink.startNodeTracking(
+                context.read<NodeCubit>(),
+                context.read<CalendarCubit>(),
+                live.id,
+              );
             } catch (_) {}
           },
         ),
