@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import '../model/planner_event.dart';
+import '../../demo/demo_data.dart';
+import '../../demo/demo_mode.dart';
 import 'server_base.dart';
 
 class GoogleCalendarInfo {
@@ -230,6 +232,7 @@ class GoogleCalendarService {
   }
 
   Future<bool> isConnected() async {
+    if (DemoMode.isActive) return DemoMocks.googleConnected;
     final data = _decode(await _send(() => _client.get(
         _uri('/api/google/status'),
         headers: _headers)));
@@ -241,6 +244,13 @@ class GoogleCalendarService {
   /// must be started from a host registered in the Google Cloud console
   /// (e.g. http://localhost:8000).
   Future<String> authUrl() async {
+    if (DemoMode.isActive) {
+      // Real OAuth needs a browser round-trip; the demo dialog one-taps
+      // instead (see _GoogleConnectDialog). This is only a safety net.
+      throw const GoogleCalendarException(
+        'Demo connect is one-tap — close this and use the Connect button.',
+      );
+    }
     final data = _decode(await _send(() => _client.get(
         _uri('/api/google/auth_url'),
         headers: _headers)));
@@ -251,11 +261,25 @@ class GoogleCalendarService {
   }
 
   Future<void> disconnect() async {
+    if (DemoMode.isActive) {
+      DemoMocks.googleConnected = false;
+      return;
+    }
     await _send(
         () => _client.post(_uri('/api/google/disconnect'), headers: _headers));
   }
 
   Future<List<GoogleCalendarInfo>> listCalendars() async {
+    if (DemoMode.isActive) {
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      if (!DemoMocks.googleConnected) {
+        throw const GoogleCalendarException(
+          'Demo Google is disconnected.',
+          needsReconnect: true,
+        );
+      }
+      return DemoData.googleCalendars();
+    }
     final data = _decode(await _send(() => _client.get(
         _uri('/api/google/calendars'),
         headers: _headers)));

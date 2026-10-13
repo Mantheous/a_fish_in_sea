@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import '../model/task_assignee.dart';
+import '../../demo/demo_data.dart';
+import '../../demo/demo_mode.dart';
 import 'server_base.dart';
 
 class GoogleContact {
@@ -183,6 +185,12 @@ class GoogleContactsService {
   }
 
   Future<GoogleContactsStatus> status() async {
+    if (DemoMode.isActive) {
+      return GoogleContactsStatus(
+        connected: DemoMocks.googleConnected,
+        contactsGranted: DemoMocks.googleConnected,
+      );
+    }
     final data = _decode(await _send(() => _client.get(
         _uri('/api/google/status'),
         headers: _headers)));
@@ -218,6 +226,14 @@ class GoogleContactsService {
   }
 
   Future<List<GoogleContact>> _fetchAndCache() async {
+    if (DemoMode.isActive) {
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      final out = [...DemoData.googleContacts()]..sort((a, b) =>
+          a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+      _cache = out;
+      _sharedCache = out;
+      return out;
+    }
     final data = _decode(await _send(() => _client.get(
         _uri('/api/google/contacts'),
         headers: _headers)));

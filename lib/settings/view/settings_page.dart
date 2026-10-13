@@ -1,4 +1,6 @@
 import 'package:a_fish_in_sea/common/undo/undo_bar.dart';
+import 'package:a_fish_in_sea/demo/demo_coordinator.dart';
+import 'package:a_fish_in_sea/demo/demo_mode.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/view/bank_connection_card.dart';
 import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
@@ -94,9 +96,11 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           _SettingsSection(
             title: 'Sync',
-            subtitle: 'Signed in as ${context.watch<AuthCubit>().state.email}. '
-                'Offline-first: this device works without a connection and '
-                'merges later; server copy wins true conflicts.',
+            subtitle: DemoMode.isActive
+                ? 'Demo mode · mock data — nothing syncs or is saved.'
+                : 'Signed in as ${context.watch<AuthCubit>().state.email}. '
+                    'Offline-first: this device works without a connection and '
+                    'merges later; server copy wins true conflicts.',
             child: const _SyncSection(),
           ),
           const _SettingsSection(
@@ -154,6 +158,10 @@ class _SyncSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Static flag (not a cubit watch): entry/exit always rebuilds the whole
+    // shell from main.dart, and this keeps standalone widget tests working
+    // without a DemoCubit in the tree.
+    if (DemoMode.isActive) return const _DemoSyncSection();
     final engine = context.read<SyncEngine>();
     return ValueListenableBuilder<EngineStatus>(
       valueListenable: engine.status,
@@ -245,6 +253,49 @@ class _SyncSection extends StatelessWidget {
     if (d.inMinutes < 60) return '${d.inMinutes}m ago';
     if (d.inHours < 24) return '${d.inHours}h ago';
     return '${d.inDays}d ago';
+  }
+}
+
+/// Demo replacement for [_SyncSection]: mock-feed refresh + exit.
+class _DemoSyncSection extends StatelessWidget {
+  const _DemoSyncSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final feedCubit = context.read<FeedCubit>();
+    return ValueListenableBuilder<bool>(
+      valueListenable: feedCubit.isSyncing,
+      builder: (context, syncing, _) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ListTile(
+            leading: syncing
+                ? const SizedBox(
+                    height: 20,
+                    width: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.science_outlined),
+            title: Text(syncing ? 'Refreshing mock feeds…' : 'Demo sync'),
+            subtitle: const Text(
+              'Mock Canvas, Google and iCal feeds refresh locally. '
+              'Submitted homework auto-completes, like the real thing.',
+            ),
+            trailing: TextButton(
+              onPressed: syncing
+                  ? null
+                  : () => feedCubit.syncAll(force: true),
+              child: const Text('Sync now'),
+            ),
+          ),
+          OutlinedButton.icon(
+            onPressed: () => DemoCoordinator.exitDemo(context),
+            icon: const Icon(Icons.logout),
+            label: const Text('Exit demo (discards mock data)'),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -366,6 +417,11 @@ class _ApiTokensSectionState extends State<_ApiTokensSection> {
 
   @override
   Widget build(BuildContext context) {
+    if (DemoMode.isActive) {
+      return const Text(
+        'API tokens need a real account — unavailable in demo mode.',
+      );
+    }
     if (_loading) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 12),

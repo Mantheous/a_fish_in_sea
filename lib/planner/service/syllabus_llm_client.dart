@@ -5,6 +5,8 @@ import 'package:http/http.dart' as http;
 
 import 'syllabus_draft.dart';
 import 'syllabus_parser.dart';
+import '../../demo/demo_data.dart';
+import '../../demo/demo_mode.dart';
 import 'server_base.dart';
 
 class SyllabusLlmException implements Exception {
@@ -27,6 +29,12 @@ Future<List<SyllabusDraft>> extractSyllabusViaServer(
 }) async {
   final trimmed = text.trim();
   if (trimmed.isEmpty) return const [];
+  if (DemoMode.isActive) {
+    // Mock LLM extraction: plausible drafts after a beat, badged as AI in
+    // the review sheet, then created as real nodes on approval.
+    await Future<void>.delayed(const Duration(milliseconds: 800));
+    return DemoData.syllabusDrafts(DateTime.now());
+  }
   // Keep in sync with the server-side cap.
   final payload = trimmed.length > 15000 ? trimmed.substring(0, 15000) : trimmed;
 

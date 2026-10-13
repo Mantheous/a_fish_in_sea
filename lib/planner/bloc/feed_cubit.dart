@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import '../../common/undo/change_record.dart';
 import '../../common/undo/revertable_hydrated_cubit.dart';
 import '../../common/undo/undo_cubit.dart';
+import '../../demo/demo_data.dart';
+import '../../demo/demo_mode.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_feed.dart';
@@ -222,6 +224,17 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     PlannerEvent updated, {
     bool series = false,
   }) async {
+    if (DemoMode.isActive) {
+      final feed = _googleFeedFor(updated);
+      if (feed == null) {
+        return 'This event can only be edited locally.';
+      }
+      DemoMocks.googleOverlay.removeWhere((e) => e.id == updated.id);
+      DemoMocks.googleOverlay.add(updated);
+      DemoMocks.googleTombstones.remove(updated.sourceUid);
+      await syncFeed(feed.id);
+      return null;
+    }
     final feed = _googleFeedFor(updated);
     if (feed == null) {
       return 'This event can only be edited locally.';
@@ -249,6 +262,36 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     required Feed feed,
     required PlannerEvent event,
   }) async {
+    if (DemoMode.isActive) {
+      if (feed.kind != FeedKind.google ||
+          feed.calendarId == null ||
+          feed.calendarId!.isEmpty) {
+        return (
+          error: 'Choose a Google calendar to save online.',
+          created: null
+        );
+      }
+      final stamp = DateTime.now().microsecondsSinceEpoch;
+      final created = PlannerEvent(
+        id: 'gcal:${feed.id}:demo-$stamp',
+        subject: event.subject,
+        notes: event.notes,
+        location: event.location,
+        start: event.start,
+        end: event.end,
+        allDay: event.allDay,
+        recurrenceRule: event.recurrenceRule,
+        feedId: feed.id,
+        sourceUid: 'demo-$stamp',
+        colorValue: event.colorValue,
+        placeId: event.placeId,
+        assignees: event.assignees,
+        tagIds: event.tagIds,
+      );
+      DemoMocks.googleOverlay.add(created);
+      await syncFeed(feed.id);
+      return (error: null, created: created);
+    }
     if (feed.kind != FeedKind.google ||
         feed.calendarId == null ||
         feed.calendarId!.isEmpty) {
@@ -278,6 +321,19 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     PlannerEvent event, {
     bool series = false,
   }) async {
+    if (DemoMode.isActive) {
+      final feed = _googleFeedFor(event);
+      if (feed == null) {
+        return 'This event can only be deleted locally.';
+      }
+      DemoMocks.googleOverlay.removeWhere((e) => e.id == event.id);
+      final remoteId = series ? seriesRemoteId(event) : event.sourceUid;
+      if (remoteId != null && remoteId.isNotEmpty) {
+        DemoMocks.googleTombstones.add(remoteId);
+      }
+      await syncFeed(feed.id);
+      return null;
+    }
     final feed = _googleFeedFor(event);
     if (feed == null) {
       return 'This event can only be deleted locally.';
@@ -296,6 +352,8 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
 
   /// Fetches the series master for a recurring instance, or null.
   Future<PlannerEvent?> fetchSeriesMaster(PlannerEvent instance) async {
+    // Demo has no remote masters; edits fall back to local behavior.
+    if (DemoMode.isActive) return null;
     final feed = _googleFeedFor(instance);
     final seriesId = instance.seriesId;
     if (feed == null || seriesId == null || seriesId.isEmpty) return null;
@@ -526,6 +584,16 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   }
 
   Future<List<PlannerEvent>> _syncIcal(Feed feed) async {
+    if (DemoMode.isActive) {
+      // Mock fetch: same shape as a parsed feed, generated fresh so the
+      // refresh buttons visibly do something. Local done/task flags are
+      // preserved by [_syncOne], exactly like a real re-sync.
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      final now = DateTime.now();
+      return DemoData.feedEvents(now)
+          .where((e) => e.feedId == feed.id)
+          .toList();
+    }
     // Server-side fetching when signed in: the server fetches the URL and
     // caches the ICS, so every device parses identical bytes (and web
     // avoids CORS). Any failure falls back to the direct/proxy fetch.
@@ -548,6 +616,46 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   }
 
   Future<List<PlannerEvent>> _syncGoogle(Feed feed) async {
+    if (DemoMode.isActive) {
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      if (!DemoMocks.googleConnected) {
+        throw const GoogleCalendarException(
+          'Demo Google is disconnected — reconnect from Classes & calendars.',
+          needsReconnect: true,
+        );
+      }
+      final now = DateTime.now();
+      final tombstoned = DemoMocks.googleTombstones;
+      if (feed.id == DemoData.googleFeedId) {
+        final byId = <String, PlannerEvent>{
+          for (final e in DemoData.feedEvents(now))
+            if (e.feedId == feed.id) e.id: e,
+        };
+        for (final extra in DemoMocks.googleOverlay) {
+          if (extra.feedId == feed.id) byId[extra.id] = extra;
+        }
+        return byId.values
+            .where((e) => !tombstoned.contains(e.sourceUid))
+            .toList();
+      }
+      // A calendar the user added mid-demo: generic mock events plus any
+      // overlay edits made to this feed.
+      final today = DateTime(now.year, now.month, now.day);
+      return [
+        PlannerEvent(
+          id: '${feed.id}:demo-kickoff',
+          subject: 'Mock sync for ${feed.name}',
+          notes: 'This calendar was added during the demo — real '
+              'calendars list here after a Google connect.',
+          start: DateTime(today.year, today.month, today.day + 1, 18),
+          end: DateTime(today.year, today.month, today.day + 1, 20),
+          feedId: feed.id,
+          sourceUid: 'demo-kickoff',
+        ),
+        for (final extra in DemoMocks.googleOverlay)
+          if (extra.feedId == feed.id) extra,
+      ];
+    }
     final calendarId = feed.calendarId;
     if (calendarId == null || calendarId.isEmpty) {
       throw const GoogleCalendarException(
@@ -574,10 +682,17 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     };
     if (canvasFeedIds.isEmpty) return;
     late final List<CanvasSubmission> submissions;
-    try {
-      submissions = await canvas.fetchSubmissions();
-    } catch (_) {
-      return;
+    if (DemoMode.isActive) {
+      // Mock planner API: one submitted + one excused heal on sync, while
+      // the bare-graded item must stay open (conservative rule demo).
+      if (!DemoMocks.canvasConnected) return;
+      submissions = DemoData.canvasSubmissions();
+    } else {
+      try {
+        submissions = await canvas.fetchSubmissions();
+      } catch (_) {
+        return;
+      }
     }
     final doneIds = <int>{
       for (final s in submissions)

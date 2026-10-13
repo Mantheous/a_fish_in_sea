@@ -2,6 +2,8 @@ import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
+import 'package:a_fish_in_sea/demo/demo_banner.dart';
+import 'package:a_fish_in_sea/demo/demo_cubit.dart';
 import 'package:a_fish_in_sea/feedback/view/feedback_page.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/finances_hub.dart';
@@ -58,6 +60,8 @@ class MyApp extends StatelessWidget {
     return MultiBlocProvider(
       providers: [
         BlocProvider(create: (_) => UndoCubit(), lazy: false),
+        // Demo mode is intentionally NOT hydrated: it must never persist.
+        BlocProvider(create: (_) => DemoCubit()),
         BlocProvider(create: (_) => NavigationCubit()),
         BlocProvider(create: (_) => SettingsCubit()),
         // Auth owns the sync-server identity. The SyncClient closure reads
@@ -151,6 +155,29 @@ class MyApp extends StatelessWidget {
   }
 }
 
+/// Page switch shared by the normal and demo shells.
+class _DemoContent extends StatelessWidget {
+  const _DemoContent();
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocBuilder<NavigationCubit, PlannerPage>(
+      builder: (context, page) {
+        return switch (page) {
+          PlannerPage.home => const HomePage(),
+          PlannerPage.calendar => const CalendarPage(),
+          PlannerPage.tasks => const TasksPage(),
+          PlannerPage.nodes => const NodesPage(),
+          PlannerPage.stats => const StatsPage(),
+          PlannerPage.finances => const FinancesHubPage(),
+          PlannerPage.feedback => const FeedbackPage(),
+          PlannerPage.settings => const SettingsPage(),
+        };
+      },
+    );
+  }
+}
+
 /// Boots the sync engine once (first pull if signed in) and runs the
 /// 5-minute background timer while the app lives.
 class _SyncBootstrap extends StatefulWidget {
@@ -196,8 +223,9 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
       ),
       home: BlocBuilder<AuthCubit, AuthState>(
         builder: (context, auth) {
-          if (!auth.isSignedIn) return const AuthPage();
-          return BlocBuilder<NavigationCubit, PlannerPage>(
+          final demo = context.watch<DemoCubit>().state;
+          if (!auth.isSignedIn && !demo) return const AuthPage();
+          final content = BlocBuilder<NavigationCubit, PlannerPage>(
             builder: (context, page) {
               return switch (page) {
                 PlannerPage.home => const HomePage(),
@@ -210,6 +238,17 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
                 PlannerPage.settings => const SettingsPage(),
               };
             },
+          );
+          if (!demo) return content;
+          // Demo shell: persistent mock-data banner above every page.
+          // Inner pages keep their own Scaffolds (drawers keep working).
+          return const Scaffold(
+            body: Column(
+              children: [
+                DemoBanner(),
+                Expanded(child: _DemoContent()),
+              ],
+            ),
           );
         },
       ),
