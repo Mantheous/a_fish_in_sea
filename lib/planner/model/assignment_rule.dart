@@ -26,6 +26,13 @@ class AssignmentRule extends Equatable {
   /// Days added to the feed due date. -2 = plan it two days early.
   /// Clamped to ±30 on load.
   final int dueOffsetDays;
+
+  /// Expected minutes of work for this type, or null to use the learned
+  /// average. Clamped to 5..1440 on load so a stray payload can never
+  /// schedule a 40-hour block. Additive: payloads written before this
+  /// existed load as null and keep learning.
+  final int? estimateMinutes;
+
   final DateTime createdAt;
 
   const AssignmentRule({
@@ -36,6 +43,7 @@ class AssignmentRule extends Equatable {
     required this.dueOffsetDays,
     required this.createdAt,
     this.classLabel,
+    this.estimateMinutes,
   });
 
   /// Scope key shared with [detectRepeatingGroups] output.
@@ -49,6 +57,8 @@ class AssignmentRule extends Equatable {
     String? classLabel,
     bool clearClassLabel = false,
     int? dueOffsetDays,
+    int? estimateMinutes,
+    bool clearEstimateMinutes = false,
   }) =>
       AssignmentRule(
         id: id,
@@ -59,6 +69,9 @@ class AssignmentRule extends Equatable {
         displayName: displayName ?? this.displayName,
         dueOffsetDays: dueOffsetDays ?? this.dueOffsetDays,
         createdAt: createdAt,
+        estimateMinutes: clearEstimateMinutes
+            ? null
+            : (estimateMinutes ?? this.estimateMinutes),
       );
 
   factory AssignmentRule.fromJson(Map<String, dynamic> json) {
@@ -74,6 +87,11 @@ class AssignmentRule extends Equatable {
       throw const FormatException('AssignmentRule needs id/feed/template');
     }
     final rawOffset = (json['dueOffsetDays'] as num?)?.toInt() ?? 0;
+    // Tolerant + clamped: absent or nonsense falls back to "learn it"
+    // rather than throwing away the user's whole rule.
+    final rawEstimate = (json['estimateMinutes'] as num?)?.toInt();
+    final estimate =
+        rawEstimate == null || rawEstimate <= 0 ? null : rawEstimate.clamp(5, 1440);
     DateTime createdAt = DateTime.fromMillisecondsSinceEpoch(0);
     final rawCreated = json['createdAt'];
     if (rawCreated is String) {
@@ -86,6 +104,7 @@ class AssignmentRule extends Equatable {
       templateKey: templateKey,
       displayName: (json['displayName'] as String?) ?? templateKey,
       dueOffsetDays: rawOffset.clamp(-30, 30),
+      estimateMinutes: estimate,
       createdAt: createdAt,
     );
   }
@@ -97,6 +116,7 @@ class AssignmentRule extends Equatable {
         'templateKey': templateKey,
         'displayName': displayName,
         'dueOffsetDays': dueOffsetDays,
+        'estimateMinutes': estimateMinutes,
         'createdAt': createdAt.toIso8601String(),
       };
 
@@ -108,6 +128,7 @@ class AssignmentRule extends Equatable {
         templateKey,
         displayName,
         dueOffsetDays,
+        estimateMinutes,
         createdAt,
       ];
 }

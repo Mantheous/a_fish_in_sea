@@ -12,6 +12,14 @@ class PlannedSlice {
   final DateTime end;
   final bool allDay;
 
+  /// Class/calendar this slice came from (feeds set the course label), and
+  /// the goal/assignment node the event is linked to. Both optional so
+  /// non-feed events and plain nodes still work; when set, the time
+  /// report can attribute the planned span to a class or a classified
+  /// assignment type.
+  final String? classLabel;
+  final String? taskId;
+
   const PlannedSlice({
     required this.eventId,
     required this.title,
@@ -19,6 +27,8 @@ class PlannedSlice {
     required this.start,
     required this.end,
     this.allDay = false,
+    this.classLabel,
+    this.taskId,
   });
 
   int get durationMin => end.isAfter(start) ? end.difference(start).inMinutes : 0;

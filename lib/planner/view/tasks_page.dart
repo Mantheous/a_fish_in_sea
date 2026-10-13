@@ -14,12 +14,16 @@ import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_editor.dart';
 import '../../nodes/view/node_finish_sheet.dart';
 import '../../nodes/view/timer_edit_sheet.dart';
+import '../bloc/assignment_estimates_cubit.dart';
 import '../bloc/assignment_rules_cubit.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/feed_cubit.dart';
+import '../bloc/settings_cubit.dart';
 import '../bloc/tasks_tab_cubit.dart';
 import '../bloc/tasks_view_options_cubit.dart';
+import '../model/assignment_estimate.dart';
+import '../model/assignment_rule.dart';
 import '../model/assignment_template.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
@@ -391,6 +395,44 @@ class _TabSaverState extends State<_TabSaver> {
 
 final _timeFormat = DateFormat('h:mm a');
 final _dueFormat = DateFormat('EEE, MMM d');
+
+int _snapMinutes(BuildContext context) {
+  try {
+    return context.read<SettingsCubit>().state.snapMinutes;
+  } catch (_) {
+    return 15;
+  }
+}
+
+/// Estimate for one assignment: the rule's explicit number, then the
+/// learned average for its classified type, then the node's own time
+/// target, then a plain hour.
+///
+/// Both cubits are optional so standalone widget tests (and any future
+/// embed of this tile) keep working without them.
+AssignmentEstimate _estimateFor(BuildContext context, Node node) {
+  var rules = const <AssignmentRule>[];
+  var efforts = const <AssignmentTypeEffort>[];
+  try {
+    rules = context.read<AssignmentRulesCubit>().state;
+  } catch (_) {}
+  try {
+    efforts = context.read<AssignmentEstimatesCubit>().state;
+  } catch (_) {}
+  return resolveAssignmentEstimate(
+    node: node,
+    rules: rules,
+    efforts: efforts,
+  );
+}
+
+/// "Est 45m" / "Est 1h 30m, usually 7 PM" for the tile's work line.
+String _estimateLine(AssignmentEstimate estimate) {
+  final minutes = describeMinutes(estimate.minutes);
+  final start = estimate.preferredStartMinute;
+  if (start == null) return 'Est ~$minutes';
+  return 'Est ~$minutes, ${describeTimeOfDay(start)}';
+}
 
 /// Reads the Tasks view options, falling back to defaults when the cubit
 /// isn't provided (widget tests pump TasksPage standalone).
@@ -1046,6 +1088,10 @@ class _NodeTile extends StatelessWidget {
     } else if (plannedStart != null && plannedEnd != null) {
       workLine = 'Planned ${_timeFormat.format(plannedStart)} – '
           '${_timeFormat.format(plannedEnd)}';
+    } else if (live.isHomework) {
+      // Not placed yet: show what the app expects this to take, and the
+      // slot the schedule will default to.
+      workLine = _estimateLine(_estimateFor(context, live));
     } else if (live.money != null) {
       final actual = (indexById != null && indexByParent != null)
           ? moneyActualForNodeIndexed(
@@ -1338,7 +1384,11 @@ class _NodeTile extends StatelessWidget {
 
   void _addToCalendar(BuildContext context, Node node) {
     context.read<CalendarDraftCubit>().requestDraft(
-          draftSeedFromNode(node),
+          draftSeedFromNode(
+            node,
+            estimate: _estimateFor(context, node),
+            snapMinutes: _snapMinutes(context),
+          ),
         );
     context.read<NavigationCubit>().setPage(PlannerPage.calendar);
     ScaffoldMessenger.of(context).showSnackBar(
