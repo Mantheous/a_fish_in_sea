@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
+import '../../demo/demo_coordinator.dart';
+import '../../demo/demo_mode.dart';
 import '../../sync/auth_cubit.dart';
 import '../../sync/sync_engine.dart';
 import '../import_service.dart';
@@ -110,14 +112,20 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
                   FilledButton.icon(
                     onPressed: _busy || done
                         ? null
-                        : () => _run(() => _service.approve(_batch.id)),
+                        : () => _run(() => DemoMode.isActive
+                            ? DemoCoordinator.demoApprove(
+                                context, _batch.id)
+                            : _service.approve(_batch.id)),
                     icon: const Icon(Icons.check),
                     label: Text('Approve all (${pending.length})'),
                   ),
                   OutlinedButton.icon(
                     onPressed: _busy || done
                         ? null
-                        : () => _run(() => _service.reject(_batch.id)),
+                        : () => _run(() => DemoMode.isActive
+                            ? DemoCoordinator.demoReject(
+                                context, _batch.id)
+                            : _service.reject(_batch.id)),
                     icon: const Icon(Icons.close),
                     label: const Text('Reject batch'),
                   ),
@@ -233,15 +241,22 @@ class _StagedTile extends StatelessWidget {
                         icon: const Icon(Icons.check),
                         color: theme.colorScheme.primary,
                         onPressed: () => onAct(
-                          () => service.approve(batchId,
-                              itemIds: [item.itemId]),
+                          () => DemoMode.isActive
+                              ? DemoCoordinator.demoApprove(
+                                  context, batchId,
+                                  itemIds: [item.itemId])
+                              : service.approve(batchId,
+                                  itemIds: [item.itemId]),
                         ),
                       ),
                       IconButton(
                         tooltip: 'Discard',
                         icon: const Icon(Icons.close),
                         onPressed: () => onAct(
-                          () => service.discard(batchId, [item.itemId]),
+                          () => DemoMode.isActive
+                              ? DemoCoordinator.demoDiscard(
+                                  context, batchId, [item.itemId])
+                              : service.discard(batchId, [item.itemId]),
                         ),
                       ),
                     ],

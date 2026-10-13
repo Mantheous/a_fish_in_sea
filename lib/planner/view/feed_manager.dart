@@ -8,6 +8,8 @@ import '../bloc/feed_cubit.dart';
 import '../model/feed.dart';
 import '../service/canvas_service.dart';
 import '../service/google_calendar_service.dart';
+import '../../demo/demo_data.dart';
+import '../../demo/demo_mode.dart';
 
 FeedKind _kindFromUrl(String url) {
   final normalized = url.toLowerCase();
@@ -590,6 +592,15 @@ class _GoogleConnectDialogState extends State<_GoogleConnectDialog> {
   }
 
   Future<void> _openAuthPage() async {
+    // Demo has no browser OAuth round-trip: one tap "connects" the mock
+    // account and lands on the calendar picker.
+    if (DemoMode.isActive) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      DemoMocks.googleConnected = true;
+      if (!mounted) return;
+      await _checkConnection();
+      return;
+    }
     try {
       final uri = Uri.parse(await widget.googleService.authUrl());
       if (kIsWeb) {
@@ -696,6 +707,31 @@ class _GoogleConnectDialogState extends State<_GoogleConnectDialog> {
   }
 
   Widget _buildNeedAuth() {
+    if (DemoMode.isActive) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Connect the mock Google account. No browser, no password — '
+            'one tap and the demo calendars list below.',
+          ),
+          const SizedBox(height: 12),
+          if (_error != null) ...[
+            Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+            const SizedBox(height: 12),
+          ],
+          FilledButton.icon(
+            onPressed: _openAuthPage,
+            icon: const Icon(Icons.open_in_new),
+            label: const Text('Connect mock Google'),
+          ),
+        ],
+      );
+    }
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,

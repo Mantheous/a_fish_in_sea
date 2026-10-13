@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
+import 'package:a_fish_in_sea/demo/demo_mode.dart';
+import 'package:a_fish_in_sea/demo/demo_tour_card.dart';
 import 'package:a_fish_in_sea/imports/view/import_inbox_card.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
@@ -72,6 +74,7 @@ class _HomePageState extends State<HomePage> {
       body: ListView(
         padding: const EdgeInsets.all(12),
         children: [
+          if (DemoMode.isActive) const DemoTourCard(),
           const ImportInboxCard(),
           const _TimeTrackingCard(),
           const _TrackingCard(),

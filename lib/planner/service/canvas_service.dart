@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import '../../demo/demo_data.dart';
+import '../../demo/demo_mode.dart';
 import 'server_base.dart';
 
 /// One Canvas assignment's submission state, as normalized by the server
@@ -152,6 +154,7 @@ class CanvasService {
   }
 
   Future<bool> isConnected() async {
+    if (DemoMode.isActive) return DemoMocks.canvasConnected;
     final data = _decode(await _send(() => _client.get(
         _uri('/api/canvas/status'),
         headers: _headers)));
@@ -159,6 +162,9 @@ class CanvasService {
   }
 
   Future<String?> connectedHost() async {
+    if (DemoMode.isActive) {
+      return DemoMocks.canvasConnected ? DemoMocks.canvasHost : null;
+    }
     final data = _decode(await _send(() => _client.get(
         _uri('/api/canvas/status'),
         headers: _headers)));
@@ -169,6 +175,14 @@ class CanvasService {
   /// it against [host] before storing. The token itself is never kept on
   /// this device beyond this call.
   Future<void> connect({required String token, required String host}) async {
+    if (DemoMode.isActive) {
+      // Mock token exchange: any pasted token "works".
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      DemoMocks.canvasConnected = true;
+      DemoMocks.canvasHost =
+          host.trim().isNotEmpty ? host.trim() : 'demo.instructure.com';
+      return;
+    }
     final response = await _send(() => _client.post(
           _uri('/api/canvas/connect'),
           headers: {..._headers, 'Content-Type': 'application/json'},
@@ -178,6 +192,10 @@ class CanvasService {
   }
 
   Future<void> disconnect() async {
+    if (DemoMode.isActive) {
+      DemoMocks.canvasConnected = false;
+      return;
+    }
     await _send(() => _client.post(
         _uri('/api/canvas/disconnect'),
         headers: _headers));
@@ -186,6 +204,7 @@ class CanvasService {
   /// Submission states across the server's sync window (wide enough to
   /// cover the overdue pile, not just this week).
   Future<List<CanvasSubmission>> fetchSubmissions() async {
+    if (DemoMode.isActive) return DemoData.canvasSubmissions();
     final data = _decode(await _send(() => _client.get(
         _uri('/api/canvas/submissions'),
         headers: _headers)));
