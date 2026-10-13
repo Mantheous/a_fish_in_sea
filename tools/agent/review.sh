@@ -29,7 +29,7 @@ COUNT="$(echo "$PRS" | python3 -c 'import json,sys; print(len(json.load(sys.stdi
 echo "[review] open PRs: $COUNT"
 [ "$COUNT" = "0" ] && exit 0
 
-echo "$PRS" | python3 -c 'import json,sys; [print(f"{p[\"number\"]}|{p[\"headRefName\"]}") for p in json.load(sys.stdin)]' | while read -r LINE; do
+echo "$PRS" | python3 -c 'import json,sys; [print(str(p["number"]) + "|" + p["headRefName"]) for p in json.load(sys.stdin)]' | while read -r LINE; do
   N="${LINE%%|*}"
   BRANCH="${LINE#*|}"
   case "$BRANCH" in
