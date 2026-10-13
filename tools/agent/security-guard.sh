@@ -60,7 +60,7 @@ Audit this pull request for security flaws before a human merges it.
 Read-only. Follow your agent instructions exactly."
   OUT_FILE="$(mktemp)"
   if ! opencode run --agent security-guardian --title "sec-guard-pr-$N" \
-      "$PROMPT" >"$OUT_FILE" 2>"$OUT_FILE.err"; then
+      "$PROMPT" </dev/null >"$OUT_FILE" 2>"$OUT_FILE.err"; then
     echo "[sec-guard] PR #$N audit run failed: $(tail -n 3 "$OUT_FILE.err")"
     rm -f "$OUT_FILE" "$OUT_FILE.err"
     continue

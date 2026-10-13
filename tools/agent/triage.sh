@@ -66,7 +66,7 @@ Persistence impact: <none | description + migration gating per AGENTS.md>
 UX check: <needed (touches user-visible UI — builder must add the ux-walk label + scope per AGENTS.md; the loop walks it post-deploy, never pre-merge) | not needed — <why>>
 Effort: <S|M|L>"
     PLAN_FILE="$(mktemp)"
-    if ! opencode run --title "triage-#$N" "$PROMPT" >"$PLAN_FILE" 2>"$PLAN_FILE.err"; then
+    if ! opencode run --title "triage-#$N" "$PROMPT" </dev/null >"$PLAN_FILE" 2>"$PLAN_FILE.err"; then
       echo "[triage] #$N plan draft failed: $(tail -n 3 "$PLAN_FILE.err")"
       rm -f "$PLAN_FILE" "$PLAN_FILE.err"
       continue
@@ -174,7 +174,7 @@ Persistence impact: <none | description + migration gating per AGENTS.md>
 UX check: <needed (touches user-visible UI — builder must add the ux-walk label + scope per AGENTS.md; the loop walks it post-deploy, never pre-merge) | not needed — <why>>
 Effort: <S|M|L>"
   REV_FILE="$(mktemp)"
-  if ! opencode run --title "triage-rev-#$N" "$REVPROMPT" >"$REV_FILE" 2>"$REV_FILE.err"; then
+  if ! opencode run --title "triage-rev-#$N" "$REVPROMPT" </dev/null >"$REV_FILE" 2>"$REV_FILE.err"; then
     echo "[triage] #$N revision failed: $(tail -n 3 "$REV_FILE.err")"
     rm -f "$REV_FILE" "$REV_FILE.err"
     continue

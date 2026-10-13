@@ -86,7 +86,7 @@ Smallness: <ok | bloated — what should be cut?>
 Fix list: <if changes-requested: numbered, concrete, bounded items. If pass: none.>
 $REVIEW_MARKER"
   REVIEW_FILE="$(mktemp)"
-  if ! opencode run --title "review-#$N" "$PROMPT" >"$REVIEW_FILE" 2>"$REVIEW_FILE.err"; then
+  if ! opencode run --title "review-#$N" "$PROMPT" </dev/null >"$REVIEW_FILE" 2>"$REVIEW_FILE.err"; then
     echo "[review] #$N reviewer run failed: $(tail -n 3 "$REVIEW_FILE.err")"
     rm -f "$REVIEW_FILE" "$REVIEW_FILE.err"
     continue
