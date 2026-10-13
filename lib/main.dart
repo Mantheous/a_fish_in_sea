@@ -195,6 +195,10 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
   // element is deactivated (crashed test teardown and hot restart).
   SyncEngine? _engine;
 
+  /// Feed ids seen on the last node/feed change, so a removed class can
+  /// be dropped from the learned assignment data.
+  Set<String> _knownFeedIds = const {};
+
   @override
   void initState() {
     super.initState();
@@ -211,10 +215,25 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
 
   @override
   Widget build(BuildContext context) {
-    // Keeps the learned "how long does this kind of assignment take, and
+    // Keep the learned "how long does this kind of assignment take, and
     // when do I usually start it" index in step with the node list. The
     // rebuild is a pure function of the nodes, so it is idempotent and
     // safe to run on every change.
+    //
+    // A removed class drops its learned rows too: the estimate index is
+    // derived from nodes, so deleting coursework would otherwise leave an
+    // orphan row in the stats forever.
+    final feeds = context.watch<FeedCubit>().state;
+    final feedIds = {for (final f in feeds) f.id};
+    final goneFeeds = _knownFeedIds.difference(feedIds);
+    _knownFeedIds = feedIds;
+    if (goneFeeds.isNotEmpty) {
+      final estimates = context.read<AssignmentEstimatesCubit>();
+      for (final id in goneFeeds) {
+        estimates.forgetFeed(id);
+      }
+    }
+
     return MultiBlocListener(
       listeners: [
         BlocListener<NodeCubit, List<Node>>(
