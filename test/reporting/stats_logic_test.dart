@@ -443,6 +443,29 @@ void main() {
       expect(report.trackedMinutes, 0);
     });
 
+    test('recorded time on a non-homework goal counts as well', () {
+      // A session on a time goal is real work the user did: leaving it out
+      // of the accounting would make "not accounted for" lie about it.
+      final report = buildAssignmentTimeReport(
+        range: _thisWeek,
+        plannedSlices: const [],
+        nodes: [
+          Node(
+            id: 'g1',
+            title: 'Lift',
+            createdAt: _monday,
+            effort: const EffortFacet(targetMinutes: 180),
+            actualStart: dayOn(1, 7),
+            actualEnd: dayOn(1, 8),
+          ),
+        ],
+      );
+      expect(report.trackedMinutes, 60);
+      // It is not an assignment, so it never appears in the per-type list.
+      expect(report.byType, isEmpty);
+      expect(report.byClass.single.label, 'No class');
+    });
+
     test('a lecture block with no homework link counts as class time', () {
       final report = buildAssignmentTimeReport(
         range: _thisWeek,

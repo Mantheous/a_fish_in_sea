@@ -30,7 +30,7 @@ Node worked({
 }
 
 void main() {
-  const _dayMinutes = 24 * 60;
+  const dayMinutes = 24 * 60;
 
   group('collectEffortSamples', () {
     test('reads a recorded homework session', () {
@@ -177,7 +177,7 @@ void main() {
       // away from it.
       final start = index.single.preferredStartMinute!;
       final away = (start - (23 * 60 + 40)).abs();
-      final circular = away > _dayMinutes / 2 ? _dayMinutes - away : away;
+      final circular = away > dayMinutes / 2 ? dayMinutes - away : away;
       expect(circular, lessThanOrEqualTo(20));
       expect(describeTimeOfDay(start), 'around 12 AM');
     });

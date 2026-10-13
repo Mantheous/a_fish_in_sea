@@ -120,8 +120,13 @@ class _StatsBodyState extends State<_StatsBody> {
     // not always the same week as the selected range.
     final weekStats = [
       for (final d in _weekDays)
-        _statsFor(d, tracking: tracking, calendar: calendar, feeds: feeds,
-            cache: sliceCache),
+        _statsFor(
+          d,
+          tracking: tracking,
+          calendar: calendar,
+          feeds: feeds,
+          cache: sliceCache,
+        ),
     ];
     final todayStats = weekStats[_day.weekday - 1];
     final weekAttended = weekStats.fold<int>(0, (sum, s) => sum + s.attendedMin);

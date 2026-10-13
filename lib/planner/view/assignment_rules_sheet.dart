@@ -10,6 +10,7 @@ import '../bloc/feed_cubit.dart';
 import '../model/assignment_estimate.dart';
 import '../model/assignment_rule.dart';
 import '../model/assignment_template.dart';
+import '../model/feed.dart';
 
 /// Repeating-assignment rules, opened from the ⋮ menu on the Tasks page.
 ///
@@ -39,7 +40,11 @@ class _AssignmentRulesSheet extends StatelessWidget {
     final rulesCubit = context.watch<AssignmentRulesCubit>();
     final rules = rulesCubit.state;
     final nodes = context.watch<NodeCubit>().state;
-    final feeds = context.watch<FeedCubit>().state;
+    // Feeds are optional (the sheet opens from anywhere).
+    var feeds = const <Feed>[];
+    try {
+      feeds = context.watch<FeedCubit>().state;
+    } catch (_) {}
     final feedNames = {for (final f in feeds) f.id: f.name};
 
     final samples = <TemplateSample>[
