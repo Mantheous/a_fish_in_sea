@@ -26,22 +26,43 @@ fi
 # A previous run may have created the local branch but lost its worktree
 # (then every relaunch died in `worktree add -b`, which refuses an existing
 # branch name). Recover instead of crashing: resume a branch that holds
-# unique work, recreate one that is empty.
+# unique work, recreate one that is empty. A branch already checked out in
+# another worktree is resumed in place — but only when that worktree is
+# provably loop-owned (it holds .agent-build.log); a foreign tree is left
+# alone for a human instead of being contaminated.
+RESUME_IN_PLACE=0
 if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
   IN_USE="$(git worktree list --porcelain | awk -v b="$BRANCH" 'BEGIN{dir=""} /^worktree /{dir=$2} $0=="branch refs/heads/"b {print dir; exit}')"
   if [ -n "${IN_USE:-}" ]; then
-    echo "[builder] #$N branch $BRANCH is already checked out in $IN_USE — skipping"
-    exit 0
-  fi
-  if [ -z "$(git log --oneline "origin/main..$BRANCH" 2>/dev/null)" ]; then
+    if [ -f "$IN_USE/.agent-build.log" ]; then
+      echo "[builder] #$N resuming previous builder work in $IN_USE"
+      WT="$IN_USE"
+      RESUME_IN_PLACE=1
+    else
+      echo "[builder] #$N branch $BRANCH is checked out in $IN_USE (not a loop worktree) — leaving it alone, needs a human"
+      exit 1
+    fi
+  elif [ -z "$(git log --oneline "origin/main..$BRANCH" 2>/dev/null)" ]; then
     echo "[builder] #$N local branch $BRANCH is empty (nothing past origin/main) — recreating from origin/main"
+    if [ -e "$WT" ]; then
+      echo "[builder] #$N worktree path $WT already exists — skipping (remove it to retry)"
+      exit 1
+    fi
     git branch -D "$BRANCH"
     git worktree add "$WT" -b "$BRANCH" origin/main
   else
     echo "[builder] #$N resuming local branch $BRANCH with unpushed work"
+    if [ -e "$WT" ]; then
+      echo "[builder] #$N worktree path $WT already exists — skipping (remove it to retry)"
+      exit 1
+    fi
     git worktree add "$WT" "$BRANCH"
   fi
 else
+  if [ -e "$WT" ]; then
+    echo "[builder] #$N worktree path $WT already exists — skipping (remove it to retry)"
+    exit 1
+  fi
   git worktree add "$WT" -b "$BRANCH" origin/main
 fi
 if [ ! -d "$WT" ]; then
@@ -72,6 +93,9 @@ Rules:
 10. If the gates fail and you cannot fix within reason, push the branch anyway and report FAIL status in the PR body.
 A separate reviewer agent will read your diff against the plan — write the PR body for a skeptical reader.
 Report at the end: PR_URL=<url or NONE> STATUS=<ready|failed>."
+if [ "$RESUME_IN_PLACE" = "1" ] && [ -f "$WT/.agent-build.log" ]; then
+  mv "$WT/.agent-build.log" "$WT/.agent-build-prev.log"
+fi
 if opencode run --auto --title "builder-#$N" "$PROMPT" >"$WT/.agent-build.log" 2>&1; then
   echo "[builder] #$N opencode run finished"
 else
