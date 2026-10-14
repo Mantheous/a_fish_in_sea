@@ -65,7 +65,7 @@ tree_dirty() {
 
 # --- 1. issues resolved by merged PRs -------------------------------------
 MERGED_JSON="$(gh pr list --state merged --limit 50 \
-  --json number,title,headRefName,baseRefName,body,url)"
+  --json number,title,headRefName,baseRefName,body,url 2>/dev/null || echo '[]')"
 CANDIDATES="$(echo "$MERGED_JSON" | python3 -c "
 import json, re, sys
 prs = json.load(sys.stdin)
@@ -103,8 +103,13 @@ else
 fi
 
 # --- 2a. remote agent branches --------------------------------------------
-REMOTE_BRANCHES="$(git ls-remote --heads origin 'agent/*' \
-  | awk '{print $2}' | sed 's|refs/heads/||')"
+# NOTE: match both naming shapes. The loop's own glob 'agent/*' misses the
+# no-slash names (agent-24-scheduled-assignment-disappears,
+# agent-task-conflict-granularity, ...) — those branches were invisible to
+# cleanup AND to the no-PR report, which is how a finished feature sat
+# unmerged on origin for two days with zero pings.
+REMOTE_BRANCHES="$(git ls-remote --heads origin 'agent/*' 'agent-*' 2>/dev/null \
+  | awk '{print $2}' | sed 's|refs/heads/||' | sort -u)"
 if [ -n "$REMOTE_BRANCHES" ]; then
   while read -r RB; do
     [ -z "$RB" ] && continue
@@ -122,7 +127,20 @@ if [ -n "$REMOTE_BRANCHES" ]; then
       if [ -z "$(git log --oneline "origin/main..origin/$RB" 2>/dev/null | head -n 3)" ]; then
         echo "[close] remote branch $RB is empty with no PR — leaving it (its issue may still be open; the builder reuses it)"
       else
-        note "remote branch $RB has NO PR and unmerged work — needs a human (open a PR or delete it)"
+        # Report ONCE per branch per day. Re-pinging every 15 minutes read
+        # as "the loop expects me to open the PRs myself" and trained the
+        # human to ignore the channel — the opposite of what an escalation
+        # is for. build.sh now auto-opens the PR for approved issues; this
+        # only fires for branches the dispatcher can't handle.
+        REPORTED_DIR="/tmp/opencode/agent-loop-reported"
+        mkdir -p "$REPORTED_DIR"
+        KEY="$REPORTED_DIR/$(echo "$RB" | tr '/' '_').no-pr"
+        if [ -f "$KEY" ] && [ $(( $(date +%s) - $(stat -c %Y "$KEY") )) -lt 86400 ]; then
+          echo "[close] remote branch $RB still needs a PR (last ping <24h ago) — not repeating"
+        else
+          note "remote branch $RB has NO PR and unmerged work — needs a human (open a PR or delete it)"
+          touch "$KEY"
+        fi
       fi
     fi
   done <<< "$REMOTE_BRANCHES"

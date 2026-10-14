@@ -104,6 +104,15 @@ fi
 PR_URL="$(grep -m1 -o 'https://github.com/[^ ]*/pull/[0-9]*' "$WT/.agent-build.log" || true)"
 [ -z "$PR_URL" ] && PR_URL="$(gh pr list --head "$BRANCH" --json url --jq '.[0].url // empty' || true)"
 [ -z "$PR_URL" ] && PR_URL="NONE (check $WT/.agent-build.log)"
+# Outcome stamp for the dispatcher (build.sh): a run that produced no PR is
+# re-launched only after AGENT_BUILDER_COOLDOWN_S, so a single model-rate-
+# limited death cannot become a 15-minute relaunch storm.
+mkdir -p /tmp/opencode/agent-loop-cd
+if [[ "$PR_URL" == NONE* ]]; then
+  date +%s > "/tmp/opencode/agent-loop-cd/$N"
+else
+  rm -f "/tmp/opencode/agent-loop-cd/$N"
+fi
 "$DIR/tg.sh" "🔨 Builder finished #$N: $TITLE
 PR: $PR_URL
 $URL" || true
