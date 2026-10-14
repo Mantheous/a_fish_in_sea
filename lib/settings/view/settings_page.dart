@@ -58,8 +58,8 @@ class _SettingsPageState extends State<SettingsPage> {
             subtitle: 'Canvas and Learning Suite feeds for your courses.',
             child: FeedManagerBody(
               kinds: {FeedKind.canvas, FeedKind.learningSuite},
-              helpText: 'Canvas: one link covers all classes (Canvas web → '
-                  'Calendar → Calendar Feed) — courses are split '
+              helpText: 'Canvas: one link covers all classes (Canvas web > '
+                  'Calendar > Calendar Feed) — courses are split '
                   'automatically. Learning Suite: add each class separately.',
               itemNoun: 'class',
               showGoogleButton: false,

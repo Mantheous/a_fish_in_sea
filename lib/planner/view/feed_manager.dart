@@ -129,7 +129,7 @@ class FeedManagerBody extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
           child: Text(
             helpText ??
-                'Canvas: one link covers all classes (Canvas web → Calendar → '
+                'Canvas: one link covers all classes (Canvas web > Calendar > '
                     'Calendar Feed) — courses are split automatically. Learning '
                     'Suite: add each class separately. Google calendars: use the '
                     'Google button below.',
@@ -533,8 +533,8 @@ class _FeedEditorDialogState extends State<_FeedEditorDialog> {
                 controller: _url,
                 decoration: const InputDecoration(
                   labelText: 'iCal link',
-                  helperText: 'Canvas: one link for all classes (Calendar → '
-                      'Calendar Feed). Learning Suite: course → Schedule → '
+                  helperText: 'Canvas: one link for all classes (Calendar > '
+                      'Calendar Feed). Learning Suite: course > Schedule > '
                       'Get iCalendar Feed.',
                   border: OutlineInputBorder(),
                 ),

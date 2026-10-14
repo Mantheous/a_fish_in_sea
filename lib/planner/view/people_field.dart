@@ -175,7 +175,7 @@ class _PeopleFieldState extends State<PeopleField> {
         else if (_notConnected)
           Text(
             'Connect Google to pick from your contacts '
-            '(Classes & calendars → Google).',
+            '(Classes & calendars > Google).',
             style: theme.textTheme.bodySmall,
           )
         else if (_needsReconnect)
