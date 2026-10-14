@@ -68,6 +68,14 @@ Read-only. Follow your agent instructions exactly."
   rm -f "$OUT_FILE.err"
   AUDIT="$(cat "$OUT_FILE"; rm -f "$OUT_FILE")"
   VERDICT="$(echo "$AUDIT" | grep -m1 '^Verdict:' || true)"
+  # Empty/template-placeholder verdict = failed audit run, never a pass
+  # (rate-limited models echo the prompt template back).
+  if [ -z "$VERDICT" ] || echo "$VERDICT" | grep -qF '<pass | changes-requested>'; then
+    echo "[sec-guard] PR #$N audit produced no usable verdict — retried next poll, nothing labeled"
+    "$DIR/tg.sh" "⚠️ Security guardian audit for PR #$N produced no verdict (failed run) — retrying next poll:
+$(gh pr view "$N" --json url --jq .url 2>/dev/null || true)" || true
+    continue
+  fi
   if ! gh pr comment "$N" --body "$AUDIT
 
 $GUARD_MARKER sha=$SHA" >/dev/null; then
@@ -144,6 +152,13 @@ if ! opencode run --agent security-guardian --title "sec-guard-$DESC" \
 fi
 cp /tmp/opencode/sec-guard-audit.log "$REPORT"
 VERDICT="$(grep -m1 '^Verdict:' "$REPORT" || true)"
+# No usable verdict = failed audit run (template echo). Not safe, not
+# blocked: re-audited next poll.
+if [ -z "$VERDICT" ] || echo "$VERDICT" | grep -qF '<pass | changes-requested>'; then
+  echo "[sec-guard] preflight audit for $DESC produced no usable verdict — not marking safe; retried next poll"
+  "$DIR/tg.sh" "⚠️ Security guardian preflight for $DESC produced no verdict (failed run) — not marking safe; retrying next poll" || true
+  exit 0
+fi
 if echo "$VERDICT" | grep -qi '^Verdict: block'; then
   echo "$DESC" > "$BLOCK_MARKER"
   echo "[sec-guard] BLOCKED $DESC — $VERDICT"
