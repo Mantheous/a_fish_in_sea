@@ -38,9 +38,11 @@ COUNT="$(echo "$PRS" | python3 -c 'import json,sys; print(len(json.load(sys.stdi
 echo "[review] open PRs: $COUNT"
 [ "$COUNT" = "0" ] && exit 0
 
-# Serialized model quota: one opencode run at a time, builders first.
-if [ "$(tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^(agent-[0-9]|rework-[0-9])' || true)" != "0" ]; then
-  echo "[review] a builder/rework session is running — deferring review to the next poll"
+# Serialized model quota: allow at most 2 loop runs concurrently (one
+# builder + this reviewer). The old death spiral was 9+ runs at once.
+RUNNING="$(tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^(agent-[0-9]|rework-[0-9])' || true)"
+if [ "${RUNNING:-0}" -ge 2 ]; then
+  echo "[review] $RUNNING builder/rework sessions already running — deferring review to the next poll"
   exit 0
 fi
 
