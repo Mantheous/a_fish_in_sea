@@ -26,7 +26,11 @@ class MockStorage extends Mock implements Storage {}
 class MockGoogleService extends Mock implements GoogleCalendarService {}
 
 /// A monday-anchored set of fixtures so the "this week" range is stable.
-final _monday = DateTime.now().subtract(
+final _monday = DateTime(
+  DateTime.now().year,
+  DateTime.now().month,
+  DateTime.now().day,
+).subtract(
   Duration(days: DateTime.now().weekday - 1),
 );
 
