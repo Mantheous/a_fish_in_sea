@@ -34,6 +34,20 @@ def anki_api_key() -> str:
     return os.getenv("ANKI_CONNECT_API_KEY", "").strip()
 
 
+def _display_base() -> str:
+    """Scheme + host + port only: ANKI_CONNECT_URL is operator config and
+    must never be echoed back to clients (it could carry credentials)."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(anki_base())
+        host = parts.hostname or "anki"
+        port = f":{parts.port}" if parts.port else ""
+        return f"{parts.scheme or 'http'}://{host}{port}"
+    except ValueError:
+        return "the Anki server"
+
+
 async def invoke(action: str, params: dict) -> object:
     """Forward one AnkiConnect call; return the `result` field.
 
@@ -51,14 +65,14 @@ async def invoke(action: str, params: dict) -> object:
         raise AnkiUpstreamError(f"Anki is unreachable: {e}") from e
     if resp.status_code != 200:
         raise AnkiUpstreamError(
-            f"Anki answered HTTP {resp.status_code} — is {anki_base()} "
+            f"Anki answered HTTP {resp.status_code} — is {_display_base()} "
             "really AnkiConnect?"
         )
     try:
         body = resp.json()
     except ValueError:
         raise AnkiUpstreamError(
-            f"Anki answered with something that is not JSON — is {anki_base()} "
+            f"Anki answered with something that is not JSON — is {_display_base()} "
             "really AnkiConnect?"
         ) from None
     if not isinstance(body, dict):

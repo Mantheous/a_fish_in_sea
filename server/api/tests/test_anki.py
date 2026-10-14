@@ -138,3 +138,36 @@ def test_upstream_failure_is_502(client: TestClient, monkeypatch):
     r = client.post("/api/anki/invoke", json={"action": "deckNames"}, headers=h)
     assert r.status_code == 502, r.text
     assert "unreachable" in r.json()["detail"]
+
+
+def test_upstream_url_is_redacted(client: TestClient, monkeypatch):
+    h = _register(client, "a8@example.com")
+    monkeypatch.setenv(
+        "ANKI_CONNECT_URL", "http://admin:s3cret@anki.internal:8765/api"
+    )
+
+    class FakeResp:
+        status_code = 500
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeResp()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    r = client.post("/api/anki/invoke", json={"action": "deckNames"}, headers=h)
+    assert r.status_code == 502, r.text
+    detail = r.json()["detail"]
+    assert "s3cret" not in detail
+    assert "admin" not in detail
+    assert "anki.internal" in detail
