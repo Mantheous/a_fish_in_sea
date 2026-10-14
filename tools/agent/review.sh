@@ -9,6 +9,15 @@
 # tracked by <!-- agent-rework --> comments) in their existing worktree.
 # After 2 rounds the verdict stands and a human is pinged. The reviewer
 # NEVER merges — merging stays human.
+#
+# Rate-limit hardening (2026-10-13): skip review while a builder session is
+# alive. Builders are serialized to one at a time (build.sh); stacking a
+# second opencode run on top is how the old quota death spiral started. The
+# PR is reviewed on a later poll instead.
+#
+# Also: gh fetches below tolerate failure (`|| true` / default empty) — one
+# GraphQL hiccup used to kill the entire poll mid-loop under `set -e`,
+# taking review/deploy/ux-walk down with it.
 set -euo pipefail
 REPO="$HOME/Repos/a_fish_in_sea"
 cd "$REPO"
@@ -24,10 +33,16 @@ gh label create "$PASS_LABEL" --color "0E8A16" \
 gh label create "$FAIL_LABEL" --color "D93F0B" \
   --description "Reviewer: changes requested, see verdict comment" >/dev/null 2>&1 || true
 
-PRS="$(gh pr list --state open --limit 20 --json number,headRefName,url,title)"
+PRS="$(gh pr list --state open --limit 20 --json number,headRefName,url,title 2>/dev/null || echo '[]')"
 COUNT="$(echo "$PRS" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
 echo "[review] open PRs: $COUNT"
 [ "$COUNT" = "0" ] && exit 0
+
+# Serialized model quota: one opencode run at a time, builders first.
+if [ "$(tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^(agent-[0-9]|rework-[0-9])' || true)" != "0" ]; then
+  echo "[review] a builder/rework session is running — deferring review to the next poll"
+  exit 0
+fi
 
 echo "$PRS" | python3 -c 'import json,sys; [print(str(p["number"]) + "|" + p["headRefName"]) for p in json.load(sys.stdin)]' | while read -r LINE; do
   N="${LINE%%|*}"
@@ -36,7 +51,7 @@ echo "$PRS" | python3 -c 'import json,sys; [print(str(p["number"]) + "|" + p["he
     agent/*) ;;
     *) echo "[review] #$N ($BRANCH) not an agent branch — skipping"; continue ;;
   esac
-  LABELS="$(gh pr view "$N" --json labels --jq '.labels[].name')"
+  LABELS="$(gh pr view "$N" --json labels --jq '.labels[].name' 2>/dev/null || true)"
   if echo "$LABELS" | grep -qx "$PASS_LABEL"; then
     echo "[review] #$N already passed — skipping"
     continue
