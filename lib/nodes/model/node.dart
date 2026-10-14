@@ -513,6 +513,11 @@ class Node extends Equatable {
   /// false, so every payload written before it existed loads as bounded.
   final bool isUnbounded;
 
+  /// Whether this goal is part of the user-curated short list shown on the
+  /// time-tracking card. Additive flag, defaults to true so existing goals
+  /// stay tracked and old payloads load untouched.
+  final bool isTracked;
+
   final ScheduleFacet? schedule;
   final MoneyFacet? money;
   final EffortFacet? effort;
@@ -549,6 +554,7 @@ class Node extends Equatable {
     this.completedAt,
     required this.createdAt,
     this.isUnbounded = false,
+    this.isTracked = true,
     this.schedule,
     this.money,
     this.effort,
@@ -626,6 +632,7 @@ class Node extends Equatable {
     bool clearCompletedAt = false,
     DateTime? createdAt,
     bool? isUnbounded,
+    bool? isTracked,
     ScheduleFacet? schedule,
     bool clearSchedule = false,
     MoneyFacet? money,
@@ -669,6 +676,7 @@ class Node extends Equatable {
             clearCompletedAt ? null : (completedAt ?? this.completedAt),
         createdAt: createdAt ?? this.createdAt,
         isUnbounded: isUnbounded ?? this.isUnbounded,
+        isTracked: isTracked ?? this.isTracked,
         schedule: clearSchedule ? null : (schedule ?? this.schedule),
         money: clearMoney ? null : (money ?? this.money),
         effort: clearEffort ? null : (effort ?? this.effort),
@@ -733,6 +741,11 @@ class Node extends Equatable {
       // coercion also survives wrong-typed values: a corrupt flag reads
       // as bounded instead of dropping the whole node.
       isUnbounded: json['isUnbounded'] == true,
+      isTracked: () {
+        final raw = json['isTracked'] ?? json['tracked'];
+        if (raw == null) return true;
+        return raw == true;
+      }(),
       schedule: json['schedule'] is Map
           ? _facetOrNull(
               () => ScheduleFacet.fromJson(
@@ -782,6 +795,8 @@ class Node extends Equatable {
         'completedAt': completedAt?.toIso8601String(),
         'createdAt': createdAt.toIso8601String(),
         'isUnbounded': isUnbounded,
+        'isTracked': isTracked,
+        'tracked': isTracked,
         'schedule': schedule?.toJson(),
         'money': money?.toJson(),
         'effort': effort?.toJson(),
@@ -811,6 +826,7 @@ class Node extends Equatable {
         completedAt,
         createdAt,
         isUnbounded,
+        isTracked,
         schedule,
         money,
         effort,
