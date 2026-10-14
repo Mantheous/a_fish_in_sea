@@ -50,7 +50,10 @@ echo "$PRS" | python3 -c 'import json,sys; [print(str(p["number"]) + "|" + p["he
   N="${LINE%%|*}"
   BRANCH="${LINE#*|}"
   case "$BRANCH" in
-    agent/*) ;;
+    # Loop/builders use agent/<n>-<slug>; ad-hoc and older loop work use
+    # agent-<slug> with no slash. Match both shapes or those PRs are never
+    # reviewed (agent-task-conflict-granularity hit exactly that).
+    agent/*|agent-*) ;;
     *) echo "[review] #$N ($BRANCH) not an agent branch — skipping"; continue ;;
   esac
   LABELS="$(gh pr view "$N" --json labels --jq '.labels[].name' 2>/dev/null || true)"

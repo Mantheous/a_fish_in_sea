@@ -19,50 +19,39 @@ if git ls-remote --heads origin "$BRANCH" | grep -q .; then
   echo "[builder] #$N branch $BRANCH already exists — skipping"
   exit 0
 fi
-if [ -e "$WT" ]; then
-  echo "[builder] #$N worktree path $WT already exists — skipping (remove it to retry)"
-  exit 1
-fi
-# A previous run may have created the local branch but lost its worktree
-# (then every relaunch died in `worktree add -b`, which refuses an existing
-# branch name). Recover instead of crashing: resume a branch that holds
-# unique work, recreate one that is empty. A branch already checked out in
-# another worktree is resumed in place — but only when that worktree is
-# provably loop-owned (it holds .agent-build.log); a foreign tree is left
-# alone for a human instead of being contaminated.
+# --- recover or create the worktree ---------------------------------------
+# A previous run may have left a worktree + branch behind (its opencode run
+# died on the model rate limit). Recovery order matters: the
+# worktree-already-exists check used to bail out with exit 1 BEFORE this
+# resume logic, so every relaunch died without ever starting opencode —
+# that is how the approved issues #8/#9/#14-#19/#30 sat for two days while
+# the poll relaunched them every 15 minutes.
 RESUME_IN_PLACE=0
-if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+if [ -e "$WT" ]; then
+  # Worktree present: resume in it when our branch is checked out there AND
+  # the tree is provably loop-owned (it holds its build log), keeping any
+  # uncommitted WIP. Anything else is left for a human.
   IN_USE="$(git worktree list --porcelain | awk -v b="$BRANCH" 'BEGIN{dir=""} /^worktree /{dir=$2} $0=="branch refs/heads/"b {print dir; exit}')"
-  if [ -n "${IN_USE:-}" ]; then
-    if [ -f "$IN_USE/.agent-build.log" ]; then
-      echo "[builder] #$N resuming previous builder work in $IN_USE"
-      WT="$IN_USE"
-      RESUME_IN_PLACE=1
-    else
-      echo "[builder] #$N branch $BRANCH is checked out in $IN_USE (not a loop worktree) — leaving it alone, needs a human"
-      exit 1
-    fi
-  elif [ -z "$(git log --oneline "origin/main..$BRANCH" 2>/dev/null)" ]; then
+  if [ "${IN_USE:-}" = "$WT" ] && { [ -f "$WT/.agent-build.log" ] || [ -f "$WT/.agent-build-prev.log" ]; }; then
+    echo "[builder] #$N resuming previous builder work in $WT (WIP uncommitted changes are kept)"
+    RESUME_IN_PLACE=1
+  else
+    echo "[builder] #$N worktree path $WT already exists (branch checked out there: ${IN_USE:-none}) — skipping, needs a human (remove it to retry)"
+    exit 1
+  fi
+elif git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+  # Local branch exists without its worktree. `worktree add -b` refuses an
+  # existing branch name, so reuse a branch that holds unique work and
+  # recreate one that is empty.
+  if [ -z "$(git log --oneline "origin/main..$BRANCH" 2>/dev/null)" ]; then
     echo "[builder] #$N local branch $BRANCH is empty (nothing past origin/main) — recreating from origin/main"
-    if [ -e "$WT" ]; then
-      echo "[builder] #$N worktree path $WT already exists — skipping (remove it to retry)"
-      exit 1
-    fi
     git branch -D "$BRANCH"
     git worktree add "$WT" -b "$BRANCH" origin/main
   else
     echo "[builder] #$N resuming local branch $BRANCH with unpushed work"
-    if [ -e "$WT" ]; then
-      echo "[builder] #$N worktree path $WT already exists — skipping (remove it to retry)"
-      exit 1
-    fi
     git worktree add "$WT" "$BRANCH"
   fi
 else
-  if [ -e "$WT" ]; then
-    echo "[builder] #$N worktree path $WT already exists — skipping (remove it to retry)"
-    exit 1
-  fi
   git worktree add "$WT" -b "$BRANCH" origin/main
 fi
 if [ ! -d "$WT" ]; then
