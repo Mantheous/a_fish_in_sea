@@ -84,15 +84,15 @@ $GUARD_MARKER sha=$SHA" >/dev/null; then
 $(gh pr view "$N" --json url --jq .url 2>/dev/null || true)" || true
     continue
   fi
-  gh pr edit "$N" --remove-label "$PASS_LABEL" --remove-label "$FAIL_LABEL" >/dev/null 2>&1 || true
+  "$DIR/label.sh" "$N" remove "$PASS_LABEL" "$FAIL_LABEL" || true
   if echo "$VERDICT" | grep -qi '^Verdict: block'; then
-    gh pr edit "$N" --add-label "$FAIL_LABEL" >/dev/null 2>&1 || true
+    "$DIR/label.sh" "$N" add "$FAIL_LABEL" || true
     echo "[data-guard] PR #$N BLOCKED — $VERDICT"
     "$DIR/tg.sh" "🛑 Data guardian blocked PR #$N: $VERDICT
 $(gh pr view "$N" --json url --jq .url)
 Audit comment on the PR." || true
   else
-    gh pr edit "$N" --add-label "$PASS_LABEL" >/dev/null 2>&1 || true
+    "$DIR/label.sh" "$N" add "$PASS_LABEL" || true
     echo "[data-guard] PR #$N safe — $VERDICT"
   fi
 done
