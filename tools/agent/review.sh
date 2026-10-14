@@ -132,13 +132,13 @@ $(gh pr view "$N" --json url --jq .url 2>/dev/null || true)" || true
     continue
   fi
   if [ "$VERDICT" = "changes-requested" ]; then
-    gh pr edit "$N" --add-label "$FAIL_LABEL" >/dev/null 2>&1 || true
+    "$DIR/label.sh" "$N" add "$FAIL_LABEL" || echo "[review] #$N could not label $FAIL_LABEL (see label.sh) — verdict comment still posted"
     echo "[review] #$N changes requested"
     "$DIR/tg.sh" "🧑‍⚖️ PR #$N review: changes requested
 $(echo "$REVIEW" | grep -m1 '^Plan fidelity:')
 $(gh pr view "$N" --json url --jq .url)" || true
   else
-    gh pr edit "$N" --add-label "$PASS_LABEL" >/dev/null 2>&1 || true
+    "$DIR/label.sh" "$N" add "$PASS_LABEL" || echo "[review] #$N could not label $PASS_LABEL"
     echo "[review] #$N passed"
   fi
 done
