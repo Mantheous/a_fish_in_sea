@@ -161,6 +161,18 @@ class SyncClient {
     return _decode(r);
   }
 
+  // ── Anki (via app server; works on web where direct AnkiConnect is
+  // unreachable, and on any signed-in native device) ───────────────────
+
+  /// One AnkiConnect-shaped call through POST /api/anki/invoke.
+  /// Returns the decoded `{"result": ...}` envelope.
+  Future<dynamic> ankiInvoke(
+    String action, [
+    Map<String, dynamic>? params,
+  ]) =>
+      _postAuthed(
+          '/api/anki/invoke', {'action': action, 'params': params ?? const {}});
+
   // ── Auth (no bearer needed) ──────────────────────────────────────────
 
   Future<Map<String, dynamic>> register(String email, String password) async {

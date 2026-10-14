@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 
 import 'package:a_fish_in_sea/anki/anki_connect.dart';
+import 'package:a_fish_in_sea/anki/anki_server.dart';
 import 'package:a_fish_in_sea/anki/anki_import.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
@@ -14,6 +15,7 @@ import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
 import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
+import 'package:a_fish_in_sea/sync/auth_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/task_assignee.dart';
 import 'package:a_fish_in_sea/planner/view/people_field.dart';
 
@@ -442,20 +444,19 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                 ),
               Row(
                 children: [
-                  if (!kIsWeb)
-                    TextButton.icon(
-                      onPressed: _ankiSyncing
-                          ? null
-                          : () => _syncAnki(context),
-                      icon: _ankiSyncing
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2))
-                          : const Icon(Icons.sync, size: 16),
-                      label: const Text('Sync from Anki'),
-                    ),
+                  TextButton.icon(
+                    onPressed: _ankiSyncing
+                        ? null
+                        : () => _syncAnki(context),
+                    icon: _ankiSyncing
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2))
+                        : const Icon(Icons.sync, size: 16),
+                    label: const Text('Sync from Anki'),
+                  ),
                   TextButton.icon(
                     onPressed: () => _importAnki(context),
                     icon: const Icon(Icons.upload_outlined, size: 16),
@@ -465,9 +466,9 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
               ),
               if (kIsWeb)
                 Text(
-                  'This browser cannot reach Anki on your computer — '
-                  'enter the count by hand, paste stats, or sync from '
-                  'the desktop app.',
+                  'Sync from Anki goes through the app server here — '
+                  'sign in first. Manual entry and pasted stats still '
+                  'work offline.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
             ],
@@ -868,7 +869,8 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   }
 
   /// Pulls today's review count from AnkiConnect into the manual field.
-  /// Native only — the button is hidden on web (see build).
+  /// Native builds call AnkiConnect directly; the web build goes through
+  /// the app server (browsers cannot reach AnkiConnect themselves).
   Future<void> _syncAnki(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
     String host = '';
@@ -877,10 +879,23 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     } catch (_) {}
     final deck = _deck.text.trim();
     setState(() => _ankiSyncing = true);
-    final client = AnkiConnectClient(host: host, httpClient: http.Client());
     try {
-      final count =
-          await client.reviewsToday(deck: deck.isEmpty ? null : deck);
+      final int count;
+      if (kIsWeb) {
+        count = await ankiServerReviewsToday(
+          context.read<AuthCubit>().syncClient,
+          deck: deck.isEmpty ? null : deck,
+        );
+      } else {
+        final client =
+            AnkiConnectClient(host: host, httpClient: http.Client());
+        try {
+          count =
+              await client.reviewsToday(deck: deck.isEmpty ? null : deck);
+        } finally {
+          client.close();
+        }
+      }
       if (!context.mounted) return;
       setState(() {
         _manualReviews.text = count.toString();
@@ -889,11 +904,13 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       messenger.showSnackBar(
         SnackBar(content: Text('Anki: $count card${count == 1 ? '' : 's'} reviewed today')),
       );
+    } on AnkiServerException catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } on AnkiException catch (e) {
       if (!context.mounted) return;
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } finally {
-      client.close();
       if (context.mounted) setState(() => _ankiSyncing = false);
     }
   }

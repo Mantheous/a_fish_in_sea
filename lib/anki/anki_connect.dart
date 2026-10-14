@@ -114,6 +114,15 @@ class AnkiConnectClient {
     return [for (final d in result) if (d is String) d];
   }
 
+  /// Builds the `findCards` query for cards answered in the last day,
+  /// optionally scoped to [deck]. Shared with the server proxy path so
+  /// deck-scoped and total counts mean the same thing everywhere.
+  static String scopedQuery(String? deck) {
+    final d = deck?.trim() ?? '';
+    final scope = d.isEmpty ? '' : 'deck:"${d.replaceAll('"', '\\"')}" ';
+    return '${scope}rated:1';
+  }
+
   /// Distinct cards answered in the last day, optionally scoped to
   /// [deck]. Uses one `findCards` query either way so deck-scoped and
   /// total counts mean the same thing.
@@ -122,10 +131,8 @@ class AnkiConnectClient {
   /// once. Good enough for "review N cards" goals, and stated on the
   /// goal so nobody mistakes it for Anki's own review total.
   Future<int> reviewsToday({String? deck}) async {
-    final d = deck?.trim() ?? '';
-    final scope = d.isEmpty ? '' : 'deck:"${d.replaceAll('"', '\\"')}" ';
     final result = await invoke('findCards', {
-      'query': '${scope}rated:1',
+      'query': scopedQuery(deck),
     });
     if (result is! List) {
       throw AnkiException('Anki answered findCards in an unknown shape.');

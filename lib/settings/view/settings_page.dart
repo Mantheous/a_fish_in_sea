@@ -1,5 +1,6 @@
 import 'package:a_fish_in_sea/common/undo/undo_bar.dart';
 import 'package:a_fish_in_sea/anki/anki_connect.dart';
+import 'package:a_fish_in_sea/anki/anki_server.dart';
 import 'package:a_fish_in_sea/demo/demo_coordinator.dart';
 import 'package:a_fish_in_sea/demo/demo_mode.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
@@ -120,8 +121,9 @@ class _SettingsPageState extends State<SettingsPage> {
           const _SettingsSection(
             title: 'Anki',
             subtitle: 'Where memorization goals read review counts from. '
-                'Desktop Anki with the AnkiConnect add-on; browsers cannot '
-                'reach it, so the web build uses manual entry instead.',
+                'Native builds talk to desktop Anki with the AnkiConnect '
+                'add-on; browsers go through the app server instead — '
+                'sign in, then test below.',
             child: _AnkiSection(),
           ),
         ],
@@ -991,9 +993,9 @@ class _BankSection extends StatelessWidget {
   }
 }
 
-/// AnkiConnect endpoint (per-device) plus a connection test. On the web
-/// the test is hidden: browsers cannot reach a desktop AnkiConnect, so
-/// there is nothing to test — goals there use manual entry.
+/// AnkiConnect endpoint (per-device) plus a connection test. Native
+/// builds test the endpoint directly; the web build tests through the
+/// app server (browsers cannot reach AnkiConnect themselves).
 class _AnkiSection extends StatefulWidget {
   const _AnkiSection();
 
@@ -1026,20 +1028,36 @@ class _AnkiSectionState extends State<_AnkiSection> {
       _testing = true;
       _status = null;
     });
-    final client = AnkiConnectClient(host: host, httpClient: http.Client());
     try {
-      final decks = await client.deckNames();
+      final List<String> decks;
+      if (kIsWeb) {
+        // Browsers cannot reach AnkiConnect directly — same check,
+        // routed through the app server. Needs a signed-in account.
+        decks = await ankiServerDeckNames(
+            context.read<AuthCubit>().syncClient);
+      } else {
+        final client =
+            AnkiConnectClient(host: host, httpClient: http.Client());
+        try {
+          decks = await client.deckNames();
+        } finally {
+          client.close();
+        }
+      }
       if (!context.mounted) return;
       setState(() {
         _status = 'Connected — ${decks.length} deck'
             '${decks.length == 1 ? '' : 's'} found.';
       });
+    } on AnkiServerException catch (e) {
+      if (!context.mounted) return;
+      setState(() => _status = null);
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } on AnkiException catch (e) {
       if (!context.mounted) return;
       setState(() => _status = null);
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } finally {
-      client.close();
       if (context.mounted) setState(() => _testing = false);
     }
   }
@@ -1078,18 +1096,16 @@ class _AnkiSectionState extends State<_AnkiSection> {
               child: const Text('Save'),
             ),
             const SizedBox(width: 8),
-            if (!kIsWeb)
-              OutlinedButton.icon(
-                onPressed:
-                    _testing ? null : () => _test(context),
-                icon: _testing
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.link),
-                label: const Text('Test connection'),
-              ),
+            OutlinedButton.icon(
+              onPressed: _testing ? null : () => _test(context),
+              icon: _testing
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.link),
+              label: const Text('Test connection'),
+            ),
           ],
         ),
         if (_status != null) ...[
@@ -1099,9 +1115,9 @@ class _AnkiSectionState extends State<_AnkiSection> {
         if (kIsWeb) ...[
           const SizedBox(height: 4),
           Text(
-            'This browser cannot reach Anki on your computer — '
-            'memorization goals here use manual counts. Sync from the '
-            'desktop app instead.',
+            'This browser reaches Anki through the app server — '
+            'sign in, then Test connection. The address above is only '
+            'used by native apps.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
