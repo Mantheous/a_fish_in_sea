@@ -66,6 +66,16 @@ merges it. Read-only. Follow your agent instructions exactly."
   rm -f "$OUT_FILE.err"
   AUDIT="$(cat "$OUT_FILE"; rm -f "$OUT_FILE")"
   VERDICT="$(echo "$AUDIT" | grep -m1 '^Verdict:' || true)"
+  # An empty verdict, or one that is the prompt's own template placeholder,
+  # means the audit run produced nothing usable (a rate-limited model echoes
+  # the template back). That is a FAILED audit, never a pass — observed for
+  # real on 2026-10-13 when a placeholder verdict marked a revision "safe".
+  if [ -z "$VERDICT" ] || echo "$VERDICT" | grep -qF '<pass | changes-requested>'; then
+    echo "[data-guard] PR #$N audit produced no usable verdict — retried next poll, nothing labeled"
+    "$DIR/tg.sh" "⚠️ Data guardian audit for PR #$N produced no verdict (failed run) — retrying next poll:
+$(gh pr view "$N" --json url --jq .url 2>/dev/null || true)" || true
+    continue
+  fi
   if ! gh pr comment "$N" --body "$AUDIT
 
 $GUARD_MARKER sha=$SHA" >/dev/null; then
@@ -138,6 +148,14 @@ if ! opencode run --agent data-guardian --title "data-guard-$DESC" \
 fi
 cp /tmp/opencode/data-guard-audit.log "$REPORT"
 VERDICT="$(grep -m1 '^Verdict:' "$REPORT" || true)"
+# No usable verdict = failed audit (rate-limited run echoing the template).
+# Do not write the safe marker: the next poll re-audits. Do not block the
+# deploy either — a transient model failure must not hold shipping hostage.
+if [ -z "$VERDICT" ] || echo "$VERDICT" | grep -qF '<pass | changes-requested>'; then
+  echo "[data-guard] preflight audit for $DESC produced no usable verdict — not marking safe; retried next poll"
+  "$DIR/tg.sh" "⚠️ Data guardian preflight for $DESC produced no verdict (failed run) — not marking safe; retrying next poll" || true
+  exit 0
+fi
 if echo "$VERDICT" | grep -qi '^Verdict: block'; then
   echo "$DESC" > "$BLOCK_MARKER"
   echo "[data-guard] BLOCKED $DESC — $VERDICT"
