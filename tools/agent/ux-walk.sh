@@ -96,8 +96,11 @@ gh issue list --label ux-walk --state open --limit 10 --json number \
   | python3 -c 'import json,sys; [print(i["number"]) for i in json.load(sys.stdin)]' \
   | while read -r N; do
   [ -z "$N" ] && continue
-  gh issue comment "$N" --body "UX walk $STAMP done (trigger: $REASON). Report: \`$REPORT\`, screenshots in \`$OUT/\` on the loop host." >/dev/null
-  gh issue edit "$N" --remove-label ux-walk >/dev/null
+  if ! gh issue comment "$N" --body "UX walk $STAMP done (trigger: $REASON). Report: \`$REPORT\`, screenshots in \`$OUT/\` on the loop host." >/dev/null \
+      || ! gh issue edit "$N" --remove-label ux-walk >/dev/null; then
+    echo "[ux-walk] #$N could not consume the label (gh hiccup) — retried next walk"
+    continue
+  fi
   echo "[ux-walk] #$N labelled walk consumed"
 done
 

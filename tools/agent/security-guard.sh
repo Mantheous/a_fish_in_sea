@@ -68,18 +68,23 @@ Read-only. Follow your agent instructions exactly."
   rm -f "$OUT_FILE.err"
   AUDIT="$(cat "$OUT_FILE"; rm -f "$OUT_FILE")"
   VERDICT="$(echo "$AUDIT" | grep -m1 '^Verdict:' || true)"
-  gh pr comment "$N" --body "$AUDIT
+  if ! gh pr comment "$N" --body "$AUDIT
 
-$GUARD_MARKER sha=$SHA" >/dev/null
+$GUARD_MARKER sha=$SHA" >/dev/null; then
+    echo "[sec-guard] PR #$N audit comment failed (gh hiccup) — retried next poll"
+    "$DIR/tg.sh" "⚠️ Security guardian could not post the audit for PR #$N — retrying next poll:
+$(gh pr view "$N" --json url --jq .url 2>/dev/null || true)" || true
+    continue
+  fi
   gh pr edit "$N" --remove-label "$PASS_LABEL" --remove-label "$FAIL_LABEL" >/dev/null 2>&1 || true
   if echo "$VERDICT" | grep -qi '^Verdict: block'; then
-    gh pr edit "$N" --add-label "$FAIL_LABEL" >/dev/null
+    gh pr edit "$N" --add-label "$FAIL_LABEL" >/dev/null 2>&1 || true
     echo "[sec-guard] PR #$N BLOCKED — $VERDICT"
     "$DIR/tg.sh" "🛑 Security guardian blocked PR #$N: $VERDICT
 $(gh pr view "$N" --json url --jq .url)
 Audit comment on the PR." || true
   else
-    gh pr edit "$N" --add-label "$PASS_LABEL" >/dev/null
+    gh pr edit "$N" --add-label "$PASS_LABEL" >/dev/null 2>&1 || true
     echo "[sec-guard] PR #$N safe — $VERDICT"
   fi
 done

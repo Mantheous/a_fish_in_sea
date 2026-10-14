@@ -27,8 +27,10 @@ echo "$ISSUES_JSON" | python3 -c 'import json,sys; [print(i["number"]) for i in 
 
   if ! python3 -c "import json,sys; sys.exit(0 if '$AUTHOR' in json.load(open('$REPO/tools/testers.json'))['testers'] else 1)"; then
     echo "[triage] #$N (@$AUTHOR) not a verified tester — commenting and unlabelling"
-    gh issue comment "$N" --body "Not a verified tester (see \`tools/testers.json\`). This issue will not be picked up by the agent loop." >/dev/null
-    gh issue edit "$N" --remove-label agent-pending >/dev/null
+    if ! gh issue comment "$N" --body "Not a verified tester (see \`tools/testers.json\`). This issue will not be picked up by the agent loop." >/dev/null \
+        || ! gh issue edit "$N" --remove-label agent-pending >/dev/null; then
+      echo "[triage] #$N could not unlabel (gh hiccup) — retried next poll"
+    fi
     continue
   fi
 
@@ -81,7 +83,10 @@ Approve: comment \`approve\` (or \`agent approved\`) on this issue (builder pick
 Deny: comment \`deny <reason>\` (issue is closed).
 To question or correct the plan, just comment in-thread — the triage agent revises the plan on the next poll.
 $MARKER"
-    gh issue comment "$N" --body "$COMMENT" >/dev/null
+    if ! gh issue comment "$N" --body "$COMMENT" >/dev/null; then
+      echo "[triage] #$N plan comment failed (gh hiccup) — retried next poll"
+      continue
+    fi
     echo "[triage] #$N plan posted"
 
     SUMMARY="$(echo "$PLAN" | python3 -c "
@@ -188,10 +193,13 @@ Approve: comment \`approve\` when the latest plan looks right (builder picks it 
 Deny: comment \`deny <reason>\` (issue is closed).
 Further feedback in-thread will be revised again on the next poll.
 $MARKER"
-  gh issue comment "$N" --body "$REVCOMMENT" >/dev/null
-  echo "[triage] #$N revised plan posted"
-  "$DIR/tg.sh" "🔄 Triage plan #$N revised after human feedback: $TITLE
+  if ! gh issue comment "$N" --body "$REVCOMMENT" >/dev/null; then
+    echo "[triage] #$N revised plan comment failed (gh hiccup) — retried next poll"
+  else
+    echo "[triage] #$N revised plan posted"
+    "$DIR/tg.sh" "🔄 Triage plan #$N revised after human feedback: $TITLE
 $URL
 Comment \`approve\` when the latest plan looks right" || echo "[triage] #$N telegram ping failed (revision still posted)"
+  fi
 done
 echo "[triage] done"
