@@ -38,13 +38,13 @@ COUNT="$(echo "$PRS" | python3 -c 'import json,sys; print(len(json.load(sys.stdi
 echo "[review] open PRs: $COUNT"
 [ "$COUNT" = "0" ] && exit 0
 
-# Serialized model quota: allow at most 2 loop runs concurrently (one
-# builder + this reviewer). The old death spiral was 9+ runs at once.
-RUNNING="$(tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^(agent-[0-9]|rework-[0-9])' || true)"
-if [ "${RUNNING:-0}" -ge 2 ]; then
-  echo "[review] $RUNNING builder/rework sessions already running — deferring review to the next poll"
-  exit 0
-fi
+# Serialized model quota: the loop allows at most 2 concurrent opencode runs
+# (one builder + one reviewer). The death spiral was 9+ runs at once. This
+# check is per-PR: reviewing two open PRs must not stack two reviewers on
+# top of a running builder.
+loop_runs() {
+  tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^(agent-[0-9]|rework-[0-9])' || true
+}
 
 echo "$PRS" | python3 -c 'import json,sys; [print(str(p["number"]) + "|" + p["headRefName"]) for p in json.load(sys.stdin)]' | while read -r LINE; do
   N="${LINE%%|*}"
@@ -84,6 +84,13 @@ $(gh pr view "$N" --json url --jq .url)" || true
   fi
 
   # --- fresh review path ---
+  # Check the quota slot BEFORE spending a reviewer run: with two open PRs
+  # and a builder alive, the second PR waits for the next poll.
+  RUNNING="$(loop_runs)"
+  if [ "${RUNNING:-0}" -ge 2 ]; then
+    echo "[review] $RUNNING loop runs already active — leaving #$N for the next poll"
+    break
+  fi
   echo "[review] #$N reviewing diff vs plan..."
   PROMPT="You are the reviewer agent. READ-ONLY on code: do NOT modify, create or delete any files. Do NOT run builds or tests. Do NOT commit or push. You may only use gh to READ.
 1. Run: gh pr view $N --json number,title,body,comments and: gh pr diff $N
@@ -111,15 +118,24 @@ $REVIEW_MARKER"
   rm -f "$REVIEW_FILE.err"
   REVIEW="$(cat "$REVIEW_FILE"; rm -f "$REVIEW_FILE")"
   VERDICT="$(echo "$REVIEW" | grep -m1 '^Verdict:' | grep -o 'changes-requested' || echo pass)"
-  gh pr comment "$N" --body "$REVIEW" >/dev/null
+  # Each gh call below is guarded: a secondary rate limit or GraphQL
+  # deprecation hiccup must not kill the whole poll under `set -e` — it
+  # cost an entire review cycle on 2026-10-13 (poll died at `gh pr
+  # comment`, skipping data-guard/security-guard/deploy/ux-walk).
+  if ! gh pr comment "$N" --body "$REVIEW" >/dev/null 2>&1; then
+    echo "[review] #$N could not post the verdict comment — re-reviewing next poll"
+    "$DIR/tg.sh" "⚠️ Review verdict for PR #$N could not be posted — gh hiccup, re-reviewing next poll:
+$(gh pr view "$N" --json url --jq .url 2>/dev/null || true)" || true
+    continue
+  fi
   if [ "$VERDICT" = "changes-requested" ]; then
-    gh pr edit "$N" --add-label "$FAIL_LABEL" >/dev/null
+    gh pr edit "$N" --add-label "$FAIL_LABEL" >/dev/null 2>&1 || true
     echo "[review] #$N changes requested"
     "$DIR/tg.sh" "🧑‍⚖️ PR #$N review: changes requested
 $(echo "$REVIEW" | grep -m1 '^Plan fidelity:')
 $(gh pr view "$N" --json url --jq .url)" || true
   else
-    gh pr edit "$N" --add-label "$PASS_LABEL" >/dev/null
+    gh pr edit "$N" --add-label "$PASS_LABEL" >/dev/null 2>&1 || true
     echo "[review] #$N passed"
   fi
 done
