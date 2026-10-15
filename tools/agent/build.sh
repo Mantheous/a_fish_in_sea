@@ -2,15 +2,22 @@
 # Builder dispatcher: for each open agent-approved issue without a branch/PR,
 # launch a detached tmux session running builder-run.sh. Safe to re-run.
 #
-# Rate-limit hardening (2026-10-13): the loop's opencode model quota cannot
-# feed a dozen concurrent builder + reviewer runs. Nine builders launched in
-# one poll all died on "Rate limit exceeded" BEFORE reaching the commit /
-# push / PR gates, so approved issues sat for days with no PR anywhere and
-# the debris pings made it look like a human had to open the PRs himself.
-# The dispatcher now:
+# Rate-limit hardening (2026-10-13, revised 2026-10-15): the loop's opencode
+# model quota cannot feed a dozen concurrent builder + reviewer runs. Nine
+# builders launched in one poll all died on "Rate limit exceeded" BEFORE
+# reaching the commit / push / PR gates, so approved issues sat for days
+# with no PR anywhere and the debris pings made it look like a human had
+# to open the PRs himself. The dispatcher now:
 #   1. serializes builders (at most one agent-<N> session at a time),
-#   2. backs off an issue whose last run failed (AGENT_BUILDER_COOLDOWN_S,
-#      default 3h; stamp written by builder-run.sh), and
+#   2. backs off an issue whose last run ended without a PR: the stamp at
+#      /tmp/opencode/agent-loop-cd/<N> holds a retry-after ("not before")
+#      epoch written by builder-run.sh (~1h + jitter, rolled once at
+#      failure time; override the base with AGENT_BUILDER_COOLDOWN_S).
+#      Backing off (instead of relaunching every 15 min) is also what stops
+#      one poisoned issue from head-of-line blocking the whole queue — the
+#      loop moves on to the next issue in the same poll. Legacy stamps
+#      holding plain failure epochs (pre-2026-10-15 scheme) read as past
+#      times and simply mean "eligible now", and
 #   3. if a builder PUSHED its branch but died before `gh pr create`,
 #      opens the PR itself instead of stranding the branch.
 set -euo pipefail
@@ -48,15 +55,16 @@ gh issue list --label agent-approved --state open --limit 20 --json number,title
     break
   fi
 
-  # Backoff: a builder that ended without a PR (its opencode run hit the
-  # model rate limit mid-run) waits AGENT_BUILDER_COOLDOWN_S before the
-  # dispatcher relaunches it — relaunch storms are what starved the quota.
-  COOLDOWN_S="${AGENT_BUILDER_COOLDOWN_S:-10800}"
+  # Backoff: a builder run that ended without a PR (model rate limit at the
+  # finish line, instant-exit worktree conflict, ...) waits until the
+  # retry-after epoch builder-run.sh wrote — ~1h + jitter. While backed
+  # off, the loop moves on to the next issue (continue, not break).
   CD="$CD_DIR/$N"
   if [ -f "$CD" ]; then
-    AGE=$(( $(date +%s) - $(cat "$CD" 2>/dev/null || echo 0) ))
-    if [ "${AGE:-$COOLDOWN_S}" -lt "$COOLDOWN_S" ]; then
-      echo "[build] #$N last builder run failed $((AGE / 60))m ago — backing off $(((COOLDOWN_S - AGE) / 60))m"
+    NOTBEFORE="$(tr -cd '0-9' <"$CD" 2>/dev/null)"
+    NOW="$(date +%s)"
+    if [ -n "${NOTBEFORE:-}" ] && [ "$NOTBEFORE" -gt "$NOW" ]; then
+      echo "[build] #$N backing off $(((NOTBEFORE - NOW) / 60))m (retry after $(date -d "@$NOTBEFORE" '+%H:%M'))"
       continue
     fi
   fi

@@ -14,6 +14,23 @@ SLUG="$(echo "$TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g' | c
 BRANCH="agent/$N-$SLUG"
 WT="$HOME/Repos/worktrees/agent-$N-$SLUG"
 
+# Retry-stamp helper: any run that ends without a PR (or exits before
+# starting) writes a "not before" epoch for the dispatcher (build.sh), so
+# the issue is retried ~RETRY_BASE_S later instead of every 15 minutes.
+# The delay is rolled ONCE here — never per poll — so retries spread out
+# without re-rolling into a relaunch storm that starves the model quota.
+# Jitter is +/-25% of the base, capped at +/-15min. Override the base with
+# AGENT_BUILDER_COOLDOWN_S (seconds, default 3600).
+RETRY_BASE_S="${AGENT_BUILDER_COOLDOWN_S:-3600}"
+write_retry_stamp() {
+  local maxj=$(( RETRY_BASE_S / 4 ))
+  [ "$maxj" -gt 900 ] && maxj=900
+  local jit=0
+  [ "$maxj" -gt 0 ] && jit=$(( RANDOM % (2 * maxj + 1) - maxj ))
+  mkdir -p /tmp/opencode/agent-loop-cd
+  date +%s -d "@$(( $(date +%s) + RETRY_BASE_S + jit ))" >"/tmp/opencode/agent-loop-cd/$N"
+}
+
 git fetch origin --quiet
 if git ls-remote --heads origin "$BRANCH" | grep -q .; then
   echo "[builder] #$N branch $BRANCH already exists — skipping"
@@ -37,6 +54,18 @@ if [ -e "$WT" ]; then
     RESUME_IN_PLACE=1
   else
     echo "[builder] #$N worktree path $WT already exists (branch checked out there: ${IN_USE:-none}) — skipping, needs a human (remove it to retry)"
+    write_retry_stamp
+    # This path dies inside a detached tmux session, so without a ping the
+    # stall is invisible until someone reads the journal — ping at most
+    # once a day (same pattern as close.sh's no-PR report).
+    REPORTED_DIR="/tmp/opencode/agent-loop-reported"
+    mkdir -p "$REPORTED_DIR"
+    KEY="$REPORTED_DIR/builder-$N-conflict.no-pr"
+    if [ ! -f "$KEY" ] || [ $(( $(date +%s) - $(stat -c %Y "$KEY") )) -ge 86400 ]; then
+      "$DIR/tg.sh" "🧑 Builder for #$N cannot start: worktree $WT already exists without loop build state — needs a human (remove it to retry):
+$URL" || true
+      touch "$KEY"
+    fi
     exit 1
   fi
 elif git show-ref --verify --quiet "refs/heads/$BRANCH"; then
@@ -94,16 +123,24 @@ fi
 PR_URL="$(grep -m1 -o 'https://github.com/[^ ]*/pull/[0-9]*' "$WT/.agent-build.log" || true)"
 [ -z "$PR_URL" ] && PR_URL="$(gh pr list --head "$BRANCH" --json url --jq '.[0].url // empty' || true)"
 [ -z "$PR_URL" ] && PR_URL="NONE (check $WT/.agent-build.log)"
-# Outcome stamp for the dispatcher (build.sh): a run that produced no PR is
-# re-launched only after AGENT_BUILDER_COOLDOWN_S, so a single model-rate-
-# limited death cannot become a 15-minute relaunch storm.
+# Outcome stamp for the dispatcher (build.sh): a run that produced no PR
+# writes a retry time (~1h + jitter via write_retry_stamp) instead of going
+# back into the every-15-minutes pool, so a model-rate-limited death cannot
+# become a relaunch storm. A rate-limited run is retried the same way —
+# the quota just needs time to recover.
 mkdir -p /tmp/opencode/agent-loop-cd
+RATE_NOTE=""
 if [[ "$PR_URL" == NONE* ]]; then
-  date +%s > "/tmp/opencode/agent-loop-cd/$N"
+  write_retry_stamp
+  RETRY_AT="$(cat "/tmp/opencode/agent-loop-cd/$N" 2>/dev/null || echo 0)"
+  if grep -qiE 'rate limit exceeded|rate_limit|http 429|too many requests' "$WT/.agent-build.log" 2>/dev/null; then
+    RATE_NOTE="hit the model rate limit — "
+  fi
+  RATE_NOTE="${RATE_NOTE}retrying after ~$(date -d "@$RETRY_AT" '+%H:%M' 2>/dev/null || echo '1h'): "
 else
   rm -f "/tmp/opencode/agent-loop-cd/$N"
 fi
-"$DIR/tg.sh" "🔨 Builder finished #$N: $TITLE
+"$DIR/tg.sh" "🔨 Builder finished #$N: ${RATE_NOTE}$TITLE
 PR: $PR_URL
 $URL" || true
 echo "[builder] #$N done PR=$PR_URL"
