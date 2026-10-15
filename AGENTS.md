@@ -10,6 +10,26 @@ writer (ad-hoc sessions too), commit WIP often, and `git stash` is
 banned in shared clones (commit instead). Merges happen in a
 throwaway worktree on `main`, verified before push.
 
+## File size: split on touch, don't bulk-refactor
+
+Long files cost agent context, merge conflicts, and untestable
+persistence even when human readability doesn't matter. Current hotspots:
+`lib/planner/view/event_editor.dart` (~3390 lines),
+`lib/planner/view/calendar_page.dart` (~2300),
+`lib/nodes/bloc/node_cubit.dart` (~2200).
+
+1. New files: keep under ~500 lines. Split view/widgets,
+   cubit/state/persistence, logic/tests up front.
+2. Existing files: never bulk-refactor for size alone. Split on touch
+   only — when a task already edits a file >500 lines, extract one
+   concern in the same branch (e.g. widget, helper, cubit slice).
+3. Keep persisted cubits small: persistence
+   (`fromJson`/`toJson`/migration) separate from business logic so
+   tolerance tests stay per-item.
+4. Each split must keep `flutter analyze` clean and extend/keep
+   round-trip + tolerance tests for any model touch. No behavior change
+   in a pure split.
+
 ## UX check: label it, don't walk it
 
 If your change touches anything a user can see or tap — screens under
