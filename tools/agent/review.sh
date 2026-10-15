@@ -113,7 +113,7 @@ Persistence: <ok | violation — cite the AGENTS.md rule>
 Security: <ok | changes-requested — untrusted-user → GitHub/builder path, auth/scope/SSRF/secrets weakening, or attacker-controlled input executed; cite file:line>
 Tests: <one line: do the tests cover the change, including goldens for screens?>
 Behavioral: <one line: does a patrol_test cover the changed user flow, or is one needed?>
-Walker: <for any user-visible change (lib/*/view, navigation, dialogs, copy): walked pre-merge with report path in the PR body, or CHANGES-REQUESTED listing the exact walk to run. Pass only if walked or provably not user-visible.>
+Walker: <for any user-visible change (lib/*/view, navigation, dialogs/sheets, button behavior, copy): PASS only if the PR body has a 'UX scope:' section AND (the linked issue carries the ux-walk label OR the PR body justifies 'UX scope: none'). Never demand a pre-merge walk — the loop walks post-deploy via ux-walk.sh (AGENTS.md). If missing, CHANGES-REQUESTED listing exactly what label/scope to add.>
 Smallness: <ok | bloated — what should be cut?>
 Fix list: <if changes-requested: numbered, concrete, bounded items. If pass: none.>
 $REVIEW_MARKER"

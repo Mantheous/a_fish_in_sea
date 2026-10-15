@@ -149,15 +149,18 @@ fi
 # --- 2b. local agent branches ---------------------------------------------
 # Delete only when the linked issue is CLOSED or the head PR merged into
 # main; never touch ad-hoc branches or branches of open issues.
-LOCAL_BRANCHES="$(git branch --list 'agent/*' | sed 's/^[*+ ]*//')"
+# NOTE: match both naming shapes like the remote cleanup above (agent/* and
+# agent-*); non-numeric names only delete when their PR merged and the tip
+# matches the merged head.
+LOCAL_BRANCHES="$(git branch --list 'agent/*' 'agent-*' 2>/dev/null | sed 's/^[*+ ]*//' | sort -u)"
 if [ -n "$LOCAL_BRANCHES" ]; then
   while read -r LB; do
     [ -z "$LB" ] && continue
-    case "$LB" in agent/adhoc-*) continue;; esac
+    case "$LB" in agent/adhoc-*|agent-adhoc-*) continue;; esac
     MERGED_HEAD="$(gh pr list --head "$LB" --state merged --limit 5 \
       --json headRefOid,baseRefName \
       --jq '.[] | select(.baseRefName=="main") | .headRefOid' 2>/dev/null | head -n 1 || true)"
-    NUM="$(echo "$LB" | sed -n 's|^agent/\([0-9]\+\)-.*|\1|p')"
+    NUM="$(echo "$LB" | sed -n -e 's|^agent/\([0-9]\+\)-.*|\1|p' -e 's|^agent-\([0-9]\+\)-.*|\1|p')"
     ISSUE_CLOSED=0
     if [ -n "$NUM" ] && [ "$(issue_state "$NUM")" = "CLOSED" ]; then
       ISSUE_CLOSED=1

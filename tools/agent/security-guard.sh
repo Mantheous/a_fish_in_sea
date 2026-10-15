@@ -46,7 +46,7 @@ PRS="$(gh pr list --state open --limit 20 \
   --jq '.[] | "\(.number)|\(.headRefName)|\(.headRefOid)"' 2>/dev/null || true)"
 echo "$PRS" | while IFS='|' read -r N BRANCH SHA; do
   [ -z "${N:-}" ] && continue
-  case "$BRANCH" in agent/*) ;; *) continue ;; esac
+  case "$BRANCH" in agent/*|agent-*) ;; *) continue ;; esac
   # Skip when the latest sec-guard comment already covers this head SHA.
   if gh pr view "$N" --comments --json comments --jq '.comments[].body' 2>/dev/null \
       | grep -qF "$GUARD_MARKER sha=$SHA"; then
@@ -69,8 +69,10 @@ Read-only. Follow your agent instructions exactly."
   AUDIT="$(cat "$OUT_FILE"; rm -f "$OUT_FILE")"
   VERDICT="$(echo "$AUDIT" | grep -m1 '^Verdict:' || true)"
   # Empty/template-placeholder verdict = failed audit run, never a pass
-  # (rate-limited models echo the prompt template back).
-  if [ -z "$VERDICT" ] || echo "$VERDICT" | grep -qF '<pass | changes-requested>'; then
+  # (rate-limited models echo the prompt template back). The guardian
+  # template is 'Verdict: safe | block', so any '<' or 'safe | block' text
+  # is a template echo, not a real verdict.
+  if [ -z "$VERDICT" ] || echo "$VERDICT" | grep -qF '<' || echo "$VERDICT" | grep -qF 'safe | block'; then
     echo "[sec-guard] PR #$N audit produced no usable verdict — retried next poll, nothing labeled"
     "$DIR/tg.sh" "⚠️ Security guardian audit for PR #$N produced no verdict (failed run) — retrying next poll:
 $(gh pr view "$N" --json url --jq .url 2>/dev/null || true)" || true
@@ -91,24 +93,39 @@ $(gh pr view "$N" --json url --jq .url 2>/dev/null || true)" || true
     "$DIR/tg.sh" "🛑 Security guardian blocked PR #$N: $VERDICT
 $(gh pr view "$N" --json url --jq .url)
 Audit comment on the PR." || true
-  else
+  elif echo "$VERDICT" | grep -qi '^Verdict: safe'; then
     "$DIR/label.sh" "$N" add "$PASS_LABEL" || true
     echo "[sec-guard] PR #$N safe — $VERDICT"
+  else
+    echo "[sec-guard] PR #$N unrecognized verdict ($VERDICT) — leaving unlabeled, retried next poll"
+    "$DIR/tg.sh" "⚠️ Security guardian audit for PR #$N had an unrecognized verdict — retrying next poll:
+$(gh pr view "$N" --json url --jq .url 2>/dev/null || true)" || true
   fi
 done
 
 # ── 2) Preflight for the revision deploy.sh will build ──────────────────
+# NOTE: deploy.sh fast-forwards main to origin/main before building, so the
+# revision it ships is origin/main — NOT necessarily local HEAD (see
+# data-guard.sh for the full explanation). DESC is keyed on origin/main.
 git fetch origin --quiet 2>&1 | head -n 5 || true
 if [ -n "$(git status --porcelain | head -n 20)" ]; then
   WT_HASH="$(git status --porcelain | sha256sum | cut -c1-16)"
   DESC="worktree-$(git rev-parse HEAD)-$WT_HASH"
+  AUDIT_RANGE_DESC="uncommitted work (git diff HEAD) plus incoming commits $(git rev-parse HEAD)..$(git rev-parse origin/main 2>/dev/null || echo origin/main)"
 else
   BRANCH="$(git rev-parse --abbrev-ref HEAD)"
   if [ "$BRANCH" != "main" ]; then
     echo "[sec-guard] clean tree on $BRANCH — deploy would skip; nothing to audit"
     exit 0
   fi
-  DESC="main-$(git rev-parse HEAD)"
+  TARGET_SHA="$(git rev-parse origin/main 2>/dev/null || git rev-parse HEAD)"
+  HEAD_SHA="$(git rev-parse HEAD)"
+  DESC="main-$TARGET_SHA"
+  if [ "$HEAD_SHA" = "$TARGET_SHA" ]; then
+    AUDIT_RANGE_DESC="HEAD ($HEAD_SHA, already at origin/main tip)"
+  else
+    AUDIT_RANGE_DESC="incoming commits $HEAD_SHA..$TARGET_SHA (git log $HEAD_SHA..$TARGET_SHA plus git diff $HEAD_SHA...$TARGET_SHA)"
+  fi
 fi
 
 if [ -f "$OVERRIDE" ] && { [ ! -s "$OVERRIDE" ] || [ "$(cat "$OVERRIDE")" = "$DESC" ]; }; then
@@ -142,9 +159,12 @@ fi
 
 PROMPT="MODE: preflight
 DESC: $DESC
-Audit the pending changes (uncommitted work in the worktree plus anything on
-this branch beyond origin/main) for security flaws. This is the revision
-the next web deploy ships. Read-only. Follow your agent instructions exactly."
+RANGE: $AUDIT_RANGE_DESC
+Audit the changes the next web deploy ships: $AUDIT_RANGE_DESC. On a clean
+main this is the incoming origin/main commits deploy.sh is about to
+fast-forward to (NOT an empty origin/main..HEAD — that range is backwards).
+Uncommitted work in the worktree (git diff HEAD) ships too when present.
+Read-only. Follow your agent instructions exactly."
 if ! opencode run --agent security-guardian --title "sec-guard-$DESC" \
     "$PROMPT" >/tmp/opencode/sec-guard-audit.log 2>&1; then
   echo "[sec-guard] audit run failed (next poll retries); not blocking"
@@ -153,8 +173,8 @@ fi
 cp /tmp/opencode/sec-guard-audit.log "$REPORT"
 VERDICT="$(grep -m1 '^Verdict:' "$REPORT" || true)"
 # No usable verdict = failed audit run (template echo). Not safe, not
-# blocked: re-audited next poll.
-if [ -z "$VERDICT" ] || echo "$VERDICT" | grep -qF '<pass | changes-requested>'; then
+# blocked: re-audited next poll. The template is 'Verdict: safe | block'.
+if [ -z "$VERDICT" ] || echo "$VERDICT" | grep -qF '<' || echo "$VERDICT" | grep -qF 'safe | block'; then
   echo "[sec-guard] preflight audit for $DESC produced no usable verdict — not marking safe; retried next poll"
   "$DIR/tg.sh" "⚠️ Security guardian preflight for $DESC produced no verdict (failed run) — not marking safe; retrying next poll" || true
   exit 0
@@ -165,9 +185,12 @@ if echo "$VERDICT" | grep -qi '^Verdict: block'; then
   "$DIR/tg.sh" "🛑 Security guardian blocked the next web deploy ($DESC): $VERDICT
 Report: $REPORT
 Override: touch .agent-sec-override, or fix the findings." || true
-else
+elif echo "$VERDICT" | grep -qi '^Verdict: safe'; then
   rm -f "$BLOCK_MARKER"
   echo "$DESC" > "$DESC_MARKER"
   echo "[sec-guard] safe $DESC — $VERDICT"
+else
+  echo "[sec-guard] preflight audit for $DESC had an unrecognized verdict — not marking safe; retried next poll"
+  "$DIR/tg.sh" "⚠️ Security guardian preflight for $DESC had an unrecognized verdict — not marking safe; retrying next poll" || true
 fi
 echo "[sec-guard] done"

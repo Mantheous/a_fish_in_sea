@@ -26,9 +26,12 @@ The task message gives you:
   worktree/main that a web deploy is about to ship)
 - For `pr`: PR=<number> — use `gh pr view <n> --json number,title,body` and
   `gh pr diff <n>`.
-- For `preflight`: DESC=<id> — audit `git diff HEAD` (uncommitted work) and
-  `git log origin/main..HEAD --oneline` with their diffs. That pending tree
-  is what the next deploy ships.
+- For `preflight`: DESC=<id> plus RANGE=<description> — audit the RANGE the
+  task message gives you (on a clean main: `git log <HEAD>..<TARGET>` and
+  `git diff <HEAD>...<TARGET>` for the incoming origin/main commits deploy.sh
+  is about to fast-forward to, plus `git diff HEAD` for any uncommitted
+  work). That RANGE is what the next deploy ships. (`origin/main..HEAD` is
+  backwards for merged commits — never use it in preflight.)
 
 Check, in this order, and ONLY against evidence in the diff/repo:
 

@@ -82,31 +82,41 @@ gh issue list --label agent-approved --state open --limit 20 --json number,title
       continue
     fi
     if [ -z "$(git log --oneline "origin/main..origin/$BRANCH" 2>/dev/null | head -n 1)" ]; then
-      echo "[build] #$N branch pushed but EMPTY — the builder reuses it"
-      continue
-    fi
-    # The builder pushed its branch but died before `gh pr create` (its
-    # opencode run hit the model rate limit at the finish line). Don't
-    # strand the work on a branch waiting for a human — open the PR from
-    # here so the reviewer gates it like any other.
-    echo "[build] #$N branch pushed but NO PR — opening it from the dispatcher"
-    LOGLINE=""
-    [ -f "$WT/.agent-build.log" ] && LOGLINE="
+      # Empty remote branch (no commits past origin/main): it deadlocks the
+      # loop if kept — close.sh leaves it, build.sh skips it, builder-run.sh
+      # exits on it. It is byte-identical to main, so delete it and fall
+      # through to launch a fresh builder below.
+      echo "[build] #$N branch pushed but EMPTY — deleting it and launching a fresh builder"
+      if git push origin --delete "$BRANCH" --quiet 2>/dev/null; then
+        echo "[build] #$N deleted empty remote branch $BRANCH"
+      else
+        echo "[build] #$N could not delete empty remote branch $BRANCH — skipping this poll"
+        continue
+      fi
+    else
+      # The builder pushed its branch but died before `gh pr create` (its
+      # opencode run hit the model rate limit at the finish line). Don't
+      # strand the work on a branch waiting for a human — open the PR from
+      # here so the reviewer gates it like any other.
+      echo "[build] #$N branch pushed but NO PR — opening it from the dispatcher"
+      LOGLINE=""
+      [ -f "$WT/.agent-build.log" ] && LOGLINE="
 Builder run log (loop host): \`$WT/.agent-build.log\` — read it to verify the gates before relying on the diff."
-    BODY="Closes #$N. Scope: $TITLE — per the latest <!-- agent-plan --> triage comment on the issue.
+      BODY="Closes #$N. Scope: $TITLE — per the latest <!-- agent-plan --> triage comment on the issue.
 
 This PR was opened by the loop dispatcher: the builder pushed its branch but its run ended before it created the PR itself (model rate limit at the finish line). The reviewer agent re-checks the diff against the plan and gates before any merge; treat anything unverified in the diff as review:changes-requested material, reworkable from \`$WT\`.$LOGLINE"
-    if PR_URL="$(gh pr create --base main --head "$BRANCH" \
-        --title "[agent #$N] $TITLE" --body "$BODY" 2>&1)"; then
-      echo "[build] #$N opened $PR_URL"
-      "$DIR/tg.sh" "🔗 Dispatcher opened the PR for #$N (builder run ended before creating it): $TITLE
+      if PR_URL="$(gh pr create --base main --head "$BRANCH" \
+          --title "[agent #$N] $TITLE" --body "$BODY" 2>&1)"; then
+        echo "[build] #$N opened $PR_URL"
+        "$DIR/tg.sh" "🔗 Dispatcher opened the PR for #$N (builder run ended before creating it): $TITLE
 $PR_URL" || true
-    else
-      echo "[build] #$N dispatcher could not open the PR: $PR_URL — needs a human"
-      "$DIR/tg.sh" "🧑 Branch for #$N has work but the dispatcher could not open its PR — needs a human:
+      else
+        echo "[build] #$N dispatcher could not open the PR: $PR_URL — needs a human"
+        "$DIR/tg.sh" "🧑 Branch for #$N has work but the dispatcher could not open its PR — needs a human:
 $URL" || true
+      fi
+      continue
     fi
-    continue
   fi
   echo "[build] #$N launching tmux session agent-$N"
   tmux new-session -d -s "agent-$N" "$DIR/builder-run.sh $N"
