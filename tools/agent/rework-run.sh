@@ -26,7 +26,7 @@ Rules:
 2. Keep the diff small — fix, don't redesign. AGENTS.md persistence rules still apply exactly.
 3. Gates (must both pass): ~/flutter/bin/flutter analyze (0 issues) and ~/flutter/bin/flutter test (all pass; extend tests for the fix — widget, golden, or patrol_test as appropriate).
 4. Commit on $BRANCH, push origin $BRANCH. NEVER push to main, NEVER commit to main.
-5. Remove the review:changes-requested label ($DIR/label.sh $N remove review:changes-requested — do NOT use gh pr edit, its label mutations are broken on this host) so the reviewer re-checks, and post a comment starting with <!-- agent-rework --> summarizing round $ROUND: what changed per fix item, gate results.
+5. Remove the review:changes-requested label ($DIR/label.sh $N remove review:changes-requested — do NOT use gh pr edit, its label mutations are broken on this host) so the reviewer re-checks, and post a comment starting with <!-- agent-rework --> summarizing round $ROUND: open with one plain-words sentence (what the user will notice, understandable without reading the code — no jargon, no class/function names), then what changed per fix item plus gate results.
 Report at the end: STATUS=<ready|failed>."
 if opencode run --auto --title "rework-#$N-r$ROUND" "$PROMPT" >"$WT/.agent-rework-$ROUND.log" 2>&1; then
   echo "[rework] #$N round $ROUND finished"

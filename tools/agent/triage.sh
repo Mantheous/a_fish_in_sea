@@ -7,6 +7,13 @@
 #      reply in-thread, so the human can converse until the plan is right.
 # Read-only except: GitHub comments/labels + Telegram sends + /tmp image
 # downloads. Never touches code.
+#
+# NOTE (2026-10-15): the plan comments below are the maintainer's primary
+# reading material, and model prose skews too technical to parse without
+# deep codebase context — hence the plain-words rules in the prompts. If
+# readability is still poor, route the commentary through longcat (clear
+# explanations, weak code): e.g. a second pass that rewrites the plan/PR
+# body in plain words before posting.
 set -euo pipefail
 REPO="$HOME/Repos/a_fish_in_sea"
 cd "$REPO"
@@ -57,10 +64,15 @@ READ-ONLY task. Do NOT modify, create, delete, or commit any repo files. Do NOT 
    - If the issue body/comments mention /tmp/opencode/... paths (ux-walk screenshots/reports live on this loop host), read those files directly.
    - If you see any other image URL in the thread you have not viewed, download it with: curl -sL \"<url>\" -o /tmp/opencode/issue-$N-extra-<i>.png then READ it. Use what you see to name the exact screen and widget.
 3. Explore the repo read-only (read/grep/glob) to ground the plan. Read AGENTS.md first for persistence rules.
-4. Output ONLY the markdown below, no extra prose before or after:
+4. Write for the maintainer, who is NOT deep in the codebase: plain,
+concrete words — name the screen and the user-visible behavior, never a
+class or function name, and no unexplained jargon anywhere. The Summary
+lines especially must make sense without reading any code; technical
+detail belongs in the Files/Risk/Test fields only.
+5. Output ONLY the markdown below, no extra prose before or after:
 ## Triage plan #$N
 Severity: <critical|high|medium|low>
-Summary: <exactly 2 lines: line1 what is asked, line2 proposed approach>
+Summary: <exactly 2 lines in plain words: line1 what the user will notice, line2 proposed approach>
 Files to touch: <list of paths, or TBD with why>
 Risk: <low|high> — <one-line reason>
 Test idea: <one line: what test would prove it>
@@ -167,11 +179,14 @@ READ-ONLY task. Do NOT modify, create, delete, or commit any repo files. Do NOT 
    - Any other image URL you have not viewed: curl -sL \"<url>\" -o /tmp/opencode/issue-$N-rev-<i>.png then READ it.
 3. Explore the repo read-only (read/grep/glob) as needed. Read AGENTS.md first for persistence rules.
 4. Address EVERY human follow-up point after the previous plan: answer questions, incorporate corrections into the revised scope. If feedback is ambiguous, pick the safest interpretation AND note the assumption plus what to confirm.
-5. Output ONLY the markdown below, no extra prose before or after:
+5. Write for the maintainer, who is NOT deep in the codebase: plain,
+concrete words — name the screen and the user-visible behavior, never a
+class or function name, and no unexplained jargon anywhere.
+6. Output ONLY the markdown below, no extra prose before or after:
 ## Triage plan #$N (rev)
-Replies: <one short line per follow-up point: what you changed or answered>
+Replies: <one short plain-words line per follow-up point: what you changed or answered>
 Severity: <critical|high|medium|low>
-Summary: <exactly 2 lines: line1 what is asked (as clarified), line2 revised approach>
+Summary: <exactly 2 lines in plain words: line1 what the user will notice (as clarified), line2 revised approach>
 Files to touch: <list of paths, or TBD with why>
 Risk: <low|high> — <one-line reason>
 Test idea: <one line: what test would prove it>

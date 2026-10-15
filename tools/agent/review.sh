@@ -99,8 +99,13 @@ $(gh pr view "$N" --json url --jq .url)" || true
 1. Run: gh pr view $N --json number,title,body,comments and: gh pr diff $N
 2. Find the linked issue (Closes #<n> in the PR body) and read its LATEST <!-- agent-plan --> triage comment PLUS any tester follow-ups after it: gh issue view <n> --json number,title,body,comments. The builder was told the contract is latest plan + follow-up clarifications (newest tester comment wins on conflict) — judge fidelity against that combined scope, not the first plan alone.
 3. Explore the repo read-only (read/grep/glob) to check the diff against the plan. Read AGENTS.md first for persistence rules.
-4. Output ONLY the markdown below, no extra prose before or after:
+4. Write for a maintainer who is NOT deep in the codebase: the Plain words
+line must make sense without reading any code (name screens and behavior,
+no class/function names, no unexplained jargon); technical detail belongs
+in the fields below it.
+5. Output ONLY the markdown below, no extra prose before or after:
 ## Review #$N
+Plain words: <one sentence: what does this PR change for the user, and is it safe to merge?>
 Verdict: <pass | changes-requested>
 Plan fidelity: <one line: does the diff implement exactly the latest triage plan scope plus tester follow-up clarifications?>
 Correctness: <one line: bugs, edge cases, or wrong behavior you can see>
