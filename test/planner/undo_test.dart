@@ -76,6 +76,64 @@ void main() {
       final restored = ChangeRecord.fromJson(record.toJson());
       expect(restored, record);
     });
+
+    test('undo history is session-scoped and never written to storage', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      for (var i = 0; i < 5; i++) {
+        nodeCubit.addNode(
+            Node(id: 't$i', title: 'Task $i', createdAt: DateTime(2026)));
+      }
+      expect(undoCubit.state.undoStack.length, 5);
+      // Full snapshots stay in memory only: persisting up to maxDepth full
+      // collections on every edit made each tap slower than the last.
+      verifyNever(() => storage.write('UndoCubit', any()));
+      // In-session undo still works.
+      undoCubit.undo();
+      expect(nodeCubit.state.length, 4);
+    });
+
+    test('toggleEventDone is one undo step and keeps the node done', () {
+      final undoCubit = UndoCubit();
+      final calendar = CalendarCubit();
+      final nodes = NodeCubit();
+      final now = DateTime(2026, 10, 11, 9);
+      calendar.emit([
+        PlannerEvent(
+          id: 'e1',
+          subject: 'Task',
+          start: now,
+          end: now.add(const Duration(hours: 1)),
+          isTask: true,
+          taskId: 'node:e1',
+        ),
+      ]);
+      nodes.emit([
+        Node(
+          id: 'node:e1',
+          title: 'Task',
+          createdAt: now,
+          calendarEventId: 'e1',
+        ),
+      ]);
+
+      NodeEventLink.toggleEventDone(calendar, nodes, 'e1');
+      expect(calendar.byId('e1')!.done, isTrue);
+      expect(nodes.byId('node:e1')!.isDone, isTrue);
+      expect(undoCubit.state.undoStack.length, 1);
+
+      NodeEventLink.toggleEventDone(calendar, nodes, 'e1');
+      expect(calendar.byId('e1')!.done, isFalse);
+      expect(nodes.byId('node:e1')!.isDone, isFalse);
+      expect(undoCubit.state.undoStack.length, 2);
+
+      undoCubit.undo();
+      expect(calendar.byId('e1')!.done, isTrue);
+      expect(nodes.byId('node:e1')!.isDone, isTrue);
+      undoCubit.redo();
+      expect(calendar.byId('e1')!.done, isFalse);
+      expect(nodes.byId('node:e1')!.isDone, isFalse);
+    });
   });
 
   group('task toggles stay cheap', () {
