@@ -112,11 +112,11 @@ for i, l in enumerate(lines):
         break
 " | head -n 2)"
     RISK="$(echo "$PLAN" | grep -m1 '^Risk:' || echo 'Risk: unknown')"
-    "$DIR/tg.sh" "🆕 Triage plan #$N: $TITLE
+    "$DIR/tg.sh" --issue "$N" "🆕 Triage plan #$N: $TITLE
 $SUMMARY
 $RISK
 $URL
-Approve: comment \`approve\` (or \`agent approved\`) on the issue / Deny: comment \`deny <reason>\`" || echo "[triage] #$N telegram ping failed (plan comment still posted)"
+Tap Approve / Deny below, or comment \`approve\` / \`deny <reason>\` on the issue" || echo "[triage] #$N telegram ping failed (plan comment still posted)"
     continue
   fi
 
@@ -212,9 +212,9 @@ $MARKER"
     echo "[triage] #$N revised plan comment failed (gh hiccup) — retried next poll"
   else
     echo "[triage] #$N revised plan posted"
-    "$DIR/tg.sh" "🔄 Triage plan #$N revised after human feedback: $TITLE
+    "$DIR/tg.sh" --issue "$N" "🔄 Triage plan #$N revised after human feedback: $TITLE
 $URL
-Comment \`approve\` when the latest plan looks right" || echo "[triage] #$N telegram ping failed (revision still posted)"
+Tap Approve below, or comment \`approve\` when the latest plan looks right" || echo "[triage] #$N telegram ping failed (revision still posted)"
   fi
 done
 echo "[triage] done"
