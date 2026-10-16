@@ -659,4 +659,186 @@ void main() {
       );
     });
   });
+
+  group('conflict badges are same-granularity', () {
+    final day = DateTime(2026, 10, 14);
+
+    PlannerEvent timed(
+      String id,
+      DateTime start,
+      DateTime end, {
+      String recurrenceRule = '',
+    }) =>
+        PlannerEvent(
+          id: id,
+          subject: id,
+          start: start,
+          end: end,
+          recurrenceRule: recurrenceRule,
+        );
+
+    PlannerEvent wholeDay(String id, {DateTime? start}) => PlannerEvent(
+          id: id,
+          subject: id,
+          start: start ?? day,
+          end: (start ?? day).add(const Duration(days: 1)),
+          allDay: true,
+        );
+
+    Future<void> pumpEditor(
+      WidgetTester tester, {
+      required CalendarCubit calendarCubit,
+      required PlannerEvent existing,
+    }) async {
+      final settingsCubit = SettingsCubit();
+      final nodeCubit = NodeCubit();
+      final feedCubit = buildFeedCubit(calendarCubit, nodeCubit);
+      await tester.pumpWidget(
+        MultiBlocProvider(
+          providers: [
+            BlocProvider.value(value: settingsCubit),
+            BlocProvider.value(value: calendarCubit),
+            BlocProvider.value(value: nodeCubit),
+            BlocProvider.value(value: feedCubit),
+          ],
+          child: MaterialApp(
+            home: Scaffold(body: EventEditorForm(existing: existing)),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('timed draft flags an overlapping timed event', (tester) async {
+      final calendarCubit = CalendarCubit();
+      calendarCubit.addEvent(timed(
+        'class',
+        DateTime(2026, 10, 14, 9, 30),
+        DateTime(2026, 10, 14, 10, 30),
+      ));
+      await pumpEditor(
+        tester,
+        calendarCubit: calendarCubit,
+        existing: timed(
+          'draft',
+          DateTime(2026, 10, 14, 9),
+          DateTime(2026, 10, 14, 10),
+        ),
+      );
+      expect(find.text('Overlaps'), findsOneWidget);
+    });
+
+    testWidgets('timed draft ignores abutting and far timed events',
+        (tester) async {
+      final calendarCubit = CalendarCubit();
+      calendarCubit.addEvent(timed(
+        'abutting',
+        DateTime(2026, 10, 14, 10),
+        DateTime(2026, 10, 14, 11),
+      ));
+      calendarCubit.addEvent(timed(
+        'far',
+        DateTime(2026, 10, 14, 14),
+        DateTime(2026, 10, 14, 15),
+      ));
+      await pumpEditor(
+        tester,
+        calendarCubit: calendarCubit,
+        existing: timed(
+          'draft',
+          DateTime(2026, 10, 14, 9),
+          DateTime(2026, 10, 14, 10),
+        ),
+      );
+      expect(find.text('Overlaps'), findsNothing);
+    });
+
+    testWidgets('timed draft never conflicts with an all-day event',
+        (tester) async {
+      final calendarCubit = CalendarCubit();
+      calendarCubit.addEvent(wholeDay('holiday'));
+      await pumpEditor(
+        tester,
+        calendarCubit: calendarCubit,
+        existing: timed(
+          'draft',
+          DateTime(2026, 10, 14, 9),
+          DateTime(2026, 10, 14, 10),
+        ),
+      );
+      // The all-day event still lists as context for the day.
+      expect(find.text('holiday'), findsOneWidget);
+      expect(find.text('Overlaps'), findsNothing);
+    });
+
+    testWidgets('all-day draft flags another all-day event', (tester) async {
+      final calendarCubit = CalendarCubit();
+      calendarCubit.addEvent(wholeDay('holiday'));
+      await pumpEditor(
+        tester,
+        calendarCubit: calendarCubit,
+        existing: wholeDay('draft'),
+      );
+      expect(find.text('Overlaps'), findsOneWidget);
+    });
+
+    testWidgets('all-day draft never conflicts with a timed event',
+        (tester) async {
+      final calendarCubit = CalendarCubit();
+      calendarCubit.addEvent(timed(
+        'class',
+        DateTime(2026, 10, 14, 9),
+        DateTime(2026, 10, 14, 10),
+      ));
+      await pumpEditor(
+        tester,
+        calendarCubit: calendarCubit,
+        existing: wholeDay('draft'),
+      );
+      expect(find.text('Overlaps'), findsNothing);
+    });
+
+    testWidgets('recurring occurrence on the picked day flags', (tester) async {
+      final calendarCubit = CalendarCubit();
+      // Weekly Wednesday lecture starting a week before the picked day:
+      // its master sits in the past, only the occurrence lands on Oct 14.
+      calendarCubit.addEvent(timed(
+        'lecture',
+        DateTime(2026, 10, 7, 10),
+        DateTime(2026, 10, 7, 11),
+        recurrenceRule: 'FREQ=WEEKLY;BYDAY=WE',
+      ));
+      await pumpEditor(
+        tester,
+        calendarCubit: calendarCubit,
+        existing: timed(
+          'draft',
+          DateTime(2026, 10, 14, 10, 30),
+          DateTime(2026, 10, 14, 11, 30),
+        ),
+      );
+      expect(find.text('Overlaps'), findsOneWidget);
+    });
+
+    testWidgets('recurring occurrence that misses the window does not flag',
+        (tester) async {
+      final calendarCubit = CalendarCubit();
+      calendarCubit.addEvent(timed(
+        'lecture',
+        DateTime(2026, 10, 7, 10),
+        DateTime(2026, 10, 7, 11),
+        recurrenceRule: 'FREQ=WEEKLY;BYDAY=WE',
+      ));
+      await pumpEditor(
+        tester,
+        calendarCubit: calendarCubit,
+        existing: timed(
+          'draft',
+          DateTime(2026, 10, 14, 13),
+          DateTime(2026, 10, 14, 14),
+        ),
+      );
+      expect(find.text('Overlaps'), findsNothing);
+    });
+  });
 }

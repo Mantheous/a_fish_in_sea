@@ -2282,6 +2282,11 @@ class _PlaceField extends StatelessWidget {
 /// flipping back to the calendar behind the sheet. On narrow screens the
 /// sheet's scrim dims the calendar ("grayed out"), which is why synced
 /// calendars looked missing when scheduling from the task menu.
+///
+/// Conflict badges are same-granularity only: all-day marks the whole
+/// day, a timed event a window on it, so the two never overlap. All-day
+/// events conflict with other all-day events; timed events conflict when
+/// their intervals intersect.
 class _DayConflictsSection extends StatelessWidget {
   final DateTime day;
   final bool allDay;
@@ -2300,7 +2305,21 @@ class _DayConflictsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final dayStart = DateTime(day.year, day.month, day.day);
+    final dayEnd = dayStart.add(const Duration(days: 1));
+    final selStart = DateTime(
+        day.year, day.month, day.day, startTime.hour, startTime.minute);
+    var selEnd = DateTime(
+        day.year, day.month, day.day, endTime.hour, endTime.minute);
+    if (!selEnd.isAfter(selStart)) {
+      selEnd = selStart.add(const Duration(hours: 1));
+    }
     List<PlannerEvent> dayEvents;
+    // Same-granularity conflicts only, keyed by id. An all-day event and a
+    // timed event never clash: one marks a whole day, the other a window
+    // on it. Both all-day conflict on a shared day; two timed events
+    // conflict when their intervals intersect.
+    Set<String> conflictingIds;
     String? syncWarning;
     try {
       final calendar = context.watch<CalendarCubit>();
@@ -2312,6 +2331,27 @@ class _DayConflictsSection extends StatelessWidget {
               e.id != excludeId &&
               feeds.isFeedVisible(e.feedId))
           .toList();
+      conflictingIds = <String>{};
+      for (final event in dayEvents) {
+        if (event.allDay != allDay) continue;
+        if (allDay) {
+          // Both day-grained and both list for the picked day.
+          conflictingIds.add(event.id);
+          continue;
+        }
+        // Compare the occurrence on the picked day, not the series
+        // master: a weekly class's master sits weeks in the past, where
+        // an interval check against today's window never fires.
+        final duration = event.end.isAfter(event.start)
+            ? event.end.difference(event.start)
+            : const Duration(hours: 1);
+        for (final occ in calendar.occurrencesOf(event, dayStart, dayEnd)) {
+          if (occ.isBefore(selEnd) && selStart.isBefore(occ.add(duration))) {
+            conflictingIds.add(event.id);
+            break;
+          }
+        }
+      }
       final failing = feeds.state
           .where((f) =>
               f.enabled &&
@@ -2327,17 +2367,6 @@ class _DayConflictsSection extends StatelessWidget {
       return const SizedBox.shrink();
     }
     dayEvents.sort((a, b) => a.start.compareTo(b.start));
-    final selStart = DateTime(
-        day.year, day.month, day.day, startTime.hour, startTime.minute);
-    var selEnd = DateTime(
-        day.year, day.month, day.day, endTime.hour, endTime.minute);
-    if (!selEnd.isAfter(selStart)) {
-      selEnd = selStart.add(const Duration(hours: 1));
-    }
-    bool overlaps(PlannerEvent e) {
-      if (allDay) return false;
-      return e.start.isBefore(selEnd) && selStart.isBefore(e.end);
-    }
 
     final timeFormat = DateFormat('h:mm a');
     return Container(
@@ -2400,7 +2429,7 @@ class _DayConflictsSection extends StatelessWidget {
                         ],
                       ),
                     ),
-                    if (overlaps(event))
+                    if (conflictingIds.contains(event.id))
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 8, vertical: 2),
