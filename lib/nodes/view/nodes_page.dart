@@ -8,9 +8,11 @@ import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/service/node_legacy_migration.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
 import 'package:a_fish_in_sea/nodes/service/node_tree_ops.dart';
+import 'package:a_fish_in_sea/nodes/view/goal_picker.dart';
 import 'package:a_fish_in_sea/nodes/view/node_checkbox.dart';
 import 'package:a_fish_in_sea/nodes/view/node_editor.dart';
 import 'package:a_fish_in_sea/nodes/view/node_finish_sheet.dart';
@@ -49,7 +51,16 @@ class _NodesPageState extends State<NodesPage> {
       ),
       drawer: const AppDrawer(),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => showNodeEditor(context),
+        onPressed: () async {
+          final created = await showNodeEditor(context);
+          // A brand-new unbounded goal is invisible in the default Leaves
+          // view, which would read as "nothing happened". Land on the
+          // tree instead so the goal is on screen right after saving.
+          if (!mounted) return;
+          if (created != null && created.isUnbounded) {
+            setState(() => _view = _NodeView.all);
+          }
+        },
         child: const Icon(Icons.add),
       ),
       body: Column(
@@ -467,98 +478,39 @@ class _NodeTile extends StatelessWidget {
                   : null,
         ),
       ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(subtitle, style: theme.textTheme.labelSmall),
-          const SizedBox(height: 4),
-          LinearProgressIndicator(value: value),
-        ],
-      ),
+      subtitle: _subtitleWidget(context, subtitle, value, live.isUnbounded),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
-        children: [
-          if (live.isTracking)
-            IconButton(
-              tooltip: 'Stop recording',
-              icon: Icon(Icons.stop,
-                  color: theme.colorScheme.primary),
-              onPressed: () => stopNodeAndFinish(context, live.id),
-            )
-          else if (live.isOpen)
-            IconButton(
-              tooltip: 'Start recording',
-              icon: const Icon(Icons.play_arrow),
-              onPressed: () {
-                try {
-                  context.read<NodeCubit>().startTracking(live.id);
-                } catch (_) {}
-              },
-            ),
-          IconButton(
-            tooltip: 'Add subgoal',
-            icon: const Icon(Icons.add_task_outlined),
-            onPressed: () => _onMenu(context, live, 'subgoal'),
-          ),
-          PopupMenuButton<String>(
-            onSelected: (choice) =>
-                _onMenu(context, live, choice),
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                  value: 'subgoal', child: Text('Add subgoal')),
-              const PopupMenuItem(
-                  value: 'edit', child: Text('Edit')),
-              const PopupMenuItem(
-                  value: 'add-child', child: Text('Add child step')),
-              const PopupMenuItem(
-                  value: 'breakdown',
-                  child: Text('Auto-breakdown into steps…')),
-              const PopupMenuItem(
-                  value: 'duplicate',
-                  child: Text('Duplicate subtree')),
-              const PopupMenuItem(
-                  value: 'toggle', child: Text('Toggle done')),
-              PopupMenuItem(
-                  value: 'fail',
-                  child: Text(live.status == NodeStatus.failed
-                      ? 'Unmark failed'
-                      : 'Mark failed')),
-              if (live.isTemplate)
-                const PopupMenuItem(
-                    value: 'generate',
-                    child: Text('Generate schedule')),
-              if (live.money != null) ...[
-                const PopupMenuItem(
-                    value: 'subdivide', child: Text('Subdivide')),
-                if (live.money!.isRecurring)
-                  const PopupMenuItem(
-                      value: 'rollover',
-                      child: Text('Rollover period')),
-              ],
-              const PopupMenuItem(
-                  value: 'delete', child: Text('Delete')),
-            ],
-          ),
-        ],
+        children: _trailingActions(context, live, theme),
       ),
       onTap: () => showNodeEditor(context, existing: live),
     );
     if (kids.isEmpty) return tile;
-    return ExpansionTile(
+    return _ParentTile(
       key: ValueKey('${live.id}:$expandToken:$expandAll'),
-      initiallyExpanded: expandAll,
       tilePadding:
           EdgeInsets.only(left: 16 + depth * 20, right: 8),
       leading: _leading(context, live),
-      title: Text(live.title),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(subtitle, style: theme.textTheme.labelSmall),
-          const SizedBox(height: 4),
-          LinearProgressIndicator(value: value),
-        ],
+      title: Text(
+        live.title,
+        style: TextStyle(
+          decoration: live.isDone ||
+                  live.status == NodeStatus.failed
+              ? TextDecoration.lineThrough
+              : null,
+          color: live.status == NodeStatus.failed
+              ? theme.colorScheme.error
+              : live.isDone
+                  ? theme.colorScheme.outline
+                  : null,
+        ),
       ),
+      subtitle:
+          _subtitleWidget(context, subtitle, value, live.isUnbounded),
+      trailingActions: _trailingActions(context, live, theme),
+      initiallyExpanded: expandAll,
+      expandToken: expandToken,
+      onTap: () => showNodeEditor(context, existing: live),
       children: [
         for (final k in kids)
           _NodeTile(
@@ -579,6 +531,88 @@ class _NodeTile extends StatelessWidget {
           ),
       ],
     );
+  }
+
+  /// Action buttons shared by leaf rows ([ListTile]) and parent rows
+  /// ([_ParentTile]): record start/stop, Add subgoal, and the overflow
+  /// menu. Parent rows previously had no trailing at all, which hid the
+  /// Add subgoal button (and the rest) on every goal with children.
+  /// Unbounded goals get no tracking buttons and no toggle/fail items:
+  /// they are ongoing directions, never completed.
+  List<Widget> _trailingActions(
+      BuildContext context, Node live, ThemeData theme) {
+    return [
+      if (!live.isUnbounded && live.isTracking)
+        IconButton(
+          tooltip: 'Stop recording',
+          icon: Icon(Icons.stop,
+              color: theme.colorScheme.primary),
+          onPressed: () => stopNodeAndFinish(context, live.id),
+        )
+      else if (!live.isUnbounded && live.isOpen)
+        IconButton(
+          tooltip: 'Start recording',
+          icon: const Icon(Icons.play_arrow),
+          onPressed: () {
+            try {
+              NodeEventLink.startNodeTracking(
+                context.read<NodeCubit>(),
+                context.read<CalendarCubit>(),
+                live.id,
+              );
+            } catch (_) {}
+          },
+        ),
+      IconButton(
+        tooltip: 'Add subgoal',
+        icon: const Icon(Icons.add_task_outlined),
+        onPressed: () => _onMenu(context, live, 'subgoal'),
+      ),
+      PopupMenuButton<String>(
+        onSelected: (choice) =>
+            _onMenu(context, live, choice),
+        itemBuilder: (context) => [
+          const PopupMenuItem(
+              value: 'subgoal', child: Text('Add subgoal')),
+          const PopupMenuItem(
+              value: 'edit', child: Text('Edit')),
+          const PopupMenuItem(
+              value: 'add-child', child: Text('Add child step')),
+          const PopupMenuItem(
+              value: 'breakdown',
+              child: Text('Auto-breakdown into steps…')),
+          const PopupMenuItem(
+              value: 'duplicate',
+              child: Text('Duplicate subtree')),
+          if (!live.isUnbounded)
+            const PopupMenuItem(
+                value: 'toggle', child: Text('Toggle done')),
+          if (!live.isUnbounded)
+            PopupMenuItem(
+                value: 'fail',
+                child: Text(live.status == NodeStatus.failed
+                    ? 'Unmark failed'
+                    : 'Mark failed')),
+          if (live.isTemplate)
+            const PopupMenuItem(
+                value: 'generate',
+                child: Text('Generate schedule')),
+          const PopupMenuItem(
+              value: 'assign-event',
+              child: Text('Assign repeating event…')),
+          if (live.money != null) ...[
+            const PopupMenuItem(
+                value: 'subdivide', child: Text('Subdivide')),
+            if (live.money!.isRecurring)
+              const PopupMenuItem(
+                  value: 'rollover',
+                  child: Text('Rollover period')),
+          ],
+          const PopupMenuItem(
+              value: 'delete', child: Text('Delete')),
+        ],
+      ),
+    ];
   }
 
   List<Node> _children(Node parent) {
@@ -617,6 +651,12 @@ class _NodeTile extends StatelessWidget {
   }
 
   Widget _leading(BuildContext context, Node live) {
+    if (live.isUnbounded) {
+      return const Tooltip(
+        message: 'Unbounded goal — ongoing, no checkbox',
+        child: Icon(Icons.all_inclusive),
+      );
+    }
     if (live.isTemplate) {
       return const Icon(Icons.repeat_outlined);
     }
@@ -629,11 +669,41 @@ class _NodeTile extends StatelessWidget {
     if (live.effort != null || live.hasCalendarBlock) {
       return const Icon(Icons.timer_outlined);
     }
+    if (live.anki != null) {
+      return const Icon(Icons.school_outlined);
+    }
     return NodeCheckbox(node: live);
+  }
+
+  /// Subtitle area: unbounded goals show text only (no bar, no percent);
+  /// everything else keeps the progress bar underneath.
+  Widget _subtitleWidget(
+      BuildContext context, String subtitle, double value, bool unbounded) {
+    final theme = Theme.of(context);
+    if (unbounded) {
+      return Text(subtitle, style: theme.textTheme.labelSmall);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(subtitle, style: theme.textTheme.labelSmall),
+        const SizedBox(height: 4),
+        LinearProgressIndicator(value: value),
+      ],
+    );
   }
 
   String _subtitle(BuildContext context, Node live, double value,
       int childCount) {
+    // Unbounded goals never show dates, targets, or a percent — just the
+    // ongoing marker plus how many concrete steps hang underneath.
+    if (live.isUnbounded) {
+      final parts = <String>['unbounded'];
+      if (childCount > 0) {
+        parts.add('$childCount step${childCount == 1 ? '' : 's'}');
+      }
+      return parts.join(' · ');
+    }
     final effectiveNow = now ?? DateTime.now();
     final parts = <String>[];
     if (childCount > 0) {
@@ -658,6 +728,15 @@ class _NodeTile extends StatelessWidget {
           : timeActualForNode(live, nodes);
       parts.add(
           '${actual.toStringAsFixed(0)}m / ${live.effort!.targetMinutes}m');
+    } else if (live.anki != null) {
+      final actual = byParent != null && nodeById != null
+          ? ankiActualForNodeIndexed(
+              live, byId: nodeById!, byParent: byParent!)
+          : ankiActualForNode(live, nodes);
+      final deck =
+          live.anki!.deckName == null ? '' : ' (${live.anki!.deckName})';
+      parts.add(
+          '${actual.toStringAsFixed(0)} / ${live.anki!.targetReviews} reviews$deck');
     }
     if (live.rule != null &&
         live.rule!.kind == NodeRuleKind.homeworkAhead) {
@@ -709,13 +788,27 @@ class _NodeTile extends StatelessWidget {
               content: Text(error ?? 'Duplicated “${live.title}”')),
         );
       case 'toggle':
-        cubit.toggleDone(live.id);
+        try {
+          NodeEventLink.toggleNodeDone(
+              cubit, context.read<CalendarCubit>(), live.id);
+        } catch (_) {
+          cubit.toggleDone(live.id);
+        }
       case 'fail':
-        cubit.setStatus(
+        try {
+          NodeEventLink.setNodeFailed(
+            cubit,
+            context.read<CalendarCubit>(),
             live.id,
-            live.status == NodeStatus.failed
-                ? NodeStatus.open
-                : NodeStatus.failed);
+            live.status != NodeStatus.failed,
+          );
+        } catch (_) {
+          cubit.setStatus(
+              live.id,
+              live.status == NodeStatus.failed
+                  ? NodeStatus.open
+                  : NodeStatus.failed);
+        }
       case 'generate':
         final made = cubit.generateInstances(
           templateId: live.id,
@@ -725,6 +818,8 @@ class _NodeTile extends StatelessWidget {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Generated $made instance(s)')),
         );
+      case 'assign-event':
+        _assignRepeatingEvent(context, live);
       case 'subdivide':
         _promptSubdivide(context, live);
       case 'rollover':
@@ -750,16 +845,73 @@ class _NodeTile extends StatelessWidget {
             context.read<CalendarCubit>().clearTaskLink(eventId);
           } catch (_) {}
         }
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Node deleted'),
-            action: SnackBarAction(
-              label: 'Undo',
-              onPressed: () => context.read<UndoCubit>().undo(),
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: const Text('Node deleted'),
+              duration: const Duration(seconds: 4),
+              // Action snackbars persist forever by default; this one must go.
+              persist: false,
+              action: SnackBarAction(
+                label: 'Undo',
+                onPressed: () => context.read<UndoCubit>().undo(),
+              ),
             ),
-          ),
-        );
+          );
     }
+  }
+
+  void _assignRepeatingEvent(BuildContext context, Node live) async {
+    final messenger = ScaffoldMessenger.of(context);
+    CalendarCubit calendar;
+    NodeCubit nodes;
+    try {
+      calendar = context.read<CalendarCubit>();
+      nodes = context.read<NodeCubit>();
+    } catch (_) {
+      return;
+    }
+    final event = await showRepeatingEventPicker(context);
+    if (event == null || !context.mounted) return;
+    // The tile's snapshot may be stale; the goal itself is what matters.
+    final goal = nodes.byId(live.id);
+    if (goal == null || !context.mounted) return;
+    final result = NodeEventLink.assignEventToGoal(
+      calendar,
+      nodes,
+      event.id,
+      goal.id,
+      includeSeries: true,
+    );
+    if (!context.mounted) return;
+    if (result.assigned == 0) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(result.error ?? 'Already assigned to “${goal.title}”.'),
+        ),
+      );
+      return;
+    }
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            result.error != null
+                ? 'Assigned ${result.assigned} item(s) to “${goal.title}”; ${result.error}'
+                : result.assigned == 1
+                    ? 'Assigned to “${goal.title}”'
+                    : 'Assigned ${result.assigned} items to “${goal.title}”',
+          ),
+          duration: const Duration(seconds: 4),
+          persist: false,
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () => context.read<UndoCubit>().undo(),
+          ),
+        ),
+      );
   }
 
   void _promptBreakdown(BuildContext context, Node live) {
@@ -902,6 +1054,85 @@ class _NodeTile extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Parent goal row in the All view.
+///
+/// Tapping the row itself opens the goal editor (same as leaf rows);
+/// only the chevron expands/collapses the children. The old
+/// [ExpansionTile] expanded on any header tap, which left collapsed
+/// parents with no discoverable way to edit.
+class _ParentTile extends StatefulWidget {
+  final EdgeInsetsGeometry tilePadding;
+  final Widget leading;
+  final Widget title;
+  final Widget subtitle;
+  final List<Widget> trailingActions;
+  final List<Widget> children;
+  final bool initiallyExpanded;
+  final int expandToken;
+  final VoidCallback onTap;
+
+  const _ParentTile({
+    super.key,
+    required this.tilePadding,
+    required this.leading,
+    required this.title,
+    required this.subtitle,
+    required this.trailingActions,
+    required this.children,
+    required this.initiallyExpanded,
+    required this.expandToken,
+    required this.onTap,
+  });
+
+  @override
+  State<_ParentTile> createState() => _ParentTileState();
+}
+
+class _ParentTileState extends State<_ParentTile> {
+  late bool _expanded = widget.initiallyExpanded;
+
+  @override
+  void didUpdateWidget(covariant _ParentTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.expandToken != widget.expandToken) {
+      _expanded = widget.initiallyExpanded;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ListTile(
+          contentPadding: widget.tilePadding,
+          leading: widget.leading,
+          title: widget.title,
+          subtitle: widget.subtitle,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ...widget.trailingActions,
+              IconButton(
+                tooltip: _expanded ? 'Collapse' : 'Expand',
+                icon: AnimatedRotation(
+                  turns: _expanded ? 0.5 : 0.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: const Icon(Icons.expand_more),
+                ),
+                onPressed: () =>
+                    setState(() => _expanded = !_expanded),
+              ),
+            ],
+          ),
+          onTap: widget.onTap,
+        ),
+        if (_expanded) ...widget.children,
+      ],
     );
   }
 }

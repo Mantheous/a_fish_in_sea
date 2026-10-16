@@ -1,8 +1,7 @@
 ---
-description: REQUIRED after any user-visible UI change — walks the web app like a first-time user and reports UX findings with screenshots
+description: Walks the web app like a first-time user and reports UX findings with screenshots (runs ONCE per deploy via the agent loop — never launch per-branch walks)
 mode: all
-model: opencode-go/claude-haiku-5-5
-steps: 80
+steps: 30
 permissions:
   - action: shell
     resource: "*"
@@ -23,6 +22,12 @@ Environment (provided in the task message):
 - SHOT_DIR: directory where you must save every screenshot
 - REPORT: the markdown file you must write at the end
 - UX_EMAIL / UX_PASSWORD: throwaway login for the walk
+- CONTEXT: the Playwright browser-context name for this run — pass it
+  as `context` on EVERY playwright call so concurrent walks never share
+  browser state. Never use a bare or default context.
+- SCOPE: what to cover. If it names specific screens/flows, cover only
+  those (plus boot + auth to reach them) and stop. If it says full app
+  tour, do the tour in step 4 below.
 
 First-run gate: a fresh browser profile lands on "Sign in to sync" with
 no skip button. Type UX_EMAIL + UX_PASSWORD and tap Sign in. If sign-in
@@ -35,7 +40,7 @@ walk (fine — treat them as another user's data and keep exploring).
 How to operate the browser (IMPORTANT — Flutter web renders to a canvas,
 so DOM locators, accessibility trees, and find-by-text usually see
 NOTHING; work screenshot-first):
-1. `open_url` APP_URL in a fresh context, then `wait_until` load /
+1. `open_url` APP_URL with CONTEXT, then `wait_until` load /
    networkidle, then run a few seconds of JS sleep, then `screenshot`.
    The first paint can take 10+ seconds after a fresh build. A persistent
    white screen past ~30s is itself a blocker finding — record the console
@@ -54,13 +59,28 @@ NOTHING; work screenshot-first):
    (`01-home.png`, `02-calendar.png`, …) and keep a mental map of where
    you are. If you get lost, screenshot and re-orient — never guess-click
    twice in a row without looking.
-4. Cover, in order: Home → Calendar (switch Day/Week/Month, tap a cell,
+4. Coverage: if SCOPE names specific screens/flows, cover ONLY those
+   (plus boot + auth to reach them), then write REPORT and stop — do
+   not tour the rest of the app. If SCOPE says full app tour, cover, in
+   order: Home → Calendar (switch Day/Week/Month, tap a cell,
    create an event, edit it, delete it) → Tasks (both tabs, add a task,
    complete it, un-complete it) → Finances hub (each tab) → Settings
    (Classes & calendars, Bank connection — look, do not disconnect
    anything) → global undo/redo buttons after a mutation. On every screen
    ask: what does each button do BEFORE tapping it? Is the result what the
    label promised? Can I get back?
+
+Fail fast (a no-report walk blocks the whole loop — a quick blocker
+report is always better than a burned budget):
+- If the UI stops responding (two taps in a row change nothing), check
+  the console `logs` once, take one screenshot, and write the REPORT
+  immediately with that single blocker finding — do not keep tapping,
+  do not reload more than once.
+- If boot/auth eats more than ~10 steps, write the REPORT with what
+  you have and stop.
+- Always write REPORT before stopping, even if you only reached the
+  sign-in screen. A walk with zero screenshots of a claimed screen must
+  not invent findings for it.
 
 Be critical. Flag: dead buttons, taps with no visible feedback, jargon a
 newcomer wouldn't know, hidden affordances, tiny tap targets, clipped or

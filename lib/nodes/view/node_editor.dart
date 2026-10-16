@@ -1,17 +1,28 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 
+import 'package:a_fish_in_sea/anki/anki_connect.dart';
+import 'package:a_fish_in_sea/anki/anki_server.dart';
+import 'package:a_fish_in_sea/anki/anki_import.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
+import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
+import 'package:a_fish_in_sea/sync/auth_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/task_assignee.dart';
 import 'package:a_fish_in_sea/planner/view/people_field.dart';
 
-Future<void> showNodeEditor(
+/// Shows the node editor dialog. Returns the created or updated node on
+/// save, or null when the dialog is cancelled or the node is deleted.
+/// Callers that ignore the result keep working unchanged.
+Future<Node?> showNodeEditor(
   BuildContext context, {
   Node? existing,
   bool enableMoney = false,
@@ -21,7 +32,7 @@ Future<void> showNodeEditor(
   /// goal tile). Ignored when [existing] is set.
   List<String> initialParentIds = const [],
 }) {
-  return showDialog<void>(
+  return showDialog<Node?>(
     context: context,
     builder: (dialogContext) => _NodeEditorDialog(
       existing: existing,
@@ -53,10 +64,9 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   late final TextEditingController _notes;
   late List<String> _parents;
 
+  bool _isUnbounded = false;
+
   DateTime? _due;
-  DateTime? _blockStart;
-  DateTime? _blockEnd;
-  bool _allDay = false;
   bool _dateFixed = false;
 
   bool _hasMoney = false;
@@ -71,6 +81,15 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   bool _hasEffort = false;
   late final TextEditingController _minutes;
   bool _effortFixed = false;
+
+  bool _hasAnki = false;
+  late final TextEditingController _deck;
+  late final TextEditingController _targetReviews;
+  TimeScale? _ankiPeriod;
+  late final TextEditingController _ankiCustomDays;
+  late final TextEditingController _manualReviews;
+  DateTime? _ankiSyncedAt;
+  bool _ankiSyncing = false;
 
   bool _hasRecurrence = false;
   TimeScale _frequency = TimeScale.daily;
@@ -89,10 +108,8 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _title = TextEditingController(text: e?.title ?? '');
     _notes = TextEditingController(text: e?.notes ?? '');
     _parents = List.of(e?.parentIds ?? widget.initialParentIds);
+    _isUnbounded = e?.isUnbounded ?? false;
     _due = e?.schedule?.due;
-    _blockStart = e?.schedule?.start;
-    _blockEnd = e?.schedule?.end;
-    _allDay = e?.schedule?.allDay ?? false;
     _dateFixed = e?.schedule?.isFixed ?? false;
     _hasMoney = e?.money != null || widget.enableMoney;
     _amount = TextEditingController(
@@ -110,6 +127,18 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _minutes = TextEditingController(
         text: e?.effort != null ? e!.effort!.targetMinutes.toString() : '');
     _effortFixed = e?.effort?.isFixed ?? false;
+    _hasAnki = e?.anki != null;
+    _deck = TextEditingController(text: e?.anki?.deckName ?? '');
+    _targetReviews = TextEditingController(
+        text: e?.anki != null ? e!.anki!.targetReviews.toString() : '');
+    _ankiPeriod = e?.anki?.period;
+    _ankiCustomDays = TextEditingController(
+        text: e?.anki?.customPeriodDays?.toString() ?? '30');
+    _manualReviews = TextEditingController(
+        text: e?.anki?.reviewsActual != null
+            ? e!.anki!.reviewsActual.toString()
+            : '');
+    _ankiSyncedAt = e?.anki?.lastSyncedAt;
     _hasRecurrence = e?.recurrence != null || widget.enableRecurrence;
     _frequency = e?.recurrence?.frequency ?? TimeScale.daily;
     _recurEnd = e?.recurrence?.endDate;
@@ -128,6 +157,10 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _amount.dispose();
     _customDaysCtrl.dispose();
     _minutes.dispose();
+    _deck.dispose();
+    _targetReviews.dispose();
+    _ankiCustomDays.dispose();
+    _manualReviews.dispose();
     _horizon.dispose();
     _minBalance.dispose();
     super.dispose();
@@ -171,6 +204,18 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
               selected: _people,
               onChanged: (next) => setState(() => _people = next),
             ),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text('Abstract / unbounded goal'),
+              subtitle: const Text(
+                  'Ongoing direction — no due date, no progress bar. '
+                  'Track it through concrete subgoals.'),
+              value: _isUnbounded,
+              onChanged: (v) => setState(() => _isUnbounded = v),
+            ),
+            if (!_isUnbounded) ...[
             const SizedBox(height: 16),
             _sectionTitle(context, 'Schedule'),
             _DateRow(
@@ -189,16 +234,6 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
               onClear:
                   _due == null ? null : () => setState(() => _due = null),
             ),
-            _BlockField(
-              start: _blockStart,
-              end: _blockEnd,
-              allDay: _allDay,
-              onChanged: (start, end, allDay) => setState(() {
-                _blockStart = start;
-                _blockEnd = end;
-                _allDay = allDay;
-              }),
-            ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               dense: true,
@@ -207,6 +242,18 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
               value: _dateFixed,
               onChanged: (v) => setState(() => _dateFixed = v),
             ),
+            // Calendar time now comes from assigned events, not the goal
+            // itself: the old block picker was removed. A stored block
+            // from before is dropped on save (the due date is kept).
+            if ((widget.existing?.schedule?.hasCalendarBlock ?? false))
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'This goal has an old calendar block — saving removes '
+                  'it. Assign an event to put it on the calendar instead.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
             const SizedBox(height: 8),
             _sectionTitle(context, 'Money'),
             SwitchListTile(
@@ -329,6 +376,103 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
               ),
             ],
             const SizedBox(height: 8),
+            _sectionTitle(context, 'Memorization (Anki)'),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text('Has memorization target'),
+              subtitle: const Text(
+                  'Review N Anki cards per period — progress feeds from '
+                  'AnkiConnect or manual counts'),
+              value: _hasAnki,
+              onChanged: (v) => setState(() => _hasAnki = v),
+            ),
+            if (_hasAnki) ...[
+              TextField(
+                controller: _deck,
+                decoration: const InputDecoration(
+                  labelText: 'Deck (blank = all decks)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _targetReviews,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Target reviews',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<TimeScale?>(
+                initialValue: _ankiPeriod,
+                decoration:
+                    const InputDecoration(labelText: 'Period (optional)'),
+                items: [
+                  const DropdownMenuItem(
+                      value: null, child: Text('One-time')),
+                  for (final s in TimeScale.values)
+                    DropdownMenuItem(value: s, child: Text(s.displayName)),
+                ],
+                onChanged: (v) => setState(() => _ankiPeriod = v),
+              ),
+              if (_ankiPeriod == TimeScale.custom) ...[
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _ankiCustomDays,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                      labelText: 'Custom period (days)'),
+                ),
+              ],
+              const SizedBox(height: 8),
+              TextField(
+                controller: _manualReviews,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Reviews so far (this period)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 4),
+              if (_ankiSyncedAt != null)
+                Text(
+                  'Last counted '
+                  '${MaterialLocalizations.of(context).formatFullDate(_ankiSyncedAt!)}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              Row(
+                children: [
+                  TextButton.icon(
+                    onPressed: _ankiSyncing
+                        ? null
+                        : () => _syncAnki(context),
+                    icon: _ankiSyncing
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2))
+                        : const Icon(Icons.sync, size: 16),
+                    label: const Text('Sync from Anki'),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => _importAnki(context),
+                    icon: const Icon(Icons.upload_outlined, size: 16),
+                    label: const Text('Paste stats'),
+                  ),
+                ],
+              ),
+              if (kIsWeb)
+                Text(
+                  'Sync from Anki goes through the app server here — '
+                  'sign in first. Manual entry and pasted stats still '
+                  'work offline.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+            ],
+            const SizedBox(height: 8),
             _sectionTitle(context, 'Repeats'),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
@@ -410,14 +554,72 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                     labelText: 'Floor balance', prefixText: '\$ '),
               ),
             ],
-            if (e != null && e.hasReported && e.reportedDuration != null) ...[
+            ], // end if (!_isUnbounded): dates, targets, repeats, rules
+            if (_isUnbounded) ...[
               const SizedBox(height: 8),
               Text(
-                'Reported ${e.reportedDuration!.inMinutes}m '
-                '(${DateFormat('h:mm a').format(e.actualStart!)} – '
-                '${DateFormat('h:mm a').format(e.actualEnd!)})',
+                'Add concrete subgoals underneath (e.g. “Serve others '
+                'this week”) — they carry the dates and the progress.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
+            ],
+            if (e != null &&
+                (e.hasReported && e.reportedDuration != null ||
+                    e.isTracking)) ...[
+              const SizedBox(height: 8),
+              Builder(builder: (context) {
+                // Live copy: a timer correction made in the edit sheet
+                // (opened below) shows here without reopening the editor.
+                Node live = e;
+                try {
+                  live = context.watch<NodeCubit>().byId(e.id) ?? e;
+                } catch (_) {}
+                final trackingLine = live.isTracking &&
+                        live.timerStartedAt != null
+                    ? 'Recording since ${DateFormat('h:mm a').format(live.timerStartedAt!)}'
+                    : null;
+                final reportedLine = live.hasReported &&
+                        live.reportedDuration != null &&
+                        live.actualStart != null &&
+                        live.actualEnd != null
+                    ? 'Reported ${live.reportedDuration!.inMinutes}m '
+                        '(${DateFormat('h:mm a').format(live.actualStart!)} – '
+                        '${DateFormat('h:mm a').format(live.actualEnd!)})'
+                    : null;
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (trackingLine != null)
+                            Text(
+                              trackingLine,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(fontWeight: FontWeight.w600),
+                            ),
+                          if (reportedLine != null) Text(
+                            reportedLine,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => showEditNodeTimerSheet(
+                        context,
+                        nodeId: e.id,
+                      ),
+                      child: Text(trackingLine != null
+                          ? 'Edit start'
+                          : 'Adjust'),
+                    ),
+                  ],
+                );
+              }),
             ],
             if (e != null && e.status == NodeStatus.failed) ...[
               const SizedBox(height: 4),
@@ -470,25 +672,55 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       );
       return;
     }
+    _saveConfirmed(context);
+  }
+
+  /// Second half of [_save], after the unbounded-facets confirm dialog.
+  /// Split out so the async confirm gate stays readable.
+  Future<void> _saveConfirmed(BuildContext context) async {
+    // The cubit is read before any await so no BuildContext crosses the
+    // confirm dialog's async gap.
     final cubit = context.read<NodeCubit>();
+    // Going unbounded drops dates/targets/repeats/rules. The hidden
+    // sections' state is still in memory here, so confirm before the
+    // save clears stored facets — one tap back to safety.
+    if (_isUnbounded) {
+      final dropping = <String>[];
+      if (_due != null) {
+        dropping.add('schedule');
+      }
+      if (_hasMoney) dropping.add('money target');
+      if (_hasEffort) dropping.add('time target');
+      if (_hasAnki) dropping.add('memorization target');
+      if (_hasRecurrence) dropping.add('repeats');
+      if (_ruleKind != NodeRuleKind.none) dropping.add('rule');
+      if (dropping.isNotEmpty) {
+        final drop = await _confirmDropFacets(context, dropping);
+        if (!context.mounted) return;
+        if (!drop) return;
+      }
+    }
+    if (!context.mounted) return;
+    final title = _title.text.trim();
+    if (title.isEmpty) return; // guarded in [_save]; re-check after await.
     final notes =
         _notes.text.trim().isEmpty ? null : _notes.text.trim();
+    final opening = widget.existing;
+    // Re-read live: a timer correction (start edit / manual entry) or a
+    // background link made while the editor was open must survive this
+    // save — the snapshot from open time would otherwise clobber it.
+    // Form-owned fields below still come from the controllers, so only
+    // non-form state refreshes.
+    final existing = opening == null
+        ? null
+        : cubit.byId(opening.id) ?? opening;
 
     ScheduleFacet? schedule;
-    if (_due != null ||
-        _blockStart != null ||
-        _blockEnd != null ||
-        _dateFixed) {
-      var end = _blockEnd;
-      var start = _blockStart;
-      if (start != null && end != null && !end.isAfter(start)) {
-        end = start.add(const Duration(hours: 1));
-      }
+    // Goals carry a due date at most — calendar time comes from assigned
+    // events. Any stored block (start/end) from before is dropped here.
+    if (_due != null || _dateFixed) {
       schedule = ScheduleFacet(
         due: _due,
-        start: start,
-        end: end,
-        allDay: _allDay,
         isFixed: _dateFixed,
       );
     }
@@ -498,10 +730,10 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       final target = double.tryParse(_amount.text.trim()) ?? 0.0;
       money = MoneyFacet(
         targetAmount: target,
-        actualAmount: widget.existing?.money?.actualAmount,
+        actualAmount: existing?.money?.actualAmount,
         direction: _direction,
         status:
-            widget.existing?.money?.status ?? MoneyStatus.projected,
+            existing?.money?.status ?? MoneyStatus.projected,
         period: _period,
         customPeriodDays: _period == TimeScale.custom
             ? int.tryParse(_customDaysCtrl.text.trim())
@@ -509,10 +741,10 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         isRecurring: _moneyRecurring,
         autoRollover: _autoRollover,
         rolloverAmount:
-            widget.existing?.money?.rolloverAmount ?? 0.0,
+            existing?.money?.rolloverAmount ?? 0.0,
         isFixed: _moneyFixed,
         linkedTransactionIds:
-            widget.existing?.money?.linkedTransactionIds ?? const [],
+            existing?.money?.linkedTransactionIds ?? const [],
       );
     }
 
@@ -521,6 +753,24 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       effort = EffortFacet(
         targetMinutes: int.tryParse(_minutes.text.trim()) ?? 0,
         isFixed: _effortFixed,
+      );
+    }
+
+    AnkiFacet? anki;
+    if (_hasAnki) {
+      final deck = _deck.text.trim();
+      final manual = int.tryParse(_manualReviews.text.trim());
+      anki = AnkiFacet(
+        deckName: deck.isEmpty ? null : deck,
+        targetReviews: int.tryParse(_targetReviews.text.trim()) ?? 0,
+        period: _ankiPeriod,
+        customPeriodDays: _ankiPeriod == TimeScale.custom
+            ? int.tryParse(_ankiCustomDays.text.trim())
+            : null,
+        // A blank count keeps the previously synced number (or nothing
+        // on a new goal) instead of zeroing it.
+        reviewsActual: manual ?? existing?.anki?.reviewsActual,
+        lastSyncedAt: manual != null ? DateTime.now() : _ankiSyncedAt,
       );
     }
 
@@ -541,8 +791,20 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       );
     }
 
-    final existing = widget.existing;
+    // Unbounded goals carry no dates, targets, repeats, or rules — the
+    // hidden sections' stale state is dropped so the save validates.
+    final isUnbounded = _isUnbounded;
+    if (isUnbounded) {
+      schedule = null;
+      money = null;
+      effort = null;
+      anki = null;
+      recurrence = null;
+      rule = null;
+    }
+
     String? error;
+    Node? result;
     if (existing == null) {
       final node = Node(
         id: 'node:${DateTime.now().microsecondsSinceEpoch}',
@@ -550,41 +812,52 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         notes: notes,
         parentIds: _parents,
         createdAt: DateTime.now(),
+        isUnbounded: isUnbounded,
         schedule: schedule,
         money: money,
         effort: effort,
+        anki: anki,
         recurrence: recurrence,
         rule: rule,
         assignees: _people,
       );
       error = cubit.addNode(node);
-      if (error == null && recurrence != null) {
-        cubit.generateInstances(
-          templateId: node.id,
-          from: DateTime.now(),
-          horizon: DateTime.now().add(const Duration(days: 365)),
-        );
+      if (error == null) {
+        result = node;
+        if (recurrence != null) {
+          cubit.generateInstances(
+            templateId: node.id,
+            from: DateTime.now(),
+            horizon: DateTime.now().add(const Duration(days: 365)),
+          );
+        }
       }
     } else {
-      error = cubit.updateNode(
-        existing.copyWith(
-          title: title,
-          notes: notes,
-          clearNotes: notes == null,
-          parentIds: _parents,
-          schedule: schedule,
-          clearSchedule: schedule == null,
-          money: money,
-          clearMoney: money == null,
-          effort: effort,
-          clearEffort: effort == null,
-          recurrence: recurrence,
-          clearRecurrence: recurrence == null,
-          rule: rule,
-          clearRule: rule == null,
-          assignees: _people,
-        ),
+      // Built on the live copy so timer/reported edits made while the
+      // editor was open survive (see above); every form-owned field is
+      // still set explicitly from the controllers.
+      final updated = existing.copyWith(
+        title: title,
+        notes: notes,
+        clearNotes: notes == null,
+        parentIds: _parents,
+        isUnbounded: isUnbounded,
+        schedule: schedule,
+        clearSchedule: schedule == null,
+        money: money,
+        clearMoney: money == null,
+        effort: effort,
+        clearEffort: effort == null,
+        anki: anki,
+        clearAnki: anki == null,
+        recurrence: recurrence,
+        clearRecurrence: recurrence == null,
+        rule: rule,
+        clearRule: rule == null,
+        assignees: _people,
       );
+      error = cubit.updateNode(updated);
+      if (error == null) result = updated;
     }
     if (error != null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -592,28 +865,184 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       );
       return;
     }
-    Navigator.of(context).pop();
+    Navigator.of(context).pop(result);
+  }
+
+  /// Pulls today's review count from AnkiConnect into the manual field.
+  /// Native builds call AnkiConnect directly; the web build goes through
+  /// the app server (browsers cannot reach AnkiConnect themselves).
+  Future<void> _syncAnki(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    String host = '';
+    try {
+      host = context.read<SettingsCubit>().state.ankiConnectHost;
+    } catch (_) {}
+    final deck = _deck.text.trim();
+    setState(() => _ankiSyncing = true);
+    try {
+      final int count;
+      if (kIsWeb) {
+        count = await ankiServerReviewsToday(
+          context.read<AuthCubit>().syncClient,
+          deck: deck.isEmpty ? null : deck,
+        );
+      } else {
+        final client =
+            AnkiConnectClient(host: host, httpClient: http.Client());
+        try {
+          count =
+              await client.reviewsToday(deck: deck.isEmpty ? null : deck);
+        } finally {
+          client.close();
+        }
+      }
+      if (!context.mounted) return;
+      setState(() {
+        _manualReviews.text = count.toString();
+        _ankiSyncedAt = DateTime.now();
+      });
+      messenger.showSnackBar(
+        SnackBar(content: Text('Anki: $count card${count == 1 ? '' : 's'} reviewed today')),
+      );
+    } on AnkiServerException catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } on AnkiException catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (context.mounted) setState(() => _ankiSyncing = false);
+    }
+  }
+
+  /// Pastes "deck,count per line" stats (see parseAnkiReviewCounts) into
+  /// the manual field. The fallback for web and mobile-only users.
+  Future<void> _importAnki(BuildContext context) async {
+    final pasted = TextEditingController();
+    final result = await showDialog<AnkiImportResult>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Paste Anki stats'),
+        content: TextField(
+          controller: pasted,
+          maxLines: 6,
+          decoration: const InputDecoration(
+            hintText: '42\nJapanese, 30',
+            helperText: 'One count per line: "42" or "Deck, 42". '
+                'Lines starting with # are ignored.',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              try {
+                Navigator.of(ctx).pop(parseAnkiReviewCounts(pasted.text));
+              } on FormatException catch (e) {
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  SnackBar(content: Text(e.message)),
+                );
+              }
+            },
+            child: const Text('Apply'),
+          ),
+        ],
+      ),
+    );
+    pasted.dispose();
+    if (result == null || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() {
+      // A single named deck fills the deck field too (when blank); mixed
+      // pastes apply the total and leave the deck alone.
+      final named =
+          result.byDeck.keys.where((k) => k != '*').toList();
+      if (named.length == 1 && _deck.text.trim().isEmpty) {
+        _deck.text = named.single;
+        _manualReviews.text = result.byDeck[named.single].toString();
+      } else {
+        _manualReviews.text = result.total.toString();
+      }
+      _ankiSyncedAt = DateTime.now();
+    });
+    messenger.showSnackBar(
+      SnackBar(content: Text('Pasted ${result.total} reviews')),
+    );
+  }
+
+  /// Confirm gate before an unbounded save clears dates/targets. Returns
+  /// true when the user accepts the removal.
+  Future<bool> _confirmDropFacets(
+      BuildContext context, List<String> dropping) async {
+    final drop = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove dates and targets?'),
+        content: Text(
+          'Saving as an unbounded goal removes this goal\u2019s '
+          '${dropping.join(', ')}. Subgoals keep their own dates.\n\n'
+          'You can still Undo right after saving.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Keep editing'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Remove and save'),
+          ),
+        ],
+      ),
+    );
+    return drop ?? false;
   }
 
   void _delete(BuildContext context, Node existing) {
+    // Capture everything up front: the dialog is popped BEFORE the banner
+    // shows. Showing an action SnackBar from a dialog and popping in the
+    // same frame leaves it up forever (its auto-dismiss never fires), so
+    // the old order stuck a permanent 'Node deleted' banner on screen.
+    // The old code also read UndoCubit through this (soon unmounted)
+    // context, which threw on Undo.
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final nodes = context.read<NodeCubit>();
+    final undo = context.read<UndoCubit>();
+    CalendarCubit? calendar;
+    try {
+      calendar = context.read<CalendarCubit>();
+    } catch (_) {}
     final eventId =
         existing.calendarEventId ?? existing.sourceEventId;
-    context.read<NodeCubit>().deleteNode(existing.id);
+    nodes.deleteNode(existing.id);
     if (eventId != null) {
       try {
-        context.read<CalendarCubit>().clearTaskLink(eventId);
+        calendar?.clearTaskLink(eventId);
       } catch (_) {}
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text('Node deleted'),
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: () => context.read<UndoCubit>().undo(),
+    navigator.pop();
+    // Replace any banner still up from an earlier delete: queued
+    // snackbars each linger 4s and stack into one that won't go away.
+    // persist: false is required: a SnackBar with an action persists
+    // forever by default, which stuck this banner on screen.
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: const Text('Node deleted'),
+          duration: const Duration(seconds: 4),
+          persist: false,
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: undo.undo,
+          ),
         ),
-      ),
-    );
-    Navigator.of(context).pop();
+      );
   }
 }
 
@@ -725,124 +1154,5 @@ class _DateRow extends StatelessWidget {
           ),
       ],
     );
-  }
-}
-
-class _BlockField extends StatelessWidget {
-  final DateTime? start;
-  final DateTime? end;
-  final bool allDay;
-  final void Function(DateTime? start, DateTime? end, bool allDay)
-      onChanged;
-
-  const _BlockField({
-    required this.start,
-    required this.end,
-    required this.allDay,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final s = start;
-    final e = end;
-    final label = s != null && e != null && !allDay
-        ? '${DateFormat('EEE, MMM d').format(s)} · '
-            '${TimeOfDay.fromDateTime(s).format(context)} – '
-            '${TimeOfDay.fromDateTime(e).format(context)}'
-        : s != null && allDay
-            ? '${DateFormat('EEE, MMM d').format(s)} · all day'
-            : 'No calendar block';
-    return Column(
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Calendar block',
-                      style:
-                          Theme.of(context).textTheme.labelLarge),
-                  Text(label,
-                      style: Theme.of(context).textTheme.bodySmall),
-                ],
-              ),
-            ),
-            IconButton(
-              tooltip: 'Pick block',
-              icon: const Icon(Icons.schedule),
-              onPressed: () => _pick(context),
-            ),
-            if (s != null || e != null)
-              IconButton(
-                tooltip: 'Clear block',
-                icon: const Icon(Icons.event_busy),
-                onPressed: () => onChanged(null, null, false),
-              ),
-          ],
-        ),
-        Row(
-          children: [
-            const Expanded(child: Text('All day')),
-            Switch(
-              value: allDay,
-              onChanged: s == null
-                  ? null
-                  : (v) => onChanged(s, e, v),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Future<void> _pick(BuildContext context) async {
-    final now = DateTime.now();
-    final initialDate = start ?? now.add(const Duration(days: 1));
-    final pickedDate = await showDatePicker(
-      context: context,
-      initialDate: initialDate,
-      firstDate: DateTime(2000),
-      lastDate: DateTime(2100),
-    );
-    if (pickedDate == null || !context.mounted) return;
-    final initialStart = start != null
-        ? TimeOfDay.fromDateTime(start!)
-        : const TimeOfDay(hour: 9, minute: 0);
-    final pickedStart = await showTimePicker(
-      context: context,
-      initialTime: initialStart,
-    );
-    if (pickedStart == null || !context.mounted) return;
-    final initialEnd = end != null
-        ? TimeOfDay.fromDateTime(end!)
-        : TimeOfDay(
-            hour: (pickedStart.hour + 1) % 24,
-            minute: pickedStart.minute,
-          );
-    final pickedEnd = await showTimePicker(
-      context: context,
-      initialTime: initialEnd,
-    );
-    if (pickedEnd == null || !context.mounted) return;
-    var blockStart = DateTime(
-      pickedDate.year,
-      pickedDate.month,
-      pickedDate.day,
-      pickedStart.hour,
-      pickedStart.minute,
-    );
-    var blockEnd = DateTime(
-      pickedDate.year,
-      pickedDate.month,
-      pickedDate.day,
-      pickedEnd.hour,
-      pickedEnd.minute,
-    );
-    if (!blockEnd.isAfter(blockStart)) {
-      blockEnd = blockStart.add(const Duration(hours: 1));
-    }
-    onChanged(blockStart, blockEnd, allDay);
   }
 }

@@ -44,7 +44,7 @@ PRS="$(gh pr list --state open --limit 20 \
   --jq '.[] | "\(.number)|\(.headRefName)|\(.headRefOid)"' 2>/dev/null || true)"
 echo "$PRS" | while IFS='|' read -r N BRANCH SHA; do
   [ -z "${N:-}" ] && continue
-  case "$BRANCH" in agent/*) ;; *) continue ;; esac
+  case "$BRANCH" in agent/*|agent-*) ;; *) continue ;; esac
   # Skip when the latest data-guard comment already covers this head SHA.
   if gh pr view "$N" --comments --json comments --jq '.comments[].body' 2>/dev/null \
       | grep -qF "$GUARD_MARKER sha=$SHA"; then
@@ -58,7 +58,7 @@ Audit this pull request for risks to the user's existing data before a human
 merges it. Read-only. Follow your agent instructions exactly."
   OUT_FILE="$(mktemp)"
   if ! opencode run --agent data-guardian --title "data-guard-pr-$N" \
-      "$PROMPT" >"$OUT_FILE" 2>"$OUT_FILE.err"; then
+      "$PROMPT" </dev/null >"$OUT_FILE" 2>"$OUT_FILE.err"; then
     echo "[data-guard] PR #$N audit run failed: $(tail -n 3 "$OUT_FILE.err")"
     rm -f "$OUT_FILE" "$OUT_FILE.err"
     continue
@@ -66,34 +66,71 @@ merges it. Read-only. Follow your agent instructions exactly."
   rm -f "$OUT_FILE.err"
   AUDIT="$(cat "$OUT_FILE"; rm -f "$OUT_FILE")"
   VERDICT="$(echo "$AUDIT" | grep -m1 '^Verdict:' || true)"
-  gh pr comment "$N" --body "$AUDIT
+  # An empty verdict, a template placeholder, or anything that is not an
+  # explicit safe/block verdict means the audit run produced nothing usable
+  # (a rate-limited model echoes the template back). That is a FAILED audit,
+  # never a pass — observed for real on 2026-10-13 when a placeholder
+  # verdict marked a revision "safe". The guardian template is
+  # 'Verdict: safe | block', so any '<' or 'safe | block' text is a template
+  # echo, not a real verdict.
+  if [ -z "$VERDICT" ] || echo "$VERDICT" | grep -qF '<' || echo "$VERDICT" | grep -qF 'safe | block'; then
+    echo "[data-guard] PR #$N audit produced no usable verdict — retried next poll, nothing labeled"
+    "$DIR/tg.sh" "⚠️ Data guardian audit for PR #$N produced no verdict (failed run) — retrying next poll:
+$(gh pr view "$N" --json url --jq .url 2>/dev/null || true)" || true
+    continue
+  fi
+  if ! gh pr comment "$N" --body "$AUDIT
 
-$GUARD_MARKER sha=$SHA" >/dev/null
-  gh pr edit "$N" --remove-label "$PASS_LABEL" --remove-label "$FAIL_LABEL" >/dev/null 2>&1 || true
+$GUARD_MARKER sha=$SHA" >/dev/null; then
+    echo "[data-guard] PR #$N audit comment failed (gh hiccup) — retried next poll"
+    "$DIR/tg.sh" "⚠️ Data guardian could not post the audit for PR #$N — retrying next poll:
+$(gh pr view "$N" --json url --jq .url 2>/dev/null || true)" || true
+    continue
+  fi
+  "$DIR/label.sh" "$N" remove "$PASS_LABEL" "$FAIL_LABEL" || true
   if echo "$VERDICT" | grep -qi '^Verdict: block'; then
-    gh pr edit "$N" --add-label "$FAIL_LABEL" >/dev/null
+    "$DIR/label.sh" "$N" add "$FAIL_LABEL" || true
     echo "[data-guard] PR #$N BLOCKED — $VERDICT"
     "$DIR/tg.sh" "🛑 Data guardian blocked PR #$N: $VERDICT
 $(gh pr view "$N" --json url --jq .url)
 Audit comment on the PR." || true
-  else
-    gh pr edit "$N" --add-label "$PASS_LABEL" >/dev/null
+  elif echo "$VERDICT" | grep -qi '^Verdict: safe'; then
+    "$DIR/label.sh" "$N" add "$PASS_LABEL" || true
     echo "[data-guard] PR #$N safe — $VERDICT"
+  else
+    echo "[data-guard] PR #$N unrecognized verdict ($VERDICT) — leaving unlabeled, retried next poll"
+    "$DIR/tg.sh" "⚠️ Data guardian audit for PR #$N had an unrecognized verdict — retrying next poll:
+$(gh pr view "$N" --json url --jq .url 2>/dev/null || true)" || true
   fi
 done
 
 # ── 2) Preflight for the revision deploy.sh will build ──────────────────
+# NOTE: deploy.sh fast-forwards main to origin/main before building, so the
+# revision it ships is origin/main — NOT necessarily local HEAD. Auditing
+# local HEAD here used to silently skip newly merged commits (DESC matched
+# the old marker, guardian saw an empty origin/main..HEAD diff, deploy then
+# shipped the unaudited tip). DESC is therefore keyed on origin/main, and
+# the guardian audits HEAD..origin/main (the incoming commits deploy will
+# pick up) plus any uncommitted work.
 git fetch origin --quiet 2>&1 | head -n 5 || true
 if [ -n "$(git status --porcelain | head -n 20)" ]; then
   WT_HASH="$(git status --porcelain | sha256sum | cut -c1-16)"
   DESC="worktree-$(git rev-parse HEAD)-$WT_HASH"
+  AUDIT_RANGE_DESC="uncommitted work (git diff HEAD) plus incoming commits $(git rev-parse HEAD)..$(git rev-parse origin/main 2>/dev/null || echo origin/main)"
 else
   BRANCH="$(git rev-parse --abbrev-ref HEAD)"
   if [ "$BRANCH" != "main" ]; then
     echo "[data-guard] clean tree on $BRANCH — deploy would skip; nothing to audit"
     exit 0
   fi
-  DESC="main-$(git rev-parse HEAD)"
+  TARGET_SHA="$(git rev-parse origin/main 2>/dev/null || git rev-parse HEAD)"
+  HEAD_SHA="$(git rev-parse HEAD)"
+  DESC="main-$TARGET_SHA"
+  if [ "$HEAD_SHA" = "$TARGET_SHA" ]; then
+    AUDIT_RANGE_DESC="HEAD ($HEAD_SHA, already at origin/main tip)"
+  else
+    AUDIT_RANGE_DESC="incoming commits $HEAD_SHA..$TARGET_SHA (git log $HEAD_SHA..$TARGET_SHA plus git diff $HEAD_SHA...$TARGET_SHA)"
+  fi
 fi
 
 if [ -f "$OVERRIDE" ] && { [ ! -s "$OVERRIDE" ] || [ "$(cat "$OVERRIDE")" = "$DESC" ]; }; then
@@ -122,10 +159,12 @@ fi
 
 PROMPT="MODE: preflight
 DESC: $DESC
-Audit the pending changes (uncommitted work in the worktree plus anything on
-this branch beyond origin/main) for risks to the user's existing data. This
-is the revision the next web deploy ships. Read-only. Follow your agent
-instructions exactly."
+RANGE: $AUDIT_RANGE_DESC
+Audit the changes the next web deploy ships: $AUDIT_RANGE_DESC. On a clean
+main this is the incoming origin/main commits deploy.sh is about to
+fast-forward to (NOT an empty origin/main..HEAD — that range is backwards).
+Uncommitted work in the worktree (git diff HEAD) ships too when present.
+Read-only. Follow your agent instructions exactly."
 if ! opencode run --agent data-guardian --title "data-guard-$DESC" \
     "$PROMPT" >/tmp/opencode/data-guard-audit.log 2>&1; then
   echo "[data-guard] audit run failed (next poll retries); not blocking"
@@ -133,15 +172,26 @@ if ! opencode run --agent data-guardian --title "data-guard-$DESC" \
 fi
 cp /tmp/opencode/data-guard-audit.log "$REPORT"
 VERDICT="$(grep -m1 '^Verdict:' "$REPORT" || true)"
+# No usable verdict = failed audit run (template echo). Not safe, not
+# blocked: re-audited next poll. The template is 'Verdict: safe | block', so
+# any '<' or 'safe | block' text is a template echo.
+if [ -z "$VERDICT" ] || echo "$VERDICT" | grep -qF '<' || echo "$VERDICT" | grep -qF 'safe | block'; then
+  echo "[data-guard] preflight audit for $DESC produced no usable verdict — not marking safe; retried next poll"
+  "$DIR/tg.sh" "⚠️ Data guardian preflight for $DESC produced no verdict (failed run) — not marking safe; retrying next poll" || true
+  exit 0
+fi
 if echo "$VERDICT" | grep -qi '^Verdict: block'; then
   echo "$DESC" > "$BLOCK_MARKER"
   echo "[data-guard] BLOCKED $DESC — $VERDICT"
   "$DIR/tg.sh" "🛑 Data guardian blocked the next web deploy ($DESC): $VERDICT
 Report: $REPORT
 Override: touch .agent-data-override, or fix the findings." || true
-else
+elif echo "$VERDICT" | grep -qi '^Verdict: safe'; then
   rm -f "$BLOCK_MARKER"
   echo "$DESC" > "$DESC_MARKER"
   echo "[data-guard] safe $DESC — $VERDICT"
+else
+  echo "[data-guard] preflight audit for $DESC had an unrecognized verdict — not marking safe; retried next poll"
+  "$DIR/tg.sh" "⚠️ Data guardian preflight for $DESC had an unrecognized verdict — not marking safe; retrying next poll" || true
 fi
 echo "[data-guard] done"

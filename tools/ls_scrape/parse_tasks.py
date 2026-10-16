@@ -23,7 +23,7 @@ import html as htmlmod
 import json
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -130,33 +130,98 @@ def first_sentences(text: str, n: int = 2) -> str:
     return out or text.strip()[:400]
 
 
+def _parse_ical_dt(value: str) -> tuple[str | None, bool]:
+    """Parse an iCal DTSTART/DTEND/DUE value to (YYYY-MM-DD or full ISO, is_date_only).
+
+    Handles DATE (20261015) and DATETIME (20261015T100000, with optional
+    trailing Z). Returns (None, False) when unparsable.
+    """
+    value = value.strip()
+    m = re.match(r"(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?Z?)?", value)
+    if not m:
+        return None, False
+    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if not (1 <= mo <= 12 and 1 <= d <= 31):
+        return None, False
+    if m.group(4) is None:
+        return f"{y:04d}-{mo:02d}-{d:02d}", True
+    hh, mi, ss = int(m.group(4)), int(m.group(5)), int(m.group(6) or "0")
+    return f"{y:04d}-{mo:02d}-{d:02d}T{hh:02d}:{mi:02d}:{ss:02d}", False
+
+
 def parse_ics(path: Path) -> list[dict]:
-    """Minimal VEVENT scan: SUMMARY, DTSTART, DESCRIPTION, URL, UID."""
+    """Minimal VEVENT/VTODO scan: SUMMARY, DTSTART/DTEND/DUE, DESCRIPTION, URL, UID.
+
+    All-day DTENDs are exclusive per RFC 5545 (DTSTART Oct 12 DTEND Oct 15
+    is due Oct 14), so window dues use DTEND minus one day. Timed values
+    keep their time component.
+    """
     events: list[dict] = []
     try:
         content = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return events
-    for block in re.findall(r"BEGIN:VEVENT(.*?)END:VEVENT", content, re.DOTALL):
-        def prop(name: str) -> str | None:
-            mm = re.search(rf"^{name}[;:].*?:(.*)$", block, re.MULTILINE)
-            return mm.group(1).strip() if mm else None
+    # Unfold iCal line folding (CRLF + single space = continuation) so
+    # wrapped SUMMARY/DESCRIPTION lines parse whole.
+    content = re.sub(r"\r?\n[ \t]", "", content)
+    for kind, block in re.findall(
+        r"BEGIN:(VEVENT|VTODO)(.*?)END:\1", content, re.DOTALL
+    ):
+        def prop(name: str) -> tuple[str | None, str]:
+            mm = re.search(
+                rf"^{name}((?:;[^:]*)?):(.*)$", block, re.MULTILINE
+            )
+            if not mm:
+                return None, ""
+            return mm.group(2).strip(), mm.group(1)
 
-        summary = prop("SUMMARY")
+        summary, _ = prop("SUMMARY")
         if not summary:
             continue
-        dtstart = prop("DTSTART") or ""
-        due = None
-        mm = re.match(r"(\d{4})(\d{2})(\d{2})", dtstart)
-        if mm:
-            due = f"{mm.group(1)}-{mm.group(2)}-{mm.group(3)}"
+        dtstart_val, dtstart_params = prop("DTSTART")
+        dtend_val, _ = prop("DTEND")
+        due_val, _ = prop("DUE")
+        # VTODOs carry DUE instead of DTSTART.
+        start_raw = dtstart_val or (due_val if kind == "VTODO" else None)
+        start_due, start_is_date = (
+            _parse_ical_dt(start_raw) if start_raw else (None, False)
+        )
+        end_due, end_is_date = (
+            _parse_ical_dt(dtend_val) if dtend_val else (None, False)
+        )
+        due = start_due
+        if (
+            start_due
+            and end_due
+            and start_is_date
+            and end_is_date
+            and len(start_due) == 10
+            and len(end_due) == 10
+        ):
+            try:
+                s = datetime.strptime(start_due, "%Y-%m-%d")
+                e = datetime.strptime(end_due, "%Y-%m-%d")
+                if (e - s).days > 1:
+                    # Exclusive end → inclusive due date.
+                    due = (e - timedelta(days=1)).strftime("%Y-%m-%d")
+                elif (e - s).days == 1:
+                    due = start_due
+                else:
+                    due = start_due
+            except ValueError:
+                due = start_due
+        elif end_due and not start_due:
+            due = end_due
+        desc, _ = prop("DESCRIPTION")
+        url, _ = prop("URL")
+        uid, _ = prop("UID")
         events.append(
             {
                 "title": summary,
                 "due": due,
-                "verbatim": (prop("DESCRIPTION") or summary)[:500],
-                "url": prop("URL"),
-                "uid": prop("UID"),
+                "verbatim": (desc or summary)[:500],
+                "url": url,
+                "uid": uid,
             }
         )
     return events

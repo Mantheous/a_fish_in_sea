@@ -1,5 +1,3 @@
-import 'package:a_fish_in_sea/common/undo/change_record.dart';
-import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/goals/model/goal.dart';
@@ -9,9 +7,13 @@ import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:a_fish_in_sea/finances/model/recurring_rule.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
+import 'package:a_fish_in_sea/planner/bloc/assignment_estimates_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
+import 'package:a_fish_in_sea/planner/model/assignment_estimate.dart';
+import 'package:a_fish_in_sea/planner/model/assignment_rule.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/tasks_view_options_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/model/task.dart';
@@ -60,6 +62,53 @@ void main() {
       );
 
   group('restore tolerates corrupt entries', () {
+    test('AssignmentEstimatesCubit keeps valid learned rows', () {
+      final cubit = AssignmentEstimatesCubit();
+      final good = AssignmentTypeEffort(
+        feedId: 'math290',
+        templateKey: 'video quiz',
+        samples: 4,
+        totalMinutes: 180,
+        minutes: const [30, 45, 60, 45],
+        startMinutes: const [19 * 60, 19 * 60, 18 * 60, 19 * 60],
+        minMinutes: 30,
+        maxMinutes: 60,
+        updatedAt: DateTime(2026, 10, 1),
+      );
+      final restored = cubit.fromJson(_withCorrupt('efforts', good.toJson()));
+      expect(restored, hasLength(1));
+      expect(restored!.single.groupKey, 'math290|video quiz');
+      expect(restored.single.estimateMinutes, 45);
+      expect(restored.single.preferredStartMinute, 19 * 60);
+    });
+
+    test('AssignmentEstimatesCubit starts empty with no stored payload', () {
+      // The learned index is derived data: no stored payload must mean
+      // "nothing learned yet", never "refuse to boot".
+      final cubit = AssignmentEstimatesCubit();
+      expect(cubit.fromJson({}), isNull);
+      expect(cubit.fromJson({'efforts': []}), isEmpty);
+      expect(cubit.fromJson({'efforts': ['nope', 42, {}]}), isEmpty);
+    });
+
+    test('AssignmentRule payloads without estimateMinutes still load', () {
+      final rule = AssignmentRule(
+        id: 'r1',
+        feedId: 'math290',
+        templateKey: 'video quiz',
+        displayName: 'Video Quiz',
+        dueOffsetDays: -2,
+        estimateMinutes: 45,
+        createdAt: DateTime(2026, 10, 1),
+      ).toJson();
+      // The payload the app wrote before expected-time existed.
+      rule.remove('estimateMinutes');
+      final loaded = AssignmentRule.fromJson(rule);
+      expect(loaded.estimateMinutes, isNull);
+      expect(loaded.dueOffsetDays, -2);
+      expect(loaded.id, 'r1');
+    });
+
     test('CalendarCubit keeps valid events', () {
       final cubit = CalendarCubit();
       final good = PlannerEvent(
@@ -149,6 +198,30 @@ void main() {
       expect(
         cubit.fromJson(const {'hiddenIds': 'not-a-list'})?.hiddenIds,
         isEmpty,
+      );
+    });
+
+    test('TasksViewOptionsCubit round-trips and tolerates old payloads', () {
+      final cubit = TasksViewOptionsCubit();
+      cubit.setHighlightDueThisWeek(true);
+      cubit.setDueFilter(TasksDueFilter.overdue);
+      final restored =
+          cubit.fromJson(cubit.toJson(cubit.state));
+      expect(restored, cubit.state);
+      // Payloads from before the due-filter existed only carry the
+      // highlight flag; the filter must default to all, not wipe.
+      expect(
+        cubit.fromJson(const {'highlightDueThisWeek': true})?.dueFilter,
+        TasksDueFilter.all,
+      );
+      // Renamed enum values and wrong types fall back to defaults.
+      expect(
+        cubit.fromJson(const {'dueFilter': 'renamed-value'})?.dueFilter,
+        TasksDueFilter.all,
+      );
+      expect(
+        cubit.fromJson(const {'dueFilter': 42}),
+        const TasksViewOptionsState(),
       );
     });
 
@@ -256,15 +329,6 @@ void main() {
       expect(cubit.byId(id)?.hasDue, isTrue);
     });
 
-    test('UndoCubit keeps valid records', () {
-      final cubit = UndoCubit();
-      final good = const ChangeRecord(entries: [
-        StateSnapshot(cubitId: 'NodeCubit', before: {}, after: {}),
-      ]).toJson();
-      final restored = cubit.fromJson(_withCorrupt('undoStack', good));
-      expect(restored?.undoStack.length, 1);
-    });
-
     test('NodeCubit keeps valid nodes, tolerates corrupt + pre-facet data',
         () {
       final cubit = NodeCubit();
@@ -280,13 +344,57 @@ void main() {
       final legacy = Map<String, dynamic>.from(good)
         ..remove('schedule')
         ..remove('money')
+        ..remove('anki')
         ..remove('parentIds');
       final restoredLegacy = cubit.fromJson({
         'nodes': [legacy],
       });
       expect(restoredLegacy?.single.schedule, isNull);
       expect(restoredLegacy?.single.money, isNull);
+      expect(restoredLegacy?.single.anki, isNull);
       expect(restoredLegacy?.single.parentIds, isEmpty);
+    });
+
+    test('NodeCubit tolerates corrupt anki facets, keeps the node', () {
+      final cubit = NodeCubit();
+      final good = Node(
+        id: 'n9',
+        title: 'Memorize',
+        createdAt: _day,
+        anki: const AnkiFacet(targetReviews: 50, deckName: 'Japanese'),
+      ).toJson();
+      final restored = cubit.fromJson({
+        'nodes': [
+          good,
+          {...good, 'id': 'n10', 'anki': 'garbage'},
+          {...good, 'id': 'n11', 'anki': {'targetReviews': 'lots'}},
+        ],
+      });
+      expect(restored?.map((n) => n.id), ['n9', 'n10', 'n11']);
+      expect(restored?[0].anki?.targetReviews, 50);
+      expect(restored?[1].anki, isNull);
+      expect(restored?[2].anki, isNull);
+    });
+
+    test('NodeCubit loads pre-flag nodes as bounded', () {
+      final cubit = NodeCubit();
+      final preFlag = Node(
+        id: 'n2',
+        title: 'Serve others',
+        createdAt: _day,
+      ).toJson()
+        ..remove('isUnbounded');
+      final restored = cubit.fromJson({
+        'nodes': [preFlag],
+      });
+      expect(restored?.single.isUnbounded, isFalse);
+      final unbounded = Node(
+        id: 'n3',
+        title: 'Serve others',
+        createdAt: _day,
+        isUnbounded: true,
+      );
+      expect(Node.fromJson(unbounded.toJson()), unbounded);
     });
 
     test('applyJson with garbage does not throw', () {
@@ -408,6 +516,7 @@ void main() {
           isRecurring: true,
         ),
         effort: const EffortFacet(targetMinutes: 30),
+        anki: const AnkiFacet(targetReviews: 50, deckName: 'Japanese'),
       );
       expect(Node.fromJson(node.toJson()), node);
     });

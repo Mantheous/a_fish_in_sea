@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../demo/demo_coordinator.dart';
+import '../../demo/demo_mode.dart';
 import '../../sync/auth_cubit.dart';
 import '../import_service.dart';
 import 'import_review_screen.dart';
@@ -31,9 +33,13 @@ class _ImportInboxCardState extends State<ImportInboxCard> {
   Future<void> _load() async {
     List<ImportBatch> batches = const [];
     try {
-      final service =
-          ImportService(context.read<AuthCubit>().syncClient);
-      batches = await service.pending();
+      if (DemoMode.isActive) {
+        batches = DemoCoordinator.demoPendingImports();
+      } else {
+        final service =
+            ImportService(context.read<AuthCubit>().syncClient);
+        batches = await service.pending();
+      }
     } catch (_) {
       // Offline / signed out / server down: stay invisible, never noisy.
     }

@@ -160,3 +160,45 @@ String? validateNodeRelations({
 
   return null;
 }
+
+/// An unbounded (abstract) goal is an ongoing direction with no dates, no
+/// targets, and no generated instances — concrete subgoals underneath carry
+/// all of that. Returns a user-facing error string, or null when [draft]
+/// is fine.
+///
+/// Always safe to run on every write: payloads written before the flag
+/// existed load with `isUnbounded: false`, so stored data can never already
+/// violate this.
+String? validateUnbounded(Node draft) {
+  if (!draft.isUnbounded) return null;
+  if (draft.schedule != null) {
+    return 'An unbounded goal cannot have a due date or calendar block. '
+        'Remove the schedule first.';
+  }
+  if (draft.money != null) {
+    return 'An unbounded goal cannot track money. '
+        'Remove the money target first.';
+  }
+  if (draft.effort != null) {
+    return 'An unbounded goal cannot have a time target. '
+        'Remove the time target first.';
+  }
+  if (draft.anki != null) {
+    return 'An unbounded goal cannot have a memorization target. '
+        'Remove the Anki target first.';
+  }
+  if (draft.recurrence != null) {
+    return 'An unbounded goal cannot repeat. '
+        'Turn off repeats first.';
+  }
+  final ruleKind = draft.rule?.kind;
+  if (ruleKind != null && ruleKind != NodeRuleKind.none) {
+    return 'An unbounded goal cannot be a derived goal. '
+        'Remove the rule first.';
+  }
+  if (draft.instanceOfId != null) {
+    return 'A generated instance cannot be unbounded — it carries the '
+        'template\'s dates.';
+  }
+  return null;
+}

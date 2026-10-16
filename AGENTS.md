@@ -10,17 +10,58 @@ writer (ad-hoc sessions too), commit WIP often, and `git stash` is
 banned in shared clones (commit instead). Merges happen in a
 throwaway worktree on `main`, verified before push.
 
-## UX check: user-visible changes must be walked
+## File size: split on touch, don't bulk-refactor
+
+Long files cost agent context, merge conflicts, and untestable
+persistence even when human readability doesn't matter. Current hotspots:
+`lib/planner/view/event_editor.dart` (~3390 lines),
+`lib/planner/view/calendar_page.dart` (~2300),
+`lib/nodes/bloc/node_cubit.dart` (~2200).
+
+1. New files: keep under ~500 lines. Split view/widgets,
+   cubit/state/persistence, logic/tests up front.
+2. Existing files: never bulk-refactor for size alone. Split on touch
+   only — when a task already edits a file >500 lines, extract one
+   concern in the same branch (e.g. widget, helper, cubit slice).
+3. Keep persisted cubits small: persistence
+   (`fromJson`/`toJson`/migration) separate from business logic so
+   tolerance tests stay per-item.
+4. Each split must keep `flutter analyze` clean and extend/keep
+   round-trip + tolerance tests for any model touch. No behavior change
+   in a pure split.
+
+## UX check: label it, don't walk it
 
 If your change touches anything a user can see or tap — screens under
 `lib/*/view/`, navigation, dialogs/sheets, button behavior, auth flow,
-empty states, copy — it is not done until the `ux-walker` subagent has
-walked it in a real browser and its findings are addressed or filed.
-Launch it with the parameters from `tools/agent/ux-walk.sh` (APP_URL,
-SHOT_DIR, REPORT, UX_EMAIL/UX_PASSWORD) plus a SCOPE limiting it to your
-feature, then stop. No code reading is needed on your part; report back
-the verdict line. The nightly loop walks the whole app anyway — this rule
-is about YOUR change, BEFORE merge.
+empty states, copy — do NOT run the walker yourself. The agent loop
+walks each deploy exactly once (`tools/agent/ux-walk.sh`, queued in
+`poll.sh`), so per-branch walks only duplicate that work and contend
+for the same machine/browser. Instead, before opening your PR:
+
+1. `gh issue edit <N> --add-label ux-walk` (or, if there is no issue,
+   put a `UX scope:` section in the PR body).
+2. Record the scope in 1–2 lines: which screens/flows you touched and
+   how to reach them.
+
+The post-deploy walk covers labeled scopes and files findings as new
+issues. Never gate a PR or merge on a walk verdict. The loop's
+heartbeat walk still covers the whole app regularly.
+
+## Perf loop: measure, don't guess
+
+`tools/agent/perf-walk.sh` runs post-deploy in `poll.sh`: a deterministic
+API-latency + bundle-size regression check against
+`tools/agent/perf-baseline.json`. Confirmed breaches file `agent-pending` +
+`perf-regression` issues (at most one open — repeats comment on it), so
+perf fixes flow through the normal triage → builder → review path, bounded
+to one hot spot per issue.
+
+1. Baselines never auto-update. Refresh deliberately with
+   `tools/agent/perf-walk.sh --update` after a perf fix ships (or the loop
+   host changes), then commit the diff.
+2. After a perf fix merges, re-run `tools/agent/perf-walk.sh --force` to
+   confirm before updating the baseline.
 
 ## Persisted state: never wipe device data
 
@@ -74,12 +115,50 @@ right.
 
 ## Shipping changes to the user
 
+Two kinds of agents ship differently. Know which one you are:
+
+- **Loop builders** (`tools/agent/builder-run.sh`, `rework-run.sh`):
+  NEVER deploy, NEVER push to `main`, NEVER build the web bundle.
+  Finish with a pushed branch + PR — the loop (`poll.sh` → human merge
+  → `deploy.sh`) ships reviewed work to the funnel.
+- **Ad-hoc** (the user asked you directly in this session): YOU ship it.
+  Do not report done until the user can see the change on the active
+  target. "Run this build to see it" is not done.
+
 Before shipping anything, read `DEBUG_PREFS.md` (gitignored, per-developer)
 and follow ONLY its active target. It tells you whether the developer is
 currently on the Tailnet web build or the mobile app — do not guess, do
 not do both, do not ask unless the file is missing.
 
-### Mobile (preferred): hot reload/restart over wireless debugging
+### Ad-hoc, web target: deploy to the Tailnet funnel
+
+The user views the web app at `https://alauris.tail088878.ts.net/fish/`.
+Tailscale serve maps `/fish` → `http://127.0.0.1:8000` (prefix stripped)
+and the FastAPI server (`server/api`, `_mount_web` in `app/main.py`)
+serves `<repo>/build/web` from disk — no server restart or copy step
+needed after a rebuild. The funnel serves the main checkout's bundle,
+so building inside a worktree does NOT ship — get the change onto `main`
+first, then deploy from the main checkout:
+
+1. Commit your work on your branch and push it. Then land it on `main`
+   via a throwaway worktree per `tools/agent/CONVENTIONS.md` rule 4
+   (verify, then publish). Ad-hoc may merge to `main`; loop builders
+   must never.
+2. From the main checkout (`$HOME/Repos/a_fish_in_sea`), run
+   `tools/agent/deploy.sh` — never a bare `flutter build web`. The script
+   keeps the data-guardian gate, the DB backup, and the base-href checks
+   (a bare build emits `<base href="/">`, which white-screens under
+   `/fish/`; the script refuses to mark such a bundle).
+3. Verify the bundle timestamp is newer than the edited source and that
+   `build/web/index.html` contains `<base href="/fish/">`.
+4. Tell the user to hard-refresh (Ctrl+Shift+R): the Flutter service
+   worker caches the previous bundle, so a normal reload can still show
+   stale code or a stale white screen.
+5. If the deploy is held back — data-guardian block, diverged `main`,
+   or build failure — stop and say so. Do NOT report done while the
+   funnel still shows the old code.
+
+### Ad-hoc, mobile target: hot reload/restart over wireless debugging
 
 Load the `wireless-debugging` skill and follow it (reconnect with
 `adb reconnect` / `adb connect` first — never re-pair unless auth fails;
@@ -92,21 +171,3 @@ known device `mantheous-a16` via Tailscale). Then:
 2. If no session exists, start one per the skill
    (`tmux new-session -d -s fish -c <repo> 'flutter run -d <id>'`;
    first launch is a 5–15 min Gradle build, reloads after are ~1s).
-
-### Web: rebuild for the Tailnet funnel
-
-The user views the web app at `https://alauris.tail088878.ts.net/fish/`.
-Tailscale serve maps `/fish` → `http://127.0.0.1:8000` (prefix stripped)
-and the FastAPI server (`server/api`, `_mount_web` in `app/main.py`)
-serves `<repo>/build/web` from disk — no server restart or copy step
-needed after a rebuild. After Dart changes:
-
-1. Rebuild with the subpath base href (REQUIRED — a bare
-   `flutter build web` emits `<base href="/">`, which white-screens
-   under `/fish/`):
-   `~/flutter/bin/flutter build web --base-href /fish/`
-2. Verify the bundle timestamp is newer than the edited source and that
-   `build/web/index.html` contains `<base href="/fish/">`.
-3. Tell the user to hard-refresh (Ctrl+Shift+R): the Flutter service
-   worker caches the previous bundle, so a normal reload can still show
-   stale code or a stale white screen.

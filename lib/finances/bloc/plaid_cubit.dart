@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:equatable/equatable.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
+import 'package:a_fish_in_sea/demo/demo_data.dart';
+import 'package:a_fish_in_sea/demo/demo_mode.dart';
 import 'package:a_fish_in_sea/finances/service/plaid_link_handler.dart';
 import 'package:a_fish_in_sea/finances/service/plaid_service.dart';
 import 'package:a_fish_in_sea/finances/service/plaid_user_id.dart';
@@ -80,6 +82,17 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
   /// Connect via Plaid Link (iOS, Android, Web) or sandbox auto-connect on
   /// desktop platforms where Link is unavailable.
   Future<void> connectBank() async {
+    if (DemoMode.isActive) {
+      // Mock Link: no credentials, no browser — straight to a connected
+      // mock bank so the whole reconcile flow is tourable.
+      emit(state.copyWith(
+        status: PlaidConnectionStatus.connecting,
+        clearError: true,
+      ));
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      _demoConnected();
+      return;
+    }
     emit(state.copyWith(
       status: PlaidConnectionStatus.connecting,
       clearError: true,
@@ -124,6 +137,15 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
 
   /// Sandbox-only shortcut without Link UI (desktop dev).
   Future<void> sandboxAutoConnect() async {
+    if (DemoMode.isActive) {
+      emit(state.copyWith(
+        status: PlaidConnectionStatus.connecting,
+        clearError: true,
+      ));
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      _demoConnected();
+      return;
+    }
     emit(state.copyWith(
       status: PlaidConnectionStatus.connecting,
       clearError: true,
@@ -146,6 +168,11 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
   }
 
   Future<void> disconnect() async {
+    if (DemoMode.isActive) {
+      // Demo-local: drop the mock connection (reconnect re-seeds it).
+      emit(state.copyWith(clearConnection: true));
+      return;
+    }
     try {
       await _service.disconnect();
     } catch (_) {
@@ -166,6 +193,11 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
   // ── Data fetching ───────────────────────────────────────────────────
 
   Future<void> fetchBalance() async {
+    if (DemoMode.isActive) {
+      if (!state.isConnected) return;
+      emit(state.copyWith(currentBalance: _demoBalance()));
+      return;
+    }
     try {
       final data = await _service.getBalance();
       final accounts = data['accounts'] as List<dynamic>? ?? [];
@@ -184,6 +216,11 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
   }
 
   Future<void> fetchAccounts() async {
+    if (DemoMode.isActive) {
+      if (!state.isConnected) return;
+      emit(state.copyWith(accounts: DemoData.plaidAccounts()));
+      return;
+    }
     try {
       final accounts = await _service.getAccounts();
       emit(state.copyWith(accounts: accounts));
@@ -191,6 +228,11 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
   }
 
   Future<List<Map<String, dynamic>>> fetchTransactions() async {
+    if (DemoMode.isActive) {
+      if (!state.isConnected) return [];
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      return DemoData.plaidTransactions(DateTime.now());
+    }
     try {
       return await _service.getTransactions();
     } catch (e) {
@@ -201,6 +243,11 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
 
   /// Restore connection if the server still has a token for this user.
   Future<void> checkExistingConnection() async {
+    if (DemoMode.isActive) {
+      // Seeded connected at entry; stay that way unless the user
+      // disconnected mid-demo (then stay disconnected — their call).
+      return;
+    }
     try {
       final info = await _service.getInfo();
       // New servers answer `connected` without echoing the access token
@@ -215,6 +262,30 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
     } catch (_) {
       // Server not running or no connection
     }
+  }
+
+  // ── Demo ──────────────────────────────────────────────────────────
+
+  void _demoConnected() {
+    emit(state.copyWith(
+      status: PlaidConnectionStatus.connected,
+      itemId: 'demo-item',
+      clearError: true,
+    ));
+    emit(state.copyWith(
+      currentBalance: _demoBalance(),
+      accounts: DemoData.plaidAccounts(),
+    ));
+  }
+
+  static double _demoBalance() {
+    var total = 0.0;
+    for (final account in DemoData.plaidAccounts()) {
+      if (account['type'] != 'depository') continue;
+      final balances = account['balances'] as Map<String, dynamic>?;
+      total += (balances?['current'] as num?)?.toDouble() ?? 0;
+    }
+    return total;
   }
 
   // ── Persistence ─────────────────────────────────────────────────────

@@ -4,6 +4,8 @@ import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:a_fish_in_sea/finances/model/recurring_rule.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/goals/model/goal.dart';
+import 'package:a_fish_in_sea/planner/model/assignment_rule.dart';
+import 'package:a_fish_in_sea/planner/model/assignment_template.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/model/task.dart';
@@ -79,6 +81,292 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   /// generation) that must not pollute the user's undo history.
   void emitSilent(List<Node> next) => emit(next);
 
+  // ── Batched writes ────────────────────────────────────────────────
+  //
+  // Series-wide operations (whole-series edit, assign-series-to-goal)
+  // touch every occurrence at once. Looping the single-write methods
+  // above snapshots the whole store, rebuilds, persists, and records an
+  // undo entry per member — hundreds of full-store snapshots that freeze
+  // then kill the tab on large stores (2730 events / 1880 nodes). These
+  // batch every member into ONE undoable emit (one undo record, one
+  // rebuild, one persist). Per-member decisions mirror the single-write
+  // methods exactly (see the equivalence tests); the only difference is
+  // that intermediate states are never emitted, so mid-loop reads below
+  // go through the evolving [pending] map instead of the cubit.
+
+  /// Saves many nodes (updates by id, adds missing) plus removals as ONE
+  /// undoable emit. Nodes failing validation are skipped; their errors
+  /// are returned keyed by node id. This mirrors the single-write
+  /// callers, which ignore those errors and continue with the rest.
+  /// With [silent] the write emits without an undo record, mirroring
+  /// [removeNodesForEvent].
+  Map<String, String> writeNodes({
+    List<Node> upserts = const [],
+    Set<String> removeIds = const {},
+    bool silent = false,
+  }) {
+    final errors = <String, String>{};
+    final valid = <Node>[];
+    for (final n in upserts) {
+      final unboundedError = validateUnbounded(n);
+      if (unboundedError != null) {
+        errors[n.id] = unboundedError;
+        continue;
+      }
+      final error = validateParents(n, n.parentIds);
+      if (error != null) {
+        errors[n.id] = error;
+        continue;
+      }
+      valid.add(n);
+    }
+    if (valid.isEmpty && removeIds.isEmpty) return errors;
+    final byId = {for (final n in valid) n.id: n};
+    final next = <Node>[];
+    for (final n in state) {
+      if (removeIds.contains(n.id)) continue;
+      next.add(byId[n.id] ?? n);
+    }
+    final known = {for (final n in state) n.id};
+    for (final n in valid) {
+      if (!known.contains(n.id)) next.add(n);
+    }
+    if (silent) {
+      emit(next);
+    } else {
+      emitChange(next);
+    }
+    return errors;
+  }
+
+  /// Nodes linked to any of [eventIds] within [byId] (mirrors [_byEventId]
+  /// over an evolving batch map instead of the cubit state).
+  static List<Node> _nodesForEventIn(
+    Map<String, Node> byId,
+    String eventId,
+  ) =>
+      [
+        for (final n in byId.values)
+          if (n.calendarEventId == eventId || n.sourceEventId == eventId) n,
+      ];
+
+  /// The node an event's `taskId` points at, if present in [byId]. Events
+  /// seeded from a task ("Add to calendar") carry this link before — and
+  /// sometimes without — the node's `calendarEventId` back-link, so
+  /// completion mirrors must follow it too.
+  static List<Node> _taskIdNodesIn(
+    Map<String, Node> byId,
+    String? taskId,
+  ) {
+    if (taskId == null || taskId.isEmpty) return const [];
+    final node = byId[taskId];
+    return node == null ? const [] : [node];
+  }
+
+  /// Batch version of [ensureNodeForFeedEvent]: ensures a homework-style
+  /// backing node for every event as ONE emit. Mirrors the single-write
+  /// decisions exactly (including the feedId null early-out).
+  void ensureNodesForFeedEvents(List<PlannerEvent> events) {
+    if (events.isEmpty) return;
+    final pending = <String, Node>{for (final n in state) n.id: n};
+    final upserts = <Node>[];
+    void put(Node n) {
+      pending[n.id] = n;
+      upserts.add(n);
+    }
+
+    for (final event in events) {
+      if (event.feedId == null) continue;
+      final existing = _nodesForEventIn(pending, event.id);
+      if (existing.isEmpty) {
+        final now = DateTime.now();
+        put(Node(
+          id: event.id,
+          title: event.subject,
+          notes: event.notes,
+          createdAt: now,
+          status: event.done ? NodeStatus.done : NodeStatus.open,
+          completedAt: event.completedAt,
+          schedule: ScheduleFacet(
+            due: event.start,
+            start: event.start,
+            end: event.end,
+          ),
+          sourceEventId: event.id,
+          feedId: event.feedId,
+          classId: event.feedId,
+          classLabel: event.classLabel,
+          assignees: event.assignees,
+        ));
+        continue;
+      }
+      final want = event.failed
+          ? NodeStatus.failed
+          : (event.done ? NodeStatus.done : NodeStatus.open);
+      for (final node in existing) {
+        if (node.status != want ||
+            node.completedAt != event.completedAt ||
+            !_sameAssignees(node.assignees, event.assignees)) {
+          put(node.copyWith(
+            status: want,
+            completedAt: event.completedAt,
+            clearCompletedAt: !event.done,
+            assignees: event.assignees,
+          ));
+        }
+      }
+    }
+    writeNodes(upserts: upserts);
+  }
+
+  /// Mirrors [upsertLinkedNodeForEvent]'s title/notes/schedule sync for
+  /// one personal linked node.
+  ///
+  /// Completion is deliberately NOT synced here: the node owns completion
+  /// for linked pairs and the event mirrors it through [NodeEventLink]
+  /// (toggle/setDone paths). Overwriting status from the event on every
+  /// save re-opens a node the stop-tracking sheet just marked done whenever
+  /// the saved event snapshot still carries the old `done: false`.
+  static Node _syncLinkedNode(Node linked, PlannerEvent event) {
+    final hasNotes = (event.notes ?? '').trim().isNotEmpty;
+    // Imported homework keeps the due date its feed gave it: the block
+    // says when the user plans to work, which is not when the
+    // assignment is due. Personal nodes have no such date, so their
+    // due stays the event's own start (the previous behaviour).
+    final due = linked.sourceEventId != null
+        ? (linked.schedule?.due ?? event.start)
+        : event.start;
+    return linked.copyWith(
+      title: event.subject,
+      notes: hasNotes ? event.notes!.trim() : null,
+      clearNotes: !hasNotes,
+      schedule: ScheduleFacet(
+        due: due,
+        start: event.start,
+        end: event.end,
+      ),
+      assignees: event.assignees,
+    );
+  }
+
+  /// Batch version of [upsertLinkedNodeForEvent]: resolves or creates the
+  /// personal backing node for every event as ONE emit. Returns the
+  /// event id → node id map. Mirrors the single-write lookup order
+  /// (taskId link, then calendar-event link, then create) exactly.
+  /// Existing nodes keep their completion (see [_syncLinkedNode]): only
+  /// newly created nodes take the event's `done` state.
+  Map<String, String> upsertLinkedNodesForEvents(List<PlannerEvent> events) {
+    final ids = <String, String>{};
+    if (events.isEmpty) return ids;
+    final pending = <String, Node>{for (final n in state) n.id: n};
+    final upserts = <Node>[];
+    void put(Node n) {
+      pending[n.id] = n;
+      upserts.add(n);
+    }
+
+    for (final event in events) {
+      if (event.taskId != null) {
+        final linked = pending[event.taskId!];
+        if (linked != null) {
+          put(_syncLinkedNode(linked, event));
+          ids[event.id] = linked.id;
+          continue;
+        }
+      }
+      Node? byCalendar;
+      for (final n in pending.values) {
+        if (n.calendarEventId == event.id) {
+          byCalendar = n;
+          break;
+        }
+      }
+      if (byCalendar != null) {
+        put(_syncLinkedNode(byCalendar, event));
+        ids[event.id] = byCalendar.id;
+        continue;
+      }
+      final id = 'node:${event.id}';
+      put(Node(
+        id: id,
+        title: event.subject,
+        notes: event.notes,
+        createdAt: DateTime.now(),
+        status: event.done ? NodeStatus.done : NodeStatus.open,
+        completedAt: event.completedAt,
+        schedule: ScheduleFacet(
+          due: event.start,
+          start: event.start,
+          end: event.end,
+        ),
+        classLabel: event.classLabel,
+        calendarEventId: event.id,
+        assignees: event.assignees,
+      ));
+      ids[event.id] = id;
+    }
+    writeNodes(upserts: upserts);
+    return ids;
+  }
+
+  /// Batch version of [setDoneForEvent]: mirrors completion onto every
+  /// backing node of every listed event as ONE emit. Same skip rules.
+  /// [taskIdsByEvent] carries each event's `taskId` link so nodes that
+  /// are only reachable through it (no `calendarEventId` back-link yet)
+  /// mirror too — the single-write version takes the same link.
+  void setDoneForEventIds(
+    Set<String> eventIds, {
+    required bool done,
+    DateTime? completedAt,
+    Map<String, String?>? taskIdsByEvent,
+  }) {
+    if (eventIds.isEmpty) return;
+    final pending = <String, Node>{for (final n in state) n.id: n};
+    final upserts = <Node>[];
+    for (final eventId in eventIds) {
+      final seen = <String>{};
+      final targets = <Node>[];
+      for (final node in _nodesForEventIn(pending, eventId)) {
+        if (seen.add(node.id)) targets.add(pending[node.id] ?? node);
+      }
+      for (final node
+          in _taskIdNodesIn(pending, taskIdsByEvent?[eventId])) {
+        if (seen.add(node.id)) targets.add(pending[node.id] ?? node);
+      }
+      for (final node in targets) {
+        if (node.isDone == done &&
+            (done || node.completedAt == null) &&
+            (node.completedAt == completedAt ||
+                (!done && completedAt == null))) {
+          continue;
+        }
+        final next = node.copyWith(
+          status: done ? NodeStatus.done : NodeStatus.open,
+          completedAt: completedAt,
+          clearCompletedAt: !done,
+        );
+        pending[next.id] = next;
+        upserts.add(next);
+      }
+    }
+    writeNodes(upserts: upserts);
+  }
+
+  /// Batch version of [removeNodesForEvent]: deletes every node backing
+  /// any listed event as ONE emit. Pass [silent] to skip the undo
+  /// record, exactly like the single version.
+  void removeNodesForEventIds(Set<String> eventIds, {bool silent = false}) {
+    if (eventIds.isEmpty) return;
+    final pending = <String, Node>{for (final n in state) n.id: n};
+    final remove = <String>{};
+    for (final eventId in eventIds) {
+      for (final node in _nodesForEventIn(pending, eventId)) {
+        remove.add(node.id);
+      }
+    }
+    writeNodes(removeIds: remove, silent: silent);
+  }
+
   // ── Queue getters (mirror the old TaskCubit home/queue semantics) ───
 
   DateTime? _queueDate(Node n) => n.schedule?.due ?? n.schedule?.start;
@@ -97,10 +385,11 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
 
   /// Open nodes sorted queue-first, done by recency — the To-Do list.
   /// Templates (dateless prescriptions) are excluded; their instances
-  /// carry the dates.
+  /// carry the dates. Unbounded goals are excluded too: they never
+  /// complete, so they would sit in the list forever.
   List<Node> get openNodes {
     final open = state
-        .where((n) => n.isOpen && !n.isTemplate)
+        .where((n) => n.isOpen && !n.isTemplate && !n.isUnbounded)
         .toList()
       ..sort(_byDueThenCreated);
     final done = state.where((n) => n.isDone).toList()
@@ -119,7 +408,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final today = DateTime(now.year, now.month, now.day);
     final tomorrow = today.add(const Duration(days: 1));
     return state.where((n) {
-      if (!n.isOpen || n.isTemplate) return false;
+      if (!n.isOpen || n.isTemplate || n.isUnbounded) return false;
       final due = n.schedule?.due;
       if (due == null) return false;
       final day = DateTime(due.year, due.month, due.day);
@@ -128,15 +417,56 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       ..sort(_byDueThenCreated);
   }
 
-  /// Open nodes due in the next 7 days (start of today through the end of
-  /// the 7th day out). Used by the Home dashboard's week section.
+  /// Open, non-template nodes with a due date strictly before the start
+  /// of today. Powers the Tasks page "Overdue" filter.
+  List<Node> get overdue => overdueAt(DateTime.now());
+
+  List<Node> overdueAt(DateTime now) {
+    final today = DateTime(now.year, now.month, now.day);
+    return state.where((n) {
+      if (!n.isOpen || n.isTemplate || n.isUnbounded) return false;
+      final due = n.schedule?.due;
+      if (due == null) return false;
+      return due.isBefore(today);
+    }).toList()
+      ..sort(_byDueThenCreated);
+  }
+
+  /// Open, non-template nodes due on today's calendar day. Powers the
+  /// Tasks page "Today" filter. Overdue items are excluded — they have
+  /// their own filter — so nothing is counted twice.
+  List<Node> get dueToday => dueTodayAt(DateTime.now());
+
+  List<Node> dueTodayAt(DateTime now) {
+    final today = DateTime(now.year, now.month, now.day);
+    final tomorrow = today.add(const Duration(days: 1));
+    return state.where((n) {
+      if (!n.isOpen || n.isTemplate || n.isUnbounded) return false;
+      final due = n.schedule?.due;
+      if (due == null) return false;
+      return !due.isBefore(today) && due.isBefore(tomorrow);
+    }).toList()
+      ..sort(_byDueThenCreated);
+  }
+
+  /// Open nodes due in the rest of the calendar week: start of today
+  /// through Sunday (inclusive). The window shrinks as the week runs
+  /// out — on Sunday it spans to next Sunday, on Saturday it covers
+  /// just the weekend. Overdue items are excluded; they belong to the
+  /// past, not to this week. Used by the Home dashboard's week section
+  /// and the Tasks page week highlight.
   List<Node> get dueThisWeek => dueThisWeekAt(DateTime.now());
 
   List<Node> dueThisWeekAt(DateTime now) {
     final today = DateTime(now.year, now.month, now.day);
-    final endExclusive = today.add(const Duration(days: 8));
+    // DateTime.weekday: Monday = 1 … Sunday = 7. Days until Sunday;
+    // Sunday itself rolls forward to next Sunday.
+    var daysToSunday = DateTime.sunday - now.weekday;
+    if (daysToSunday <= 0) daysToSunday += 7;
+    // +1 so a due date on Sunday itself is still inside the window.
+    final endExclusive = today.add(Duration(days: daysToSunday + 1));
     return state.where((n) {
-      if (!n.isOpen || n.isTemplate) return false;
+      if (!n.isOpen || n.isTemplate || n.isUnbounded) return false;
       final due = n.schedule?.due;
       if (due == null) return false;
       return !due.isBefore(today) && due.isBefore(endExclusive);
@@ -156,7 +486,19 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   ///  - **Structural relations** ([validateNodeRelations]): everything
   ///    expressed through `instanceOfId` rather than `parentIds`, which
   ///    the cycle walk below cannot see.
-  String? validateParents(Node draft, List<String> parentIds) {
+  ///
+  /// [checkRelations] exists because these rules can refuse a state that
+  /// old data already satisfies. Running them on every write would make
+  /// such a node permanently un-editable — every ordinary edit (toggling
+  /// done, starting the timer) would come back with a structural error the
+  /// caller cannot act on, and the edit would be lost. So the relation
+  /// rules only apply when the structure that *defines* the relation is
+  /// actually being changed.
+  String? validateParents(
+    Node draft,
+    List<String> parentIds, {
+    bool checkRelations = true,
+  }) {
     final seenParents = <String>{};
     for (final p in parentIds) {
       if (p == draft.id) return 'A node cannot be its own parent.';
@@ -171,19 +513,39 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         return 'That parent would create a cycle.';
       }
     }
-    final relationError = validateNodeRelations(
-      draft: draft,
-      all: state,
-      parentIds: parentIds,
-    );
-    if (relationError != null) return relationError;
+    // Structural relations, but only when the caller is actually changing
+    // the structure they describe (see [checkRelations]).
+    if (checkRelations && _relationsChanged(draft, parentIds)) {
+      final relationError = validateNodeRelations(
+        draft: draft,
+        all: state,
+        parentIds: parentIds,
+      );
+      if (relationError != null) return relationError;
+    }
     return null;
+  }
+
+  /// True when [draft]'s parent/instance structure differs from what is
+  /// stored. Identity of the two relations, not their contents: if a node
+  /// was already parented wrongly, editing it is how it gets fixed.
+  bool _relationsChanged(Node draft, List<String> parentIds) {
+    final stored = byId(draft.id);
+    if (stored == null) return true;
+    if (stored.instanceOfId != draft.instanceOfId) return true;
+    if (stored.parentIds.length != parentIds.length) return true;
+    for (var i = 0; i < parentIds.length; i++) {
+      if (stored.parentIds[i] != parentIds[i]) return true;
+    }
+    return false;
   }
 
   // ── CRUD ────────────────────────────────────────────────────────────
 
   String? addNode(Node node) {
     if (byId(node.id) != null) return 'A node with that id exists.';
+    final unboundedError = validateUnbounded(node);
+    if (unboundedError != null) return unboundedError;
     final error = validateParents(node, node.parentIds);
     if (error != null) return error;
     emitChange([...state, node]);
@@ -192,11 +554,36 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
 
   String? updateNode(Node updated) {
     if (byId(updated.id) == null) return 'Node not found.';
-    final error = validateParents(updated, updated.parentIds);
-    if (error != null) return error;
+    final unboundedError = validateUnbounded(updated);
+    if (unboundedError != null) return unboundedError;
+    // Fast path: status/completion/content edits leave the DAG structure
+    // untouched. Re-running validateParents here rebuilds the full parent
+    // index plus a descendant walk (O(n)) on every checkbox tap.
+    final current = byId(updated.id)!;
+    if (!_sameStructure(current, updated)) {
+      final error = validateParents(updated, updated.parentIds);
+      if (error != null) return error;
+    }
     emitChange(
         state.map((n) => n.id == updated.id ? updated : n).toList());
     return null;
+  }
+
+  /// Structural fields guarded by [validateParents]: parent links, the
+  /// template link, and the recurrence that makes a node a template.
+  /// Everything else (status, dates, money, text) cannot introduce a cycle.
+  static bool _sameStructure(Node a, Node b) {
+    if (a.instanceOfId != b.instanceOfId) return false;
+    if (a.recurrence != b.recurrence) return false;
+    final pa = a.parentIds;
+    final pb = b.parentIds;
+    if (!identical(pa, pb)) {
+      if (pa.length != pb.length) return false;
+      for (var i = 0; i < pa.length; i++) {
+        if (pa[i] != pb[i]) return false;
+      }
+    }
+    return true;
   }
 
   String? reparent(String id, List<String> parentIds) {
@@ -279,10 +666,15 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         parentIds: parents,
         status: NodeStatus.open,
         createdAt: at,
+        isUnbounded: n.isUnbounded,
         schedule: n.schedule,
         money: n.money?.copyWith(
             status: MoneyStatus.projected, clearActual: true),
         effort: n.effort,
+        // A copy is a fresh goal: same deck and target, but the review
+        // count starts over (like money actuals, which are cleared too).
+        anki: n.anki?.copyWith(
+            clearReviewsActual: true, clearLastSyncedAt: true),
         recurrence: n.recurrence,
         rule: n.rule,
         instanceOfId: n.instanceOfId == null
@@ -426,6 +818,87 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         : node.copyWith(status: status, clearCompletedAt: true));
   }
 
+  /// Marks many nodes done/open as ONE undoable emit (one undo record,
+  /// one rebuild, one persist). Per-node decisions mirror [toggleDone]:
+  /// done stamps [completedAt], reopening clears it, and nodes already
+  /// in the target state are left untouched. Returns the number changed.
+  int setDoneMany(Set<String> ids, {required bool done, DateTime? now}) {
+    if (ids.isEmpty) return 0;
+    final at = now ?? DateTime.now();
+    final next = <Node>[];
+    var changed = 0;
+    for (final n in state) {
+      if (!ids.contains(n.id)) {
+        next.add(n);
+        continue;
+      }
+      if (n.isDone == done && (done || n.completedAt == null)) {
+        next.add(n);
+        continue;
+      }
+      changed++;
+      next.add(done
+          ? n.copyWith(status: NodeStatus.done, completedAt: at)
+          : n.copyWith(status: NodeStatus.open, clearCompletedAt: true));
+    }
+    if (changed == 0) return 0;
+    emitChange(next);
+    return changed;
+  }
+
+  /// Deletes many nodes as ONE undoable emit. Cascade rules mirror
+  /// [deleteNode]: generated instances of removed nodes go too, a child
+  /// is cascaded only when ALL its parents are removed, and survivors
+  /// keep their remaining parents. Returns the total removed, including
+  /// cascaded nodes.
+  int deleteNodes(Set<String> ids) {
+    final targets = ids.where((id) => _byIdMap.containsKey(id)).toSet();
+    if (targets.isEmpty) return 0;
+    final byParent = <String, List<String>>{};
+    final byInstanceOf = <String, List<String>>{};
+    for (final n in state) {
+      for (final p in n.parentIds) {
+        (byParent[p] ??= []).add(n.id);
+      }
+      final t = n.instanceOfId;
+      if (t != null) (byInstanceOf[t] ??= []).add(n.id);
+    }
+    final doomed = Set<String>.of(targets);
+    final queue = List<String>.of(targets);
+    while (queue.isNotEmpty) {
+      final current = queue.removeLast();
+      final instances = byInstanceOf[current];
+      if (instances != null) {
+        for (final child in instances) {
+          if (doomed.add(child)) queue.add(child);
+        }
+      }
+      final children = byParent[current];
+      if (children == null) continue;
+      for (final child in children) {
+        if (doomed.contains(child)) continue;
+        final node = _byIdMap[child];
+        if (node == null) continue;
+        if (node.parentIds.isNotEmpty &&
+            node.parentIds.every(doomed.contains)) {
+          if (doomed.add(child)) queue.add(child);
+        }
+      }
+    }
+    final before = state.length;
+    final next = <Node>[];
+    for (final n in state) {
+      if (doomed.contains(n.id)) continue;
+      final keptParents =
+          n.parentIds.where((p) => !doomed.contains(p)).toList();
+      next.add(keptParents.length == n.parentIds.length
+          ? n
+          : n.copyWith(parentIds: keptParents));
+    }
+    emitChange(next);
+    return before - next.length;
+  }
+
   /// Sets the calendar/planned work block, preserving the rest of the
   /// schedule (due date, fixed flag). Used by the follow-up scheduler.
   void setScheduleBlock(String id, DateTime start, DateTime end) {
@@ -538,6 +1011,33 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     updateNode(node.copyWith(clearTimerStartedAt: true));
   }
 
+  /// Moves a running timer's start (Toggl-style correction). Recording
+  /// continues — only the start moves, so a late press or a restart gap
+  /// is fixable without losing the session. Starts in the future clamp
+  /// to [now]; no-op when not tracking.
+  void setTimerStart(String id, DateTime start, {DateTime? now}) {
+    final node = byId(id);
+    if (node == null || !node.isTracking) return;
+    final at = now ?? DateTime.now();
+    updateNode(node.copyWith(
+        timerStartedAt: start.isAfter(at) ? at : start));
+  }
+
+  /// Sets the reported interval directly (manual entry + post-stop
+  /// correction). Takes manual control: a running timer is cleared and
+  /// the given start/end become the record. A non-positive range is
+  /// floored to one minute.
+  void setReported(String id, DateTime start, DateTime end) {
+    final node = byId(id);
+    if (node == null) return;
+    updateNode(node.copyWith(
+      actualStart: start,
+      actualEnd:
+          end.isAfter(start) ? end : start.add(const Duration(minutes: 1)),
+      clearTimerStartedAt: true,
+    ));
+  }
+
   void clearReported(String id) {
     final node = byId(id);
     if (node == null) return;
@@ -551,6 +1051,73 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       clearActualEnd: true,
       clearTimerStartedAt: true,
     ));
+  }
+
+  /// Marks a goal as part of the curated set shown on the time-tracking
+  /// card. Additive toggle; no-op when unchanged.
+  void setTracked(String id, bool tracked) {
+    final node = byId(id);
+    if (node == null || node.isTracked == tracked) return;
+    updateNode(node.copyWith(isTracked: tracked));
+  }
+
+  /// Moves a recorded chunk (reported interval and/or running timer) from
+  /// [fromId] to [toId], clearing it from the source. Powers the goal
+  /// picker on a time chunk: the time follows the newly chosen goal.
+  void reassignTime(String fromId, String toId) {
+    _moveRecordedTime(fromId, toId);
+  }
+
+  void reassignTracking(String fromId, String toId) =>
+      _moveRecordedTime(fromId, toId);
+
+  void reassignReported(String fromId, String toId) =>
+      _moveRecordedTime(fromId, toId);
+
+  void reassignChunk(String fromId, String toId) =>
+      _moveRecordedTime(fromId, toId);
+
+  void moveReported(String fromId, String toId) =>
+      _moveRecordedTime(fromId, toId);
+
+  void moveTracking(String fromId, String toId) =>
+      _moveRecordedTime(fromId, toId);
+
+  void moveTimer(String fromId, String toId) =>
+      _moveRecordedTime(fromId, toId);
+
+  void _moveRecordedTime(String fromId, String toId) {
+    if (fromId == toId) return;
+    final from = byId(fromId);
+    final to = byId(toId);
+    if (from == null || to == null) return;
+    final hasRunning = from.timerStartedAt != null;
+    final hasReported =
+        from.actualStart != null || from.actualEnd != null;
+    if (!hasRunning && !hasReported) return;
+    final next = <Node>[];
+    for (final n in state) {
+      if (n.id == toId) {
+        next.add(n.copyWith(
+          timerStartedAt: hasRunning
+              ? from.timerStartedAt
+              : n.timerStartedAt,
+          actualStart:
+              hasReported ? (from.actualStart ?? n.actualStart) : n.actualStart,
+          actualEnd:
+              hasReported ? (from.actualEnd ?? n.actualEnd) : n.actualEnd,
+        ));
+      } else if (n.id == fromId) {
+        next.add(n.copyWith(
+          clearTimerStartedAt: hasRunning,
+          clearActualStart: hasReported && from.actualStart != null,
+          clearActualEnd: hasReported && from.actualEnd != null,
+        ));
+      } else {
+        next.add(n);
+      }
+    }
+    emitChange(next);
   }
 
   // ── Money: subdivide / merge / link transaction ─────────────────────
@@ -863,6 +1430,11 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       schedule: schedule,
       money: money,
       effort: template.effort,
+      // Instances inherit the deck and target but start unreviewed: the
+      // template's cached count belongs to its own period, not the new
+      // instance's.
+      anki: template.anki?.copyWith(
+          clearReviewsActual: true, clearLastSyncedAt: true),
       instanceOfId: template.id,
       sourceEventId: template.sourceEventId,
       calendarEventId: template.calendarEventId,
@@ -878,6 +1450,33 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   // Each maps one legacy object to a Node without touching the legacy
   // cubits, so old data is never wiped and both systems can coexist
   // while the UI migrates.
+
+  /// Translates legacy [Expense.overriddenFields] keys to node paths.
+  ///
+  /// [Expense.overrideField] records flat field names ("name", "amount",
+  /// "date", "category", "notes") while [Node.overriddenFields] uses
+  /// facet-qualified paths ("money.targetAmount", "schedule.due", "title").
+  /// Passing the legacy set through verbatim — as this importer used to —
+  /// leaves every override inert, because nothing reads a key like
+  /// "amount" off a node: the user's edit is preserved but stops
+  /// signalling ownership, so the next template change silently overwrites
+  /// it.
+  ///
+  /// Keys with no node equivalent are kept verbatim rather than dropped,
+  /// so the fact that the field was overridden survives even though the
+  /// node has nowhere to put the value.
+  static Set<String> _translateLegacyOverrides(Set<String> legacy) {
+    const legacyToNode = {
+      'name': 'title',
+      'notes': 'notes',
+      'amount': 'money.targetAmount',
+      'date': 'schedule.due',
+      'category': 'category',
+    };
+    return {
+      for (final key in legacy) legacyToNode[key] ?? key,
+    };
+  }
 
   String importGoal(Goal goal) {
     final existing = byId('node:${goal.id}');
@@ -1023,7 +1622,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
             ? const []
             : [expense.linkedTransactionId!],
       ),
-      overriddenFields: expense.overriddenFields,
+      overriddenFields: _translateLegacyOverrides(expense.overriddenFields),
     );
     emitChange([...state, node]);
     return node.id;
@@ -1080,23 +1679,31 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   }
 
   /// Creates or refreshes the personal linked node for [event] so the
-  /// event shows up in the queue. Returns the node id. Title/notes/due/
-  /// done mirror the event; completion is kept in sync both ways.
+  /// event shows up in the queue. Returns the node id. Title/notes/due
+  /// mirror the event; completion is kept in sync through the explicit
+  /// mirror calls ([setDoneForEvent] / [NodeEventLink]), never here, so a
+  /// save carrying a stale `done: false` cannot re-open a node the
+  /// stop-tracking sheet just marked done. New nodes take the event's
+  /// completion once, at creation.
   String upsertLinkedNodeForEvent(PlannerEvent event) {
     Node syncLinked(Node linked) {
       final hasNotes = (event.notes ?? '').trim().isNotEmpty;
+      // Imported homework keeps the due date its feed gave it: the block
+      // says when the user plans to work, which is not when the
+      // assignment is due. Personal nodes have no such date, so their
+      // due stays the event's own start (the previous behaviour).
+      final due = linked.sourceEventId != null
+          ? (linked.schedule?.due ?? event.start)
+          : event.start;
       return linked.copyWith(
         title: event.subject,
         notes: hasNotes ? event.notes!.trim() : null,
         clearNotes: !hasNotes,
         schedule: ScheduleFacet(
-          due: event.start,
+          due: due,
           start: event.start,
           end: event.end,
         ),
-        status: event.done ? NodeStatus.done : NodeStatus.open,
-        completedAt: event.completedAt,
-        clearCompletedAt: !event.done || event.completedAt == null,
         assignees: event.assignees,
       );
     }
@@ -1133,20 +1740,39 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     return id;
   }
 
-  /// Mirrors an event's completion onto every backing node.
+  /// Backing-node check: personal links plus feed shadows, plus the node
+  /// an event's `taskId` points at (seeded tasks carry that link before —
+  /// and sometimes without — the `calendarEventId` back-link). Used by the
+  /// mirrors below so they can fold a whole event's nodes into one emit
+  /// instead of one emit per node.
+  static bool _backsEvent(Node node, String eventId, [String? taskId]) =>
+      node.calendarEventId == eventId ||
+      node.sourceEventId == eventId ||
+      (taskId != null && taskId.isNotEmpty && node.id == taskId);
+
+  /// Mirrors an event's completion onto every backing node in ONE emit
+  /// (one undo record, one rebuild) instead of one emit per node.
+  /// [taskId] is the event's `taskId` link: nodes reachable only through
+  /// it mirror too.
   void setDoneForEvent(
     String eventId, {
     required bool done,
     DateTime? completedAt,
+    String? taskId,
   }) {
-    for (final node in nodesForEventId(eventId)) {
-      if (node.isDone == done &&
-          (done || node.completedAt == null) &&
-          (node.completedAt == completedAt ||
-              (!done && completedAt == null))) {
+    var changed = false;
+    final next = <Node>[];
+    for (final node in state) {
+      if (!_backsEvent(node, eventId, taskId) ||
+          (node.isDone == done &&
+              (done || node.completedAt == null) &&
+              (node.completedAt == completedAt ||
+                  (!done && completedAt == null)))) {
+        next.add(node);
         continue;
       }
-      updateNode(
+      changed = true;
+      next.add(
         node.copyWith(
           status: done ? NodeStatus.done : NodeStatus.open,
           completedAt: completedAt,
@@ -1154,17 +1780,47 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         ),
       );
     }
+    if (changed) emitChange(next);
   }
 
-  void setFailedForEvent(String eventId, bool failed) {
-    for (final node in nodesForEventId(eventId)) {
-      final next = failed ? NodeStatus.failed : NodeStatus.open;
-      if (node.status == next) continue;
-      updateNode(node.copyWith(
-        status: next,
-        clearCompletedAt: true,
-      ));
+  /// Mirrors an event's failed flag onto backing nodes in ONE emit.
+  /// Clearing (`failed: false`) only re-opens nodes that are actually
+  /// failed — done nodes keep their completion. (Previously every non-open
+  /// node was flipped to open, so completing a mirrored task immediately
+  /// undid the just-applied completion.)
+  /// [taskId] is the event's `taskId` link: nodes reachable only through
+  /// it mirror too.
+  void setFailedForEvent(String eventId, bool failed, {String? taskId}) {
+    var changed = false;
+    final next = <Node>[];
+    for (final node in state) {
+      if (!_backsEvent(node, eventId, taskId)) {
+        next.add(node);
+        continue;
+      }
+      if (failed) {
+        if (node.status == NodeStatus.failed) {
+          next.add(node);
+          continue;
+        }
+        changed = true;
+        next.add(node.copyWith(
+          status: NodeStatus.failed,
+          clearCompletedAt: true,
+        ));
+      } else {
+        if (node.status != NodeStatus.failed) {
+          next.add(node);
+          continue;
+        }
+        changed = true;
+        next.add(node.copyWith(
+          status: NodeStatus.open,
+          clearCompletedAt: true,
+        ));
+      }
     }
+    if (changed) emitChange(next);
   }
 
   /// Ensures a homework-style node exists for a feed event that was
@@ -1215,7 +1871,12 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
 
   /// Deletes every node backing [eventId] (personal link and/or homework
   /// node). Used when an event is deleted or un-marked as actionable.
-  /// Silent: callers deleting events already record their own undo.
+  /// Silent (plain emit, no undo record of its own): callers deleting
+  /// events fold the removal into their own undo step via
+  /// [RevertableHydratedCubit.atomic], so undo restores both sides.
+  /// Deliberately index-only (no `taskId` follow): a task-seeded event
+  /// points at a standalone task that must survive un-marking — the event
+  /// editor's task-link sync protects it the same way.
   void removeNodesForEvent(String eventId) {
     final ids = nodesForEventId(eventId).map((n) => n.id).toSet();
     if (ids.isEmpty) return;
@@ -1232,6 +1893,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     List<PlannerEvent> events,
     Feed feed, {
     Set<String> taskOptOutIds = const {},
+    List<AssignmentRule> assignmentRules = const [],
   }) {
     final now = DateTime.now();
     var base = state;
@@ -1251,6 +1913,59 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         .map((n) => n.sourceEventId)
         .whereType<String>()
         .toSet();
+    final byEventId = {for (final e in events) e.id: e};
+    // One-time healing for the pre-fix exclusive-end bug: LS all-day
+    // DTENDs are exclusive per RFC 5545 (DTSTART Oct 12 DTEND Oct 15 is
+    // due Oct 14), but imports used to stamp due = DTEND (Oct 15). Move
+    // open nodes still sitting exactly on the old base (or old base +
+    // their rule shift) to the inclusive base. Hand-edited dues sit
+    // anywhere else and are left alone.
+    var healed = 0;
+    final healedBase = <Node>[];
+    for (final n in base) {
+      final eventId = n.sourceEventId;
+      final s = n.schedule;
+      final event = eventId == null ? null : byEventId[eventId];
+      if (feed.kind != FeedKind.learningSuite ||
+          event == null ||
+          s?.due == null ||
+          !n.isOpen) {
+        healedBase.add(n);
+        continue;
+      }
+      final isWindow = event.allDay &&
+          event.end.difference(event.start) > const Duration(days: 1);
+      if (!isWindow) {
+        healedBase.add(n);
+        continue;
+      }
+      final shift = assignmentOffsetFor(
+        assignmentRules,
+        feedId: feed.id,
+        title: n.title,
+      );
+      final oldBaseDue = shift == 0
+          ? event.end
+          : event.end.add(Duration(days: shift));
+      if (s!.due != oldBaseDue) {
+        healedBase.add(n);
+        continue;
+      }
+      final newBaseDue = shift == 0
+          ? event.end.subtract(const Duration(days: 1))
+          : event.end
+              .subtract(const Duration(days: 1))
+              .add(Duration(days: shift));
+      healed++;
+      healedBase.add(n.copyWith(
+        schedule: s.copyWith(
+          due: newBaseDue,
+          start: event.start,
+          end: event.end,
+        ),
+      ));
+    }
+    base = healedBase;
     final imported = <Node>[];
     for (final event in events) {
       if (taskOptOutIds.contains(event.id)) continue;
@@ -1258,11 +1973,25 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       if (existingSource.contains(event.id)) continue;
       if (existing.contains(event.id)) continue;
       // Learning Suite open..due windows (DTSTART..DTEND) are due at the
-      // end of the window: without this every window node would be due
-      // (and instantly overdue) on its open date.
+      // inclusive end of the window: without this every window node would
+      // be due (and instantly overdue) on its open date. All-day DTENDs
+      // are exclusive per RFC 5545, so the due date is end minus one day
+      // (DTSTART Oct 12 DTEND Oct 15 → due Oct 14); timed windows keep
+      // the exact end instant. The feed window stays in start/end as
+      // truth.
       final isWindow = feed.kind == FeedKind.learningSuite &&
           event.allDay &&
           event.end.difference(event.start) > const Duration(days: 1);
+      final baseDue = isWindow
+          ? event.end.subtract(const Duration(days: 1))
+          : event.start;
+      // Assignment rules shift the planned deadline (e.g. video quizzes
+      // due 2 days early); the feed window stays in start/end as truth.
+      final shift = assignmentOffsetFor(
+        assignmentRules,
+        feedId: feed.id,
+        title: event.subject,
+      );
       imported.add(Node(
         id: event.id,
         title: event.subject,
@@ -1271,7 +2000,9 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         status: event.done ? NodeStatus.done : NodeStatus.open,
         completedAt: event.completedAt,
         schedule: ScheduleFacet(
-          due: isWindow ? event.end : event.start,
+          due: shift == 0
+              ? baseDue
+              : baseDue.add(Duration(days: shift)),
           start: event.start,
           end: event.end,
         ),
@@ -1283,9 +2014,64 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       ));
     }
     final next = [...base, ...imported];
-    if (imported.isNotEmpty || next.length != state.length) {
+    if (imported.isNotEmpty || healed > 0 || next.length != state.length) {
       emitSilent(next);
     }
+  }
+
+  /// Re-targets open homework dues for one repeating type as ONE
+  /// undoable emit. Only items currently sitting at one of [fromOffsets]
+  /// (whole days from their own feed window) move to [newOffsetDays]:
+  /// never-shifted items sit at 0, rule-shifted ones at the old offset,
+  /// and hand-edited items sit anywhere else and are left alone.
+  /// Returns the number changed; emits nothing when zero.
+  ///
+  /// - New rule (offset N): retarget(newOffset: N, from: [0]).
+  /// - Edit old → new: retarget(newOffset: new, from: [0, old]).
+  /// - Delete (move back): retarget(newOffset: 0, from: [old]).
+  int retargetAssignmentDues({
+    required String feedId,
+    required String templateKey,
+    required int newOffsetDays,
+    List<int> fromOffsets = const [0],
+  }) {
+    final from = fromOffsets.toSet();
+    var changed = 0;
+    final next = <Node>[];
+    for (final n in state) {
+      if (n.sourceEventId == null ||
+          !n.isOpen ||
+          (n.feedId ?? n.classId) != feedId ||
+          assignmentTemplateKey(n.title) != templateKey) {
+        next.add(n);
+        continue;
+      }
+      final s = n.schedule;
+      final base = assignmentBaseDue(
+        start: s?.start,
+        end: s?.end,
+        allDay: s?.allDay ?? false,
+      );
+      final shift =
+          assignmentShiftOf(due: s?.due, base: base);
+      if (base == null || shift == null || !from.contains(shift)) {
+        next.add(n);
+        continue;
+      }
+      if (shift == newOffsetDays) {
+        next.add(n);
+        continue;
+      }
+      changed++;
+      next.add(n.copyWith(
+        schedule: s!.copyWith(
+          due: base.add(Duration(days: newOffsetDays)),
+        ),
+      ));
+    }
+    if (changed == 0) return 0;
+    emitChange(next);
+    return changed;
   }
 
   /// Deletes every homework node imported from [feedId]. Silent: feed

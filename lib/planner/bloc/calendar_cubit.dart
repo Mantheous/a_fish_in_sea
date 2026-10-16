@@ -34,6 +34,18 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
         state.map((e) => e.id == event.id ? event : e).toList(),
       );
 
+  /// Replaces each listed event by id as ONE undoable emit: one undo
+  /// record, one rebuild, one persist. Series-wide writes must use this
+  /// (or [replaceFeedEvents]): looping [updateEvent] snapshots the whole
+  /// store, rebuilds, and persists per member, which freezes then kills
+  /// the tab on large calendars (2730 events: one series save emitted
+  /// hundreds of full-store snapshots until the renderer died).
+  void updateEvents(List<PlannerEvent> updated) {
+    if (updated.isEmpty) return;
+    final byId = {for (final e in updated) e.id: e};
+    emitChange([for (final e in state) byId[e.id] ?? e]);
+  }
+
   void deleteEvent(String eventId) =>
       emitChange(state.where((e) => e.id != eventId).toList());
 
@@ -110,6 +122,33 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
     final event = byId(eventId);
     if (event == null || !event.isTracking) return;
     updateEvent(event.copyWith(clearTimerStartedAt: true));
+  }
+
+  /// Moves a running timer's start (Toggl-style correction). Recording
+  /// continues — only the start moves, so a late press or a restart gap
+  /// is fixable without losing the session. Starts in the future clamp
+  /// to [now]; no-op when not tracking.
+  void setTimerStart(String eventId, DateTime start, {DateTime? now}) {
+    final event = byId(eventId);
+    if (event == null || !event.isTracking) return;
+    final at = now ?? DateTime.now();
+    updateEvent(event.copyWith(
+        timerStartedAt: start.isAfter(at) ? at : start));
+  }
+
+  /// Sets the reported interval directly (manual entry + post-stop
+  /// correction). Takes manual control: a running timer is cleared and
+  /// the given start/end become the record. A non-positive range is
+  /// floored to one minute.
+  void setReported(String eventId, DateTime start, DateTime end) {
+    final event = byId(eventId);
+    if (event == null) return;
+    updateEvent(event.copyWith(
+      actualStart: start,
+      actualEnd:
+          end.isAfter(start) ? end : start.add(const Duration(minutes: 1)),
+      clearTimerStartedAt: true,
+    ));
   }
 
   void clearReported(String eventId) {

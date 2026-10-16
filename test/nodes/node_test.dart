@@ -409,6 +409,77 @@ void main() {
           now: t0.add(const Duration(minutes: 35)));
       expect(cubit.byId('b')?.reportedDuration, const Duration(minutes: 30));
     });
+
+    test('setTimerStart moves the start but keeps recording', () {
+      final cubit = NodeCubit();
+      cubit.addNode(node('a'));
+      final t0 = DateTime(2026, 9, 12, 9);
+      cubit.startTracking('a', now: t0);
+      final corrected = DateTime(2026, 9, 12, 8, 30);
+      cubit.setTimerStart('a', corrected,
+          now: t0.add(const Duration(minutes: 10)));
+      final live = cubit.byId('a')!;
+      expect(live.isTracking, isTrue);
+      expect(live.timerStartedAt, corrected);
+    });
+
+    test('setTimerStart clamps future starts and ignores idle nodes', () {
+      final cubit = NodeCubit();
+      cubit.addNode(node('a'));
+      cubit.addNode(node('b'));
+      final t0 = DateTime(2026, 9, 12, 9);
+      cubit.startTracking('a', now: t0);
+      cubit.setTimerStart(
+          'a', t0.add(const Duration(hours: 2)),
+          now: t0.add(const Duration(minutes: 10)));
+      expect(cubit.byId('a')?.timerStartedAt,
+          t0.add(const Duration(minutes: 10)));
+      expect(cubit.byId('a')?.isTracking, isTrue);
+      // Idle node: no timer appears out of an edit.
+      cubit.setTimerStart('b', t0, now: t0);
+      expect(cubit.byId('b')?.isTracking, isFalse);
+      // Unknown id: no crash.
+      cubit.setTimerStart('missing', t0, now: t0);
+    });
+
+    test('setReported writes the interval and takes over a running timer',
+        () {
+      final cubit = NodeCubit();
+      cubit.addNode(node('a'));
+      cubit.addNode(node('b'));
+      final t0 = DateTime(2026, 9, 12, 9);
+      cubit.startTracking('a', now: t0);
+      cubit.setReported('a', t0.subtract(const Duration(hours: 1)), t0);
+      final live = cubit.byId('a')!;
+      expect(live.isTracking, isFalse);
+      expect(live.reportedDuration, const Duration(hours: 1));
+      // Manual entry without ever starting the timer.
+      cubit.setReported(
+          'b', DateTime(2026, 9, 11, 19), DateTime(2026, 9, 11, 20, 30));
+      expect(cubit.byId('b')?.reportedDuration,
+          const Duration(minutes: 90));
+    });
+
+    test('setReported floors a non-positive range to one minute', () {
+      final cubit = NodeCubit();
+      cubit.addNode(node('a'));
+      final t0 = DateTime(2026, 9, 12, 9);
+      cubit.setReported('a', t0, t0.subtract(const Duration(minutes: 5)));
+      expect(cubit.byId('a')?.reportedDuration,
+          const Duration(minutes: 1));
+    });
+
+    test('running timer survives a storage round trip (rebuild)', () {
+      final cubit = NodeCubit();
+      cubit.addNode(node('a'));
+      final t0 = DateTime(2026, 9, 12, 9);
+      cubit.startTracking('a', now: t0);
+      // A rebuild rehydrates from the persisted json: the timer must come
+      // back recording with its original start, not stopped or reset.
+      final restored = cubit.fromJson(cubit.toJson(cubit.state));
+      expect(restored?.single.isTracking, isTrue);
+      expect(restored?.single.timerStartedAt, t0);
+    });
   });
 
   group('legacy importers', () {
@@ -621,6 +692,37 @@ void main() {
       final shadow = cubit.byId('evt:2');
       expect(shadow?.sourceEventId, 'evt:2');
       expect(shadow?.classLabel, 'Physics');
+    });
+
+    test('scheduling an imported assignment keeps its due date', () {
+      final cubit = NodeCubit();
+      cubit.addNode(Node(
+        id: 'hw:f1:evt',
+        title: 'AI Plan',
+        createdAt: DateTime(2026, 9, 12, 8),
+        schedule: ScheduleFacet(
+          due: DateTime(2026, 9, 16, 15),
+          start: DateTime(2026, 9, 16, 15),
+          end: DateTime(2026, 9, 16, 15),
+        ),
+        sourceEventId: 'hw:f1:evt',
+        feedId: 'f1',
+        classId: 'f1',
+        classLabel: 'C S 291',
+      ));
+      final id = cubit.upsertLinkedNodeForEvent(PlannerEvent(
+        id: 'evt:1',
+        subject: 'AI Plan',
+        start: DateTime(2026, 9, 14, 9),
+        end: DateTime(2026, 9, 14, 10),
+        taskId: 'hw:f1:evt',
+      ));
+      final node = cubit.byId(id)!;
+      // The block is when the user plans to work; the due date came from
+      // the class feed and must survive being scheduled.
+      expect(node.schedule?.start, DateTime(2026, 9, 14, 9));
+      expect(node.schedule?.end, DateTime(2026, 9, 14, 10));
+      expect(node.schedule?.due, DateTime(2026, 9, 16, 15));
     });
   });
 

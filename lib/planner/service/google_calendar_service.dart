@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import '../model/planner_event.dart';
+import '../../demo/demo_data.dart';
+import '../../demo/demo_mode.dart';
 import 'server_base.dart';
 
 class GoogleCalendarInfo {
@@ -101,12 +103,20 @@ class GoogleCalendarService {
   final String Function() baseUrl;
   final String Function() userId;
   final String? Function()? authToken;
+
+  /// Refreshes the app session (JWT) and returns the new access token.
+  /// Wired to [AuthCubit.refreshAccessToken] in main.dart. Without it an
+  /// access token that expires mid-session (15 min) turns every Google
+  /// push into a 401 "Invalid token" — the sync client already retries
+  /// this way, the Google proxy did not.
+  final Future<String?> Function()? refreshAccessToken;
   final http.Client _client;
 
   GoogleCalendarService({
     required this.baseUrl,
     required this.userId,
     this.authToken,
+    this.refreshAccessToken,
     http.Client? client,
   }) : _client = client ?? http.Client();
 
@@ -137,7 +147,37 @@ class GoogleCalendarService {
   /// ([http.ClientException], [SocketException], [TimeoutException]) into a
   /// [GoogleCalendarException] that names the server, instead of leaking a
   /// bare "ClientException" string into the UI.
+  ///
+  /// On a 401 that looks like an expired app session (the server's string
+  /// `detail`, e.g. "Invalid token" — not the map-shaped Google-error
+  /// payload that carries `needsReconnect`), refreshes the session once
+  /// and retries with the new bearer, mirroring [SyncClient]. Callers pass
+  /// a closure so [_headers] is re-read and the retry carries the fresh
+  /// token.
   Future<http.Response> _send(Future<http.Response> Function() request) async {
+    final first = await _attempt(request);
+    if (first.statusCode != 401 || refreshAccessToken == null) return first;
+    if (!_isAppSessionExpiry(first)) return first;
+    final fresh = await refreshAccessToken!();
+    if (fresh == null || fresh.isEmpty) return first;
+    return _attempt(request);
+  }
+
+  /// True when a 401 looks like our own JWT expired, not a Google-side
+  /// auth failure. Google failures arrive as
+  /// `{"detail": {"error": ..., "needsReconnect": ...}}` (map detail) and
+  /// refreshing the app session can't fix those.
+  bool _isAppSessionExpiry(http.Response response) {
+    try {
+      final body = jsonDecode(response.body);
+      if (body is Map) return body['detail'] is! Map;
+    } catch (_) {}
+    return true;
+  }
+
+  Future<http.Response> _attempt(
+    Future<http.Response> Function() request,
+  ) async {
     try {
       return await request().timeout(const Duration(seconds: 30));
     } on GoogleCalendarException {
@@ -192,6 +232,7 @@ class GoogleCalendarService {
   }
 
   Future<bool> isConnected() async {
+    if (DemoMode.isActive) return DemoMocks.googleConnected;
     final data = _decode(await _send(() => _client.get(
         _uri('/api/google/status'),
         headers: _headers)));
@@ -203,6 +244,13 @@ class GoogleCalendarService {
   /// must be started from a host registered in the Google Cloud console
   /// (e.g. http://localhost:8000).
   Future<String> authUrl() async {
+    if (DemoMode.isActive) {
+      // Real OAuth needs a browser round-trip; the demo dialog one-taps
+      // instead (see _GoogleConnectDialog). This is only a safety net.
+      throw const GoogleCalendarException(
+        'Demo connect is one-tap — close this and use the Connect button.',
+      );
+    }
     final data = _decode(await _send(() => _client.get(
         _uri('/api/google/auth_url'),
         headers: _headers)));
@@ -213,11 +261,25 @@ class GoogleCalendarService {
   }
 
   Future<void> disconnect() async {
+    if (DemoMode.isActive) {
+      DemoMocks.googleConnected = false;
+      return;
+    }
     await _send(
         () => _client.post(_uri('/api/google/disconnect'), headers: _headers));
   }
 
   Future<List<GoogleCalendarInfo>> listCalendars() async {
+    if (DemoMode.isActive) {
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      if (!DemoMocks.googleConnected) {
+        throw const GoogleCalendarException(
+          'Demo Google is disconnected.',
+          needsReconnect: true,
+        );
+      }
+      return DemoData.googleCalendars();
+    }
     final data = _decode(await _send(() => _client.get(
         _uri('/api/google/calendars'),
         headers: _headers)));

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../demo/demo_coordinator.dart';
 import '../auth_cubit.dart';
 import '../sync_engine.dart';
 import '../sync_meta_cubit.dart';
@@ -136,6 +137,23 @@ class _AuthPageState extends State<AuthPage> {
                 'connection and merges later. If the same item changes on '
                 'two devices, the server copy wins.',
                 style: TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 16),
+              const Divider(),
+              const SizedBox(height: 8),
+              const Text(
+                'Just looking around? Tour the whole app — calendar, '
+                'tasks, finances, stats and every integration — on mock '
+                'data. Nothing is saved and no account is needed.',
+                style: TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 8),
+              FilledButton.tonalIcon(
+                onPressed: _busy
+                    ? null
+                    : () => DemoCoordinator.enterDemo(context),
+                icon: const Icon(Icons.science_outlined),
+                label: const Text('Try demo mode (no sign-in)'),
               ),
             ],
           ),

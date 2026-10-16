@@ -8,58 +8,532 @@ import '../../navigation/bloc/navigation_cubit.dart';
 import '../../navigation/view/app_drawer.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
+import '../../nodes/service/node_event_link.dart';
 import '../../nodes/service/node_progress.dart';
 import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_editor.dart';
 import '../../nodes/view/node_finish_sheet.dart';
+import '../../nodes/view/timer_edit_sheet.dart';
+import '../bloc/assignment_estimates_cubit.dart';
+import '../bloc/assignment_rules_cubit.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/feed_cubit.dart';
+import '../bloc/settings_cubit.dart';
+import '../bloc/tasks_tab_cubit.dart';
+import '../bloc/tasks_view_options_cubit.dart';
+import '../model/assignment_estimate.dart';
+import '../model/assignment_rule.dart';
+import '../model/assignment_template.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../model/task_assignee.dart';
 import 'feed_manager.dart';
+import 'assignment_rules_sheet.dart';
 import 'syllabus_import_sheet.dart';
+import 'tasks_view_options_sheet.dart';
 
-class TasksPage extends StatelessWidget {
+class TasksPage extends StatefulWidget {
   const TasksPage({super.key});
+
+  /// Tab the user was last on (0 = To-Do, 1 = Homework). Falls back to 0
+  /// when the cubit isn't provided (widget tests pump TasksPage standalone).
+  static int _initialTab(BuildContext context) {
+    try {
+      final i = context.read<TasksTabCubit>().state;
+      if (i < 0 || i > 1) return 0;
+      return i;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  static void _saveTab(BuildContext context, int index) {
+    try {
+      context.read<TasksTabCubit>().setTab(index);
+    } catch (_) {}
+  }
+
+  @override
+  State<TasksPage> createState() => _TasksPageState();
+}
+
+/// Multi-select lives here so one selection spans both tabs: long-press
+/// a task to start selecting, tap to add more, then mark the bunch done
+/// (or delete them) from the bottom bar in a single undoable step.
+class _TasksPageState extends State<TasksPage> {
+  /// Selected node ids. Empty means normal (non-selecting) mode.
+  final Set<String> _selected = {};
+
+  bool get _selecting => _selected.isNotEmpty;
+
+  void _toggleSelection(String id) {
+    setState(() {
+      if (!_selected.remove(id)) _selected.add(id);
+    });
+  }
+
+  void _enterSelection(String id) {
+    setState(() {
+      _selected.add(id);
+    });
+  }
+
+  void _clearSelection() {
+    if (_selected.isEmpty) return;
+    setState(() {
+      _selected.clear();
+    });
+  }
+
+  void _selectAll(Iterable<String> ids) {
+    setState(() {
+      _selected.addAll(ids);
+    });
+  }
+
+  void _deselectAll(Iterable<String> ids) {
+    if (_selected.isEmpty) return;
+    setState(() {
+      _selected.removeAll(ids);
+    });
+  }
+
+  /// Selection restricted to nodes that still exist, so bulk actions
+  /// never reference nodes deleted elsewhere.
+  Set<String> _liveSelection(NodeCubit nodes) =>
+      _selected.where((id) => nodes.byId(id) != null).toSet();
+
+  void _markSelectedDone() {
+    NodeCubit nodes;
+    try {
+      nodes = context.read<NodeCubit>();
+    } catch (_) {
+      return;
+    }
+    CalendarCubit? calendar;
+    try {
+      calendar = context.read<CalendarCubit>();
+    } catch (_) {}
+    final ids = _liveSelection(nodes);
+    if (ids.isEmpty) {
+      _clearSelection();
+      return;
+    }
+    final changed = calendar == null
+        ? nodes.setDoneMany(ids, done: true)
+        : NodeEventLink.setNodesDone(nodes, calendar, ids, done: true);
+    setState(() {
+      _selected.clear();
+    });
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(changed == 1
+              ? '1 task marked done'
+              : '$changed tasks marked done'),
+          duration: const Duration(seconds: 4),
+          // Action snackbars persist forever by default; this one must go.
+          persist: false,
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () => context.read<UndoCubit>().undo(),
+          ),
+        ),
+      );
+  }
+
+  void _deleteSelected() {
+    NodeCubit nodes;
+    try {
+      nodes = context.read<NodeCubit>();
+    } catch (_) {
+      return;
+    }
+    CalendarCubit? calendar;
+    try {
+      calendar = context.read<CalendarCubit>();
+    } catch (_) {}
+    final ids = _liveSelection(nodes);
+    if (ids.isEmpty) {
+      _clearSelection();
+      return;
+    }
+    final removed = calendar == null
+        ? nodes.deleteNodes(ids)
+        : NodeEventLink.deleteNodesAndUnlink(nodes, calendar, ids);
+    setState(() {
+      _selected.clear();
+    });
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+              removed == 1 ? '1 task deleted' : '$removed tasks deleted'),
+          duration: const Duration(seconds: 4),
+          // Action snackbars persist forever by default; this one must go.
+          persist: false,
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () => context.read<UndoCubit>().undo(),
+          ),
+        ),
+      );
+  }
 
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
       length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Tasks'),
-          actions: [
-            IconButton(
-              tooltip: 'Import from syllabus',
-              icon: const Icon(Icons.auto_awesome),
-              onPressed: () => showSyllabusImport(context),
+      initialIndex: TasksPage._initialTab(context),
+      child: Builder(
+        builder: (context) {
+          return Scaffold(
+            appBar: AppBar(
+              leading: _selecting
+                  ? IconButton(
+                      tooltip: 'Clear selection',
+                      icon: const Icon(Icons.close),
+                      onPressed: _clearSelection,
+                    )
+                  : null,
+              title: _selecting
+                  ? Text('${_selected.length} selected')
+                  : const Text('Tasks'),
+              actions: _selecting
+                  ? const [UndoRedoActions()]
+                  : [
+                      Builder(
+                        builder: (buttonContext) {
+                          var active = false;
+                          try {
+                            active = buttonContext
+                                .watch<TasksViewOptionsCubit>()
+                                .state
+                                .hasActiveOptions;
+                          } catch (_) {}
+                          return Badge(
+                            isLabelVisible: active,
+                            child: IconButton(
+                              tooltip: 'View options',
+                              icon: const Icon(Icons.layers_outlined),
+                              onPressed: () =>
+                                  showTasksViewOptions(buttonContext),
+                            ),
+                          );
+                        },
+                      ),
+                      IconButton(
+                        tooltip: 'Import from syllabus',
+                        icon: const Icon(Icons.auto_awesome),
+                        onPressed: () => showSyllabusImport(context),
+                      ),
+                      IconButton(
+                        tooltip: 'Manage classes',
+                        icon: const Icon(Icons.sync),
+                        onPressed: () => showFeedManager(context),
+                      ),
+                      PopupMenuButton<String>(
+                        tooltip: 'More actions',
+                        icon: const Icon(Icons.more_vert),
+                        onSelected: (value) {
+                          switch (value) {
+                            case 'rules':
+                              showAssignmentRules(context);
+                            case 'view':
+                              showTasksViewOptions(context);
+                            case 'syllabus':
+                              showSyllabusImport(context);
+                            case 'classes':
+                              showFeedManager(context);
+                          }
+                        },
+                        itemBuilder: (menuContext) => const [
+                          PopupMenuItem(
+                            value: 'rules',
+                            child: Text('Repeating assignment rules'),
+                          ),
+                          PopupMenuItem(
+                            value: 'view',
+                            child: Text('View options'),
+                          ),
+                          PopupMenuItem(
+                            value: 'syllabus',
+                            child: Text('Import from syllabus'),
+                          ),
+                          PopupMenuItem(
+                            value: 'classes',
+                            child: Text('Manage classes'),
+                          ),
+                        ],
+                      ),
+                      const UndoRedoActions(),
+                    ],
+              bottom: TabBar(
+                onTap: (i) => TasksPage._saveTab(context, i),
+                tabs: const [
+                  Tab(text: 'To-Do'),
+                  Tab(text: 'Homework'),
+                ],
+              ),
             ),
-            IconButton(
-              tooltip: 'Manage classes',
-              icon: const Icon(Icons.sync),
-              onPressed: () => showFeedManager(context),
+            drawer: _selecting ? null : const AppDrawer(),
+            floatingActionButton: _selecting
+                ? null
+                : FloatingActionButton(
+                    onPressed: () => showNodeEditor(context),
+                    child: const Icon(Icons.add),
+                  ),
+            bottomNavigationBar: _selecting
+                ? SafeArea(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              _selected.length == 1
+                                  ? '1 selected'
+                                  : '${_selected.length} selected',
+                              style:
+                                  Theme.of(context).textTheme.titleSmall,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Delete selected',
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: _deleteSelected,
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton.icon(
+                            onPressed: _markSelectedDone,
+                            icon: const Icon(Icons.check),
+                            label: const Text('Mark done'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : null,
+            body: _TabSaver(
+              child: TabBarView(
+                children: [
+                  _TodoTab(
+                    selected: _selected,
+                    selecting: _selecting,
+                    onToggleSelection: _toggleSelection,
+                    onEnterSelection: _enterSelection,
+                    onSelectAll: _selectAll,
+                    onDeselectAll: _deselectAll,
+                  ),
+                  _HomeworkTab(
+                    selected: _selected,
+                    selecting: _selecting,
+                    onToggleSelection: _toggleSelection,
+                    onEnterSelection: _enterSelection,
+                    onSelectAll: _selectAll,
+                    onDeselectAll: _deselectAll,
+                  ),
+                ],
+              ),
             ),
-            const UndoRedoActions(),
-          ],
-          bottom: const TabBar(
-            tabs: [
-              Tab(text: 'To-Do'),
-              Tab(text: 'Homework'),
-            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Persists swipe-driven tab changes (TabBar.onTap only fires on taps, not
+/// on TabBarView swipes). Listens to the DefaultTabController and records
+/// the settled index in [TasksTabCubit]; tolerates a missing cubit so
+/// standalone widget tests keep working.
+class _TabSaver extends StatefulWidget {
+  final Widget child;
+
+  const _TabSaver({required this.child});
+
+  @override
+  State<_TabSaver> createState() => _TabSaverState();
+}
+
+class _TabSaverState extends State<_TabSaver> {
+  TabController? _controller;
+
+  void _onTabChanged() {
+    final controller = _controller;
+    if (controller == null || controller.indexIsChanging) return;
+    try {
+      context.read<TasksTabCubit>().setTab(controller.index);
+    } catch (_) {}
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final next = DefaultTabController.of(context);
+    if (_controller != next) {
+      _controller?.removeListener(_onTabChanged);
+      _controller = next;
+      _controller?.addListener(_onTabChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.removeListener(_onTabChanged);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
+final _timeFormat = DateFormat('h:mm a');
+final _dueFormat = DateFormat('EEE, MMM d');
+
+int _snapMinutes(BuildContext context) {
+  try {
+    return context.read<SettingsCubit>().state.snapMinutes;
+  } catch (_) {
+    return 15;
+  }
+}
+
+/// Estimate for one assignment: the rule's explicit number, then the
+/// learned average for its classified type, then the node's own time
+/// target, then a plain hour.
+///
+/// Both cubits are optional so standalone widget tests (and any future
+/// embed of this tile) keep working without them.
+AssignmentEstimate _estimateFor(BuildContext context, Node node) {
+  var rules = const <AssignmentRule>[];
+  var efforts = const <AssignmentTypeEffort>[];
+  try {
+    rules = context.read<AssignmentRulesCubit>().state;
+  } catch (_) {}
+  try {
+    efforts = context.read<AssignmentEstimatesCubit>().state;
+  } catch (_) {}
+  return resolveAssignmentEstimate(
+    node: node,
+    rules: rules,
+    efforts: efforts,
+  );
+}
+
+/// "Est 45m" / "Est 1h 30m, usually 7 PM" for the tile's work line.
+String _estimateLine(AssignmentEstimate estimate) {
+  final minutes = describeMinutes(estimate.minutes);
+  final start = estimate.preferredStartMinute;
+  if (start == null) return 'Est ~$minutes';
+  return 'Est ~$minutes, ${describeTimeOfDay(start)}';
+}
+
+/// Reads the Tasks view options, falling back to defaults when the cubit
+/// isn't provided (widget tests pump TasksPage standalone).
+TasksViewOptionsState _viewOptions(BuildContext context) {
+  try {
+    return context.watch<TasksViewOptionsCubit>().state;
+  } catch (_) {
+    return const TasksViewOptionsState();
+  }
+}
+
+/// Ids matching the active date filter, or null when no filter is on.
+/// Filter sets only ever contain open nodes ([NodeCubit.dueTodayAt] /
+/// [NodeCubit.overdueAt] are open-only), so completed items are hidden
+/// while a filter is active.
+Set<String>? _filterIds(
+  NodeCubit nodeCubit,
+  TasksDueFilter filter,
+  DateTime now,
+) {
+  switch (filter) {
+    case TasksDueFilter.all:
+      return null;
+    case TasksDueFilter.today:
+      return {for (final n in nodeCubit.dueTodayAt(now)) n.id};
+    case TasksDueFilter.overdue:
+      return {for (final n in nodeCubit.overdueAt(now)) n.id};
+  }
+}
+
+/// Empty state shown when a date filter hides every row. Offers a way
+/// back to the full list.
+class _FilteredEmpty extends StatelessWidget {
+  final TasksDueFilter filter;
+
+  const _FilteredEmpty({required this.filter});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = switch (filter) {
+      TasksDueFilter.today => 'Nothing due today',
+      TasksDueFilter.overdue => 'Nothing overdue',
+      TasksDueFilter.all => 'Nothing to do!',
+    };
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.check_circle_outline, size: 48),
+          const SizedBox(height: 8),
+          Text(label, style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          const Text('Try a different filter, or add a node with +'),
+          const SizedBox(height: 12),
+          OutlinedButton(
+            onPressed: () {
+              try {
+                context
+                    .read<TasksViewOptionsCubit>()
+                    .setDueFilter(TasksDueFilter.all);
+              } catch (_) {}
+            },
+            child: const Text('Show everything'),
           ),
-        ),
-        drawer: const AppDrawer(),
-        floatingActionButton: FloatingActionButton(
-          onPressed: () => showNodeEditor(context),
-          child: const Icon(Icons.add),
-        ),
-        body: TabBarView(
+        ],
+      ),
+    );
+  }
+}
+
+/// "Select all" header shown above a task list while multi-selecting.
+class _SelectAllRow extends StatelessWidget {
+  final bool allSelected;
+  final int count;
+  final ValueChanged<bool> onChanged;
+
+  const _SelectAllRow({
+    required this.allSelected,
+    required this.count,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => onChanged(!allSelected),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Row(
           children: [
-            const _TodoTab(),
-            const _HomeworkTab(),
+            Checkbox(
+              value: allSelected,
+              onChanged: (v) => onChanged(v ?? false),
+            ),
+            const Text('Select all'),
+            const Spacer(),
+            Text(
+              '$count selected',
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+            const SizedBox(width: 16),
           ],
         ),
       ),
@@ -67,26 +541,50 @@ class TasksPage extends StatelessWidget {
   }
 }
 
-final _timeFormat = DateFormat('h:mm a');
-final _dueFormat = DateFormat('EEE, MMM d');
-
 class _TodoTab extends StatelessWidget {
-  const _TodoTab();
+  final Set<String> selected;
+  final bool selecting;
+  final void Function(String id) onToggleSelection;
+  final void Function(String id) onEnterSelection;
+  final void Function(Iterable<String> ids) onSelectAll;
+  final void Function(Iterable<String> ids) onDeselectAll;
+
+  const _TodoTab({
+    required this.selected,
+    required this.selecting,
+    required this.onToggleSelection,
+    required this.onEnterSelection,
+    required this.onSelectAll,
+    required this.onDeselectAll,
+  });
 
   @override
   Widget build(BuildContext context) {
     return BlocBuilder<NodeCubit, List<Node>>(
       builder: (context, nodes) {
         final feedCubit = context.watch<FeedCubit>();
-        final open = feedCubit.visibleNodes(
-          context.read<NodeCubit>().openNodes,
-        );
-        if (open.isEmpty) return const _EmptyTodo();
+        final nodeCubit = context.read<NodeCubit>();
+        final viewOptions = _viewOptions(context);
+        final now = DateTime.now();
+        final weekDueIds = viewOptions.highlightDueThisWeek
+            ? {
+                for (final n in nodeCubit.dueThisWeekAt(now)) n.id,
+              }
+            : const <String>{};
+        final filter = _filterIds(nodeCubit, viewOptions.dueFilter, now);
+        var open = feedCubit.visibleNodes(nodeCubit.openNodes);
+        if (filter != null) {
+          open = open.where((n) => filter.contains(n.id)).toList();
+        }
+        if (open.isEmpty) {
+          return viewOptions.isFiltering
+              ? _FilteredEmpty(filter: viewOptions.dueFilter)
+              : const _EmptyTodo();
+        }
         // Precompute once per list build (not per tile): calendar link set,
         // feed map, node indexes, and a single `now`. Tiles receive plain
         // data and use `read` — no per-tile full-state watches.
         final calendarState = context.watch<CalendarCubit>().state;
-        final now = DateTime.now();
         final linkedEventIds = <String>{};
         final linkedTaskIds = <String>{};
         for (final e in calendarState) {
@@ -97,7 +595,7 @@ class _TodoTab extends StatelessWidget {
         final feedById = {for (final f in feedCubit.state) f.id: f};
         final nodeById = {for (final n in nodes) n.id: n};
         final indexes = buildNodeIndexes(nodes);
-        return ListView.builder(
+        Widget list = ListView.builder(
           itemCount: open.length,
           itemBuilder: (context, index) {
             final node = open[index];
@@ -105,14 +603,35 @@ class _TodoTab extends StatelessWidget {
               node: node,
               showClass: true,
               now: now,
+              highlightDueThisWeek: weekDueIds.contains(node.id),
               feedById: feedById,
               nodeById: nodeById,
               indexById: indexes.byId,
               indexByParent: indexes.byParent,
               linkedEventIds: linkedEventIds,
               linkedTaskIds: linkedTaskIds,
+              selected: selected.contains(node.id),
+              selecting: selecting,
+              onToggleSelection: () => onToggleSelection(node.id),
+              onEnterSelection: () => onEnterSelection(node.id),
             );
           },
+        );
+        if (!selecting) return list;
+        final allIds = [for (final n in open) n.id];
+        final allSelected = allIds.every(selected.contains);
+        final count = allIds.where(selected.contains).length;
+        return Column(
+          children: [
+            _SelectAllRow(
+              allSelected: allSelected,
+              count: count,
+              onChanged: (select) => select
+                  ? onSelectAll(allIds)
+                  : onDeselectAll(allIds),
+            ),
+            Expanded(child: list),
+          ],
         );
       },
     );
@@ -149,7 +668,21 @@ class _EmptyTodo extends StatelessWidget {
 }
 
 class _HomeworkTab extends StatefulWidget {
-  const _HomeworkTab();
+  final Set<String> selected;
+  final bool selecting;
+  final void Function(String id) onToggleSelection;
+  final void Function(String id) onEnterSelection;
+  final void Function(Iterable<String> ids) onSelectAll;
+  final void Function(Iterable<String> ids) onDeselectAll;
+
+  const _HomeworkTab({
+    required this.selected,
+    required this.selecting,
+    required this.onToggleSelection,
+    required this.onEnterSelection,
+    required this.onSelectAll,
+    required this.onDeselectAll,
+  });
 
   @override
   State<_HomeworkTab> createState() => _HomeworkTabState();
@@ -168,9 +701,22 @@ class _HomeworkTabState extends State<_HomeworkTab>
     super.build(context);
     final nodeCubit = context.watch<NodeCubit>();
     final feedCubit = context.watch<FeedCubit>();
-    final imported = feedCubit.visibleNodes(
+    final viewOptions = _viewOptions(context);
+    final now = DateTime.now();
+    final filter = _filterIds(nodeCubit, viewOptions.dueFilter, now);
+    final weekDueIds = viewOptions.highlightDueThisWeek
+        ? {for (final n in nodeCubit.dueThisWeekAt(now)) n.id}
+        : const <String>{};
+    var imported = feedCubit.visibleNodes(
         nodeCubit.state.where((n) => n.isHomework).toList());
+    if (filter != null) {
+      imported =
+          imported.where((n) => filter.contains(n.id)).toList();
+    }
     if (imported.isEmpty) {
+      if (viewOptions.isFiltering) {
+        return _FilteredEmpty(filter: viewOptions.dueFilter);
+      }
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -209,10 +755,11 @@ class _HomeworkTabState extends State<_HomeworkTab>
     // state never jumps to the wrong class.
     final groupKeys = byClass.keys.toList()..sort();
     // Hoisted per-build (not per-tile/per-group): feed map, node liveness
-    // map, shared money indexes, calendar link sets, one `now`. Sort each
+    // map, shared money indexes, calendar link sets. Sort each
     // group once up front instead of inside the itemBuilder on every
     // rebuild (the old `..sort` mutated the list during build).
-    final now = DateTime.now();
+    // (`now` is hoisted at the top of build so highlight + filter share
+    // one clock reading.)
     final feedById = {for (final f in feedCubit.state) f.id: f};
     final allNodes = nodeCubit.state;
     final nodeById = {for (final n in allNodes) n.id: n};
@@ -253,25 +800,113 @@ class _HomeworkTabState extends State<_HomeworkTab>
       children: [
         ValueListenableBuilder<bool>(
           valueListenable: feedCubit.isSyncing,
-          builder: (context, syncing, _) => ListTile(
-            dense: true,
-            title: Text(
-              syncing ? 'Syncing…' : 'Assignments by class',
-              style: Theme.of(context).textTheme.labelMedium,
-            ),
-            trailing: IconButton(
-              icon: syncing
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.refresh),
-              onPressed:
-                  syncing ? null : () => feedCubit.syncAll(force: true),
-            ),
-          ),
+          builder: (context, syncing, _) {
+            // Repeating-type candidates for the rules entry point. Same
+            // inputs as the rules sheet so the badge/banner match what the
+            // sheet will show. Cheap (a few hundred nodes at most).
+            var unruledRepeating = 0;
+            try {
+              final rules = context.watch<AssignmentRulesCubit>().state;
+              final samples = <TemplateSample>[
+                for (final n in nodeCubit.state)
+                  if (n.sourceEventId != null &&
+                      n.schedule?.due != null &&
+                      (n.feedId ?? n.classId ?? '').isNotEmpty)
+                    TemplateSample(
+                      feedId: (n.feedId ?? n.classId)!,
+                      title: n.title,
+                      classLabel: n.classLabel,
+                      due: n.schedule!.due,
+                    ),
+              ];
+              final rued =
+                  {for (final r in rules) r.groupKey};
+              unruledRepeating = detectRepeatingGroups(samples)
+                  .where((g) =>
+                      g.isRepeating &&
+                      !rued.contains('${g.feedId}|${g.templateKey}'))
+                  .length;
+            } catch (_) {}
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  dense: true,
+                  title: Text(
+                    syncing ? 'Syncing…' : 'Assignments by class',
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Badge(
+                        isLabelVisible: unruledRepeating > 0,
+                        label: Text('$unruledRepeating'),
+                        child: IconButton(
+                          tooltip: 'Repeating assignment rules',
+                          icon: const Icon(Icons.tune_outlined),
+                          onPressed: () => showAssignmentRules(context),
+                        ),
+                      ),
+                      IconButton(
+                        icon: syncing
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2),
+                              )
+                            : const Icon(Icons.refresh),
+                        onPressed: syncing
+                            ? null
+                            : () => feedCubit.syncAll(force: true),
+                      ),
+                    ],
+                  ),
+                ),
+                if (unruledRepeating > 0)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+                    child: Card(
+                      child: ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.auto_awesome_outlined),
+                        title: Text(
+                          unruledRepeating == 1
+                              ? '1 repeating type detected'
+                              : '$unruledRepeating repeating types detected',
+                        ),
+                        subtitle: const Text(
+                          'Weekly quizzes and problem sets can be due '
+                          'earlier or later in your plan.',
+                        ),
+                        trailing: TextButton(
+                          onPressed: () => showAssignmentRules(context),
+                          child: const Text('View'),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
         ),
+        if (widget.selecting)
+          Builder(
+            builder: (context) {
+              final allIds = [for (final n in imported) n.id];
+              final allSelected = allIds.every(widget.selected.contains);
+              final count =
+                  allIds.where(widget.selected.contains).length;
+              return _SelectAllRow(
+                allSelected: allSelected,
+                count: count,
+                onChanged: (select) => select
+                    ? widget.onSelectAll(allIds)
+                    : widget.onDeselectAll(allIds),
+              );
+            },
+          ),
         Expanded(
           child: ListView.builder(
             itemCount: groupKeys.length,
@@ -312,12 +947,19 @@ class _HomeworkTabState extends State<_HomeworkTab>
                         node: node,
                         showClass: false,
                         now: now,
+                        highlightDueThisWeek: weekDueIds.contains(node.id),
                         feedById: feedById,
                         nodeById: nodeById,
                         indexById: indexes.byId,
                         indexByParent: indexes.byParent,
                         linkedEventIds: linkedEventIds,
                         linkedTaskIds: linkedTaskIds,
+                        selected: widget.selected.contains(node.id),
+                        selecting: widget.selecting,
+                        onToggleSelection: () =>
+                            widget.onToggleSelection(node.id),
+                        onEnterSelection: () =>
+                            widget.onEnterSelection(node.id),
                       ),
                   ],
                 ),
@@ -345,9 +987,19 @@ bool _isDueToday(DateTime due, DateTime now) {
   return day == today;
 }
 
+/// Readable orange for "due today" cues in either brightness.
+Color _dueTodayColor(ThemeData theme) =>
+    theme.brightness == Brightness.dark
+        ? Colors.orange.shade300
+        : Colors.orange.shade800;
+
 class _NodeTile extends StatelessWidget {
   final Node node;
   final bool showClass;
+
+  /// True when the "highlight due this week" view option is on and this
+  /// node is open with a due date inside the calendar-week window.
+  final bool highlightDueThisWeek;
   // Hoisted per-list data (all optional for backwards compat): when
   // supplied the tile avoids per-tile `watch` subscriptions and O(n) scans.
   final DateTime? now;
@@ -357,10 +1009,18 @@ class _NodeTile extends StatelessWidget {
   final Map<String, List<Node>>? indexByParent;
   final Set<String>? linkedEventIds;
   final Set<String>? linkedTaskIds;
+  // Multi-select state. While [selecting], the leading checkbox becomes
+  // a selection box and taps toggle selection instead of opening the
+  // editor; long-press is what enters selection mode.
+  final bool selected;
+  final bool selecting;
+  final VoidCallback? onToggleSelection;
+  final VoidCallback? onEnterSelection;
 
   const _NodeTile({
     required this.node,
     required this.showClass,
+    this.highlightDueThisWeek = false,
     this.now,
     this.feedById,
     this.nodeById,
@@ -368,6 +1028,10 @@ class _NodeTile extends StatelessWidget {
     this.indexByParent,
     this.linkedEventIds,
     this.linkedTaskIds,
+    this.selected = false,
+    this.selecting = false,
+    this.onToggleSelection,
+    this.onEnterSelection,
   });
   @override
   Widget build(BuildContext context) {
@@ -424,6 +1088,10 @@ class _NodeTile extends StatelessWidget {
     } else if (plannedStart != null && plannedEnd != null) {
       workLine = 'Planned ${_timeFormat.format(plannedStart)} – '
           '${_timeFormat.format(plannedEnd)}';
+    } else if (live.isHomework) {
+      // Not placed yet: show what the app expects this to take, and the
+      // slot the schedule will default to.
+      workLine = _estimateLine(_estimateFor(context, live));
     } else if (live.money != null) {
       final actual = (indexById != null && indexByParent != null)
           ? moneyActualForNodeIndexed(
@@ -437,8 +1105,21 @@ class _NodeTile extends StatelessWidget {
           '\$${actual.toStringAsFixed(2)} / \$${live.money!.effectiveTarget.toStringAsFixed(2)}';
     }
     final due = live.schedule?.due;
-    return ListTile(
-      leading: NodeCheckbox(node: live),
+    // Due today outranks the week tint: same highlight option, hotter
+    // color. (A highlighted row is always open — the week set is
+    // open-only — so no extra status check is needed.)
+    final isDueTodayHighlight = highlightDueThisWeek &&
+        due != null &&
+        _isDueToday(due, effectiveNow);
+    final tile = ListTile(
+      selected: selecting && selected,
+      selectedTileColor: theme.colorScheme.secondaryContainer,
+      leading: selecting
+          ? Checkbox(
+              value: selected,
+              onChanged: (_) => onToggleSelection?.call(),
+            )
+          : NodeCheckbox(node: live),
       title: Text(
         live.title,
         style: TextStyle(
@@ -489,28 +1170,71 @@ class _NodeTile extends StatelessWidget {
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: live.isOverdueAt(effectiveNow)
                         ? theme.colorScheme.error
-                        : null,
-                    fontWeight: _isDueToday(due, effectiveNow)
-                        ? FontWeight.bold
-                        : null,
+                        : isDueTodayHighlight
+                            ? _dueTodayColor(theme)
+                            : highlightDueThisWeek
+                                ? theme.colorScheme.tertiary
+                                : null,
+                    fontWeight:
+                        _isDueToday(due, effectiveNow) || highlightDueThisWeek
+                            ? FontWeight.bold
+                            : null,
                   ),
                 ),
             ],
           ),
+          // Toggl-style: tap a recording/reported line to correct it
+          // (move the start while running, edit the interval after).
           if (workLine != null)
-            Text(
-              workLine,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: failed
-                    ? theme.colorScheme.error
-                    : live.isTracking
-                        ? theme.colorScheme.primary
-                        : null,
-                fontWeight: failed || live.isTracking
-                    ? FontWeight.w600
-                    : null,
-              ),
-            ),
+            live.isTracking ||
+                    (!failed &&
+                        live.hasReported &&
+                        live.reportedDuration != null)
+                ? InkWell(
+                    onTap: () => showEditNodeTimerSheet(
+                      context,
+                      nodeId: live.id,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            workLine,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: failed
+                                  ? theme.colorScheme.error
+                                  : live.isTracking
+                                      ? theme.colorScheme.primary
+                                      : null,
+                              fontWeight: failed || live.isTracking
+                                  ? FontWeight.w600
+                                  : null,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Icon(
+                          Icons.edit,
+                          size: 12,
+                          color: theme.colorScheme.outline,
+                        ),
+                      ],
+                    ),
+                  )
+                : Text(
+                    workLine,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: failed
+                          ? theme.colorScheme.error
+                          : live.isTracking
+                              ? theme.colorScheme.primary
+                              : null,
+                      fontWeight: failed || live.isTracking
+                          ? FontWeight.w600
+                          : null,
+                    ),
+                  ),
           if (live.assignees.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 2),
@@ -538,7 +1262,11 @@ class _NodeTile extends StatelessWidget {
                       stopNodeAndFinish(context, live.id);
                     } else {
                       try {
-                        nodeCubit.startTracking(live.id);
+                        NodeEventLink.startNodeTracking(
+                          nodeCubit,
+                          context.read<CalendarCubit>(),
+                          live.id,
+                        );
                       } catch (_) {}
                     }
                   },
@@ -576,7 +1304,54 @@ class _NodeTile extends StatelessWidget {
           ),
         ],
       ),
-      onTap: () => showNodeEditor(context, existing: live),
+      onTap: selecting
+          ? onToggleSelection
+          : () => showNodeEditor(context, existing: live),
+      onLongPress: selecting ? onToggleSelection : onEnterSelection,
+    );
+    if (isDueTodayHighlight) {
+      // Due today: hotter orange row and edge so today's work jumps out
+      // from the rest of the week. Same transparent-Material trick as
+      // below keeps ink splashes above the tint.
+      return Semantics(
+        container: true,
+        label: 'Due today',
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.orange.withAlpha(41),
+            border: const Border(
+              left: BorderSide(color: Colors.orange, width: 4),
+            ),
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: tile,
+          ),
+        ),
+      );
+    }
+    if (!highlightDueThisWeek) return tile;
+    // Tinted row plus a colored edge: this item is due inside the
+    // calendar-week window and the option is on. The transparent Material
+    // keeps the tile's ink splashes above the tint while the container
+    // paints the background and the edge (a Material would cover the
+    // border). The semantics label surfaces the same cue to screen
+    // readers.
+    return Semantics(
+      container: true,
+      label: 'Due this week',
+      child: Container(
+        decoration: BoxDecoration(
+          color: theme.colorScheme.tertiaryContainer,
+          border: Border(
+            left: BorderSide(color: theme.colorScheme.tertiary, width: 4),
+          ),
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: tile,
+        ),
+      ),
     );
   }
 
@@ -609,7 +1384,11 @@ class _NodeTile extends StatelessWidget {
 
   void _addToCalendar(BuildContext context, Node node) {
     context.read<CalendarDraftCubit>().requestDraft(
-          draftSeedFromNode(node),
+          draftSeedFromNode(
+            node,
+            estimate: _estimateFor(context, node),
+            snapMinutes: _snapMinutes(context),
+          ),
         );
     context.read<NavigationCubit>().setPage(PlannerPage.calendar);
     ScaffoldMessenger.of(context).showSnackBar(
@@ -630,15 +1409,20 @@ class _NodeTile extends StatelessWidget {
         context.read<CalendarCubit>().clearTaskLink(eventId);
       } catch (_) {}
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text('Node deleted'),
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: () => context.read<UndoCubit>().undo(),
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: const Text('Node deleted'),
+          duration: const Duration(seconds: 4),
+          // Action snackbars persist forever by default; this one must go.
+          persist: false,
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () => context.read<UndoCubit>().undo(),
+          ),
         ),
-      ),
-    );
+      );
   }
 }
 

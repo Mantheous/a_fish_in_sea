@@ -468,6 +468,118 @@ void main() {
       }
     });
   });
+  group('GoogleCalendarService session refresh', () {
+    PlannerEvent refreshEvent() => PlannerEvent(
+          id: 'gcal:f1:e1',
+          subject: 'Work',
+          start: DateTime(2026, 9, 10, 12, 30),
+          end: DateTime(2026, 9, 10, 13, 30),
+          feedId: 'f1',
+          sourceUid: 'e1',
+        );
+
+    test('retries once with a fresh token after an expired-session 401',
+        () async {
+      var calls = 0;
+      var refreshed = false;
+      String? token = 'stale';
+      final authHeaders = <String?>[];
+      final service = GoogleCalendarService(
+        baseUrl: () => '',
+        userId: () => 'u',
+        authToken: () => token,
+        refreshAccessToken: () async {
+          refreshed = true;
+          token = 'fresh';
+          return token;
+        },
+        client: MockClient((request) async {
+          calls++;
+          authHeaders.add(request.headers['Authorization']);
+          if (calls == 1) {
+            return http.Response(
+              jsonEncode({'detail': 'Invalid token'}),
+              401,
+            );
+          }
+          return http.Response(
+            jsonEncode({'event': eventJson(id: 'e1')}),
+            200,
+          );
+        }),
+      );
+      final updated = await service.updateEvent(
+        calendarId: 'primary',
+        feedId: 'f1',
+        eventId: 'e1',
+        event: refreshEvent(),
+      );
+      expect(updated.sourceUid, 'e1');
+      expect(refreshed, isTrue);
+      expect(calls, 2);
+      expect(authHeaders[0], 'Bearer stale');
+      expect(authHeaders[1], 'Bearer fresh');
+    });
+
+    test('does not refresh for Google-side auth failures', () async {
+      var refreshed = false;
+      var calls = 0;
+      final service = GoogleCalendarService(
+        baseUrl: () => '',
+        userId: () => 'u',
+        authToken: () => 'stale',
+        refreshAccessToken: () async {
+          refreshed = true;
+          return 'fresh';
+        },
+        client: MockClient((request) async {
+          calls++;
+          return http.Response(
+            jsonEncode({
+              'detail': {
+                'error': 'Google account not connected',
+                'needsReconnect': true,
+              },
+            }),
+            401,
+          );
+        }),
+      );
+      try {
+        await service.fetchEvents(calendarId: 'primary', feedId: 'f1');
+        fail('expected a GoogleCalendarException');
+      } on GoogleCalendarException catch (e) {
+        expect(e.needsReconnect, isTrue);
+      }
+      expect(refreshed, isFalse);
+      expect(calls, 1);
+    });
+
+    test('surfaces the 401 when refresh yields nothing', () async {
+      var calls = 0;
+      final service = GoogleCalendarService(
+        baseUrl: () => '',
+        userId: () => 'u',
+        authToken: () => 'stale',
+        refreshAccessToken: () async => null,
+        client: MockClient((request) async {
+          calls++;
+          return http.Response(
+            jsonEncode({'detail': 'Invalid token'}),
+            401,
+          );
+        }),
+      );
+      try {
+        await service.fetchEvents(calendarId: 'primary', feedId: 'f1');
+        fail('expected a GoogleCalendarException');
+      } on GoogleCalendarException catch (e) {
+        expect(e.statusCode, 401);
+        expect(e.message, 'Invalid token');
+      }
+      expect(calls, 1);
+    });
+  });
   group('PlannerEvent colorValue', () {
     test('seriesId round trips through json', () {
       final event = PlannerEvent(

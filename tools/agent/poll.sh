@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Agent dev-loop orchestrator, run by agent-poll.timer every 15 min.
 # Logs to journal via systemd. Long builds run in tmux (see build.sh).
+#
+# Step wrapper: each step is wrapped so a failure in one (a flaky gh call
+# under `set -e` inside the step used to kill the WHOLE poll — that skipped
+# deploy/ux-walk/perf-walk for the cycle, repeatedly) no longer takes the
+# rest of the cycle down with it. Every step is idempotent and safe to
+# re-run, so the next poll retries whatever failed.
 set -euo pipefail
 REPO="$HOME/Repos/a_fish_in_sea"
 cd "$REPO"
@@ -23,11 +29,26 @@ if gh issue list --state open --search "AGENT LOOPS: PAUSED in:title" --limit 5 
   echo "[agent-poll] paused via AGENT LOOPS: PAUSED issue — skipping"
   exit 0
 fi
-"$REPO/tools/agent/triage.sh"
-"$REPO/tools/agent/approve.sh"
-"$REPO/tools/agent/build.sh"
-"$REPO/tools/agent/review.sh"
-"$REPO/tools/agent/data-guard.sh"
-"$REPO/tools/agent/deploy.sh"
-"$REPO/tools/agent/ux-walk.sh"
+
+step() {
+  local name="$1"; shift
+  local st=0
+  echo "[agent-poll] step $name"
+  "$@" || st=$?
+  if [ "$st" -ne 0 ]; then
+    echo "[agent-poll] step $name failed (exit $st) — continuing the cycle"
+    "$REPO/tools/agent/tg.sh" "⚠️ Agent loop step '$name' failed this cycle (exit $st) — continuing; see journalctl --user -u agent-poll" || true
+  fi
+}
+
+step close       "$REPO/tools/agent/close.sh"
+step triage      "$REPO/tools/agent/triage.sh"
+step approve     "$REPO/tools/agent/approve.sh"
+step build       "$REPO/tools/agent/build.sh"
+step review      "$REPO/tools/agent/review.sh"
+step data-guard  "$REPO/tools/agent/data-guard.sh"
+step sec-guard   "$REPO/tools/agent/security-guard.sh"
+step deploy      "$REPO/tools/agent/deploy.sh"
+step ux-walk     "$REPO/tools/agent/ux-walk.sh"
+step perf-walk   "$REPO/tools/agent/perf-walk.sh"
 echo "[agent-poll] done"

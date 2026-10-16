@@ -2,10 +2,13 @@ import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
+import 'package:a_fish_in_sea/demo/demo_banner.dart';
+import 'package:a_fish_in_sea/demo/demo_cubit.dart';
 import 'package:a_fish_in_sea/feedback/view/feedback_page.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/finances_hub.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
+import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/navigation/view/home_page.dart';
 import 'package:a_fish_in_sea/nodes/view/nodes_page.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
@@ -13,6 +16,11 @@ import 'package:a_fish_in_sea/planner/bloc/calendar_draft_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/tasks_tab_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/assignment_estimates_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/assignment_rules_cubit.dart';
+import 'package:a_fish_in_sea/planner/model/assignment_rule.dart';
+import 'package:a_fish_in_sea/planner/bloc/tasks_view_options_cubit.dart';
 import 'package:a_fish_in_sea/planner/service/canvas_service.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
@@ -54,6 +62,8 @@ class MyApp extends StatelessWidget {
     return MultiBlocProvider(
       providers: [
         BlocProvider(create: (_) => UndoCubit(), lazy: false),
+        // Demo mode is intentionally NOT hydrated: it must never persist.
+        BlocProvider(create: (_) => DemoCubit()),
         BlocProvider(create: (_) => NavigationCubit()),
         BlocProvider(create: (_) => SettingsCubit()),
         // Auth owns the sync-server identity. The SyncClient closure reads
@@ -85,6 +95,10 @@ class MyApp extends StatelessWidget {
         BlocProvider(create: (_) => CalendarCubit()),
         BlocProvider(create: (_) => CalendarVisibilityCubit()),
         BlocProvider(create: (_) => CalendarDraftCubit()),
+        BlocProvider(create: (_) => TasksTabCubit()),
+        BlocProvider(create: (_) => AssignmentRulesCubit()),
+        BlocProvider(create: (_) => AssignmentEstimatesCubit(), lazy: false),
+        BlocProvider(create: (_) => TasksViewOptionsCubit()),
         BlocProvider(create: (_) => PlacesCubit()),
         BlocProvider(create: (_) => TrackingCubit()),
         BlocProvider(create: (_) => ReportingCubit()),
@@ -99,10 +113,19 @@ class MyApp extends StatelessWidget {
               userId: () => context.read<PlaidCubit>().state.userId,
               authToken: () =>
                   context.read<AuthCubit>().state.accessToken,
+              refreshAccessToken: () =>
+                  context.read<AuthCubit>().refreshAccessToken(),
             ),
             proxyBase: () =>
                 context.read<SettingsCubit>().state.icalProxyBase,
             syncClient: context.read<AuthCubit>().syncClient,
+            assignmentRulesProvider: () {
+              try {
+                return context.read<AssignmentRulesCubit>().state;
+              } catch (_) {
+                return const <AssignmentRule>[];
+              }
+            },
             canvasService: CanvasService(
               baseUrl: () =>
                   context.read<SettingsCubit>().state.icalProxyBase,
@@ -135,6 +158,29 @@ class MyApp extends StatelessWidget {
   }
 }
 
+/// Page switch shared by the normal and demo shells.
+class _DemoContent extends StatelessWidget {
+  const _DemoContent();
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocBuilder<NavigationCubit, PlannerPage>(
+      builder: (context, page) {
+        return switch (page) {
+          PlannerPage.home => const HomePage(),
+          PlannerPage.calendar => const CalendarPage(),
+          PlannerPage.tasks => const TasksPage(),
+          PlannerPage.nodes => const NodesPage(),
+          PlannerPage.stats => const StatsPage(),
+          PlannerPage.finances => const FinancesHubPage(),
+          PlannerPage.feedback => const FeedbackPage(),
+          PlannerPage.settings => const SettingsPage(),
+        };
+      },
+    );
+  }
+}
+
 /// Boots the sync engine once (first pull if signed in) and runs the
 /// 5-minute background timer while the app lives.
 class _SyncBootstrap extends StatefulWidget {
@@ -148,6 +194,10 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
   // Saved in initState: context.read in dispose() is unsafe once the
   // element is deactivated (crashed test teardown and hot restart).
   SyncEngine? _engine;
+
+  /// Feed ids seen on the last node/feed change, so a removed class can
+  /// be dropped from the learned assignment data.
+  Set<String> _knownFeedIds = const {};
 
   @override
   void initState() {
@@ -165,37 +215,78 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'a fish in sea',
-      theme: ThemeData(
-        colorSchemeSeed: Colors.teal,
-        useMaterial3: true,
-        brightness: Brightness.light,
-      ),
-      darkTheme: ThemeData(
-        colorSchemeSeed: Colors.teal,
-        useMaterial3: true,
-        brightness: Brightness.dark,
-      ),
-      home: BlocBuilder<AuthCubit, AuthState>(
-        builder: (context, auth) {
-          if (!auth.isSignedIn) return const AuthPage();
-          return BlocBuilder<NavigationCubit, PlannerPage>(
-            builder: (context, page) {
-              return switch (page) {
-                PlannerPage.home => const HomePage(),
-                PlannerPage.calendar => const CalendarPage(),
-                PlannerPage.tasks => const TasksPage(),
-                PlannerPage.nodes => const NodesPage(),
-                PlannerPage.stats => const StatsPage(),
-                PlannerPage.finances => const FinancesHubPage(),
-                PlannerPage.feedback => const FeedbackPage(),
-                PlannerPage.settings => const SettingsPage(),
-              };
-            },
-          );
-        },
+    // Keep the learned "how long does this kind of assignment take, and
+    // when do I usually start it" index in step with the node list. The
+    // rebuild is a pure function of the nodes, so it is idempotent and
+    // safe to run on every change.
+    //
+    // A removed class drops its learned rows too: the estimate index is
+    // derived from nodes, so deleting coursework would otherwise leave an
+    // orphan row in the stats forever.
+    final feeds = context.watch<FeedCubit>().state;
+    final feedIds = {for (final f in feeds) f.id};
+    final goneFeeds = _knownFeedIds.difference(feedIds);
+    _knownFeedIds = feedIds;
+    if (goneFeeds.isNotEmpty) {
+      final estimates = context.read<AssignmentEstimatesCubit>();
+      for (final id in goneFeeds) {
+        estimates.forgetFeed(id);
+      }
+    }
+
+    return MultiBlocListener(
+      listeners: [
+        BlocListener<NodeCubit, List<Node>>(
+          listenWhen: (a, b) => !identical(a, b),
+          listener: (context, nodes) {
+            context.read<AssignmentEstimatesCubit>().rebuildFrom(nodes);
+          },
+        ),
+      ],
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'a fish in sea',
+        theme: ThemeData(
+          colorSchemeSeed: Colors.teal,
+          useMaterial3: true,
+          brightness: Brightness.light,
+        ),
+        darkTheme: ThemeData(
+          colorSchemeSeed: Colors.teal,
+          useMaterial3: true,
+          brightness: Brightness.dark,
+        ),
+        home: BlocBuilder<AuthCubit, AuthState>(
+          builder: (context, auth) {
+            final demo = context.watch<DemoCubit>().state;
+            if (!auth.isSignedIn && !demo) return const AuthPage();
+            final content = BlocBuilder<NavigationCubit, PlannerPage>(
+              builder: (context, page) {
+                return switch (page) {
+                  PlannerPage.home => const HomePage(),
+                  PlannerPage.calendar => const CalendarPage(),
+                  PlannerPage.tasks => const TasksPage(),
+                  PlannerPage.nodes => const NodesPage(),
+                  PlannerPage.stats => const StatsPage(),
+                  PlannerPage.finances => const FinancesHubPage(),
+                  PlannerPage.feedback => const FeedbackPage(),
+                  PlannerPage.settings => const SettingsPage(),
+                };
+              },
+            );
+            if (!demo) return content;
+            // Demo shell: persistent mock-data banner above every page.
+            // Inner pages keep their own Scaffolds (drawers keep working).
+            return const Scaffold(
+              body: Column(
+                children: [
+                  DemoBanner(),
+                  Expanded(child: _DemoContent()),
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }

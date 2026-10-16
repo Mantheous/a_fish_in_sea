@@ -239,23 +239,35 @@ class SyncEngine {
           continue;
         }
         if (m == null) {
-          current[r.itemId] = Map<String, dynamic>.from(r.data);
+          final merged = Map<String, dynamic>.from(r.data);
+          // Fresh bookkeeping (new device, reset meta): same rule as a
+          // conflict — a locally running timer is live truth, not stale.
+          _preserveRunningTimer(collection, current[r.itemId], merged);
+          current[r.itemId] = merged;
           changed = true;
-        } else if (m.serverTime == seen) {
-          continue; // remote unchanged; local diff handled at push
-        } else {
-          // Remote changed. No local change -> take server; local change
-          // too -> conflict, server wins (documented policy).
-          final local = current[r.itemId];
-          if (local == null || contentHash(local) != m.hash) {
-            current[r.itemId] = Map<String, dynamic>.from(r.data);
-            changed = true;
-          }
+          upsertMeta[k] = ItemMeta(
+              hash: contentHash(merged), serverTime: seen);
+          continue;
         }
-        upsertMeta[k] = ItemMeta(
-            hash: contentHash(
-                Map<String, dynamic>.from(current[r.itemId] ?? r.data)),
-            serverTime: seen);
+        if (m.serverTime == seen) {
+          continue; // remote unchanged; local diff handled at push
+        }
+        // Remote changed. No local change -> take server; local change
+        // too -> conflict, server wins (documented policy). Both adopt
+        // the merged copy; the running-timer carve-out inside
+        // [_preserveRunningTimer] is the only way local state survives
+        // a pull. When the merge resolves to the local copy (e.g. it
+        // kept an earlier timer start), the meta is left alone so the
+        // push phase propagates the merged version back to the server.
+        final local = current[r.itemId];
+        final merged = Map<String, dynamic>.from(r.data);
+        _preserveRunningTimer(collection, local, merged);
+        if (local == null || contentHash(merged) != contentHash(local)) {
+          current[r.itemId] = merged;
+          changed = true;
+          upsertMeta[k] = ItemMeta(
+              hash: contentHash(merged), serverTime: seen);
+        }
       }
       if (changed) _apply(collection, current);
     }
@@ -265,6 +277,49 @@ class SyncEngine {
   }
 
   static String _stamp(DateTime t) => t.toUtc().toIso8601String();
+
+  /// A running timer is wall-clock truth, not last-write-wins data: taking
+  /// a server copy verbatim would silently stop a timer the user started
+  /// (e.g. a boot sync pulling the pre-start version after a rebuild).
+  /// When the local copy is recording, its start survives the merge; when
+  /// both sides record, the earliest start wins (the true start). A remote
+  /// stop still lands its reported interval — only the live start is kept.
+  ///
+  /// One exception: the remote record stopped *after* the local run
+  /// started ([actualEnd] later than the local start). That stop targets
+  /// this run (e.g. stopped on another device), so it wins and the local
+  /// timer clears. Older remote actuals predate the run — a previous
+  /// session — and never stop it.
+  static void _preserveRunningTimer(String collection,
+      Map<String, dynamic>? local, Map<String, dynamic> merged) {
+    if (collection != 'nodes' && collection != 'events') return;
+    final localStart = local?['timerStartedAt'];
+    if (localStart is! String || localStart.isEmpty) return;
+    final localDt = DateTime.tryParse(localStart);
+    if (localDt == null) return;
+    final remoteStart = merged['timerStartedAt'];
+    final remoteDt =
+        remoteStart is String && remoteStart.isNotEmpty
+            ? DateTime.tryParse(remoteStart)
+            : null;
+    // Both running: the earliest start is the true one (ISO strings alone
+    // are not safe to compare across local/UTC forms, so compare parsed
+    // instants).
+    if (remoteDt != null) {
+      if (localDt.isBefore(remoteDt)) {
+        merged['timerStartedAt'] = localStart;
+      }
+      return;
+    }
+    final remoteEndRaw = merged['actualEnd'];
+    final remoteEnd =
+        remoteEndRaw is String && remoteEndRaw.isNotEmpty
+            ? DateTime.tryParse(remoteEndRaw)
+            : null;
+    if (remoteEnd == null || !remoteEnd.isAfter(localDt)) {
+      merged['timerStartedAt'] = localStart;
+    }
+  }
 
   // ── Apply merged maps back into cubits (no undo records) ────────────
 

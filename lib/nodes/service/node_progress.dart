@@ -2,7 +2,9 @@ import '../model/node.dart';
 
 /// Progress of a leaf node given its actuals. Clamped to [0, 1].
 /// Money leaves compare actual vs target, effort leaves minutes vs target,
-/// plain leaves are binary on [Node.isDone].
+/// anki leaves cached review counts vs target, plain leaves are binary on
+/// [Node.isDone]. Facet precedence is money, then effort, then anki: a
+/// node carrying two facets reports the first.
 double leafProgress(
   Node node, {
   double timeActualMinutes = 0,
@@ -17,6 +19,11 @@ double leafProgress(
     final target = node.effort!.targetMinutes;
     if (target <= 0) return node.isDone ? 1.0 : 0.0;
     return (timeActualMinutes / target).clamp(0.0, 1.0);
+  }
+  if (node.anki != null) {
+    final target = node.anki!.targetReviews;
+    if (target <= 0) return node.isDone ? 1.0 : 0.0;
+    return ((node.anki!.reviewsActual ?? 0) / target).clamp(0.0, 1.0);
   }
   return node.isDone ? 1.0 : 0.0;
 }
@@ -39,6 +46,7 @@ double childrenProgress(List<double> childValues) {
 ///   own target (a $62 grocery run fills a $400 food month). Without its
 ///   own target, children targets are summed instead.
 /// - Effort parent with ordinary children: same shape in minutes.
+/// - Anki parent with ordinary children: same shape in cached reviews.
 /// - Plain parents: average of children. Shared children count once per
 ///   root query.
 Map<String, double> progressForest(
@@ -70,8 +78,12 @@ Map<String, double> progressForest(
           moneyActualByNodeId: moneyActualByNodeId);
     }
     if (kids.any((k) => k.instanceOfId == node.id)) {
-      final rated =
-          kids.where((k) => k.status != NodeStatus.skipped).toList();
+      // Skipped and unbounded instances never rate: an unbounded goal
+      // never completes, so counting it would pin the average down.
+      final rated = kids
+          .where((k) =>
+              k.status != NodeStatus.skipped && !k.isUnbounded)
+          .toList();
       if (rated.isEmpty) return 0.0;
       return childrenProgress(
           [for (final k in rated) visit(k.id, {...stack})]);
@@ -110,8 +122,30 @@ Map<String, double> progressForest(
           node.id, byId, byParent, timeActualByNodeId, {});
       return (actual / target).clamp(0.0, 1.0);
     }
-    final rated =
-        kids.where((k) => k.status != NodeStatus.skipped).toList();
+    final ankiFlavor = node.anki != null ||
+        kids.any((k) => _subtreeHasAnki(k.id, byParent));
+    if (ankiFlavor) {
+      final ownTarget = (node.anki?.targetReviews ?? 0).toDouble();
+      final target = ownTarget != 0
+          ? ownTarget
+          : kids.fold<double>(
+              0,
+              (sum, k) =>
+                  sum + _subtreeAnkiTarget(k.id, byId, byParent, {}));
+      if (target <= 0) {
+        return childrenProgress(
+            [for (final k in kids) visit(k.id, {...stack})]);
+      }
+      final actual = _subtreeAnkiActual(node.id, byId, byParent, {});
+      return (actual / target).clamp(0.0, 1.0);
+    }
+    // Plain parents average their rated children. Unbounded children are
+    // excluded like skipped ones: they never complete, so counting them
+    // would pin a concrete parent below 100% forever.
+    final rated = kids
+        .where(
+            (k) => k.status != NodeStatus.skipped && !k.isUnbounded)
+        .toList();
     if (rated.isEmpty) return 0.0;
     return childrenProgress(
         [for (final k in rated) visit(k.id, {...stack})]);
@@ -153,6 +187,13 @@ double _leafValue(
     final target = node.effort!.targetMinutes;
     if (target <= 0) return node.isDone ? 1.0 : 0.0;
     return ((timeActualByNodeId[node.id] ?? 0) / target).clamp(0.0, 1.0);
+  }
+  if (node.anki != null) {
+    // Anki actuals are cached on the facet itself (synced from
+    // AnkiConnect or entered manually), so no external map is needed.
+    final target = node.anki!.targetReviews;
+    if (target <= 0) return node.isDone ? 1.0 : 0.0;
+    return ((node.anki!.reviewsActual ?? 0) / target).clamp(0.0, 1.0);
   }
   return node.isDone ? 1.0 : 0.0;
 }
@@ -308,6 +349,60 @@ double _subtreeEffortTarget(
   return total;
 }
 
+/// Cached Anki reviews for [node] plus all descendants. Unlike time and
+/// money, Anki actuals live on the facet (last synced count), so there is
+/// no overrides map — sync writes the numbers, progress reads them.
+double ankiActualForNode(Node node, List<Node> all) {
+  final idx = buildNodeIndexes(all);
+  return ankiActualForNodeIndexed(
+    node,
+    byId: idx.byId,
+    byParent: idx.byParent,
+  );
+}
+
+/// Indexed variant: reuses the caller's maps so list tiles don't
+/// rebuild them O(n) each.
+double ankiActualForNodeIndexed(
+  Node node, {
+  required Map<String, Node> byId,
+  required Map<String, List<Node>> byParent,
+}) {
+  return _subtreeAnkiActual(node.id, byId, byParent, {});
+}
+
+double _subtreeAnkiActual(
+  String id,
+  Map<String, Node> byId,
+  Map<String, List<Node>> byParent,
+  Set<String> seen,
+) {
+  if (!seen.add(id)) return 0.0;
+  final node = byId[id];
+  if (node == null) return 0.0;
+  var total = (node.anki?.reviewsActual ?? 0).toDouble();
+  for (final kid in byParent[id] ?? const <Node>[]) {
+    total += _subtreeAnkiActual(kid.id, byId, byParent, seen);
+  }
+  return total;
+}
+
+double _subtreeAnkiTarget(
+  String id,
+  Map<String, Node> byId,
+  Map<String, List<Node>> byParent,
+  Set<String> seen,
+) {
+  if (!seen.add(id)) return 0.0;
+  final node = byId[id];
+  if (node == null) return 0.0;
+  var total = (node.anki?.targetReviews ?? 0).toDouble();
+  for (final kid in byParent[id] ?? const <Node>[]) {
+    total += _subtreeAnkiTarget(kid.id, byId, byParent, seen);
+  }
+  return total;
+}
+
 bool _subtreeHasMoney(String id, Map<String, List<Node>> byParent) {
   final seen = <String>{};
   final queue = <String>[id];
@@ -330,6 +425,20 @@ bool _subtreeHasEffort(String id, Map<String, List<Node>> byParent) {
     if (!seen.add(current)) continue;
     for (final kid in byParent[current] ?? const <Node>[]) {
       if (kid.effort != null) return true;
+      queue.add(kid.id);
+    }
+  }
+  return false;
+}
+
+bool _subtreeHasAnki(String id, Map<String, List<Node>> byParent) {
+  final seen = <String>{};
+  final queue = <String>[id];
+  while (queue.isNotEmpty) {
+    final current = queue.removeLast();
+    if (!seen.add(current)) continue;
+    for (final kid in byParent[current] ?? const <Node>[]) {
+      if (kid.anki != null) return true;
       queue.add(kid.id);
     }
   }
@@ -382,26 +491,59 @@ bool isGoalNode(Node n) => !n.isHomework && n.calendarEventId == null;
 List<Node> goalNodes(List<Node> all) => all.where(isGoalNode).toList();
 
 /// Leaf goal nodes: goal nodes no other goal node lists as a parent.
-/// Sorted by due date, then creation. This is the actionable bottom of
-/// the tree — the default landing for the Nodes page.
+/// Unbounded goals are excluded — they are directions, not actionable
+/// steps. Sorted by due date, then creation. This is the actionable bottom
+/// of the tree — the default landing for the Nodes page.
+///
+/// A repeating series collapses to a single row: a template's instances
+/// share one [instanceOfId], so only the next open instance (earliest due,
+/// falling back to earliest overall when none are open) is kept. Without
+/// this a daily habit with a year of generated instances would flood the
+/// list with hundreds of same-titled rows.
 List<Node> leafNodes(List<Node> all) {
   final goals = goalNodes(all);
   final parented = <String>{};
   for (final n in goals) {
     parented.addAll(n.parentIds);
   }
-  final leaves = goals.where((n) => !parented.contains(n.id)).toList()
-    ..sort((a, b) {
-      final aDue = a.schedule?.due;
-      final bDue = b.schedule?.due;
-      if (aDue == null && bDue == null) {
-        return a.createdAt.compareTo(b.createdAt);
+  int compareNodes(Node a, Node b) {
+    final aDue = a.schedule?.due;
+    final bDue = b.schedule?.due;
+    if (aDue == null && bDue == null) {
+      return a.createdAt.compareTo(b.createdAt);
+    }
+    if (aDue == null) return 1;
+    if (bDue == null) return -1;
+    final cmp = aDue.compareTo(bDue);
+    return cmp != 0 ? cmp : a.createdAt.compareTo(b.createdAt);
+  }
+
+  final rawLeaves =
+      goals.where((n) => !n.isUnbounded && !parented.contains(n.id)).toList()
+        ..sort(compareNodes);
+  final plain = <Node>[];
+  final byTemplate = <String, List<Node>>{};
+  for (final n in rawLeaves) {
+    final templateId = n.instanceOfId;
+    if (templateId == null) {
+      plain.add(n);
+    } else {
+      (byTemplate[templateId] ??= []).add(n);
+    }
+  }
+  for (final instances in byTemplate.values) {
+    instances.sort(compareNodes);
+    Node? nextOpen;
+    for (final n in instances) {
+      if (n.isOpen) {
+        nextOpen = n;
+        break;
       }
-      if (aDue == null) return 1;
-      if (bDue == null) return -1;
-      return aDue.compareTo(bDue);
-    });
-  return leaves;
+    }
+    plain.add(nextOpen ?? instances.first);
+  }
+  plain.sort(compareNodes);
+  return plain;
 }
 
 /// Nodes with a calendar block, sorted by start.
@@ -412,9 +554,11 @@ List<Node> calendarNodes(List<Node> all) {
 }
 
 /// Open nodes with a due date, overdue first then earliest due.
+/// Unbounded goals never queue: they carry no due date by construction.
 List<Node> priorityQueue(List<Node> all, DateTime now) {
-  final items =
-      all.where((n) => n.isOpen && n.hasDue).toList()..sort((a, b) {
+  final items = all
+      .where((n) => n.isOpen && !n.isUnbounded && n.hasDue)
+      .toList()..sort((a, b) {
         final aOver = a.isOverdueAt(now) ? 0 : 1;
         final bOver = b.isOverdueAt(now) ? 0 : 1;
         if (aOver != bOver) return aOver - bOver;

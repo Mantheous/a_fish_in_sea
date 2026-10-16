@@ -261,6 +261,108 @@ class EffortFacet extends Equatable {
   List<Object?> get props => [targetMinutes, isFixed];
 }
 
+/// Memorization facet (Anki integration, issue #29). A node with this
+/// facet is a "review N cards per period" goal whose progress comes from
+/// Anki review statistics.
+///
+/// The numbers are a client-side cache, never credentials: [reviewsActual]
+/// is the last synced/manual count for the current period and
+/// [lastSyncedAt] says when it was recorded. Sync overwrites the cache —
+/// the server only ever sees these plain counts. [deckName] scopes the
+/// count to one Anki deck; null counts every deck.
+class AnkiFacet extends Equatable {
+  final String? deckName;
+  final int targetReviews;
+  final TimeScale? period;
+  final int? customPeriodDays;
+  final int? reviewsActual;
+  final DateTime? lastSyncedAt;
+  final bool isFixed;
+
+  const AnkiFacet({
+    this.deckName,
+    this.targetReviews = 0,
+    this.period,
+    this.customPeriodDays,
+    this.reviewsActual,
+    this.lastSyncedAt,
+    this.isFixed = false,
+  });
+
+  AnkiFacet copyWith({
+    String? deckName,
+    bool clearDeck = false,
+    int? targetReviews,
+    TimeScale? period,
+    bool clearPeriod = false,
+    int? customPeriodDays,
+    bool clearCustomPeriod = false,
+    int? reviewsActual,
+    bool clearReviewsActual = false,
+    DateTime? lastSyncedAt,
+    bool clearLastSyncedAt = false,
+    bool? isFixed,
+  }) =>
+      AnkiFacet(
+        deckName: clearDeck ? null : (deckName ?? this.deckName),
+        targetReviews: targetReviews ?? this.targetReviews,
+        period: clearPeriod ? null : (period ?? this.period),
+        customPeriodDays: clearCustomPeriod
+            ? null
+            : (customPeriodDays ?? this.customPeriodDays),
+        reviewsActual: clearReviewsActual
+            ? null
+            : (reviewsActual ?? this.reviewsActual),
+        lastSyncedAt: clearLastSyncedAt
+            ? null
+            : (lastSyncedAt ?? this.lastSyncedAt),
+        isFixed: isFixed ?? this.isFixed,
+      );
+
+  factory AnkiFacet.fromJson(Map<String, dynamic> json) {
+    final rawDeck = json['deckName'] as String?;
+    return AnkiFacet(
+      deckName: rawDeck == null || rawDeck.trim().isEmpty ? null : rawDeck,
+      targetReviews:
+          ((json['targetReviews'] as num?)?.toInt() ?? 0).clamp(0, 1000000000),
+      period: json['period'] == null
+          ? null
+          : TimeScale.values.firstWhere(
+              (e) => e.name == json['period'],
+              orElse: () => TimeScale.monthly,
+            ),
+      customPeriodDays: (json['customPeriodDays'] as num?)?.toInt(),
+      reviewsActual: json['reviewsActual'] == null
+          ? null
+          : ((json['reviewsActual'] as num?)?.toInt() ?? 0)
+              .clamp(0, 1000000000),
+      lastSyncedAt: _tryDate(json['lastSyncedAt']),
+      isFixed: json['isFixed'] as bool? ?? false,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'deckName': deckName,
+        'targetReviews': targetReviews,
+        'period': period?.name,
+        'customPeriodDays': customPeriodDays,
+        'reviewsActual': reviewsActual,
+        'lastSyncedAt': lastSyncedAt?.toIso8601String(),
+        'isFixed': isFixed,
+      };
+
+  @override
+  List<Object?> get props => [
+        deckName,
+        targetReviews,
+        period,
+        customPeriodDays,
+        reviewsActual,
+        lastSyncedAt,
+        isFixed,
+      ];
+}
+
 /// Recurrence for habit/budget templates. Only set on templates;
 /// instances carry concrete dates + `instanceOfId`.
 class NodeRecurrence extends Equatable {
@@ -374,6 +476,7 @@ class RuleFacet extends Equatable {
 /// - [schedule] with a start/end block → calendar
 /// - [money] → ledger / waterfall
 /// - [effort] → time target with planned-vs-actual calibration
+/// - [anki] → memorization target fed by Anki review statistics
 /// - [recurrence] → habit/budget template generating dated instances
 /// - [rule] → derived goal evaluated by query (no tag matching)
 ///
@@ -381,6 +484,19 @@ class RuleFacet extends Equatable {
 /// parents (e.g. groceries under both "Food budget" and "Errands").
 /// Reporting is direct — subtree sums plus [MoneyFacet.linkedTransactionIds]
 /// and recorded actuals. There are no tags.
+///
+/// An [isUnbounded] node is an abstract, ongoing direction ("serve
+/// others"): no due date, no targets, no progress bar. It never completes
+/// itself; concrete subgoals underneath carry the dates and the progress.
+/// Unbounded nodes stay out of the priority queue, the leaf list, and
+/// parent progress averages, so an aspiration that never ends cannot pin a
+/// concrete goal below 100%.
+///
+/// This class carries no `tagIds`. The legacy models it replaced
+/// ([Transaction], [Expense], [PlannerEvent], [Task], [Goal],
+/// [ReportedEntry]) still persist one, but nothing reads it: it is
+/// write-only dead data carried for round-trip compatibility. See
+/// [Node.importExpense] for the legacy path.
 class Node extends Equatable {
   static const int storageVersion = 1;
 
@@ -392,9 +508,20 @@ class Node extends Equatable {
   final DateTime? completedAt;
   final DateTime createdAt;
 
+  /// True for abstract, unbounded goals: ongoing directions with no due
+  /// date, no targets, and no progress bar. Additive flag, defaults to
+  /// false, so every payload written before it existed loads as bounded.
+  final bool isUnbounded;
+
+  /// Whether this goal is part of the user-curated short list shown on the
+  /// time-tracking card. Additive flag, defaults to true so existing goals
+  /// stay tracked and old payloads load untouched.
+  final bool isTracked;
+
   final ScheduleFacet? schedule;
   final MoneyFacet? money;
   final EffortFacet? effort;
+  final AnkiFacet? anki;
   final NodeRecurrence? recurrence;
   final RuleFacet? rule;
 
@@ -426,9 +553,12 @@ class Node extends Equatable {
     this.status = NodeStatus.open,
     this.completedAt,
     required this.createdAt,
+    this.isUnbounded = false,
+    this.isTracked = true,
     this.schedule,
     this.money,
     this.effort,
+    this.anki,
     this.recurrence,
     this.rule,
     this.instanceOfId,
@@ -459,6 +589,7 @@ class Node extends Equatable {
   bool get hasCalendarBlock => schedule?.hasCalendarBlock ?? false;
   bool get hasMoney => money != null;
   bool get hasEffort => effort != null;
+  bool get hasAnki => anki != null;
 
   Duration? get reportedDuration {
     final s = actualStart;
@@ -500,12 +631,16 @@ class Node extends Equatable {
     DateTime? completedAt,
     bool clearCompletedAt = false,
     DateTime? createdAt,
+    bool? isUnbounded,
+    bool? isTracked,
     ScheduleFacet? schedule,
     bool clearSchedule = false,
     MoneyFacet? money,
     bool clearMoney = false,
     EffortFacet? effort,
     bool clearEffort = false,
+    AnkiFacet? anki,
+    bool clearAnki = false,
     NodeRecurrence? recurrence,
     bool clearRecurrence = false,
     RuleFacet? rule,
@@ -540,9 +675,12 @@ class Node extends Equatable {
         completedAt:
             clearCompletedAt ? null : (completedAt ?? this.completedAt),
         createdAt: createdAt ?? this.createdAt,
+        isUnbounded: isUnbounded ?? this.isUnbounded,
+        isTracked: isTracked ?? this.isTracked,
         schedule: clearSchedule ? null : (schedule ?? this.schedule),
         money: clearMoney ? null : (money ?? this.money),
         effort: clearEffort ? null : (effort ?? this.effort),
+        anki: clearAnki ? null : (anki ?? this.anki),
         recurrence: clearRecurrence ? null : (recurrence ?? this.recurrence),
         rule: clearRule ? null : (rule ?? this.rule),
         instanceOfId:
@@ -598,6 +736,16 @@ class Node extends Equatable {
       ),
       completedAt: _tryDate(json['completedAt']),
       createdAt: createdAt,
+      // Missing (pre-flag payloads) reads as bounded, so old data loads
+      // untouched and never trips [validateUnbounded]. The == true
+      // coercion also survives wrong-typed values: a corrupt flag reads
+      // as bounded instead of dropping the whole node.
+      isUnbounded: json['isUnbounded'] == true,
+      isTracked: () {
+        final raw = json['isTracked'] ?? json['tracked'];
+        if (raw == null) return true;
+        return raw == true;
+      }(),
       schedule: json['schedule'] is Map
           ? _facetOrNull(
               () => ScheduleFacet.fromJson(
@@ -610,6 +758,10 @@ class Node extends Equatable {
       effort: json['effort'] is Map
           ? _facetOrNull(() => EffortFacet.fromJson(
               Map<String, dynamic>.from(json['effort'] as Map)))
+          : null,
+      anki: json['anki'] is Map
+          ? _facetOrNull(() => AnkiFacet.fromJson(
+              Map<String, dynamic>.from(json['anki'] as Map)))
           : null,
       recurrence: json['recurrence'] is Map
           ? _facetOrNull(() => NodeRecurrence.fromJson(
@@ -642,9 +794,13 @@ class Node extends Equatable {
         'status': status.name,
         'completedAt': completedAt?.toIso8601String(),
         'createdAt': createdAt.toIso8601String(),
+        'isUnbounded': isUnbounded,
+        'isTracked': isTracked,
+        'tracked': isTracked,
         'schedule': schedule?.toJson(),
         'money': money?.toJson(),
         'effort': effort?.toJson(),
+        'anki': anki?.toJson(),
         'recurrence': recurrence?.toJson(),
         'rule': rule?.toJson(),
         'instanceOfId': instanceOfId,
@@ -669,9 +825,12 @@ class Node extends Equatable {
         status,
         completedAt,
         createdAt,
+        isUnbounded,
+        isTracked,
         schedule,
         money,
         effort,
+        anki,
         recurrence,
         rule,
         instanceOfId,

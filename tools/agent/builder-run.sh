@@ -14,31 +14,114 @@ SLUG="$(echo "$TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g' | c
 BRANCH="agent/$N-$SLUG"
 WT="$HOME/Repos/worktrees/agent-$N-$SLUG"
 
+# Retry-stamp helper: any run that ends without a PR (or exits before
+# starting) writes a "not before" epoch for the dispatcher (build.sh), so
+# the issue is retried ~RETRY_BASE_S later instead of every 15 minutes.
+# The delay is rolled ONCE here — never per poll — so retries spread out
+# without re-rolling into a relaunch storm that starves the model quota.
+# Jitter is +/-25% of the base, capped at +/-15min. Override the base with
+# AGENT_BUILDER_COOLDOWN_S (seconds, default 3600).
+RETRY_BASE_S="${AGENT_BUILDER_COOLDOWN_S:-3600}"
+write_retry_stamp() {
+  local maxj=$(( RETRY_BASE_S / 4 ))
+  [ "$maxj" -gt 900 ] && maxj=900
+  local jit=0
+  [ "$maxj" -gt 0 ] && jit=$(( RANDOM % (2 * maxj + 1) - maxj ))
+  mkdir -p /tmp/opencode/agent-loop-cd
+  date +%s -d "@$(( $(date +%s) + RETRY_BASE_S + jit ))" >"/tmp/opencode/agent-loop-cd/$N"
+}
+
 git fetch origin --quiet
 if git ls-remote --heads origin "$BRANCH" | grep -q .; then
   echo "[builder] #$N branch $BRANCH already exists — skipping"
   exit 0
 fi
-git worktree add "$WT" -b "$BRANCH" origin/main
+# --- recover or create the worktree ---------------------------------------
+# A previous run may have left a worktree + branch behind (its opencode run
+# died on the model rate limit). Recovery order matters: the
+# worktree-already-exists check used to bail out with exit 1 BEFORE this
+# resume logic, so every relaunch died without ever starting opencode —
+# that is how the approved issues #8/#9/#14-#19/#30 sat for two days while
+# the poll relaunched them every 15 minutes.
+RESUME_IN_PLACE=0
+if [ -e "$WT" ]; then
+  # Worktree present: resume in it when our branch is checked out there AND
+  # the tree is provably loop-owned (it holds its build log), keeping any
+  # uncommitted WIP. Anything else is left for a human.
+  IN_USE="$(git worktree list --porcelain | awk -v b="$BRANCH" 'BEGIN{dir=""} /^worktree /{dir=$2} $0=="branch refs/heads/"b {print dir; exit}')"
+  if [ "${IN_USE:-}" = "$WT" ] && { [ -f "$WT/.agent-build.log" ] || [ -f "$WT/.agent-build-prev.log" ]; }; then
+    echo "[builder] #$N resuming previous builder work in $WT (WIP uncommitted changes are kept)"
+    RESUME_IN_PLACE=1
+  else
+    echo "[builder] #$N worktree path $WT already exists (branch checked out there: ${IN_USE:-none}) — skipping, needs a human (remove it to retry)"
+    write_retry_stamp
+    # This path dies inside a detached tmux session, so without a ping the
+    # stall is invisible until someone reads the journal — ping at most
+    # once a day (same pattern as close.sh's no-PR report).
+    REPORTED_DIR="/tmp/opencode/agent-loop-reported"
+    mkdir -p "$REPORTED_DIR"
+    KEY="$REPORTED_DIR/builder-$N-conflict.no-pr"
+    if [ ! -f "$KEY" ] || [ $(( $(date +%s) - $(stat -c %Y "$KEY") )) -ge 86400 ]; then
+      "$DIR/tg.sh" "🧑 Builder for #$N cannot start: worktree $WT already exists without loop build state — needs a human (remove it to retry):
+$URL" || true
+      touch "$KEY"
+    fi
+    exit 1
+  fi
+elif git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+  # Local branch exists without its worktree. `worktree add -b` refuses an
+  # existing branch name, so reuse a branch that holds unique work and
+  # recreate one that is empty.
+  if [ -z "$(git log --oneline "origin/main..$BRANCH" 2>/dev/null)" ]; then
+    echo "[builder] #$N local branch $BRANCH is empty (nothing past origin/main) — recreating from origin/main"
+    git branch -D "$BRANCH"
+    git worktree add "$WT" -b "$BRANCH" origin/main
+  else
+    echo "[builder] #$N resuming local branch $BRANCH with unpushed work"
+    git worktree add "$WT" "$BRANCH"
+  fi
+else
+  git worktree add "$WT" -b "$BRANCH" origin/main
+fi
+if [ ! -d "$WT" ]; then
+  echo "[builder] #$N worktree $WT missing after add — aborting"
+  exit 1
+fi
 echo "[builder] #$N worktree $WT branch $BRANCH"
 
+# Pre-download issue screenshots so the builder can VIEW them (same reason
+# as triage: headless agents read local images, not remote URLs).
+IMGDIR="/tmp/opencode/issue-$N-imgs"
+"$DIR/fetch-issue-images.sh" "$N" "$IMGDIR" >/dev/null 2>&1 || true
+IMGS="$(ls "$IMGDIR"/img*.* 2>/dev/null | tr '\n' ' ' || true)"
+[ -z "${IMGS// /}" ] && IMGS="(none — no image attachments found)"
+
 PROMPT="You are the builder agent. Work ONLY inside this worktree: $WT (branch $BRANCH, based on origin/main).
-Issue: gh issue view $N --json number,title,body,comments (run it to get the spec).
+Spec: gh issue view $N --json number,title,body,comments (run it to get the FULL thread — body plus every comment).
 Rules:
-1. The triage plan lives in the <!-- agent-plan --> comment on the issue — that scope is the contract. Implement the plan, nothing more. If the plan is wrong, say so in the PR body instead of freelancing.
-2. Keep the diff SMALL and focused: the issue and nothing else. No drive-by refactors, no unrelated cleanups, no formatting churn. If the change naturally exceeds ~300 lines, stop and explain why in the PR body instead of ballooning it.
-3. Follow AGENTS.md persistence rules exactly (additive-only models, orElse enum fallback, gated migrations with Migration.removeAfter, extend tolerance tests).
-4. NEVER push to main, NEVER commit to main.
-5. Gates (must both pass): ~/flutter/bin/flutter analyze (0 issues) and ~/flutter/bin/flutter test (all pass, add/update tests for the change, including goldens under test/goldens/ if you touched a screen).
-6. If you touched a user flow (auth, navigation, create/edit/delete, sync), add or extend a patrol_test and run it headless against the dev API server: export PATH="$HOME/.local/bin:$HOME/.pub-cache/bin:$PATH" PATROL_ANALYTICS_ENABLED=false; patrol test --device chrome --web-headless --target patrol_test/<file>.dart --dart-define=SERVER_URL=http://127.0.0.1:8000 (needs the API server on :8000; uses a unique test account per run).
-7. UX check (AGENTS.md rule, mandatory when the triage plan says UX check: needed OR you touched lib/*/view, navigation, dialogs, or user-facing copy): the served :8000 build does NOT contain your branch, so preview yours — build it to a temp dir, serve it statically, and walk THAT:
-   PREVIEW=/tmp/opencode/ux-issue-$N; PORT=$((8100 + $N % 500)); ~/flutter/bin/flutter build web --base-href / --dart-define=SERVER_URL=http://127.0.0.1:8000 --output $PREVIEW/web && (cd $PREVIEW/web && nohup python3 -m http.server $PORT >/dev/null 2>&1 &) && sleep 2
-   then: opencode run --agent ux-walker --title "ux-walk-issue-$N" with APP_URL http://127.0.0.1:$PORT/, SHOT_DIR/REPORT under $PREVIEW/, UX_EMAIL ux-walker@example.com, UX_PASSWORD ux-walker-dev-pass-1, and a SCOPE limited to your change.
-   Address its findings in the branch or note them in the PR body with the report path. Kill the static server when done.
-7. Commit on $BRANCH, push origin $BRANCH, open PR with: gh pr create --base main --head $BRANCH --title \"[agent #$N] <title>\" --body \"Closes #$N. Scope: <one line, matches the triage plan>. Test log: <paste tail of flutter test>. Risk notes: <...>. Screenshots: <host paths under /tmp/opencode/ you verified against, for UX-filed issues>\"
-8. If the gates fail and you cannot fix within reason, push the branch anyway and report FAIL status in the PR body.
-A separate reviewer agent will read your diff against the plan — write the PR body for a skeptical reader.
+1. The contract is the LATEST <!-- agent-plan --> comment PLUS any tester clarifications posted after it. Read the whole thread newest-to-oldest: follow-up tester comments override or narrow the plan. If plan + follow-ups conflict, follow the newest tester comment. Do NOT freelance beyond plan + follow-ups. If both together are still wrong or unimplementable, say so in the PR body instead of inventing scope.
+2. Screenshots are part of the spec — never say an image could not be loaded: pre-downloaded issue images (if any) are in $IMGDIR (found: $IMGS) — list that dir and READ each image with the read tool to VIEW it. If the thread mentions /tmp/opencode/... paths (ux-walk screenshots/reports on this loop host), read those directly. Any other image URL you have not viewed: curl -sL \"<url>\" -o /tmp/opencode/issue-$N-build-<i>.png then READ it, and use what you see to locate the exact screen/widget.
+3. Keep the diff SMALL and focused: the issue and nothing else. No drive-by refactors, no unrelated cleanups, no formatting churn. If the change naturally exceeds ~300 lines, stop and explain why in the PR body instead of ballooning it.
+4. Follow AGENTS.md persistence rules exactly (additive-only models, orElse enum fallback, gated migrations with Migration.removeAfter, extend tolerance tests).
+5. NEVER push to main, NEVER commit to main. You are a LOOP BUILDER, not an ad-hoc agent: AGENTS.md's "Ad-hoc: YOU ship it" clause and CONVENTIONS.md rule 4 (merge from a throwaway worktree) do NOT apply to you — they are for human/ad-hoc sessions. Do NOT merge your branch into main yourself (no merge worktree, no fast-forward push), do NOT run tools/agent/deploy.sh or flutter build web, and do NOT verify or touch build/web. Shipping for you means: the PR is open. The human merges; the loop deploys. A builder that merges or deploys itself has bypassed the review gate and is a bug.
+6. Gates (must both pass): ~/flutter/bin/flutter analyze (0 issues) and ~/flutter/bin/flutter test (all pass, add/update tests for the change, including goldens under test/goldens/ if you touched a screen).
+7. If you touched a user flow (auth, navigation, create/edit/delete, sync), add or extend a patrol_test and run it headless against the dev API server: export PATH="$HOME/.local/bin:$HOME/.pub-cache/bin:$PATH" PATROL_ANALYTICS_ENABLED=false; patrol test --device chrome --web-headless --target patrol_test/<file>.dart --dart-define=SERVER_URL=http://127.0.0.1:8000 (needs the API server on :8000; uses a unique test account per run).
+8. UX check (AGENTS.md rule): do NOT run the ux-walker yourself — the agent loop walks each deploy exactly once (tools/agent/ux-walk.sh via poll.sh), and per-branch walks duplicate that work while contending for the same browser. If the triage plan says UX check: needed OR you touched lib/*/view, navigation, dialogs/sheets, or user-facing copy: run gh issue edit $N --add-label ux-walk and record the scope (screens/flows touched + how to reach them, 1-2 lines) in the PR body under a 'UX scope:' heading. The post-deploy walk covers it and files findings as new issues. Never gate your PR on a walk verdict.
+9. Commit on $BRANCH, push origin $BRANCH, open PR with: gh pr create --base main --head $BRANCH --title \"[agent #$N] <title>\" --body \"Closes #$N. In plain words: <2-4 sentences saying what the user will notice and why, written for a maintainer who has NOT read the code — name screens and behavior, no jargon, no class/function names>. Scope: <one line, matches the latest triage plan + tester follow-ups>. UX scope: <screens/flows touched + how to reach them, or 'none — no user-visible change'>. Test log: <paste tail of flutter test>. Risk notes: <one line, plain words first, then technical detail if needed>. Screenshots: <host paths under /tmp/opencode/ you verified against, for UX-filed issues>\". If gh pr create fails with "No commits between main and <branch>" (your branch's commits are already in main), do NOT merge, push, or deploy anything to fix it — report PR_URL=NONE with that exact reason and stop; a human will sort out how it landed.
+10. If the gates fail and you cannot fix within reason, push the branch anyway and report FAIL status in the PR body.
+11. Commit messages on $BRANCH must NOT contain fix/fixes/fixed/close/closes/resolves #$N — if such a commit ever lands on main (e.g. through a merge), GitHub auto-closes the issue before the human has reviewed anything. Use \"refs #$N\" in commit messages; the PR body is where \"Closes #$N\" belongs.
+A separate reviewer agent will read your diff against the plan — write the PR body for a busy maintainer who has not read the code: plain words first, technical detail after.
 Report at the end: PR_URL=<url or NONE> STATUS=<ready|failed>."
+
+# NOTE (2026-10-15): the PR body is the maintainer's primary reading
+# material, and model prose skews too technical to parse without deep
+# codebase context — hence the "In plain words" lead section required
+# above. If readability is still poor, route the commentary through
+# longcat (clear explanations, weak code): e.g. a second pass that
+# rewrites the PR body in plain words before `gh pr create`.
+if [ "$RESUME_IN_PLACE" = "1" ] && [ -f "$WT/.agent-build.log" ]; then
+  mv "$WT/.agent-build.log" "$WT/.agent-build-prev.log"
+fi
 if opencode run --auto --title "builder-#$N" "$PROMPT" >"$WT/.agent-build.log" 2>&1; then
   echo "[builder] #$N opencode run finished"
 else
@@ -47,7 +130,24 @@ fi
 PR_URL="$(grep -m1 -o 'https://github.com/[^ ]*/pull/[0-9]*' "$WT/.agent-build.log" || true)"
 [ -z "$PR_URL" ] && PR_URL="$(gh pr list --head "$BRANCH" --json url --jq '.[0].url // empty' || true)"
 [ -z "$PR_URL" ] && PR_URL="NONE (check $WT/.agent-build.log)"
-"$DIR/tg.sh" "🔨 Builder finished #$N: $TITLE
+# Outcome stamp for the dispatcher (build.sh): a run that produced no PR
+# writes a retry time (~1h + jitter via write_retry_stamp) instead of going
+# back into the every-15-minutes pool, so a model-rate-limited death cannot
+# become a relaunch storm. A rate-limited run is retried the same way —
+# the quota just needs time to recover.
+mkdir -p /tmp/opencode/agent-loop-cd
+RATE_NOTE=""
+if [[ "$PR_URL" == NONE* ]]; then
+  write_retry_stamp
+  RETRY_AT="$(cat "/tmp/opencode/agent-loop-cd/$N" 2>/dev/null || echo 0)"
+  if grep -qiE 'rate limit exceeded|rate_limit|http 429|too many requests' "$WT/.agent-build.log" 2>/dev/null; then
+    RATE_NOTE="hit the model rate limit — "
+  fi
+  RATE_NOTE="${RATE_NOTE}retrying after ~$(date -d "@$RETRY_AT" '+%H:%M' 2>/dev/null || echo '1h'): "
+else
+  rm -f "/tmp/opencode/agent-loop-cd/$N"
+fi
+"$DIR/tg.sh" "🔨 Builder finished #$N: ${RATE_NOTE}$TITLE
 PR: $PR_URL
 $URL" || true
 echo "[builder] #$N done PR=$PR_URL"

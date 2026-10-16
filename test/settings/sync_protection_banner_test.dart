@@ -26,8 +26,11 @@ void main() {
     await tester.pump();
 
     // The Sync section sits below the fold in the lazy settings list.
+    // Scroll to the restore action itself: sections below Sync (e.g. API
+    // tokens) may push the banner above the viewport when scrolling to
+    // the sign-out button at the section's end.
     await tester.scrollUntilVisible(
-      find.text('Sign out (keeps on-device data)'),
+      find.text('Restore missing items from cloud'),
       400,
       scrollable: find.byType(Scrollable).first,
     );

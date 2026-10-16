@@ -23,6 +23,36 @@ class SyncAuth {
   static String? current() => tokenProvider?.call();
 }
 
+/// Scoped long-lived token for third-party apps / AI agents.
+/// Mirrors server `ApiTokenOut` (see `server/api/app/schemas.py`).
+/// The plaintext secret is only returned once at creation and is never
+/// stored on device — only the id/prefix/scopes metadata lives here.
+class ApiToken {
+  final int id;
+  final String name;
+  final String prefix;
+  final List<String> scopes;
+  final bool review;
+
+  const ApiToken({
+    required this.id,
+    required this.name,
+    required this.prefix,
+    required this.scopes,
+    required this.review,
+  });
+
+  factory ApiToken.fromJson(Map<String, dynamic> json) => ApiToken(
+        id: (json['id'] as num).toInt(),
+        name: json['name'] as String? ?? '',
+        prefix: json['prefix'] as String? ?? '',
+        scopes: ((json['scopes'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .toList(),
+        review: json['review'] as bool? ?? false,
+      );
+}
+
 /// Single pull record from the server envelope.
 class SyncRecord {
   final String collection;
@@ -130,6 +160,18 @@ class SyncClient {
     }
     return _decode(r);
   }
+
+  // ── Anki (via app server; works on web where direct AnkiConnect is
+  // unreachable, and on any signed-in native device) ───────────────────
+
+  /// One AnkiConnect-shaped call through POST /api/anki/invoke.
+  /// Returns the decoded `{"result": ...}` envelope.
+  Future<dynamic> ankiInvoke(
+    String action, [
+    Map<String, dynamic>? params,
+  ]) =>
+      _postAuthed(
+          '/api/anki/invoke', {'action': action, 'params': params ?? const {}});
 
   // ── Auth (no bearer needed) ──────────────────────────────────────────
 
@@ -240,8 +282,39 @@ class SyncClient {
     return Map<String, dynamic>.from(_decode(r) as Map);
   }
 
-  // ── Generic authed JSON helpers (feedback + future small endpoints) ──
+  // ── Scoped API tokens (Settings → API tokens) ────────────────────────
 
+  /// Lists the caller's unrevoked tokens (metadata only, no secrets).
+  Future<List<ApiToken>> listApiTokens() async {
+    final body = await _getAuthed('/api/v1/tokens');
+    final list = body as List? ?? const [];
+    return list
+        .map((e) => ApiToken.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
+  /// Mints a token. Returns the metadata plus the plaintext secret, which
+  /// the server shows exactly once — callers must surface it for copy
+  /// immediately and never persist it.
+  Future<({ApiToken info, String token})> createApiToken({
+    required String name,
+    List<String> scopes = const ['sync'],
+    bool review = false,
+  }) async {
+    final body = Map<String, dynamic>.from(await _postAuthed(
+        '/api/v1/tokens', {'name': name, 'scopes': scopes, 'review': review}));
+    return (
+      info: ApiToken.fromJson(body),
+      token: body['token'] as String? ?? '',
+    );
+  }
+
+  /// Revokes a token. The server answers 204 with an empty body.
+  Future<void> revokeApiToken(int id) async {
+    await apiDelete('/api/v1/tokens/$id');
+  }
+
+  // ── Generic authed JSON helpers (feedback + future small endpoints) ──
   /// GET decoded JSON with the shared 401→refresh handling.
   Future<dynamic> apiGet(String path, [Map<String, String>? query]) =>
       _getAuthed(path, query);

@@ -12,6 +12,7 @@ import '../../navigation/bloc/navigation_cubit.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_calendar.dart';
+import '../../nodes/service/node_event_link.dart';
 import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_editor.dart';
 import '../../nodes/view/node_finish_sheet.dart';
@@ -273,62 +274,12 @@ class _CalendarPageState extends State<CalendarPage> {
                   ),
                 ],
               ),
-            ),
-          if (compactHeader)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                mainAxisSize: MainAxisSize.max,
-                children: [
-                  IconButton(
-                    tooltip: _previousTooltip,
-                    icon: const Icon(Icons.chevron_left),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: _goToPrevious,
-                  ),
-                  TextButton(
-                    onPressed: _goToToday,
-                    style: const ButtonStyle(
-                      visualDensity: VisualDensity.compact,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: const Text('Today'),
-                  ),
-                  IconButton(
-                    tooltip: _nextTooltip,
-                    icon: const Icon(Icons.chevron_right),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: _goToNext,
-                  ),
-                ],
-              ),
             )
           else ...[
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
               child: Row(
                 children: [
-                  IconButton(
-                    tooltip: _previousTooltip,
-                    icon: const Icon(Icons.chevron_left),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: _goToPrevious,
-                  ),
-                  TextButton(
-                    onPressed: _goToToday,
-                    style: const ButtonStyle(
-                      visualDensity: VisualDensity.compact,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: const Text('Today'),
-                  ),
-                  IconButton(
-                    tooltip: _nextTooltip,
-                    icon: const Icon(Icons.chevron_right),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: _goToNext,
-                  ),
                   Expanded(
                     child: Align(
                       alignment: Alignment.centerRight,
@@ -1204,23 +1155,29 @@ class _CalendarPageState extends State<CalendarPage> {
       } else {
         if (backing.isDone) return;
         try {
-          context.read<NodeCubit>().startTracking(backing.id);
+          NodeEventLink.startNodeTracking(
+            context.read<NodeCubit>(),
+            context.read<CalendarCubit>(),
+            backing.id,
+          );
         } catch (_) {}
       }
       return;
     }
+    NodeCubit? nodes;
     CalendarCubit calendar;
     try {
+      nodes = context.read<NodeCubit>();
       calendar = context.read<CalendarCubit>();
     } catch (_) {
       return;
     }
     final live = calendar.byId(event.id) ?? event;
     if (live.isTracking) {
-      calendar.stopTracking(live.id);
+      NodeEventLink.stopEventTrackingAligned(nodes, calendar, live.id);
     } else {
       if (live.allDay) return;
-      calendar.startTracking(live.id);
+      NodeEventLink.startEventTracking(nodes, calendar, live.id);
     }
   }
 
@@ -1662,89 +1619,13 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   /// Jumps the calendar back to today, keeping the current Day/Week/Month
-  /// view. Wired to the Today button, the header arrows' long-press
-  /// fallback, and double-tap/click on the view switcher (a re-tap on the
-  /// active segment never reaches `onSelectionChanged`, so the switcher is
-  /// wrapped in a `GestureDetector.onDoubleTap` instead).
+  /// view. Reached via double-tap/click on the view switcher (a re-tap on
+  /// the active segment never reaches `onSelectionChanged`, so the
+  /// switcher is wrapped in a `GestureDetector.onDoubleTap` instead).
   void _goToToday() {
     final now = DateTime.now();
     _controller.displayDate = now;
     _controller.selectedDate = now;
-  }
-
-  String get _previousTooltip => switch (_view) {
-        CalendarView.day => 'Previous day',
-        CalendarView.week => 'Previous week',
-        CalendarView.month => 'Previous month',
-        _ => 'Previous',
-      };
-
-  String get _nextTooltip => switch (_view) {
-        CalendarView.day => 'Next day',
-        CalendarView.week => 'Next week',
-        CalendarView.month => 'Next month',
-        _ => 'Next',
-      };
-
-  /// Steps the visible page back by one day/week/month, matching the
-  /// current view. Drives `displayDate` directly — `CalendarController`
-  /// exposes no forward()/backward() API.
-  void _goToPrevious() {
-    final base = _controller.displayDate ??
-        _controller.selectedDate ??
-        DateTime.now();
-    _controller.displayDate = _shiftByView(base, -1);
-  }
-
-  /// Steps the visible page forward by one day/week/month.
-  void _goToNext() {
-    final base = _controller.displayDate ??
-        _controller.selectedDate ??
-        DateTime.now();
-    _controller.displayDate = _shiftByView(base, 1);
-  }
-
-  DateTime _shiftByView(DateTime date, int direction) {
-    switch (_view) {
-      case CalendarView.day:
-        return date.add(Duration(days: direction));
-      case CalendarView.week:
-        return date.add(Duration(days: 7 * direction));
-      case CalendarView.month:
-        return _addMonths(date, direction);
-      case CalendarView.timelineDay:
-        return date.add(Duration(days: direction));
-      case CalendarView.timelineWeek:
-        return date.add(Duration(days: 7 * direction));
-      case CalendarView.timelineWorkWeek:
-        return date.add(Duration(days: 7 * direction));
-      case CalendarView.timelineMonth:
-        return _addMonths(date, direction);
-      case CalendarView.workWeek:
-        return date.add(Duration(days: 7 * direction));
-      case CalendarView.schedule:
-        return _addMonths(date, direction);
-    }
-  }
-
-  /// Month arithmetic clamped to the target month's last day (so Jan 31 →
-  /// Feb lands on Feb 28/29 instead of overflowing into March).
-  DateTime _addMonths(DateTime date, int months) {
-    final monthIndex = (date.month - 1) + months;
-    final year = date.year + monthIndex ~/ 12;
-    final month = monthIndex % 12 + 1;
-    final lastDay = DateTime(year, month + 1, 0).day;
-    final day = date.day > lastDay ? lastDay : date.day;
-    return DateTime(
-      year,
-      month,
-      day,
-      date.hour,
-      date.minute,
-      date.second,
-      date.millisecond,
-      date.microsecond,
-    );
   }
 
   /// Creates (or reuses) the manual report entry for a task-event,
@@ -2396,9 +2277,11 @@ class _RecordingBannerState extends State<_RecordingBanner> {
               FilledButton.icon(
                 onPressed: () {
                   try {
-                    context
-                        .read<CalendarCubit>()
-                        .stopTracking(widget.event.id);
+                    NodeEventLink.stopEventTrackingAligned(
+                      context.read<NodeCubit>(),
+                      context.read<CalendarCubit>(),
+                      widget.event.id,
+                    );
                   } catch (_) {}
                 },
                 style: FilledButton.styleFrom(

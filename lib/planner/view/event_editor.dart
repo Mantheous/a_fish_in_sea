@@ -8,8 +8,10 @@ import '../../common/undo/undo_cubit.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_event_link.dart';
+import '../../nodes/view/goal_picker.dart';
 import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_finish_sheet.dart';
+import '../../nodes/view/timer_edit_sheet.dart';
 import '../../reporting/bloc/places_cubit.dart';
 import '../../reporting/model/place.dart';
 import '../../reporting/view/time_range_dial.dart';
@@ -361,7 +363,13 @@ class EventEditorFormState extends State<EventEditorForm> {
         }
       } catch (_) {}
     }
-    _isTask = existing?.isTask ?? false;
+    // Scheduling something out of the Tasks menu ("Add to calendar" on a
+    // task) means the event *is* that task's plan, so the switch starts
+    // on instead of silently demoting the assignment to a plain calendar
+    // event. An existing event always keeps whatever flag it was saved
+    // with — including a deliberate un-check.
+    final seededFromTask = widget.existing == null && _sourceTaskId != null;
+    _isTask = existing?.isTask ?? seededFromTask;
     _done = existing?.done ?? false;
     _reminderMinutesBefore = existing?.reminderMinutesBefore;
     if (existing != null) {
@@ -1129,7 +1137,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       widget.onFinished?.call();
       return;
     }
-    final base = widget.existing!;
+    final base = calendarCubit.byId(widget.existing!.id) ?? widget.existing!;
     final ruleForMove =
         _customRepeat ? base.recurrenceRule : config.ruleFor(start);
     if (_canChangeCalendar(base, feedCubit)) {
@@ -1626,6 +1634,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       _applySeriesLocal(
         master,
         done: done,
+        editedId: base.id,
       );
       widget.onFinished?.call();
       return;
@@ -1650,7 +1659,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       messenger.showSnackBar(SnackBar(content: Text(error)));
       return;
     }
-    _applySeriesPostPush(master, done: done);
+    _applySeriesPostPush(master, done: done, editedId: base.id);
     widget.onFinished?.call();
   }
 
@@ -1685,9 +1694,17 @@ class EventEditorFormState extends State<EventEditorForm> {
   }
 
   /// Local-only series update: applies the editor's task/people/place
-  /// state to every cached occurrence of the series and mirrors each
-  /// into its backing node. No Google write.
-  void _applySeriesLocal(PlannerEvent master, {required bool done}) {
+  /// state to the series' future occurrences and mirrors each into its
+  /// backing node. Past occurrences stay plain calendar events (no backing
+  /// nodes): marking a series that has been repeating for a while must not
+  /// flood the Tasks list with an overdue todo per past occurrence. No
+  /// Google write.
+  ///
+  /// Batched into a handful of emits (one per cubit): looping the
+  /// single-write methods snapshots the whole store per occurrence and
+  /// kills the tab on large calendars.
+  void _applySeriesLocal(PlannerEvent master,
+      {required bool done, String? editedId}) {
     CalendarCubit calendar;
     NodeCubit nodes;
     try {
@@ -1700,36 +1717,89 @@ class EventEditorFormState extends State<EventEditorForm> {
         FeedCubit.seriesRemoteId(master) ?? FeedCubit.seriesKeyFor(master);
     if (key == null) return;
     final completedAt = done ? DateTime.now() : null;
-    for (final event in List.of(calendar.state)) {
-      if (FeedCubit.seriesKeyFor(event) != key) continue;
-      final updated = event.copyWith(
-        isTask: _isTask,
-        done: done,
-        completedAt: completedAt,
-        clearCompletedAt: !done,
-        placeId: _placeId,
-        clearPlaceId: _placeId == null,
-        assignees: List.of(_people),
-        reminderMinutesBefore: _reminderMinutesBefore,
-        clearReminder: _reminderMinutesBefore == null,
-      );
-      calendar.updateEvent(updated);
-      if (!_isTask) {
-        nodes.removeNodesForEvent(event.id);
-      } else {
-        nodes.ensureNodeForFeedEvent(updated.copyWith(isTask: true));
-        nodes.setDoneForEvent(
-          event.id,
+    final members = [
+      for (final event in calendar.state)
+        if (FeedCubit.seriesKeyFor(event) == key) event,
+    ];
+    if (members.isEmpty) return;
+    final now = DateTime.now();
+    // The occurrence the user edited is always a target, even when it is
+    // itself in the past — the toggle was flipped on it explicitly. Every
+    // other past occurrence is left out of the task set.
+    bool isTarget(PlannerEvent event) =>
+        event.id == editedId ||
+        NodeEventLink.isFutureOccurrence(event, now);
+    final targets = [for (final event in members) if (isTarget(event)) event];
+    final past = [for (final event in members) if (!isTarget(event)) event];
+    calendar.updateEvents([
+      for (final event in targets)
+        event.copyWith(
+          isTask: _isTask,
           done: done,
           completedAt: completedAt,
-        );
-      }
+          clearCompletedAt: !done,
+          placeId: _placeId,
+          clearPlaceId: _placeId == null,
+          assignees: List.of(_people),
+          reminderMinutesBefore: _reminderMinutesBefore,
+          clearReminder: _reminderMinutesBefore == null,
+        ),
+      // Past occurrences keep people/place in sync but never stay tasks,
+      // so a series marked today can't leave overdue todos behind — even
+      // ones created by an earlier whole-series mark.
+      for (final event in past)
+        if (event.isTask ||
+            event.done ||
+            event.completedAt != null ||
+            !_sameAssignees(event.assignees, _people))
+          event.copyWith(
+            isTask: false,
+            done: false,
+            clearCompletedAt: true,
+            placeId: _placeId,
+            clearPlaceId: _placeId == null,
+            assignees: List.of(_people),
+            reminderMinutesBefore: _reminderMinutesBefore,
+            clearReminder: _reminderMinutesBefore == null,
+          ),
+    ]);
+    final pastIds = {for (final e in past) e.id};
+    if (!_isTask) {
+      nodes.removeNodesForEventIds(
+          {for (final e in members) e.id},
+          silent: true);
+      return;
     }
+    nodes.ensureNodesForFeedEvents([
+      for (final event in targets)
+        event.copyWith(
+          isTask: true,
+          done: done,
+          completedAt: completedAt,
+          clearCompletedAt: !done,
+          placeId: _placeId,
+          clearPlaceId: _placeId == null,
+          assignees: List.of(_people),
+          reminderMinutesBefore: _reminderMinutesBefore,
+          clearReminder: _reminderMinutesBefore == null,
+        ),
+    ]);
+    nodes.setDoneForEventIds(
+      {for (final e in targets) e.id},
+      done: done,
+      completedAt: completedAt,
+      taskIdsByEvent: {for (final e in targets) e.id: e.taskId},
+    );
+    nodes.removeNodesForEventIds(pastIds, silent: true);
   }
 
   /// Post-push series fix-up: the Google re-sync drops local-only state,
-  /// so re-assert node/people/place on every occurrence of the series.
-  void _applySeriesPostPush(PlannerEvent master, {required bool done}) {
+  /// so re-assert node/people/place on the series' future occurrences.
+  /// Past occurrences are un-marked for the same reason as in
+  /// [_applySeriesLocal]. Batched like [_applySeriesLocal] for the same
+  /// storm reason.
+  void _applySeriesPostPush(PlannerEvent master,
+      {required bool done, String? editedId}) {
     CalendarCubit calendar;
     NodeCubit nodes;
     try {
@@ -1742,44 +1812,75 @@ class EventEditorFormState extends State<EventEditorForm> {
         FeedCubit.seriesRemoteId(master) ?? FeedCubit.seriesKeyFor(master);
     if (key == null) return;
     final completedAt = done ? DateTime.now() : null;
-    for (final event in List.of(calendar.state)) {
-      if (FeedCubit.seriesKeyFor(event) != key) continue;
-      if (!_sameAssignees(event.assignees, _people)) {
-        calendar.updateEvent(event.copyWith(assignees: List.of(_people)));
+    final members = [
+      for (final event in calendar.state)
+        if (FeedCubit.seriesKeyFor(event) == key) event,
+    ];
+    if (members.isEmpty) return;
+    final now = DateTime.now();
+    bool isTarget(PlannerEvent event) =>
+        event.id == editedId ||
+        NodeEventLink.isFutureOccurrence(event, now);
+    final targets = [for (final event in members) if (isTarget(event)) event];
+    final past = [for (final event in members) if (!isTarget(event)) event];
+    final targetIds = {for (final e in targets) e.id};
+    final calUpdates = <PlannerEvent>[];
+    for (final event in members) {
+      final pastEvent = !targetIds.contains(event.id);
+      var current = event;
+      if (!_sameAssignees(current.assignees, _people)) {
+        current = current.copyWith(assignees: List.of(_people));
       }
-      final current = calendar.byId(event.id) ?? event;
-      if (!_isTask) {
+      if (!_isTask || pastEvent) {
         if (current.isTask) {
-          calendar.updateEvent(
-            current.copyWith(
-              isTask: false,
-              done: false,
-              clearCompletedAt: true,
-            ),
+          current = current.copyWith(
+            isTask: false,
+            done: false,
+            clearCompletedAt: true,
           );
         }
-        nodes.removeNodesForEvent(event.id);
-        continue;
+      } else {
+        final marked = current.copyWith(
+          isTask: true,
+          done: done,
+          completedAt: completedAt,
+          clearCompletedAt: !done,
+          placeId: _placeId,
+          clearPlaceId: _placeId == null,
+          assignees: List.of(_people),
+          reminderMinutesBefore: _reminderMinutesBefore,
+          clearReminder: _reminderMinutesBefore == null,
+        );
+        if (marked != current) current = marked;
       }
-      final marked = current.copyWith(
-        isTask: true,
-        done: done,
-        completedAt: completedAt,
-        clearCompletedAt: !done,
-        placeId: _placeId,
-        clearPlaceId: _placeId == null,
-        assignees: List.of(_people),
-        reminderMinutesBefore: _reminderMinutesBefore,
-        clearReminder: _reminderMinutesBefore == null,
-      );
-      if (marked != current) calendar.updateEvent(marked);
-      nodes.ensureNodeForFeedEvent(marked);
-      nodes.setDoneForEvent(
-        event.id,
-        done: done,
-        completedAt: completedAt,
-      );
+      if (current != event) calUpdates.add(current);
     }
+    calendar.updateEvents(calUpdates);
+    if (!_isTask) {
+      nodes.removeNodesForEventIds(
+          {for (final e in members) e.id},
+          silent: true);
+      return;
+    }
+    // The re-sync may have dropped the mark the push just set, so the
+    // ensure input carries the full local state (mirrors the old
+    // per-member `marked` exactly, including members needing no
+    // calendar change).
+    final markedById = {for (final e in calUpdates) e.id: e};
+    nodes.ensureNodesForFeedEvents([
+      for (final event in targets) markedById[event.id] ?? event,
+    ]);
+    nodes.setDoneForEventIds(
+      targetIds,
+      done: done,
+      completedAt: completedAt,
+      taskIdsByEvent: {
+        for (final id in targetIds) id: calendar.byId(id)?.taskId,
+      },
+    );
+    nodes.removeNodesForEventIds(
+        {for (final e in past) e.id},
+        silent: true);
   }
 
   /// Mirrors a locally saved event's task flag into [NodeCubit]: creates or
@@ -1794,6 +1895,15 @@ class EventEditorFormState extends State<EventEditorForm> {
     }
     final calendar = context.read<CalendarCubit>();
     if (!saved.isTask) {
+      final seeded = _seededSourceNode(nodes, saved.id, saved.taskId);
+      if (seeded != null) {
+        // The Task switch describes the event, not the assignment it was
+        // scheduled from: turning it off must not delete that task. The
+        // block the user just picked is still that task's plan, so the
+        // task list keeps showing it as scheduled.
+        nodes.setScheduleBlock(seeded.id, saved.start, saved.end);
+        return;
+      }
       nodes.removeNodesForEvent(saved.id);
       return;
     }
@@ -1803,6 +1913,7 @@ class EventEditorFormState extends State<EventEditorForm> {
         saved.id,
         done: saved.done,
         completedAt: saved.completedAt,
+        taskId: saved.taskId,
       );
       return;
     }
@@ -1812,7 +1923,23 @@ class EventEditorFormState extends State<EventEditorForm> {
       saved.id,
       done: saved.done,
       completedAt: saved.completedAt,
+      taskId: saved.taskId ?? nodeId,
     );
+  }
+
+  /// The pre-existing task that seeded this event ("Add to calendar"),
+  /// when it is still linked to it. Never the synthetic `node:<id>`
+  /// backing that [NodeCubit.upsertLinkedNodeForEvent] creates for an
+  /// event marked as a task itself — that one is disposable.
+  static Node? _seededSourceNode(
+    NodeCubit nodes,
+    String eventId,
+    String? linkedId,
+  ) {
+    if (linkedId == null || linkedId == 'node:$eventId') return null;
+    final node = nodes.byId(linkedId);
+    if (node == null || node.calendarEventId != eventId) return null;
+    return node;
   }
 
   /// Re-applies the editor's task flag after a Google push + re-sync, which
@@ -1829,10 +1956,22 @@ class EventEditorFormState extends State<EventEditorForm> {
       return;
     }
     if (!_isTask) {
+      if (_seededSourceNode(nodes, syncedId, _sourceTaskId) != null) {
+        // Scheduling an assignment must not delete it, even when the user
+        // saved the calendar block as a plain event.
+        return;
+      }
       NodeEventLink.unmarkEventAsNode(calendar, nodes, syncedId);
       return;
     }
     NodeEventLink.markEventAsNode(calendar, nodes, syncedId);
+    // The block the user picked is the source task's plan as well. Google
+    // holds the time; the task keeps its own due date.
+    final seeded = _seededSourceNode(nodes, syncedId, _sourceTaskId);
+    final synced = calendar.byId(syncedId);
+    if (seeded != null && synced != null) {
+      nodes.setScheduleBlock(seeded.id, synced.start, synced.end);
+    }
     if (_done) {
       NodeEventLink.toggleEventDone(calendar, nodes, syncedId);
     }
@@ -2509,6 +2648,8 @@ class EventDetailView extends StatelessWidget {
             _TaskStatusTile(event: event),
             const SizedBox(height: 8),
             _TaskTimeSection(event: event),
+            const SizedBox(height: 8),
+            _GoalAssignmentSection(event: event),
           ] else if (!event.allDay) ...[
             // Plain calendar events (Google / personal) can also be timed
             // like in Toggl: one tap on Start records from now, Stop saves
@@ -2606,6 +2747,263 @@ class _TaskStatusTile extends StatelessWidget {
   }
 }
 
+/// Goal assignment for a task-event: which goal(s) its backing node
+/// reports to, plus assign/remove. Backing nodes parented under a goal
+/// roll their completion into the goal's progress.
+class _GoalAssignmentSection extends StatelessWidget {
+  final PlannerEvent event;
+
+  const _GoalAssignmentSection({required this.event});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    List<Node> all = const [];
+    try {
+      all = context.watch<NodeCubit>().state;
+    } catch (_) {}
+    Node? backing;
+    for (final n in all) {
+      if (n.calendarEventId == event.id ||
+          n.sourceEventId == event.id ||
+          n.id == event.taskId) {
+        backing = n;
+        break;
+      }
+    }
+    final byId = {for (final n in all) n.id: n};
+    final parents = backing == null
+        ? const <Node>[]
+        : [
+            for (final pid in backing.parentIds)
+              if (byId[pid] != null) byId[pid]!,
+          ];
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.dividerColor),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Goal', style: theme.textTheme.labelLarge),
+          const SizedBox(height: 4),
+          if (backing == null) ...[
+            Text(
+              'This task has no linked step yet — assign to create the link.',
+              style: theme.textTheme.bodySmall,
+            ),
+          ] else if (parents.isEmpty) ...[
+            Text(
+              'Not assigned to a goal yet.',
+              style: theme.textTheme.bodySmall,
+            ),
+          ] else ...[
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (final p in parents)
+                  Chip(
+                    label: Text(
+                      p.title,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    deleteIcon: const Icon(Icons.close, size: 16),
+                    onDeleted: () => _unassign(context, p.id),
+                  ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: () => _assign(context),
+              icon: const Icon(Icons.flag_outlined, size: 16),
+              label: Text(parents.isEmpty ? 'Assign to goal' : 'Change goal'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _assign(BuildContext context) async {
+    NodeCubit nodes;
+    CalendarCubit calendar;
+    try {
+      nodes = context.read<NodeCubit>();
+      calendar = context.read<CalendarCubit>();
+    } catch (_) {
+      return;
+    }
+    final live = calendar.byId(event.id) ?? event;
+    final liveBacking =
+        NodeEventLink.backingNodeFor(nodes, calendar, event.id);
+    final goal = await showGoalPicker(
+      context,
+      excludeNodeId: liveBacking?.id,
+    );
+    if (goal == null || !context.mounted) return;
+    // Repeating events offer a scope choice: just this occurrence, or
+    // this plus all future instances (the seed is always included so an
+    // explicitly picked past occurrence still acts on itself).
+    var includeSeries = false;
+    if (NodeEventLink.isRepeatingEvent(live)) {
+      final futureMembers =
+          NodeEventLink.futureSeriesMembers(calendar, live);
+      if (futureMembers.length > 1) {
+        final scope = await showDialog<_GoalAssignScope>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Assign repeating event'),
+            content: Text(
+              'Apply “${goal.title}” to just this occurrence, or to '
+              'this and all future instances (${futureMembers.length})?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext)
+                    .pop(_GoalAssignScope.cancel),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext)
+                    .pop(_GoalAssignScope.occurrence),
+                child: const Text('This occurrence'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext)
+                    .pop(_GoalAssignScope.series),
+                child: Text('This + future (${futureMembers.length})'),
+              ),
+            ],
+          ),
+        );
+        if (scope == null || scope == _GoalAssignScope.cancel) return;
+        includeSeries = scope == _GoalAssignScope.series;
+        if (!context.mounted) return;
+      }
+    }
+    final result = NodeEventLink.assignEventToGoal(
+      calendar,
+      nodes,
+      event.id,
+      goal.id,
+      includeSeries: includeSeries,
+    );
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result.assigned > 1
+              ? 'Assigned ${result.assigned} items to “${goal.title}”'
+              : result.assigned == 1
+                  ? 'Assigned to “${goal.title}”'
+                  : (result.error ?? 'Already assigned to “${goal.title}”.'),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _unassign(BuildContext context, String goalId) async {
+    NodeCubit nodes;
+    CalendarCubit calendar;
+    try {
+      nodes = context.read<NodeCubit>();
+      calendar = context.read<CalendarCubit>();
+    } catch (_) {
+      return;
+    }
+    final live = calendar.byId(event.id) ?? event;
+    // When several future occurrences share this goal, offer to remove
+    // just this one or this plus all future instances.
+    var includeSeries = false;
+    if (NodeEventLink.isRepeatingEvent(live)) {
+      final futureMembers =
+          NodeEventLink.futureSeriesMembers(calendar, live);
+      if (futureMembers.length > 1) {
+        var assignedCount = 0;
+        for (final m in futureMembers) {
+          final backing =
+              NodeEventLink.backingNodeFor(nodes, calendar, m.id);
+          if (backing?.parentIds.contains(goalId) ?? false) {
+            assignedCount++;
+          }
+        }
+        if (assignedCount > 1) {
+          final scope = await showDialog<_GoalAssignScope>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              title: const Text('Remove from goal'),
+              content: Text(
+                'Remove just this occurrence, or this and all future '
+                'instances ($assignedCount assigned)?',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext)
+                      .pop(_GoalAssignScope.cancel),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext)
+                      .pop(_GoalAssignScope.occurrence),
+                  child: const Text('This occurrence'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(dialogContext)
+                      .pop(_GoalAssignScope.series),
+                  child: const Text('This + future'),
+                ),
+              ],
+            ),
+          );
+          if (scope == null || scope == _GoalAssignScope.cancel) return;
+          includeSeries = scope == _GoalAssignScope.series;
+          if (!context.mounted) return;
+        }
+      }
+    }
+    if (includeSeries) {
+      final result = NodeEventLink.unassignEventFromGoal(
+        calendar,
+        nodes,
+        event.id,
+        goalId,
+        includeSeries: true,
+      );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.removed > 1
+                ? 'Removed ${result.removed} items from goal'
+                : result.removed == 1
+                    ? 'Removed from goal'
+                    : (result.error ?? 'Already removed from goal'),
+          ),
+        ),
+      );
+      return;
+    }
+    final backing = NodeEventLink.backingNodeFor(nodes, calendar, event.id);
+    if (backing == null) return;
+    final error =
+        NodeEventLink.unassignNodeFromGoal(nodes, backing.id, goalId);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(error ?? 'Removed from goal'),
+      ),
+    );
+  }
+}
+
+enum _GoalAssignScope { cancel, occurrence, series }
+
 class _TaskTimeSection extends StatelessWidget {
   final PlannerEvent event;
 
@@ -2691,13 +3089,24 @@ class _TaskTimeSection extends StatelessWidget {
                       ? null
                       : () {
                           try {
-                            context
-                                .read<NodeCubit>()
-                                .startTracking(nodeId);
+                            NodeEventLink.startNodeTracking(
+                              context.read<NodeCubit>(),
+                              context.read<CalendarCubit>(),
+                              nodeId,
+                            );
                           } catch (_) {}
                         },
                   icon: const Icon(Icons.play_arrow, size: 16),
                   label: const Text('Start'),
+                ),
+              if (node.isTracking)
+                TextButton.icon(
+                  onPressed: () => showEditNodeTimerSheet(
+                    context,
+                    nodeId: nodeId,
+                  ),
+                  icon: const Icon(Icons.edit, size: 16),
+                  label: const Text('Edit start'),
                 ),
               OutlinedButton(
                 onPressed: () {
@@ -2729,6 +3138,15 @@ class _TaskTimeSection extends StatelessWidget {
                     } catch (_) {}
                   },
                   child: const Text('Clear reported'),
+                ),
+              if (node.hasReported && !node.isTracking)
+                TextButton.icon(
+                  onPressed: () => showEditNodeTimerSheet(
+                    context,
+                    nodeId: nodeId,
+                  ),
+                  icon: const Icon(Icons.tune, size: 16),
+                  label: const Text('Adjust'),
                 ),
             ],
           ),
@@ -2816,6 +3234,15 @@ class _TimeReportSection extends StatelessWidget {
                       .startTracking(eventId),
                   icon: const Icon(Icons.play_arrow, size: 16),
                   label: const Text('Start'),
+                ),
+              if (isTracking)
+                TextButton.icon(
+                  onPressed: () => showEditEventTimerSheet(
+                    context,
+                    eventId: eventId,
+                  ),
+                  icon: const Icon(Icons.edit, size: 16),
+                  label: const Text('Edit start'),
                 ),
               // "Mark failed" only makes sense for task-events; plain
               // calendar events just record time.

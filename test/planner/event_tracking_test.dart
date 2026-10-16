@@ -138,6 +138,58 @@ void main() {
       final restored = cubit.fromJson(cubit.toJson(cubit.state));
       expect(restored?.single.isTracking, isTrue);
     });
+
+    test('setTimerStart moves the start but keeps recording', () {
+      final cubit = CalendarCubit();
+      cubit.addEvent(event('e1', DateTime(2026, 9, 7, 9)));
+      final t0 = DateTime(2026, 9, 7, 9, 5);
+      cubit.startTracking('e1', now: t0);
+      final corrected = DateTime(2026, 9, 7, 8, 40);
+      cubit.setTimerStart('e1', corrected,
+          now: t0.add(const Duration(minutes: 30)));
+      final live = cubit.byId('e1')!;
+      expect(live.isTracking, isTrue);
+      expect(live.timerStartedAt, corrected);
+    });
+
+    test('setTimerStart clamps future starts and ignores idle events', () {
+      final cubit = CalendarCubit();
+      cubit.addEvent(event('e1', DateTime(2026, 9, 7, 9)));
+      cubit.addEvent(event('e2', DateTime(2026, 9, 7, 10)));
+      final t0 = DateTime(2026, 9, 7, 9, 5);
+      cubit.startTracking('e1', now: t0);
+      cubit.setTimerStart(
+          'e1', t0.add(const Duration(hours: 3)),
+          now: t0.add(const Duration(minutes: 20)));
+      expect(cubit.byId('e1')?.timerStartedAt,
+          t0.add(const Duration(minutes: 20)));
+      expect(cubit.byId('e1')?.isTracking, isTrue);
+      cubit.setTimerStart('e2', t0, now: t0);
+      expect(cubit.byId('e2')?.isTracking, isFalse);
+      cubit.setTimerStart('missing', t0, now: t0);
+    });
+
+    test('setReported writes the interval and takes over a running timer',
+        () {
+      final cubit = CalendarCubit();
+      cubit.addEvent(event('e1', DateTime(2026, 9, 7, 9)));
+      cubit.addEvent(event('e2', DateTime(2026, 9, 7, 10)));
+      final t0 = DateTime(2026, 9, 7, 9, 5);
+      cubit.startTracking('e1', now: t0);
+      cubit.setReported('e1', DateTime(2026, 9, 7, 8), t0);
+      final live = cubit.byId('e1')!;
+      expect(live.isTracking, isFalse);
+      expect(live.reportedDuration, const Duration(hours: 1, minutes: 5));
+      // Manual entry without ever starting the timer.
+      cubit.setReported('e2',
+          DateTime(2026, 9, 7, 10), DateTime(2026, 9, 7, 10, 45));
+      expect(cubit.byId('e2')?.reportedDuration,
+          const Duration(minutes: 45));
+      // Non-positive ranges floor to one minute, never vanish.
+      cubit.setReported('e2', t0, t0);
+      expect(cubit.byId('e2')?.reportedDuration,
+          const Duration(minutes: 1));
+    });
   });
 
   group('selectNowNext', () {

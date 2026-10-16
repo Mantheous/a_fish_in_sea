@@ -38,7 +38,7 @@ NodeTrackingSelection selectNodeTracking(
   int nextCount = 2,
   int unscheduledCount = 3,
 }) {
-  final open = nodes.where((n) => n.isOpen && !n.isTemplate).toList();
+  final open = nodes.where((n) => n.isOpen && !n.isTemplate && n.isTracked).toList();
   Node? recording;
   for (final n in open) {
     if (n.isTracking) {
