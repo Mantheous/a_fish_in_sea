@@ -31,6 +31,7 @@ import '../model/task_assignee.dart';
 import 'feed_manager.dart';
 import 'assignment_rules_sheet.dart';
 import 'syllabus_import_sheet.dart';
+import 'task_highlight_tint.dart';
 import 'tasks_view_options_sheet.dart';
 
 class TasksPage extends StatefulWidget {
@@ -444,38 +445,59 @@ TasksViewOptionsState _viewOptions(BuildContext context) {
   }
 }
 
-/// Ids matching the active date filter, or null when no filter is on.
-/// Filter sets only ever contain open nodes ([NodeCubit.dueTodayAt] /
-/// [NodeCubit.overdueAt] are open-only), so completed items are hidden
-/// while a filter is active.
-Set<String>? _filterIds(
-  NodeCubit nodeCubit,
-  TasksDueFilter filter,
+/// Applies the active view filter plus a highlight in "Hide" mode to
+/// [nodes]. The 'all' view skips matching entirely so the base lists show
+/// exactly what they always showed (including done homework); any other
+/// view keeps only matching nodes. A hiding highlight removes its matches
+/// on top, whatever the view.
+List<Node> _applyViewOptions(
+  List<Node> nodes,
+  TasksViewOptionsState viewOptions,
   DateTime now,
 ) {
-  switch (filter) {
-    case TasksDueFilter.all:
-      return null;
-    case TasksDueFilter.today:
-      return {for (final n in nodeCubit.dueTodayAt(now)) n.id};
-    case TasksDueFilter.overdue:
-      return {for (final n in nodeCubit.overdueAt(now)) n.id};
+  var result = nodes;
+  final filter = viewOptions.activeFilter;
+  if (!filter.isShowAll) {
+    result = result.where((n) => filter.matches(n, now)).toList();
   }
+  final highlight = viewOptions.highlight;
+  if (highlight.enabled && highlight.hideMatching) {
+    result = result.where((n) => !highlight.matches(n, now)).toList();
+  }
+  return result;
 }
 
-/// Empty state shown when a date filter hides every row. Offers a way
-/// back to the full list.
-class _FilteredEmpty extends StatelessWidget {
-  final TasksDueFilter filter;
+/// Ids tinted by the highlight rule (never the "Hide" mode — those rows
+/// are removed by [_applyViewOptions] instead).
+Set<String> _highlightIds(
+  NodeCubit nodeCubit,
+  TasksViewOptionsState viewOptions,
+  DateTime now,
+) {
+  final highlight = viewOptions.highlight;
+  if (!highlight.enabled || highlight.hideMatching) {
+    return const <String>{};
+  }
+  return {
+    for (final n in nodeCubit.state)
+      if (highlight.matches(n, now)) n.id,
+  };
+}
 
-  const _FilteredEmpty({required this.filter});
+/// Empty state shown when the active view (or a hiding highlight) leaves
+/// no rows. Offers a way back to the full list.
+class _FilteredEmpty extends StatelessWidget {
+  final String filterName;
+
+  const _FilteredEmpty({required this.filterName});
 
   @override
   Widget build(BuildContext context) {
-    final label = switch (filter) {
-      TasksDueFilter.today => 'Nothing due today',
-      TasksDueFilter.overdue => 'Nothing overdue',
-      TasksDueFilter.all => 'Nothing to do!',
+    final label = switch (filterName) {
+      'Today' => 'Nothing due today',
+      'Overdue' => 'Nothing overdue',
+      'All' => 'Nothing to do!',
+      _ => 'No matches for "$filterName"',
     };
     return Center(
       child: Column(
@@ -490,9 +512,12 @@ class _FilteredEmpty extends StatelessWidget {
           OutlinedButton(
             onPressed: () {
               try {
-                context
-                    .read<TasksViewOptionsCubit>()
-                    .setDueFilter(TasksDueFilter.all);
+                final cubit = context.read<TasksViewOptionsCubit>();
+                cubit.setActiveFilter('all');
+                if (cubit.state.highlight.enabled &&
+                    cubit.state.highlight.hideMatching) {
+                  cubit.setHighlightEnabled(false);
+                }
               } catch (_) {}
             },
             child: const Text('Show everything'),
@@ -566,19 +591,18 @@ class _TodoTab extends StatelessWidget {
         final nodeCubit = context.read<NodeCubit>();
         final viewOptions = _viewOptions(context);
         final now = DateTime.now();
-        final weekDueIds = viewOptions.highlightDueThisWeek
-            ? {
-                for (final n in nodeCubit.dueThisWeekAt(now)) n.id,
-              }
-            : const <String>{};
-        final filter = _filterIds(nodeCubit, viewOptions.dueFilter, now);
-        var open = feedCubit.visibleNodes(nodeCubit.openNodes);
-        if (filter != null) {
-          open = open.where((n) => filter.contains(n.id)).toList();
-        }
+        final highlightIds = _highlightIds(nodeCubit, viewOptions, now);
+        final highlightColor = viewOptions.highlight.enabled
+            ? viewOptions.highlight.colorValue
+            : null;
+        var open = _applyViewOptions(
+          feedCubit.visibleNodes(nodeCubit.openNodes),
+          viewOptions,
+          now,
+        );
         if (open.isEmpty) {
           return viewOptions.isFiltering
-              ? _FilteredEmpty(filter: viewOptions.dueFilter)
+              ? _FilteredEmpty(filterName: viewOptions.activeFilter.name)
               : const _EmptyTodo();
         }
         // Precompute once per list build (not per tile): calendar link set,
@@ -603,7 +627,8 @@ class _TodoTab extends StatelessWidget {
               node: node,
               showClass: true,
               now: now,
-              highlightDueThisWeek: weekDueIds.contains(node.id),
+              highlightMatched: highlightIds.contains(node.id),
+              highlightColorValue: highlightColor,
               feedById: feedById,
               nodeById: nodeById,
               indexById: indexes.byId,
@@ -703,19 +728,19 @@ class _HomeworkTabState extends State<_HomeworkTab>
     final feedCubit = context.watch<FeedCubit>();
     final viewOptions = _viewOptions(context);
     final now = DateTime.now();
-    final filter = _filterIds(nodeCubit, viewOptions.dueFilter, now);
-    final weekDueIds = viewOptions.highlightDueThisWeek
-        ? {for (final n in nodeCubit.dueThisWeekAt(now)) n.id}
-        : const <String>{};
-    var imported = feedCubit.visibleNodes(
-        nodeCubit.state.where((n) => n.isHomework).toList());
-    if (filter != null) {
-      imported =
-          imported.where((n) => filter.contains(n.id)).toList();
-    }
+    final highlightIds = _highlightIds(nodeCubit, viewOptions, now);
+    final highlightColor = viewOptions.highlight.enabled
+        ? viewOptions.highlight.colorValue
+        : null;
+    var imported = _applyViewOptions(
+      feedCubit.visibleNodes(
+          nodeCubit.state.where((n) => n.isHomework).toList()),
+      viewOptions,
+      now,
+    );
     if (imported.isEmpty) {
       if (viewOptions.isFiltering) {
-        return _FilteredEmpty(filter: viewOptions.dueFilter);
+        return _FilteredEmpty(filterName: viewOptions.activeFilter.name);
       }
       return Center(
         child: Padding(
@@ -947,7 +972,8 @@ class _HomeworkTabState extends State<_HomeworkTab>
                         node: node,
                         showClass: false,
                         now: now,
-                        highlightDueThisWeek: weekDueIds.contains(node.id),
+                        highlightMatched: highlightIds.contains(node.id),
+                        highlightColorValue: highlightColor,
                         feedById: feedById,
                         nodeById: nodeById,
                         indexById: indexes.byId,
@@ -997,9 +1023,11 @@ class _NodeTile extends StatelessWidget {
   final Node node;
   final bool showClass;
 
-  /// True when the "highlight due this week" view option is on and this
-  /// node is open with a due date inside the calendar-week window.
-  final bool highlightDueThisWeek;
+  /// True when the highlight rule matches this node (open, due inside the
+  /// highlight window). [highlightColorValue] tints the row, or the theme
+  /// default when null; rows due today always glow orange on top.
+  final bool highlightMatched;
+  final int? highlightColorValue;
   // Hoisted per-list data (all optional for backwards compat): when
   // supplied the tile avoids per-tile `watch` subscriptions and O(n) scans.
   final DateTime? now;
@@ -1020,7 +1048,8 @@ class _NodeTile extends StatelessWidget {
   const _NodeTile({
     required this.node,
     required this.showClass,
-    this.highlightDueThisWeek = false,
+    this.highlightMatched = false,
+    this.highlightColorValue,
     this.now,
     this.feedById,
     this.nodeById,
@@ -1105,12 +1134,15 @@ class _NodeTile extends StatelessWidget {
           '\$${actual.toStringAsFixed(2)} / \$${live.money!.effectiveTarget.toStringAsFixed(2)}';
     }
     final due = live.schedule?.due;
-    // Due today outranks the week tint: same highlight option, hotter
-    // color. (A highlighted row is always open — the week set is
-    // open-only — so no extra status check is needed.)
-    final isDueTodayHighlight = highlightDueThisWeek &&
+    // Due today outranks the custom tint: same highlight, hotter color.
+    // (A highlighted row is always open — the highlight set is open-only
+    // — so no extra status check is needed.)
+    final isDueTodayHighlight = highlightMatched &&
         due != null &&
         _isDueToday(due, effectiveNow);
+    final highlightTextColor = highlightColorValue == null
+        ? theme.colorScheme.tertiary
+        : Color(highlightColorValue!);
     final tile = ListTile(
       selected: selecting && selected,
       selectedTileColor: theme.colorScheme.secondaryContainer,
@@ -1172,11 +1204,11 @@ class _NodeTile extends StatelessWidget {
                         ? theme.colorScheme.error
                         : isDueTodayHighlight
                             ? _dueTodayColor(theme)
-                            : highlightDueThisWeek
-                                ? theme.colorScheme.tertiary
+                            : highlightMatched
+                                ? highlightTextColor
                                 : null,
                     fontWeight:
-                        _isDueToday(due, effectiveNow) || highlightDueThisWeek
+                        _isDueToday(due, effectiveNow) || highlightMatched
                             ? FontWeight.bold
                             : null,
                   ),
@@ -1309,49 +1341,14 @@ class _NodeTile extends StatelessWidget {
           : () => showNodeEditor(context, existing: live),
       onLongPress: selecting ? onToggleSelection : onEnterSelection,
     );
-    if (isDueTodayHighlight) {
-      // Due today: hotter orange row and edge so today's work jumps out
-      // from the rest of the week. Same transparent-Material trick as
-      // below keeps ink splashes above the tint.
-      return Semantics(
-        container: true,
-        label: 'Due today',
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.orange.withAlpha(41),
-            border: const Border(
-              left: BorderSide(color: Colors.orange, width: 4),
-            ),
-          ),
-          child: Material(
-            type: MaterialType.transparency,
-            child: tile,
-          ),
-        ),
-      );
-    }
-    if (!highlightDueThisWeek) return tile;
-    // Tinted row plus a colored edge: this item is due inside the
-    // calendar-week window and the option is on. The transparent Material
-    // keeps the tile's ink splashes above the tint while the container
-    // paints the background and the edge (a Material would cover the
-    // border). The semantics label surfaces the same cue to screen
-    // readers.
-    return Semantics(
-      container: true,
-      label: 'Due this week',
-      child: Container(
-        decoration: BoxDecoration(
-          color: theme.colorScheme.tertiaryContainer,
-          border: Border(
-            left: BorderSide(color: theme.colorScheme.tertiary, width: 4),
-          ),
-        ),
-        child: Material(
-          type: MaterialType.transparency,
-          child: tile,
-        ),
-      ),
+    if (!highlightMatched) return tile;
+    // Tinted row plus a colored edge: the highlight rule matches this
+    // item. Due-today rows keep the hotter orange cue on top.
+    return TaskHighlightTint(
+      hot: isDueTodayHighlight,
+      colorValue: highlightColorValue,
+      semanticsLabel: 'Due this week',
+      child: tile,
     );
   }
 
