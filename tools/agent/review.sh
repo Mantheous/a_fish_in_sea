@@ -8,7 +8,14 @@
 # PRs with review:changes-requested get bounded rework (max 2 rounds,
 # tracked by <!-- agent-rework --> comments) in their existing worktree.
 # After 2 rounds the verdict stands and a human is pinged. The reviewer
-# NEVER merges — merging stays human.
+# NEVER merges — the loop's merge step (merge.sh) merges fully-gated PRs
+# (review:pass + data:safe + sec:safe, all verdicts covering the current
+# head SHA) without a human in the path.
+#
+# Stale-pass guard: verdict comments carry `<!-- agent-review --> sha=<head>`
+# and a review:pass label only counts when it covers the PR's CURRENT head
+# SHA. New commits after a pass drop the label and get a fresh review, so
+# the merge step can never ship code the reviewer hasn't seen.
 #
 # Rate-limit hardening (2026-10-13): skip review while a builder session is
 # alive. Builders are serialized to one at a time (build.sh); stacking a
@@ -33,7 +40,7 @@ gh label create "$PASS_LABEL" --color "0E8A16" \
 gh label create "$FAIL_LABEL" --color "D93F0B" \
   --description "Reviewer: changes requested, see verdict comment" >/dev/null 2>&1 || true
 
-PRS="$(gh pr list --state open --limit 20 --json number,headRefName,url,title 2>/dev/null || echo '[]')"
+PRS="$(gh pr list --state open --limit 20 --json number,headRefName,headRefOid,url,title 2>/dev/null || echo '[]')"
 COUNT="$(echo "$PRS" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
 echo "[review] open PRs: $COUNT"
 [ "$COUNT" = "0" ] && exit 0
@@ -46,9 +53,11 @@ loop_runs() {
   tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^(agent-[0-9]|rework-[0-9])' || true
 }
 
-echo "$PRS" | python3 -c 'import json,sys; [print(str(p["number"]) + "|" + p["headRefName"]) for p in json.load(sys.stdin)]' | while read -r LINE; do
+echo "$PRS" | python3 -c 'import json,sys; [print(str(p["number"]) + "|" + p["headRefName"] + "|" + p.get("headRefOid","")) for p in json.load(sys.stdin)]' | while read -r LINE; do
   N="${LINE%%|*}"
-  BRANCH="${LINE#*|}"
+  REST="${LINE#*|}"
+  BRANCH="${REST%%|*}"
+  SHA="${REST#*|}"
   case "$BRANCH" in
     # Loop/builders use agent/<n>-<slug>; ad-hoc and older loop work use
     # agent-<slug> with no slash. Match both shapes or those PRs are never
@@ -58,8 +67,16 @@ echo "$PRS" | python3 -c 'import json,sys; [print(str(p["number"]) + "|" + p["he
   esac
   LABELS="$(gh pr view "$N" --json labels --jq '.labels[].name' 2>/dev/null || true)"
   if echo "$LABELS" | grep -qx "$PASS_LABEL"; then
-    echo "[review] #$N already passed — skipping"
-    continue
+    # A pass only counts when the verdict comment covers the current head
+    # SHA (see stale-pass guard above). New commits drop the label and get
+    # a fresh review below instead of riding a stale pass into the merge.
+    if [ -n "${SHA:-}" ] && gh pr view "$N" --comments --json comments --jq '.comments[].body' 2>/dev/null \
+        | grep -qF "$REVIEW_MARKER sha=$SHA"; then
+      echo "[review] #$N already passed at $SHA — skipping"
+      continue
+    fi
+    echo "[review] #$N has new commits since its pass — re-reviewing"
+    "$DIR/label.sh" "$N" remove "$PASS_LABEL" || true
   fi
 
   if echo "$LABELS" | grep -qx "$FAIL_LABEL"; then
@@ -132,8 +149,7 @@ Tests: <one line: do the tests cover the change, including goldens for screens?>
 Behavioral: <one line: does a patrol_test cover the changed user flow, or is one needed?>
 Walker: <for any user-visible change (lib/*/view, navigation, dialogs/sheets, button behavior, copy): PASS only if the PR body has a 'UX scope:' section AND (the linked issue carries the ux-walk label OR the PR body justifies 'UX scope: none'). Never demand a pre-merge walk — the loop walks post-deploy via ux-walk.sh (AGENTS.md). If missing, CHANGES-REQUESTED listing exactly what label/scope to add.>
 Smallness: <ok | bloated — what should be cut?>
-Fix list: <if changes-requested: numbered, concrete, bounded items. If pass: none.>
-$REVIEW_MARKER"
+Fix list: <if changes-requested: numbered, concrete, bounded items. If pass: none.>"
   REVIEW_FILE="$(mktemp)"
   if ! opencode run --title "review-#$N" "$PROMPT" </dev/null >"$REVIEW_FILE" 2>"$REVIEW_FILE.err"; then
     echo "[review] #$N reviewer run failed: $(tail -n 3 "$REVIEW_FILE.err")"
@@ -143,6 +159,15 @@ $REVIEW_MARKER"
   rm -f "$REVIEW_FILE.err"
   REVIEW="$(cat "$REVIEW_FILE"; rm -f "$REVIEW_FILE")"
   VERDICT="$(echo "$REVIEW" | grep -m1 '^Verdict:' | grep -o 'changes-requested' || echo pass)"
+  # SHA-key the verdict (stale-pass guard): the merge step only trusts a
+  # pass whose comment covers the PR's current head SHA. Fall back to the
+  # live head SHA when the list-time value is empty.
+  if [ -z "${SHA:-}" ]; then
+    SHA="$(gh pr view "$N" --json headRefOid --jq .headRefOid 2>/dev/null || true)"
+  fi
+  REVIEW="$REVIEW
+
+$REVIEW_MARKER sha=$SHA"
   # Each gh call below is guarded: a secondary rate limit or GraphQL
   # deprecation hiccup must not kill the whole poll under `set -e` — it
   # cost an entire review cycle on 2026-10-13 (poll died at `gh pr

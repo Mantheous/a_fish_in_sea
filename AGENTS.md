@@ -118,9 +118,13 @@ right.
 Two kinds of agents ship differently. Know which one you are:
 
 - **Loop builders** (`tools/agent/builder-run.sh`, `rework-run.sh`):
-  NEVER deploy, NEVER push to `main`, NEVER build the web bundle.
-  Finish with a pushed branch + PR — the loop (`poll.sh` → human merge
-  → `deploy.sh`) ships reviewed work to the funnel.
+  NEVER deploy, NEVER push to `main`, NEVER build the web bundle, NEVER
+  merge your own PR. Finish with a pushed branch + PR — the loop ships it
+  itself (`poll.sh`: review → data-guardian → security-guardian → `merge.sh`
+  auto-merges fully-gated PRs → `close.sh` closes the issue → `deploy.sh`
+  rebuilds the funnel bundle). No human merge or approval stands in the
+  path (auto-ship mode, 2026-10-17): triaged plans are built automatically,
+  and commenting `deny <reason>` on an issue is the only brake.
 - **Ad-hoc** (the user asked you directly in this session): YOU ship it.
   Do not report done until the user can see the change on the active
   target. "Run this build to see it" is not done.

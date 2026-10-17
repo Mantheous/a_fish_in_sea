@@ -62,6 +62,10 @@ happened: feature code + another session's tests vanished into one
   (`git worktree add /tmp/opencode/merge-<topic> main`), never inside
   someone's live tree. Fast-forward when possible; resolve conflicts
   there.
+- Exception: the loop's `merge.sh` merges fully-gated agent PRs server-side
+  (`gh pr merge --merge`) with no local checkout at all — that is the ONLY
+  automated path to `main`. Loop builders still never merge anything
+  themselves (see `builder-run.sh` rule 5).
 - Verify the result before it becomes shared truth: server
   `pytest tests/`, `flutter analyze`, and note pre-existing breakage
   explicitly rather than shipping it silently.

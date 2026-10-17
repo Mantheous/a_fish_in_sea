@@ -91,8 +91,8 @@ Effort: <S|M|L>"
     COMMENT="$PLAN
 
 ---
-Approve: comment \`approve\` (or \`agent approved\`) on this issue (builder picks it up automatically).
-Deny: comment \`deny <reason>\` (issue is closed).
+The loop builds triaged plans automatically (auto-ship mode: no approval
+needed). To stop this issue, comment \`deny <reason>\` — the loop closes it.
 To question or correct the plan, just comment in-thread — the triage agent revises the plan on the next poll.
 $MARKER"
     if ! gh issue comment "$N" --body "$COMMENT" >/dev/null; then
@@ -112,11 +112,11 @@ for i, l in enumerate(lines):
         break
 " | head -n 2)"
     RISK="$(echo "$PLAN" | grep -m1 '^Risk:' || echo 'Risk: unknown')"
-    "$DIR/tg.sh" --issue "$N" "🆕 Triage plan #$N: $TITLE
+    "$DIR/tg.sh" "🔨 Working on #$N: $TITLE
 $SUMMARY
 $RISK
 $URL
-Tap Approve / Deny below, or comment \`approve\` / \`deny <reason>\` on the issue" || echo "[triage] #$N telegram ping failed (plan comment still posted)"
+To stop it, comment \`deny <reason>\` on the issue." || echo "[triage] #$N telegram ping failed (plan comment still posted)"
     continue
   fi
 
@@ -204,17 +204,17 @@ Effort: <S|M|L>"
   REVCOMMENT="$REVPLAN
 
 ---
-Approve: comment \`approve\` when the latest plan looks right (builder picks it up automatically).
-Deny: comment \`deny <reason>\` (issue is closed).
+The loop builds triaged plans automatically (auto-ship mode: no approval
+needed). To stop this issue, comment \`deny <reason>\` — the loop closes it.
 Further feedback in-thread will be revised again on the next poll.
 $MARKER"
   if ! gh issue comment "$N" --body "$REVCOMMENT" >/dev/null; then
     echo "[triage] #$N revised plan comment failed (gh hiccup) — retried next poll"
   else
     echo "[triage] #$N revised plan posted"
-    "$DIR/tg.sh" --issue "$N" "🔄 Triage plan #$N revised after human feedback: $TITLE
+    "$DIR/tg.sh" "🔄 Plan for #$N revised after feedback: $TITLE
 $URL
-Tap Approve below, or comment \`approve\` when the latest plan looks right" || echo "[triage] #$N telegram ping failed (revision still posted)"
+Working on the latest plan automatically — comment \`deny <reason>\` on the issue to stop it." || echo "[triage] #$N telegram ping failed (revision still posted)"
   fi
 done
 echo "[triage] done"
