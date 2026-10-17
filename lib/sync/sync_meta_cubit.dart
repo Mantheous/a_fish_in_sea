@@ -33,6 +33,101 @@ class ItemMeta extends Equatable {
   List<Object?> get props => [hash, serverTime];
 }
 
+/// Per-account saved state (sync cursor, item meta, and local collection data)
+/// so switching accounts on a shared device preserves each account's exact
+/// sync baseline and unsynced local edits across app restarts.
+class AccountSnapshot extends Equatable {
+  final String? cursor;
+  final Map<String, ItemMeta> items;
+  final Map<String, Map<String, Map<String, dynamic>>> collections;
+
+  const AccountSnapshot({
+    this.cursor,
+    this.items = const {},
+    this.collections = const {},
+  });
+
+  AccountSnapshot copyWith({
+    String? cursor,
+    bool clearCursor = false,
+    Map<String, ItemMeta>? items,
+    Map<String, Map<String, Map<String, dynamic>>>? collections,
+  }) =>
+      AccountSnapshot(
+        cursor: clearCursor ? null : (cursor ?? this.cursor),
+        items: items ?? this.items,
+        collections: collections ?? this.collections,
+      );
+
+  Map<String, dynamic> toJson() => {
+        if (cursor != null) 'cursor': cursor,
+        'items': {
+          for (final e in items.entries)
+            e.key: {'hash': e.value.hash, 'serverTime': e.value.serverTime},
+        },
+        'collections': collections,
+      };
+
+  static AccountSnapshot? fromJson(dynamic raw) {
+    if (raw is! Map) return null;
+    final rawCursor = raw['cursor'];
+    final cursor =
+        rawCursor is String && rawCursor.isNotEmpty ? rawCursor : null;
+    final items = <String, ItemMeta>{};
+    final rawItems = raw['items'];
+    if (rawItems is Map) {
+      for (final e in rawItems.entries) {
+        try {
+          if (e.value is! Map) continue;
+          final m = Map<String, dynamic>.from(e.value as Map);
+          final h = m['hash'];
+          final t = m['serverTime'];
+          if (h is String && t is String) {
+            items[e.key.toString()] = ItemMeta(hash: h, serverTime: t);
+          }
+        } catch (_) {}
+      }
+    }
+    final collections = <String, Map<String, Map<String, dynamic>>>{};
+    final rawColls = raw['collections'];
+    if (rawColls is Map) {
+      for (final coll in rawColls.entries) {
+        if (coll.value is! Map) continue;
+        final itemMap = <String, Map<String, dynamic>>{};
+        for (final item in (coll.value as Map).entries) {
+          if (item.value is Map) {
+            itemMap[item.key.toString()] =
+                Map<String, dynamic>.from(item.value as Map);
+          }
+        }
+        collections[coll.key.toString()] = itemMap;
+      }
+    } else {
+      // Legacy shape where the map directly held {collection -> {itemId -> data}}.
+      for (final coll in raw.entries) {
+        if (coll.key == 'cursor' || coll.key == 'items') continue;
+        if (coll.value is! Map) continue;
+        final itemMap = <String, Map<String, dynamic>>{};
+        for (final item in (coll.value as Map).entries) {
+          if (item.value is Map) {
+            itemMap[item.key.toString()] =
+                Map<String, dynamic>.from(item.value as Map);
+          }
+        }
+        collections[coll.key.toString()] = itemMap;
+      }
+    }
+    return AccountSnapshot(
+      cursor: cursor,
+      items: items,
+      collections: collections,
+    );
+  }
+
+  @override
+  List<Object?> get props => [cursor, items, collections];
+}
+
 /// Persisted sync cursor + per-item meta. Deliberately NOT synced itself
 /// (each device tracks its own sync position).
 class SyncMetaState extends Equatable {
@@ -46,11 +141,10 @@ class SyncMetaState extends Equatable {
   /// device. Additive nullable field so old payloads load unchanged.
   final String? lastEmail;
 
-  /// Persisted per-account snapshots of local collections so switching
-  /// accounts on a shared device never loses unsynced local work across app
-  /// restarts AND never leaks one account's data into another account.
-  final Map<String, Map<String, Map<String, Map<String, dynamic>>>>
-      accountSnapshots;
+  /// Persisted per-account snapshots of sync meta + local collections so
+  /// switching accounts on a shared device never loses unsynced local edits
+  /// across app restarts AND never leaks one account's data into another.
+  final Map<String, AccountSnapshot> accountSnapshots;
 
   const SyncMetaState({
     this.cursor,
@@ -63,8 +157,7 @@ class SyncMetaState extends Equatable {
     String? cursor,
     Map<String, ItemMeta>? items,
     String? lastEmail,
-    Map<String, Map<String, Map<String, Map<String, dynamic>>>>?
-        accountSnapshots,
+    Map<String, AccountSnapshot>? accountSnapshots,
   }) =>
       SyncMetaState(
         cursor: cursor ?? this.cursor,
@@ -87,8 +180,7 @@ class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
     Map<String, ItemMeta>? upsert,
     Set<String>? remove,
     String? lastEmail,
-    Map<String, Map<String, Map<String, Map<String, dynamic>>>>?
-        accountSnapshots,
+    Map<String, AccountSnapshot>? accountSnapshots,
   }) {
     final next = Map<String, ItemMeta>.of(state.items);
     if (upsert != null) next.addAll(upsert);
@@ -105,21 +197,39 @@ class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
     ));
   }
 
-  /// Clears sync position (sign-out / account switch). Preserves [lastEmail]
-  /// and [accountSnapshots] unless [clearLastEmail] is true so signing in as a
-  /// different user can detect the account change, preserve the previous
-  /// account's unsynced local state on disk, and avoid merging it into the
-  /// next user's account.
+  /// Clears active sync position (sign-out / account switch). Preserves the
+  /// outgoing account's cursor + item meta inside [accountSnapshots] under
+  /// [lastEmail] so returning to that account reseeds its sync bookkeeping
+  /// instead of overwriting unsynced local edits on pull.
   void reset({
     bool clearLastEmail = false,
     String? lastEmail,
-    Map<String, Map<String, Map<String, Map<String, dynamic>>>>?
-        accountSnapshots,
-  }) =>
-      emit(SyncMetaState(
-        lastEmail: lastEmail ?? (clearLastEmail ? null : state.lastEmail),
-        accountSnapshots: accountSnapshots ?? state.accountSnapshots,
-      ));
+    String? cursor,
+    Map<String, ItemMeta>? items,
+    Map<String, AccountSnapshot>? accountSnapshots,
+  }) {
+    final effectiveLast =
+        lastEmail ?? (clearLastEmail ? null : state.lastEmail);
+    final snaps = Map<String, AccountSnapshot>.of(
+      accountSnapshots ?? state.accountSnapshots,
+    );
+    final prevKey = (state.lastEmail ?? '').trim().toLowerCase();
+    if (accountSnapshots == null &&
+        prevKey.isNotEmpty &&
+        (state.cursor != null || state.items.isNotEmpty)) {
+      final existing = snaps[prevKey] ?? const AccountSnapshot();
+      snaps[prevKey] = existing.copyWith(
+        cursor: state.cursor,
+        items: Map<String, ItemMeta>.of(state.items),
+      );
+    }
+    emit(SyncMetaState(
+      cursor: cursor,
+      items: items ?? const {},
+      lastEmail: effectiveLast,
+      accountSnapshots: snaps,
+    ));
+  }
 
   @override
   SyncMetaState? fromJson(Map<String, dynamic> json) {
@@ -128,38 +238,22 @@ class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
       final items = <String, ItemMeta>{};
       for (final e in raw.entries) {
         try {
+          if (e.value is! Map) continue;
           final m = Map<String, dynamic>.from(e.value as Map);
-          items[e.key.toString()] = ItemMeta(
-            hash: m['hash'] as String? ?? '',
-            serverTime: m['serverTime'] as String? ?? '',
-          );
+          final h = m['hash'];
+          final t = m['serverTime'];
+          if (h is! String || t is! String) continue;
+          items[e.key.toString()] = ItemMeta(hash: h, serverTime: t);
         } catch (_) {}
       }
       final rawSnaps = json['accountSnapshots'];
-      final snaps =
-          <String, Map<String, Map<String, Map<String, dynamic>>>>{};
+      final snaps = <String, AccountSnapshot>{};
       if (rawSnaps is Map) {
         for (final acct in rawSnaps.entries) {
-          try {
-            final collMap = <String, Map<String, Map<String, dynamic>>>{};
-            final rawColls = acct.value;
-            if (rawColls is Map) {
-              for (final coll in rawColls.entries) {
-                final itemMap = <String, Map<String, dynamic>>{};
-                final rawItems = coll.value;
-                if (rawItems is Map) {
-                  for (final item in rawItems.entries) {
-                    if (item.value is Map) {
-                      itemMap[item.key.toString()] =
-                          Map<String, dynamic>.from(item.value as Map);
-                    }
-                  }
-                }
-                collMap[coll.key.toString()] = itemMap;
-              }
-            }
-            snaps[acct.key.toString()] = collMap;
-          } catch (_) {}
+          final parsed = AccountSnapshot.fromJson(acct.value);
+          if (parsed != null) {
+            snaps[acct.key.toString()] = parsed;
+          }
         }
       }
       final rawEmail = json['lastEmail'];
@@ -183,6 +277,9 @@ class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
         },
         if (state.lastEmail != null) 'lastEmail': state.lastEmail,
         if (state.accountSnapshots.isNotEmpty)
-          'accountSnapshots': state.accountSnapshots,
+          'accountSnapshots': {
+            for (final e in state.accountSnapshots.entries)
+              e.key: e.value.toJson(),
+          },
       };
 }

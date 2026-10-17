@@ -509,4 +509,73 @@ void main() {
     // Local data stays intact on sign-out.
     expect(d.nodes.byId('t1')?.title, 'v1');
   });
+
+  test('returning to account A reseeds meta so conflicts merge instead of clobber',
+      () async {
+    final server = FakeSyncClient();
+    final shared = _Device(server);
+
+    // Alice syncs t1, then makes an offline edit + an offline-only t2.
+    await shared.auth.login('alice@example.com', 'password123');
+    shared.nodes.addNode(
+      Node(id: 't1', title: 'v1', createdAt: DateTime(2026)),
+    );
+    await shared.engine.syncNow();
+    expect(server.store['nodes']?.containsKey('t1'), isTrue);
+    shared.nodes.updateNode(shared.nodes.byId('t1')!.copyWith(title: 'A edit'));
+    shared.nodes.addNode(
+      Node(id: 't2', title: 'Offline only', createdAt: DateTime(2026)),
+    );
+    shared.engine.signOut();
+
+    // Fresh engine over rehydrated meta (simulates app restart).
+    final rehydratedMeta = SyncMetaCubit();
+    rehydratedMeta.emit(
+      rehydratedMeta.fromJson(shared.meta.toJson(shared.meta.state))!,
+    );
+    final restartedEngine = SyncEngine(
+      client: server,
+      auth: shared.auth,
+      meta: rehydratedMeta,
+      events: shared.events,
+      feeds: shared.feeds,
+      nodes: shared.nodes,
+      transactions: TransactionsCubit(),
+      places: PlacesCubit(),
+      reporting: ReportingCubit(),
+      tracking: TrackingCubit(),
+      settings: shared.settings,
+      waterfall: WaterfallCubit(
+        nodeCubit: shared.nodes,
+        transactionsCubit: TransactionsCubit(),
+        plaidCubit: PlaidCubit(),
+      ),
+      plaid: PlaidCubit(),
+    );
+
+    // Bob uses the device meanwhile; server-side change to t1 lands from
+    // another device while Alice is away.
+    server.store.clear();
+    await shared.auth.login('bob@example.com', 'password123');
+    rehydratedMeta.reset();
+    await restartedEngine.syncNow();
+    expect(shared.nodes.byId('t1'), isNull);
+    expect(shared.nodes.byId('t2'), isNull);
+
+    // Seed the server-side newer version of t1 directly.
+    server.store['nodes'] = {
+      't1': _Row({'id': 't1', 'title': 'Server edit'}, false,
+          DateTime.utc(2026, 9, 13)),
+    };
+
+    // Alice returns: offline-only t2 must survive and push; t1 is a true
+    // conflict (both sides edited) so documented server-wins applies but
+    // the merge runs through the normal conflict path with reseeded meta.
+    await shared.auth.login('alice@example.com', 'password123');
+    rehydratedMeta.reset();
+    await restartedEngine.syncNow();
+    expect(shared.nodes.byId('t2')?.title, 'Offline only');
+    expect(shared.nodes.byId('t1')?.title, 'Server edit');
+    expect(server.store['nodes']?.containsKey('t2'), isTrue);
+  });
 }

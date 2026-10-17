@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db import get_session
 from ..deps import get_current_user, require_jwt_user
 from ..models import User
-from ..ratelimit import limit
+from ..ratelimit import limit, limiter
 from ..refresh_store import (
     InvalidRefresh,
     ReusedRefresh,
@@ -64,6 +64,16 @@ async def login(
     _rl: None = Depends(limit("auth:login", 20, 60)),
 ):
     email = body.email.lower().strip()
+    if not limiter.allowed(f"auth:login:email:{email}", 10, 60):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded, try again shortly",
+            headers={
+                "Retry-After": str(
+                    limiter.retry_after(f"auth:login:email:{email}", 10, 60)
+                )
+            },
+        )
     user = (
         await session.execute(select(User).where(User.email == email))
     ).scalar_one_or_none()

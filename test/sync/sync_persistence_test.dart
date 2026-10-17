@@ -137,4 +137,71 @@ void main() {
     // Wrong-typed entries are skipped per-item, never fatal.
     expect(restored.items.keys, isNot(contains('alsobad')));
   });
+
+  test('SyncMetaCubit round-trips account snapshots and tolerates garbage',
+      () {
+    final cubit = SyncMetaCubit();
+    cubit.save(
+      cursor: '2026-09-12T00:00:00Z',
+      lastEmail: 'a@example.com',
+      upsert: {
+        'nodes/t1': const ItemMeta(hash: 'h1', serverTime: '2026-09-12T00:00:00Z'),
+      },
+    );
+    // Simulate a snapshot written by signOut/account-switch.
+    final snap = AccountSnapshot(
+      cursor: '2026-09-12T00:00:00Z',
+      items: {
+        'nodes/t1':
+            const ItemMeta(hash: 'h1', serverTime: '2026-09-12T00:00:00Z'),
+      },
+      collections: {
+        'nodes': {
+          't1': {'id': 't1', 'title': 'Offline draft'},
+        },
+      },
+    );
+    cubit.save(accountSnapshots: {'a@example.com': snap});
+    final json = cubit.toJson(cubit.state);
+    final restored = cubit.fromJson(json)!;
+    expect(restored.accountSnapshots['a@example.com']?.cursor,
+        '2026-09-12T00:00:00Z');
+    expect(restored.accountSnapshots['a@example.com']?.items['nodes/t1']?.hash,
+        'h1');
+    expect(
+        restored.accountSnapshots['a@example.com']?.collections['nodes']?['t1']
+            ?['title'],
+        'Offline draft');
+
+    // Malformed snapshots never throw and never wipe valid state.
+    final garbage = cubit.fromJson({
+      'cursor': 'x',
+      'items': const {},
+      'accountSnapshots': {
+        'a@example.com': 'not-a-map',
+        'b@example.com': {
+          'cursor': 42,
+          'items': {
+            'good': {'hash': 'h', 'serverTime': 't'},
+            'bad': 'nope',
+            'alsobad': {'hash': 42},
+          },
+          'collections': {
+            'nodes': {
+              't1': {'id': 't1', 'title': 'kept'},
+              't2': 'garbage-entry',
+            },
+            'broken-coll': 'not-a-map',
+          },
+        },
+      },
+    })!;
+    expect(garbage.accountSnapshots.keys, isNot(contains('a@example.com')));
+    final b = garbage.accountSnapshots['b@example.com']!;
+    expect(b.items.keys, contains('good'));
+    expect(b.items.keys, isNot(contains('bad')));
+    expect(b.items.keys, isNot(contains('alsobad')));
+    expect(b.collections['nodes']?['t1']?['title'], 'kept');
+    expect(b.collections['nodes']?.containsKey('t2'), isFalse);
+  });
 }

@@ -95,13 +95,8 @@ def _enforce(rl: RateLimiter, key: str, max_calls: int, window_s: float) -> None
 
 
 def _ip(request: Request) -> str:
-    host = request.client.host if request.client and request.client.host else ""
-    if host in ("127.0.0.1", "::1", "localhost"):
-        ts_login = (request.headers.get("tailscale-user-login") or "").strip()
-        if ts_login:
-            return f"ts:{ts_login[:128]}"
-    if host:
-        return host
+    if request.client is not None and request.client.host:
+        return request.client.host
     return "unknown"
 
 

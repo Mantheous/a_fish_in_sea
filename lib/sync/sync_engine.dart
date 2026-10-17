@@ -131,26 +131,35 @@ class SyncEngine {
     protectedDeletions.value = const [];
   }
 
-  Map<String, Map<String, Map<String, Map<String, dynamic>>>>
-      _withSnapshotFor(String email) {
-    final next =
-        Map<String, Map<String, Map<String, Map<String, dynamic>>>>.of(
-      meta.state.accountSnapshots,
-    );
+  Map<String, AccountSnapshot> _withSnapshotFor(String email) {
+    final next = Map<String, AccountSnapshot>.of(meta.state.accountSnapshots);
     if (email.isNotEmpty) {
-      next[email] = {
-        for (final c in collections) c: _extract(c),
-      };
+      final prev = next[email];
+      final hasActiveMeta =
+          meta.state.cursor != null || meta.state.items.isNotEmpty;
+      next[email] = AccountSnapshot(
+        cursor: hasActiveMeta ? meta.state.cursor : prev?.cursor,
+        items: hasActiveMeta
+            ? Map<String, ItemMeta>.of(meta.state.items)
+            : (prev?.items ?? const {}),
+        collections: {
+          for (final c in collections) c: _extract(c),
+        },
+      );
     }
     return next;
   }
 
-  void _restoreLocalAccountIfPresent(String email) {
-    final snap = meta.state.accountSnapshots[email];
-    if (snap == null) return;
-    for (final entry in snap.entries) {
+  AccountSnapshot? _restoreLocalAccountIfPresent(
+    String email,
+    Map<String, AccountSnapshot> snapshots,
+  ) {
+    final snap = snapshots[email];
+    if (snap == null) return null;
+    for (final entry in snap.collections.entries) {
       _apply(entry.key, entry.value);
     }
+    return snap;
   }
 
   /// Epoch-fences any in-flight sync, revokes the session, disconnects Plaid,
@@ -192,14 +201,34 @@ class SyncEngine {
         prevEmail != currentEmail) {
       final updatedSnapshots = _withSnapshotFor(prevEmail);
       clearLocalAccountData();
-      _restoreLocalAccountIfPresent(currentEmail);
+      final restored =
+          _restoreLocalAccountIfPresent(currentEmail, updatedSnapshots);
       meta.reset(
         clearLastEmail: true,
         lastEmail: currentEmail,
+        cursor: restored?.cursor,
+        items: restored?.items,
         accountSnapshots: updatedSnapshots,
       );
-    } else if (currentEmail.isNotEmpty && prevEmail != currentEmail) {
-      meta.save(lastEmail: currentEmail);
+    } else if (currentEmail.isNotEmpty) {
+      final restored = meta.state.accountSnapshots[currentEmail];
+      if (meta.state.cursor == null &&
+          meta.state.items.isEmpty &&
+          restored != null &&
+          (restored.cursor != null || restored.items.isNotEmpty)) {
+        // Returning to a previously-synced account with no active baseline
+        // (e.g. after app restart): restore its local collections first so
+        // unsynced edits survive, then reseed its item meta so the normal
+        // pull conflict path runs instead of overwriting local edits.
+        _restoreLocalAccountIfPresent(currentEmail, meta.state.accountSnapshots);
+        meta.save(
+          cursor: restored.cursor,
+          upsert: restored.items,
+          lastEmail: currentEmail,
+        );
+      } else if (prevEmail != currentEmail) {
+        meta.save(lastEmail: currentEmail);
+      }
     }
     final myEpoch = ++_epoch;
     _running = true;
