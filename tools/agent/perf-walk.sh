@@ -98,37 +98,80 @@ def req(method, path, token=None, body=None):
     with urllib.request.urlopen(r, timeout=30) as res:
         payload = json.load(res)
     return (time.perf_counter() - t0) * 1000.0, payload
+
+
+def _perf_cleanup(api, access, email, seeded):
+    """Remove the throwaway account and every row it owns after measuring.
+
+    Single-item HTTP deletes stay below the sync mass-deletion guard; the
+    direct DB sweep (loop host only) also deletes the account itself and any
+    rows the guard withheld or whose IDs were never tracked (push batches).
+    Never fails the walk."""
+    for collection, item_id in seeded:
+        try:
+            req("DELETE", f"/api/v1/items/{collection}/{item_id}", token=access)
+        except Exception:
+            pass
+    db_path = "server/api/data/app.db"
+    if os.path.exists(db_path):
+        try:
+            import sqlite3
+            con = sqlite3.connect(db_path, timeout=5.0)
+            try:
+                con.execute("PRAGMA busy_timeout=5000")
+                con.execute(
+                    "DELETE FROM sync_items WHERE user_id = "
+                    "(SELECT id FROM users WHERE email = ?)", (email,))
+                con.execute(
+                    "DELETE FROM refresh_tokens WHERE user_id = "
+                    "(SELECT id FROM users WHERE email = ?)", (email,))
+                con.execute("DELETE FROM users WHERE email = ?", (email,))
+                con.commit()
+            finally:
+                con.close()
+        except Exception as exc:  # missing db, locked, etc. — non-fatal
+            print(f"[perf-walk] direct DB cleanup skipped: {exc}", file=sys.stderr)
 stamp = int(time.time() * 1000)
 email = f"perf-walk-{stamp}@example.com"
-_, tok = req("POST", "/api/v1/auth/register",
-             body={"email": email, "password": "perf-walk-pass-1"})
-access = tok["access_token"]
-seed = [{"collection": "nodes", "item_id": f"perf-n-{stamp}-{i}",
-         "data": {"id": f"perf-n-{stamp}-{i}", "title": f"perf seed item {i}"}}
-        for i in range(100)]
-seed += [{"collection": "events", "item_id": f"perf-e-{stamp}-{i}",
-          "data": {"id": f"perf-e-{stamp}-{i}", "subject": "standup",
-                   "start": "2026-09-14T09:00:00Z", "end": "2026-09-14T09:30:00Z"}}
-         for i in range(20)]
-_, pushed = req("POST", "/api/v1/sync/push", token=access, body={"changes": seed})
-assert len(pushed["applied"]) == 120, f"seed failed: {pushed}"
-def med(fn, n=5):
-    return statistics.median(sorted(fn() for _ in range(n)))
-pull_ms = med(lambda: req("GET", "/api/v1/sync/pull", token=access)[0])
-items_ms = med(lambda: req("GET", "/api/v1/items/nodes", token=access)[0])
-def push_once():
-    uid = time.time_ns()
-    ch = [{"collection": "nodes", "item_id": f"perf-w-{stamp}-{uid}-{i}",
-           "data": {"id": f"perf-w-{stamp}-{uid}-{i}", "title": "w"}}
-          for i in range(5)]
-    ms, _ = req("POST", "/api/v1/sync/push", token=access, body={"changes": ch})
-    return ms
-push_ms = med(push_once)
-with open(out_path, "w") as f:
-    json.dump({"sync_pull_ms": round(pull_ms, 1),
-               "items_nodes_ms": round(items_ms, 1),
-               "sync_push_ms": round(push_ms, 1),
-               "seed_account": email}, f)
+access = None
+seeded = []
+try:
+    _, tok = req("POST", "/api/v1/auth/register",
+                 body={"email": email, "password": "perf-walk-pass-1"})
+    access = tok["access_token"]
+    seed = [{"collection": "nodes", "item_id": f"perf-n-{stamp}-{i}",
+             "data": {"id": f"perf-n-{stamp}-{i}", "title": f"perf seed item {i}"}}
+            for i in range(100)]
+    seed += [{"collection": "events", "item_id": f"perf-e-{stamp}-{i}",
+              "data": {"id": f"perf-e-{stamp}-{i}", "subject": "standup",
+                       "start": "2026-09-14T09:00:00Z", "end": "2026-09-14T09:30:00Z"}}
+             for i in range(20)]
+    _, pushed = req("POST", "/api/v1/sync/push", token=access, body={"changes": seed})
+    assert len(pushed["applied"]) == 120, f"seed failed: {pushed}"
+    seeded = [(s["collection"], s["item_id"]) for s in seed]
+    def med(fn, n=5):
+        return statistics.median(sorted(fn() for _ in range(n)))
+    pull_ms = med(lambda: req("GET", "/api/v1/sync/pull", token=access)[0])
+    items_ms = med(lambda: req("GET", "/api/v1/items/nodes", token=access)[0])
+    push_batches = []
+    def push_once():
+        uid = time.time_ns()
+        ch = [{"collection": "nodes", "item_id": f"perf-w-{stamp}-{uid}-{i}",
+               "data": {"id": f"perf-w-{stamp}-{uid}-{i}", "title": "w"}}
+              for i in range(5)]
+        ms, _ = req("POST", "/api/v1/sync/push", token=access, body={"changes": ch})
+        push_batches.extend((c["collection"], c["item_id"]) for c in ch)
+        return ms
+    push_ms = med(push_once)
+    seeded.extend(push_batches)
+    with open(out_path, "w") as f:
+        json.dump({"sync_pull_ms": round(pull_ms, 1),
+                   "items_nodes_ms": round(items_ms, 1),
+                   "sync_push_ms": round(push_ms, 1),
+                   "seed_account": email}, f)
+finally:
+    if access is not None:
+        _perf_cleanup(api, access, email, seeded)
 EOF
 }
 
