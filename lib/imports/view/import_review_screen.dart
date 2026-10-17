@@ -245,8 +245,12 @@ class _StagedTile extends StatelessWidget {
                               ? DemoCoordinator.demoApprove(
                                   context, batchId,
                                   itemIds: [item.itemId])
-                              : service.approve(batchId,
-                                  itemIds: [item.itemId]),
+                              : service.approve(
+                                  batchId,
+                                  itemIds: [
+                                    '${item.collection}:${item.itemId}'
+                                  ],
+                                ),
                         ),
                       ),
                       IconButton(
@@ -256,7 +260,10 @@ class _StagedTile extends StatelessWidget {
                           () => DemoMode.isActive
                               ? DemoCoordinator.demoDiscard(
                                   context, batchId, [item.itemId])
-                              : service.discard(batchId, [item.itemId]),
+                              : service.discard(
+                                  batchId,
+                                  ['${item.collection}:${item.itemId}'],
+                                ),
                         ),
                       ),
                     ],

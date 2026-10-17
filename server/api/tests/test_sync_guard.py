@@ -197,3 +197,29 @@ def test_escape_hatch_env(client: TestClient, monkeypatch: pytest.MonkeyPatch):
     assert len(out["applied"]) == 5
     assert out["guarded"] == []
     assert _live_ids(client, h, "feeds") == set()
+
+
+def test_mismatched_id_push_rejected_once_never_wedgeable(client: TestClient):
+    """A push whose embedded data.id disagrees with item_id is rejected
+    (400) and nothing is stored, so the same row pushed later with a
+    matching id still applies: rejected once, never wedgeable."""
+    tokens = _register(client, "wedge@example.com")
+    h = _auth(tokens)
+
+    mismatched = {
+        "collection": "nodes",
+        "item_id": "n-wedge",
+        "data": {"id": "WRONG", "title": "T"},
+        "deleted": False,
+    }
+
+    r = client.post("/api/v1/sync/push", headers=h, json={"changes": [mismatched]})
+    assert r.status_code == 400, r.text
+    assert "data.id" in r.json()["detail"]
+    assert "n-wedge" not in _live_ids(client, h, "nodes")
+
+    fixed = dict(mismatched, data={"id": "n-wedge", "title": "T"})
+    out = _push(client, h, [fixed])
+    assert len(out["applied"]) == 1
+    assert out["guarded"] == []
+    assert "n-wedge" in _live_ids(client, h, "nodes")

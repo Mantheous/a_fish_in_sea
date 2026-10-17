@@ -119,7 +119,15 @@ async def put_item(
     check_token_scope(user, f"{collection}:write")
     now = _now()
     data = dict(body.data)
-    if collection not in _SINGLETON_COLLECTIONS:
+    if collection in _SINGLETON_COLLECTIONS:
+        # Singletons are exempt from the push-side id check in /sync/push,
+        # so enforce the data.id == item_id invariant here: never store a
+        # row whose embedded id disagrees with its row id, which would
+        # otherwise wedge a later push of that row (400 data.id != item_id
+        # forever). waterfall and plaid are singletons too, not just
+        # settings.
+        data["id"] = item_id
+    else:
         payload_id = data.get("id")
         if payload_id is not None and str(payload_id) != item_id:
             raise HTTPException(
@@ -127,8 +135,6 @@ async def put_item(
                 detail=f"data.id {payload_id!r} != item_id {item_id!r}",
             )
         data["id"] = item_id
-    else:
-        data.setdefault("id", item_id)
     row = (
         await session.execute(
             select(SyncItem).where(
