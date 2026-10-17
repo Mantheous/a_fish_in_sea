@@ -108,12 +108,34 @@ This PR was opened by the loop dispatcher: the builder pushed its branch but its
       if PR_URL="$(gh pr create --base main --head "$BRANCH" \
           --title "[agent #$N] $TITLE" --body "$BODY" 2>&1)"; then
         echo "[build] #$N opened $PR_URL"
+        rm -f "/tmp/opencode/agent-loop-reported/dispatcher-$N-no-pr" 2>/dev/null || true
         "$DIR/tg.sh" "🔗 Dispatcher opened the PR for #$N (builder run ended before creating it): $TITLE
 $PR_URL" || true
       else
         echo "[build] #$N dispatcher could not open the PR: $PR_URL — needs a human"
-        "$DIR/tg.sh" "🧑 Branch for #$N has work but the dispatcher could not open its PR — needs a human:
-$URL" || true
+        # A persistent `gh pr create` failure would otherwise re-ping every
+        # 15-min poll — throttle to once/day like the other escalations.
+        DKEY="/tmp/opencode/agent-loop-reported/dispatcher-$N-no-pr"
+        mkdir -p "$(dirname "$DKEY")"
+        if [ ! -f "$DKEY" ] || [ $(( $(date +%s) - $(stat -c %Y "$DKEY") )) -ge 86400 ]; then
+          COMMITS="$(git log --oneline "origin/main..origin/$BRANCH" 2>/dev/null | head -n 5 || true)"
+          [ -n "${COMMITS:-}" ] || COMMITS="(could not list — see the loop host)"
+          "$DIR/tg.sh" "🧑 Dispatcher for #$N needs a human to open the PR (auto-PR failed):
+Issue: $TITLE
+$URL
+Branch: $BRANCH (pushed, no PR on record)
+Commits past origin/main:
+$COMMITS
+gh pr create failed with:
+$PR_URL
+What to do: open the PR by hand, or drop the branch if the work is unwanted:
+  gh pr create --base main --head \"$BRANCH\" --title \"[agent #$N] $TITLE\" --body \"Closes #$N. ...\"
+  # or: git push origin --delete \"$BRANCH\"
+Loop behavior: retries the auto-PR each poll; this ping repeats at most once/day. Nothing is merged automatically." || true
+          touch "$DKEY"
+        else
+          echo "[build] #$N dispatcher PR failure already pinged <24h ago — not repeating"
+        fi
       fi
       continue
     fi

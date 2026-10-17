@@ -62,8 +62,33 @@ if [ -e "$WT" ]; then
     mkdir -p "$REPORTED_DIR"
     KEY="$REPORTED_DIR/builder-$N-conflict.no-pr"
     if [ ! -f "$KEY" ] || [ $(( $(date +%s) - $(stat -c %Y "$KEY") )) -ge 86400 ]; then
-      "$DIR/tg.sh" "🧑 Builder for #$N cannot start: worktree $WT already exists without loop build state — needs a human (remove it to retry):
-$URL" || true
+      # Descriptive escalation: the loop refuses to delete a path it cannot
+      # prove it owns (no .agent-build.log marker) — it may hold a human's
+      # uncommitted work. Show the actual state so the human can tell at a
+      # glance whether it is safe to reclaim (often: empty branch, clean
+      # tree — a leftover the loop could not auto-reuse).
+      COMMITS="$(git log --oneline "origin/main..$BRANCH" 2>/dev/null | head -n 5 || true)"
+      [ -n "${COMMITS:-}" ] || COMMITS="(none — branch is identical to origin/main)"
+      if [ -d "$WT" ]; then
+        DIRTY="$(git -C "$WT" status --porcelain 2>/dev/null | head -n 10 || true)"
+        [ -n "${DIRTY:-}" ] || DIRTY="(none — worktree is clean)"
+      else
+        DIRTY="(path exists but is not a usable worktree checkout)"
+      fi
+      "$DIR/tg.sh" "🧑 Builder for #$N cannot start — worktree blocked, human check needed:
+Issue: $TITLE
+$URL
+Expected branch: $BRANCH | worktree: $WT | branch checked out there: ${IN_USE:-none}
+Why the loop stopped itself: the path exists but carries no loop marker (.agent-build.log), so the loop cannot prove it owns the tree and refuses to delete it (CONVENTIONS.md: never touch another writer's tree — it may hold uncommitted work).
+Branch state (commits past origin/main):
+$COMMITS
+Uncommitted changes in $WT:
+$DIRTY
+What to do: if the state above is empty/expected, reclaim it with:
+  git worktree remove \"$WT\" --force
+  git branch -D \"$BRANCH\"  # only if Branch state shows (none) above
+  rm -f /tmp/opencode/agent-loop-cd/$N  # clear backoff so the next poll retries immediately
+Loop behavior while blocked: issue backs off ~1h between retries; this ping repeats at most once/day. Nothing is deleted automatically." || true
       touch "$KEY"
     fi
     exit 1

@@ -67,8 +67,25 @@ echo "$PRS" | python3 -c 'import json,sys; [print(str(p["number"]) + "|" + p["he
     ROUNDS="$(gh pr view "$N" --comments --json comments --jq '.comments[].body' 2>/dev/null | grep -cF "$REWORK_MARKER" || true)"
     if [ "${ROUNDS:-0}" -ge "$MAX_REWORK" ]; then
       echo "[review] #$N rework exhausted ($ROUNDS rounds) — needs human"
-      "$DIR/tg.sh" "🧑‍⚖️ PR #$N failed review twice — needs a human:
-$(gh pr view "$N" --json url --jq .url)" || true
+      # Without a throttle this re-pings every 15-min poll for a PR that
+      # will never advance on its own — once/day like the other escalations.
+      RKEY="/tmp/opencode/agent-loop-reported/review-$N-exhausted"
+      mkdir -p "$(dirname "$RKEY")"
+      if [ ! -f "$RKEY" ] || [ $(( $(date +%s) - $(stat -c %Y "$RKEY") )) -ge 86400 ]; then
+        PRURL="$(gh pr view "$N" --json url --jq .url 2>/dev/null || true)"
+        PRTITLE="$(gh pr view "$N" --json title --jq .title 2>/dev/null || true)"
+        [ -n "${PRURL:-}" ] || PRURL="(could not fetch PR URL — run: gh pr view $N)"
+        "$DIR/tg.sh" "🧑‍⚖️ PR #$N needs a human: review wants changes, loop rework exhausted ($ROUNDS/$MAX_REWORK rounds):
+${PRTITLE:-PR #$N}
+$PRURL
+Branch: $BRANCH
+Why the loop stopped itself: the reviewer is READ-ONLY and never merges — it posts a verdict with a numbered Fix list; the reworker applied $MAX_REWORK rounds and the verdict is still changes-requested. The loop will not run more rework on its own — the next step needs your judgment.
+What to do: read the latest <!-- agent-review --> verdict comment for the Fix list (gh pr view $N --comments), then push fixes to $BRANCH yourself, merge manually if you disagree with the review, or close the PR. The review:changes-requested label stays until a human acts.
+Loop behavior: PR is skipped every poll; this ping repeats at most once/day. No auto-merge ever happens." || true
+        touch "$RKEY"
+      else
+        echo "[review] #$N rework exhausted already pinged <24h ago — not repeating"
+      fi
       continue
     fi
     SESSION="rework-$N"

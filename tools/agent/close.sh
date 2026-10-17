@@ -50,6 +50,24 @@ note() {
   echo "[close] $1"
 }
 
+# Sticky escalations ("kept ..." notes) describe state that never resolves
+# on its own. note() feeds the final Telegram ping, so calling it every
+# poll re-pings every 15 minutes (that is how one dirty worktree produced
+# ~100 pings). Log to the journal every time, but only escalate to
+# Telegram once per day per key.
+note_once_per_day() {
+  local key="$1"; shift
+  local msg="$1"
+  local f="/tmp/opencode/agent-loop-reported/close-$(echo "$key" | tr '/' '_')"
+  mkdir -p "$(dirname "$f")"
+  if [ -f "$f" ] && [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 86400 ]; then
+    echo "[close] $msg (last ping <24h ago) — not repeating"
+    return 0
+  fi
+  note "$msg"
+  touch "$f"
+}
+
 issue_state() {
   gh issue view "$1" --json state --jq .state 2>/dev/null || echo UNKNOWN
 }
@@ -138,7 +156,16 @@ if [ -n "$REMOTE_BRANCHES" ]; then
         if [ -f "$KEY" ] && [ $(( $(date +%s) - $(stat -c %Y "$KEY") )) -lt 86400 ]; then
           echo "[close] remote branch $RB still needs a PR (last ping <24h ago) — not repeating"
         else
-          note "remote branch $RB has NO PR and unmerged work — needs a human (open a PR or delete it)"
+          COMMITS="$(git log --oneline "origin/main..origin/$RB" 2>/dev/null | head -n 5 || true)"
+          [ -n "${COMMITS:-}" ] || COMMITS="(could not list — see the loop host)"
+          RNUM="$(echo "$RB" | sed -n -e 's|^agent/\([0-9]\+\)-.*|\1|p' -e 's|^agent-\([0-9]\+\)-.*|\1|p')"
+          RLINK=""
+          [ -n "${RNUM:-}" ] && RLINK="Possible issue: #$RNUM (gh issue view $RNUM)"
+          note "remote branch $RB has NO PR and unmerged work — human decision needed (loop never force-opens PRs for branches it cannot link to an approved issue; build.sh auto-PRs only dispatcher-known approved issues):
+commits past origin/main:
+$COMMITS
+$RLINK
+fix: gh pr create --base main --head \"$RB\" ... (open a PR) OR git push origin --delete \"$RB\" (drop the branch)"
           touch "$KEY"
         fi
       fi
@@ -174,7 +201,11 @@ if [ -n "$LOCAL_BRANCHES" ]; then
         continue  # closed issue but unmerged local work — human decides
       fi
       if [ "$(git rev-parse "$LB" 2>/dev/null)" != "$MERGED_HEAD" ]; then
-        note "kept local branch $LB: tip differs from its merged PR head — needs a human"
+        TIP="$(git rev-parse --short "$LB" 2>/dev/null || echo unknown)"
+        MH_SHORT="$(echo "${MERGED_HEAD:-unknown}" | cut -c1-7)"
+        note_once_per_day "$LB.tip" "kept local branch $LB: tip $TIP differs from its merged PR head $MH_SHORT — human decision needed (squash/rebase merge already landed, but the local tip holds extra commits the PR does not — the loop will not delete unique work):
+inspect: git log --oneline origin/main..$LB | head; git diff $MH_SHORT..$LB --stat | head
+fix: keep it (do nothing — loop keeps skipping) OR delete it: git branch -D \"$LB\" (remove its worktree first if one exists)"
         continue
       fi
       # Tip matches the merge: squash/rebase leftovers, PR keeps the history.
@@ -185,7 +216,12 @@ if [ -n "$LOCAL_BRANCHES" ]; then
         run git worktree prune
         note "pruned stale worktree metadata for $LB"
       elif tree_dirty "$WT"; then
-        note "kept worktree $WT ($LB): uncommitted changes — needs a human"
+        DIRTY="$(git -C "$WT" status --porcelain 2>/dev/null | head -n 10 || true)"
+        [ -n "${DIRTY:-}" ] || DIRTY="(unreadable — see the loop host)"
+        note_once_per_day "$LB.dirty" "kept worktree $WT ($LB): uncommitted changes — human decision needed (loop never deletes a dirty tree; it may hold your work — often these are just disposable test artifacts like test/goldens/failures/*.png):
+$DIRTY
+inspect: git -C \"$WT\" status --short; git -C \"$WT\" diff --stat | tail -n 5
+fix: commit or discard the changes inside $WT, then remove it: git worktree remove \"$WT\" --force (only when clean or deliberately discarded)"
         continue
       else
         run git worktree remove "$WT" --force
