@@ -1,5 +1,4 @@
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
-import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
@@ -22,28 +21,6 @@ class MockStorage extends Mock implements Storage {}
 
 class MockGoogleService extends Mock implements GoogleCalendarService {}
 
-Node _node(
-  String id,
-  String title, {
-  DateTime? due,
-  NodeStatus status = NodeStatus.open,
-  bool homework = false,
-  bool template = false,
-}) {
-  return Node(
-    id: id,
-    title: title,
-    createdAt: DateTime(2026, 10, 1),
-    status: status,
-    schedule: due == null ? null : ScheduleFacet(due: due),
-    sourceEventId: homework ? 'evt:$id' : null,
-    classLabel: homework ? 'Physics' : null,
-    recurrence: template
-        ? const NodeRecurrence(frequency: TimeScale.weekly)
-        : null,
-  );
-}
-
 void main() {
   setUp(() {
     final storage = MockStorage();
@@ -55,138 +32,12 @@ void main() {
   });
 
   group('TasksViewOptionsCubit', () {
-    test('defaults to off / all, toggles, clears', () {
+    test('legacy defaults live on as editable presets', () {
       final cubit = TasksViewOptionsCubit();
       addTearDown(cubit.close);
-      expect(cubit.state.highlightDueThisWeek, isFalse);
-      expect(cubit.state.dueFilter, TasksDueFilter.all);
-      expect(cubit.state.hasActiveOptions, isFalse);
-      expect(cubit.state.isFiltering, isFalse);
-
-      cubit.setHighlightDueThisWeek(true);
-      expect(cubit.state.hasActiveOptions, isTrue);
-      expect(cubit.state.isFiltering, isFalse);
-
-      cubit.setDueFilter(TasksDueFilter.today);
-      expect(cubit.state.isFiltering, isTrue);
-
-      cubit.clearAll();
-      expect(cubit.state, const TasksViewOptionsState());
-    });
-
-    test('round-trips through JSON', () {
-      final cubit = TasksViewOptionsCubit();
-      addTearDown(cubit.close);
-      cubit.setHighlightDueThisWeek(true);
-      cubit.setDueFilter(TasksDueFilter.overdue);
-      final restored = cubit.fromJson(cubit.toJson(cubit.state));
-      expect(restored, cubit.state);
-    });
-
-    test('old payloads without dueFilter load with filter off', () {
-      final cubit = TasksViewOptionsCubit();
-      addTearDown(cubit.close);
-      final restored = cubit.fromJson(const {
-        'highlightDueThisWeek': true,
-      });
-      expect(restored?.highlightDueThisWeek, isTrue);
-      expect(restored?.dueFilter, TasksDueFilter.all);
-    });
-
-    test('wrong-typed values and unknown enums fall back to defaults', () {
-      final cubit = TasksViewOptionsCubit();
-      addTearDown(cubit.close);
-      final restored = cubit.fromJson(const {
-        'highlightDueThisWeek': 'yes',
-        'dueFilter': 'renamed-value',
-      });
-      expect(restored, const TasksViewOptionsState());
-      expect(cubit.fromJson(const {'dueFilter': 42}),
-          const TasksViewOptionsState());
-    });
-  });
-
-  group('calendar-week window (Sunday start)', () {
-    // 2026-10-11 is a Sunday.
-    final sunday = DateTime(2026, 10, 11, 12);
-    final monday = DateTime(2026, 10, 12, 12);
-    final saturday = DateTime(2026, 10, 17, 12);
-
-    NodeCubit cubitWith(List<Node> nodes) {
-      final cubit = NodeCubit();
-      for (final n in nodes) {
-        cubit.addNode(n);
-      }
-      return cubit;
-    }
-
-    test('Sunday looks forward to next Sunday inclusive', () {
-      final cubit = cubitWith([
-        _node('today', 'today', due: DateTime(2026, 10, 11, 9)),
-        _node('sat', 'sat', due: DateTime(2026, 10, 17, 9)),
-        _node('sun', 'sun', due: DateTime(2026, 10, 18, 9)),
-        _node('mon', 'mon', due: DateTime(2026, 10, 19, 9)),
-        _node('past', 'past', due: DateTime(2026, 10, 10, 9)),
-      ]);
-      addTearDown(cubit.close);
-      expect(
-        cubit.dueThisWeekAt(sunday).map((n) => n.id),
-        containsAll(['today', 'sat', 'sun']),
-      );
-      expect(cubit.dueThisWeekAt(sunday).map((n) => n.id),
-          isNot(contains('mon')));
-      // Overdue belongs to the past, not to this week.
-      expect(cubit.dueThisWeekAt(sunday).map((n) => n.id),
-          isNot(contains('past')));
-    });
-
-    test('Monday runs through Sunday, next Monday is out', () {
-      final cubit = cubitWith([
-        _node('sun', 'sun', due: DateTime(2026, 10, 18, 9)),
-        _node('mon', 'mon', due: DateTime(2026, 10, 19, 9)),
-      ]);
-      addTearDown(cubit.close);
-      expect(cubit.dueThisWeekAt(monday).map((n) => n.id), ['sun']);
-    });
-
-    test('Saturday covers just the weekend', () {
-      final cubit = cubitWith([
-        _node('wed', 'wed', due: DateTime(2026, 10, 14, 9)),
-        _node('sat', 'sat', due: DateTime(2026, 10, 17, 9)),
-        _node('sun', 'sun', due: DateTime(2026, 10, 18, 9)),
-        _node('mon', 'mon', due: DateTime(2026, 10, 19, 9)),
-      ]);
-      addTearDown(cubit.close);
-      expect(cubit.dueThisWeekAt(saturday).map((n) => n.id),
-          containsAll(['sat', 'sun']));
-      expect(cubit.dueThisWeekAt(saturday).map((n) => n.id),
-          isNot(contains('wed')));
-      expect(cubit.dueThisWeekAt(saturday).map((n) => n.id),
-          isNot(contains('mon')));
-    });
-
-    test('done and template nodes never match the week', () {
-      final cubit = cubitWith([
-        _node('done', 'done',
-            due: DateTime(2026, 10, 13, 9), status: NodeStatus.done),
-        _node('tmpl', 'tmpl',
-            due: DateTime(2026, 10, 13, 9), template: true),
-      ]);
-      addTearDown(cubit.close);
-      expect(cubit.dueThisWeekAt(monday), isEmpty);
-    });
-
-    test('dueToday is strict, overdue is strictly before today', () {
-      final cubit = cubitWith([
-        _node('over', 'over', due: DateTime(2026, 10, 10, 9)),
-        _node('today', 'today', due: DateTime(2026, 10, 11, 9)),
-        _node('tomorrow', 'tomorrow', due: DateTime(2026, 10, 12, 9)),
-        _node('done-today', 'done-today',
-            due: DateTime(2026, 10, 11, 9), status: NodeStatus.done),
-      ]);
-      addTearDown(cubit.close);
-      expect(cubit.dueTodayAt(sunday).map((n) => n.id), ['today']);
-      expect(cubit.overdueAt(sunday).map((n) => n.id), ['over']);
+      expect(cubit.state.filters.map((f) => f.id), ['all', 'today', 'overdue']);
+      expect(cubit.state.activeFilterId, 'all');
+      expect(cubit.state.hasCustomFilters, isFalse);
     });
   });
 
@@ -294,10 +145,12 @@ void main() {
 
         await tester.tap(find.byTooltip('View options'));
         await tester.pumpAndSettle();
-        expect(find.text('Highlight items due this week'), findsOneWidget);
+        expect(find.text('Views'), findsOneWidget);
+        await tester.ensureVisible(find.byType(SwitchListTile));
+        await tester.pumpAndSettle();
         await tester.tap(find.byType(SwitchListTile));
         await tester.pumpAndSettle();
-        expect(viewOptions.state.highlightDueThisWeek, isTrue);
+        expect(viewOptions.state.highlight.enabled, isTrue);
         await tester.tap(find.byTooltip('Close'));
         await tester.pumpAndSettle();
 
@@ -365,7 +218,7 @@ void main() {
       final handle = tester.ensureSemantics();
       try {
         await pumpTasks(tester);
-        viewOptions.setHighlightDueThisWeek(true);
+        viewOptions.setHighlightEnabled(true);
         await tester.pumpAndSettle();
 
         Finder tinted(Color color) => find.ancestor(
@@ -407,7 +260,7 @@ void main() {
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
 
-      expect(viewOptions.state.dueFilter, TasksDueFilter.today);
+      expect(viewOptions.state.activeFilterId, 'today');
       expect(find.text('Due today task'), findsOneWidget);
       expect(find.text('Overdue task'), findsNothing);
       expect(find.text('Far future task'), findsNothing);
@@ -429,7 +282,7 @@ void main() {
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
 
-      expect(viewOptions.state.dueFilter, TasksDueFilter.overdue);
+      expect(viewOptions.state.activeFilterId, 'overdue');
       expect(find.text('Overdue task'), findsOneWidget);
       expect(find.text('Due today task'), findsNothing);
       expect(find.text('Far future task'), findsNothing);
@@ -437,8 +290,8 @@ void main() {
 
     testWidgets('clear resets highlight and filter', (tester) async {
       await pumpTasks(tester);
-      viewOptions.setHighlightDueThisWeek(true);
-      viewOptions.setDueFilter(TasksDueFilter.today);
+      viewOptions.setHighlightEnabled(true);
+      viewOptions.setActiveFilter('today');
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('View options'));
       await tester.pumpAndSettle();
@@ -448,6 +301,64 @@ void main() {
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       expect(find.text('Far future task'), findsOneWidget);
+    });
+
+    testWidgets('hide mode removes matching rows instead of tinting',
+        (tester) async {
+      await pumpTasks(tester);
+      viewOptions.setHighlightEnabled(true);
+      viewOptions.setHighlightHideMatching(true);
+      await tester.pumpAndSettle();
+
+      expect(viewOptions.state.isFiltering, isTrue);
+      expect(find.text('Due today task'), findsNothing);
+      expect(find.text('Due this week task'), findsNothing);
+      // Outside the week window: overdue and far-future stay.
+      expect(find.text('Overdue task'), findsOneWidget);
+      expect(find.text('Far future task'), findsOneWidget);
+    });
+
+    testWidgets('custom highlight color tints week rows', (tester) async {
+      await pumpTasks(tester);
+      viewOptions.setHighlightEnabled(true);
+      viewOptions.setHighlightColor(0xFF42A5F5);
+      await tester.pumpAndSettle();
+
+      final tinted = find.ancestor(
+        of: find.text('Due this week task'),
+        matching: find.byWidgetPredicate(
+          (w) =>
+              w is Container &&
+              w.decoration is BoxDecoration &&
+              (w.decoration! as BoxDecoration).color ==
+                  const Color(0xFF42A5F5).withAlpha(41),
+        ),
+      );
+      expect(tinted, findsOneWidget);
+    });
+
+    testWidgets('new filter from the builder activates on save',
+        (tester) async {
+      await pumpTasks(tester);
+      await tester.tap(find.byTooltip('View options'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('New filter'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('New filter'));
+      await tester.pumpAndSettle();
+      expect(find.text('Edit filter'), findsNothing);
+      await tester.dragUntilVisible(
+        find.text('Add filter'),
+        find.byType(ListView).last,
+        const Offset(0, -200),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add filter'));
+      await tester.pumpAndSettle();
+
+      expect(viewOptions.state.filters, hasLength(4));
+      expect(viewOptions.state.activeFilterId, startsWith('custom:'));
+      expect(viewOptions.state.isFiltering, isTrue);
     });
 
     testWidgets('works without a TasksViewOptionsCubit provider',

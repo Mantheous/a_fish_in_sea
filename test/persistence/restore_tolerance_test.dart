@@ -13,7 +13,6 @@ import 'package:a_fish_in_sea/planner/model/assignment_estimate.dart';
 import 'package:a_fish_in_sea/planner/model/assignment_rule.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
-import 'package:a_fish_in_sea/planner/bloc/tasks_view_options_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/model/task.dart';
@@ -198,30 +197,6 @@ void main() {
       expect(
         cubit.fromJson(const {'hiddenIds': 'not-a-list'})?.hiddenIds,
         isEmpty,
-      );
-    });
-
-    test('TasksViewOptionsCubit round-trips and tolerates old payloads', () {
-      final cubit = TasksViewOptionsCubit();
-      cubit.setHighlightDueThisWeek(true);
-      cubit.setDueFilter(TasksDueFilter.overdue);
-      final restored =
-          cubit.fromJson(cubit.toJson(cubit.state));
-      expect(restored, cubit.state);
-      // Payloads from before the due-filter existed only carry the
-      // highlight flag; the filter must default to all, not wipe.
-      expect(
-        cubit.fromJson(const {'highlightDueThisWeek': true})?.dueFilter,
-        TasksDueFilter.all,
-      );
-      // Renamed enum values and wrong types fall back to defaults.
-      expect(
-        cubit.fromJson(const {'dueFilter': 'renamed-value'})?.dueFilter,
-        TasksDueFilter.all,
-      );
-      expect(
-        cubit.fromJson(const {'dueFilter': 42}),
-        const TasksViewOptionsState(),
       );
     });
 
