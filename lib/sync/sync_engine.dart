@@ -67,6 +67,12 @@ class SyncEngine {
   bool _running = false;
   int _epoch = 0;
 
+  /// Per-account local snapshots preserved when switching accounts on a shared
+  /// device so neither account loses unsynced local work nor leaks data into
+  /// the other account's cloud.
+  final Map<String, Map<String, Map<String, Map<String, dynamic>>>>
+      _accountSnapshots = {};
+
   SyncEngine({
     required this.client,
     required this.auth,
@@ -131,16 +137,34 @@ class SyncEngine {
     protectedDeletions.value = const [];
   }
 
+  void _snapshotLocalAccount(String email) {
+    if (email.isEmpty) return;
+    _accountSnapshots[email] = {
+      for (final c in collections) c: _extract(c),
+    };
+  }
+
+  void _restoreLocalAccountIfPresent(String email) {
+    final snap = _accountSnapshots[email];
+    if (snap == null) return;
+    for (final entry in snap.entries) {
+      _apply(entry.key, entry.value);
+    }
+  }
+
   /// Epoch-fences any in-flight sync, revokes the session, disconnects Plaid,
-  /// and clears local account data (or records the previous account email if
-  /// [clearLocalData] is false so a later sign-in by a different user still
-  /// starts clean).
-  void signOut({bool clearLocalData = true}) {
+  /// and records the signed-out account's email in [SyncMetaCubit] (keeping
+  /// on-device data intact by default so unsynced local work is never lost,
+  /// while isolating it if a different account signs in next).
+  void signOut({bool clearLocalData = false}) {
     _epoch++;
     _running = false;
     status.value = EngineStatus.idle;
     lastError = null;
     final previousEmail = auth.state.email.trim().toLowerCase();
+    if (previousEmail.isNotEmpty) {
+      _snapshotLocalAccount(previousEmail);
+    }
     auth.logout();
     plaid.clearLocalSession();
     if (clearLocalData) {
@@ -164,7 +188,9 @@ class SyncEngine {
         prevEmail.isNotEmpty &&
         currentEmail.isNotEmpty &&
         prevEmail != currentEmail) {
+      _snapshotLocalAccount(prevEmail);
       clearLocalAccountData();
+      _restoreLocalAccountIfPresent(currentEmail);
       meta.reset(clearLastEmail: true, lastEmail: currentEmail);
     } else if (currentEmail.isNotEmpty && prevEmail != currentEmail) {
       meta.save(lastEmail: currentEmail);

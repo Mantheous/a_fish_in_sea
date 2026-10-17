@@ -99,9 +99,11 @@ def _ip(request: Request) -> str:
     if host in ("127.0.0.1", "::1", "localhost"):
         xff = (request.headers.get("x-forwarded-for") or "").strip()
         if xff:
-            first = xff.split(",")[0].strip()
-            if first:
-                return first[:128]
+            # Trust the rightmost hop appended by the local reverse proxy so
+            # clients cannot spoof X-Forwarded-For to evade rate limits.
+            rightmost = xff.split(",")[-1].strip()
+            if rightmost:
+                return rightmost[:128]
         real_ip = (request.headers.get("x-real-ip") or "").strip()
         if real_ip:
             return real_ip[:128]

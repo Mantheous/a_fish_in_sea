@@ -48,10 +48,9 @@ app.*.map.json
 # Environment variables
 **/.env
 
-# Local personal financial spreadsheets, bank CSV exports, and DB snapshots
+# Local personal financial spreadsheets and bank CSV exports
 *.xlsx
 lib/data/*.csv
-server/api/data/*.db*
 
 # Per-dev server token stores (local only; import once via
 # server/api `python -m app.migrate_json`, then delete)

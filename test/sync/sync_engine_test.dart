@@ -434,27 +434,25 @@ void main() {
     await shared.engine.syncNow();
     expect(server.store['nodes']?.containsKey('alice-secret'), isTrue);
 
-    // Case 1: Alice signs out via engine.signOut(), then Bob signs in.
+    // Case 1: Alice signs out via engine.signOut() (keeps on-device data for
+    // Alice, records lastEmail='alice@example.com'), then Bob signs in.
     shared.engine.signOut();
-    expect(shared.nodes.state, isEmpty);
+    expect(shared.nodes.byId('alice-secret'), isNotNull);
     expect(shared.meta.state.items, isEmpty);
+    expect(shared.meta.state.lastEmail, 'alice@example.com');
 
     // Simulate Bob's empty cloud account on the server.
     server.store.clear();
 
-    // Case 2: Even if Alice's data were still on disk when meta.reset() ran
-    // (e.g. account switch via AuthPage), SyncMetaCubit.lastEmail detects the
-    // different email and clears local cubits before pushing to Bob's cloud.
-    shared.nodes.addNode(
-      Node(id: 'stale-alice', title: 'Leftover', createdAt: DateTime(2026)),
-    );
-    shared.meta.reset(lastEmail: 'alice@example.com');
+    // Case 2: Bob signs in on the shared device. SyncEngine snapshots Alice's
+    // local state and switches to a clean slate for Bob so zero of Alice's
+    // items leak into Bob's cloud account.
     await shared.auth.login('bob@example.com', 'password123');
     shared.meta.reset(); // AuthPage resets cursor/items, preserving lastEmail
     await shared.engine.syncNow();
 
-    expect(shared.nodes.byId('stale-alice'), isNull);
-    expect(server.store['nodes']?.containsKey('stale-alice') ?? false, isFalse);
+    expect(shared.nodes.byId('alice-secret'), isNull);
+    expect(server.store['nodes']?.containsKey('alice-secret') ?? false, isFalse);
   });
 
   test('signOut mid-sync fences in-flight sync so meta stays reset', () async {
@@ -470,6 +468,7 @@ void main() {
     expect(d.auth.state.isSignedIn, isFalse);
     expect(d.meta.state.cursor, isNull);
     expect(d.meta.state.items, isEmpty);
-    expect(d.nodes.state, isEmpty);
+    // Local data stays intact on sign-out.
+    expect(d.nodes.byId('t1')?.title, 'v1');
   });
 }

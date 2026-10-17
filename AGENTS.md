@@ -106,7 +106,8 @@ Data safety is enforced in three layers — do not weaken any of them:
    the deliberate escape hatch — never set it to "fix" a blocked sync.
 3. `tools/agent/backup-db.sh` (also run by `deploy.sh`) snapshots
    `server/api/data/app.db` to `server/api/data/backups/` (gzipped;
-   32 recent + 14 daily). Restore: stop uvicorn, gunzip over `app.db`,
+   32 recent + 14 daily). Restore: stop uvicorn, remove any
+   `app.db-wal` / `app.db-shm` sidecars, gunzip over `app.db`,
    start uvicorn.
 
 When a persisted model changes, extend the per-item tolerance tests and
