@@ -493,8 +493,37 @@ void main() {
     expect(shared.nodes.byId('alice-unsynced')?.title, 'Offline draft');
   });
 
-  test('signOut mid-sync fences in-flight sync so meta stays reset', () async {
+  test('sign out, edit offline, same-account re-login keeps the offline edit',
+      () async {
     final server = FakeSyncClient();
+    final d = _Device(server);
+    await d.signIn();
+    d.nodes.addNode(
+      Node(id: 't1', title: 'v1', createdAt: DateTime(2026)),
+    );
+    await d.engine.syncNow();
+    expect(server.store['nodes']?.containsKey('t1'), isTrue);
+
+    // Sign out (keeps on-device data), edit + add while signed out.
+    d.engine.signOut();
+    d.nodes.updateNode(d.nodes.byId('t1')!.copyWith(title: 'offline edit'));
+    d.nodes.addNode(
+      Node(id: 't2', title: 'offline new', createdAt: DateTime(2026)),
+    );
+
+    // Same account signs back in (AuthPage resets cursor/items).
+    await d.auth.login('a@example.com', 'password123');
+    d.meta.reset();
+    await d.engine.syncNow();
+
+    // Nothing is wiped to the sign-out-time snapshot; both items push.
+    expect(d.nodes.byId('t1')?.title, 'offline edit');
+    expect(d.nodes.byId('t2')?.title, 'offline new');
+    expect(server.store['nodes']?['t1']?.data['title'], 'offline edit');
+    expect(server.store['nodes']?.containsKey('t2'), isTrue);
+  });
+
+  test('signOut mid-sync fences in-flight sync so meta stays reset', () async {    final server = FakeSyncClient();
     final d = _Device(server);
     await d.signIn();
     d.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));

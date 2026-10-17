@@ -217,10 +217,16 @@ class SyncEngine {
           restored != null &&
           (restored.cursor != null || restored.items.isNotEmpty)) {
         // Returning to a previously-synced account with no active baseline
-        // (e.g. after app restart): restore its local collections first so
-        // unsynced edits survive, then reseed its item meta so the normal
-        // pull conflict path runs instead of overwriting local edits.
-        _restoreLocalAccountIfPresent(currentEmail, meta.state.accountSnapshots);
+        // (e.g. after app restart): reseed its item meta so the normal pull
+        // conflict path runs instead of overwriting local edits. Live cubits
+        // stay authoritative for the same account — only backfill
+        // collections that are currently empty (e.g. storage was evicted),
+        // never overwrite live data with the sign-out-time snapshot.
+        for (final entry in restored.collections.entries) {
+          if (_extract(entry.key).isEmpty && entry.value.isNotEmpty) {
+            _apply(entry.key, entry.value);
+          }
+        }
         meta.save(
           cursor: restored.cursor,
           upsert: restored.items,
