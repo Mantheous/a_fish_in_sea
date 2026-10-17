@@ -27,6 +27,25 @@ REPO="$HOME/Repos/a_fish_in_sea"
 cd "$REPO"
 DIR="$REPO/tools/agent"
 
+# Serialized model quota: never stack a guardian LLM run on top of a live
+# builder/rework session (same guard build.sh/review.sh already use).
+loop_runs() {
+  tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^(agent-[0-9]|rework-[0-9])' || true
+}
+
+# Returns 0 when the audit range touches the security surface the
+# security-guardian exists to protect: server/, tools/, .opencode/, lib/sync/,
+# lib/feedback/. Changed files = uncommitted work vs HEAD plus incoming
+# origin/main commits (what the next deploy ships).
+touches_security_surface() {
+  local changed
+  changed="$(git diff --name-only HEAD 2>/dev/null)"
+  if git rev-parse --verify origin/main >/dev/null 2>&1; then
+    changed="$(printf '%s\n%s' "$changed" "$(git diff --name-only HEAD origin/main 2>/dev/null)")"
+  fi
+  printf '%s\n' "$changed" | grep -qE '^server/|^tools/|^\.opencode/|^lib/sync/|^lib/feedback/'
+}
+
 PASS_LABEL="sec:safe"
 FAIL_LABEL="sec:blocked"
 GUARD_MARKER='<!-- sec-guard -->'
@@ -42,15 +61,21 @@ gh label create "$FAIL_LABEL" --color "B60205" \
 
 # ── 1) PR audits ─────────────────────────────────────────────────────────
 PRS="$(gh pr list --state open --limit 20 \
-  --json number,headRefName,headRefOid \
-  --jq '.[] | "\(.number)|\(.headRefName)|\(.headRefOid)"' 2>/dev/null || true)"
-echo "$PRS" | while IFS='|' read -r N BRANCH SHA; do
+  --json number,headRefName,headRefOid,url \
+  --jq '.[] | "\(.number)|\(.headRefName)|\(.headRefOid)|\(.url // "")"' 2>/dev/null || true)"
+echo "$PRS" | while IFS='|' read -r N BRANCH SHA URL; do
   [ -z "${N:-}" ] && continue
   case "$BRANCH" in agent/*|agent-*) ;; *) continue ;; esac
   # Skip when the latest sec-guard comment already covers this head SHA.
   if gh pr view "$N" --comments --json comments --jq '.comments[].body' 2>/dev/null \
       | grep -qF "$GUARD_MARKER sha=$SHA"; then
     echo "[sec-guard] PR #$N already audited at $SHA — skipping"
+    continue
+  fi
+  # Don't stack a guardian LLM run on top of a live builder/rework session.
+  RUNNING="$(loop_runs)"
+  if [ "${RUNNING:-0}" -ge 1 ]; then
+    echo "[sec-guard] $RUNNING loop run(s) active — skipping PR #$N audit this poll"
     continue
   fi
   echo "[sec-guard] PR #$N ($BRANCH) auditing $SHA..."
@@ -87,7 +112,7 @@ $GUARD_MARKER sha=$SHA" >/dev/null; then
     "$DIR/label.sh" "$N" add "$FAIL_LABEL" || true
     echo "[sec-guard] PR #$N BLOCKED — $VERDICT"
     "$DIR/tg.sh" "🛑 Security guardian blocked PR #$N: $VERDICT
-$(gh pr view "$N" --json url --jq .url)
+$URL
 Audit comment on the PR." || true
   elif echo "$VERDICT" | grep -qi '^Verdict: safe'; then
     "$DIR/label.sh" "$N" add "$PASS_LABEL" || true
@@ -148,6 +173,23 @@ if ! "$PYTEST_PY" -m pytest server/api/tests/test_security.py server/api/tests/t
   "$DIR/tg.sh" "🛑 Deploy held back: security tests failed on $DESC
 $(tail -n 5 /tmp/opencode/sec-guard-tests.log)
 Report: $REPORT" || true
+  exit 0
+fi
+
+# Path filter: deterministic tests passed. If nothing in the security
+# surface (server/, tools/, .opencode/, lib/sync/, lib/feedback/) changed,
+# there is nothing for the security-guardian LLM to audit — skip it and
+# mark the revision safe so deploy can proceed.
+if ! touches_security_surface; then
+  rm -f "$BLOCK_MARKER"
+  echo "$DESC" > "$DESC_MARKER"
+  echo "[sec-guard] $DESC touches no server/tools/.opencode/lib/sync/lib/feedback files — deterministic tests passed, guardian LLM skipped"
+  exit 0
+fi
+# Don't stack a guardian LLM run on top of a live builder/rework session.
+RUNNING="$(loop_runs)"
+if [ "${RUNNING:-0}" -ge 1 ]; then
+  echo "[sec-guard] $RUNNING loop run(s) active — skipping guardian LLM audit this poll"
   exit 0
 fi
 

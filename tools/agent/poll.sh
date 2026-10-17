@@ -42,10 +42,10 @@ step() {
 }
 
 step close       "$REPO/tools/agent/close.sh"
-step triage      "$REPO/tools/agent/triage.sh"
-step tg-callbacks "$REPO/tools/agent/tg-callbacks.sh"
 step approve     "$REPO/tools/agent/approve.sh"
 step build       "$REPO/tools/agent/build.sh"
+step triage      "$REPO/tools/agent/triage.sh"
+step tg-callbacks "$REPO/tools/agent/tg-callbacks.sh"
 step review      "$REPO/tools/agent/review.sh"
 step data-guard  "$REPO/tools/agent/data-guard.sh"
 step sec-guard   "$REPO/tools/agent/security-guard.sh"
