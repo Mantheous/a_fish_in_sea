@@ -1,10 +1,12 @@
 import 'package:equatable/equatable.dart';
 
 import '../../nodes/model/node.dart';
+import 'task_date_range.dart';
 
 /// Date window for a task filter. [all] matches everything (the filter
 /// then only restricts by status/kind/class/planning); [undated] matches
-/// only items without a due date.
+/// only items without a due date; [custom] matches a rolling
+/// [TaskDateRange] window (day offsets from today, either end optional).
 enum TaskFilterDate {
   all,
   overdue,
@@ -13,6 +15,7 @@ enum TaskFilterDate {
   thisWeek,
   next7Days,
   undated,
+  custom,
 }
 
 /// Which provenance a filter keeps. Tabs already split To-Do from
@@ -41,6 +44,10 @@ bool taskFilterDateMatches(
 }) {
   switch (date) {
     case TaskFilterDate.all:
+      return true;
+    case TaskFilterDate.custom:
+      // Custom windows carry their own bounds ([TaskDateRange]) and go
+      // through [TaskFilter.matches]; bare calls treat them as unbounded.
       return true;
     case TaskFilterDate.undated:
       return due == null;
@@ -103,6 +110,11 @@ class TaskFilter extends Equatable {
 
   final TaskFilterPlanned planned;
 
+  /// Rolling window used only when [date] is [TaskFilterDate.custom].
+  /// Null means unbounded (matches any date, like [TaskFilterDate.all],
+  /// but still honors [showUndated]).
+  final TaskDateRange? customRange;
+
   const TaskFilter({
     required this.id,
     required this.name,
@@ -112,6 +124,7 @@ class TaskFilter extends Equatable {
     this.kind = TaskFilterKind.both,
     this.classKeys = const [],
     this.planned = TaskFilterPlanned.all,
+    this.customRange,
   });
 
   /// Id for a user-built filter.
@@ -164,6 +177,13 @@ class TaskFilter extends Equatable {
     if (date == TaskFilterDate.undated) {
       return node.schedule?.due == null;
     }
+    if (date == TaskFilterDate.custom) {
+      return (customRange ?? const TaskDateRange()).matches(
+        node.schedule?.due,
+        now,
+        showUndated: showUndated,
+      );
+    }
     return taskFilterDateMatches(
       date,
       node.schedule?.due,
@@ -181,6 +201,7 @@ class TaskFilter extends Equatable {
     TaskFilterKind? kind,
     List<String>? classKeys,
     TaskFilterPlanned? planned,
+    TaskDateRange? customRange,
   }) =>
       TaskFilter(
         id: id ?? this.id,
@@ -191,6 +212,7 @@ class TaskFilter extends Equatable {
         kind: kind ?? this.kind,
         classKeys: classKeys ?? this.classKeys,
         planned: planned ?? this.planned,
+        customRange: customRange ?? this.customRange,
       );
 
   Map<String, dynamic> toJson() => {
@@ -202,6 +224,7 @@ class TaskFilter extends Equatable {
         'kind': kind.name,
         'classKeys': classKeys,
         'planned': planned.name,
+        'customRange': customRange?.toJson(),
       };
 
   /// Null when [raw] is not a usable filter (missing id, wrong shape) so
@@ -249,6 +272,7 @@ class TaskFilter extends Equatable {
       classKeys: keys,
       planned: enumOr(TaskFilterPlanned.values, map['planned'],
           TaskFilterPlanned.all, (e) => e.name),
+      customRange: TaskDateRange.tryParse(map['customRange']),
     );
   }
 
@@ -263,6 +287,7 @@ class TaskFilter extends Equatable {
         // Sorted for stable == across restores.
         [...classKeys]..sort(),
         planned,
+        customRange,
       ];
 }
 
@@ -398,6 +423,7 @@ String taskFilterDateLabel(TaskFilterDate date) => switch (date) {
       TaskFilterDate.thisWeek => 'Due this week',
       TaskFilterDate.next7Days => 'Due in the next 7 days',
       TaskFilterDate.undated => 'Undated only',
+      TaskFilterDate.custom => 'Custom range',
     };
 
 String taskHighlightDateLabel(TaskHighlightDate date) => switch (date) {
@@ -424,7 +450,10 @@ String taskFilterPlannedLabel(TaskFilterPlanned planned) => switch (planned) {
 /// completed · Homework only · Physics".
 String describeTaskFilter(TaskFilter filter) {
   final parts = <String>[];
-  if (filter.date != TaskFilterDate.all) {
+  if (filter.date == TaskFilterDate.custom) {
+    parts.add(
+        describeTaskDateRange(filter.customRange ?? const TaskDateRange()));
+  } else if (filter.date != TaskFilterDate.all) {
     parts.add(taskFilterDateLabel(filter.date));
   }
   parts.add(filter.showCompleted ? 'shows completed' : 'hides completed');

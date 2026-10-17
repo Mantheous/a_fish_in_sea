@@ -373,6 +373,48 @@ void main() {
       expect(viewOptions.state.isFiltering, isTrue);
     });
 
+    testWidgets('custom range filter keeps overdue through tomorrow',
+        (tester) async {
+      await pumpTasks(tester);
+      await tester.tap(find.byTooltip('View options'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.text('New filter', skipOffstage: false),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('New filter'));
+      await tester.pumpAndSettle();
+
+      // Switch the date window to the rolling custom range.
+      await tester.tap(find.byType(DropdownButtonFormField<TaskFilterDate>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Custom range').last);
+      await tester.pumpAndSettle();
+      // The one-tap preset for overdue + today + tomorrow.
+      await tester.ensureVisible(
+        find.text('Tomorrow or earlier', skipOffstage: false),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Tomorrow or earlier'));
+      await tester.pumpAndSettle();
+
+      await tester.dragUntilVisible(
+        find.text('Add filter'),
+        find.byType(ListView).last,
+        const Offset(0, -200),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add filter'));
+      await tester.pumpAndSettle();
+
+      expect(viewOptions.state.activeFilter.date, TaskFilterDate.custom);
+      expect(find.text('Overdue task'), findsOneWidget);
+      expect(find.text('Due today task'), findsOneWidget);
+      expect(find.text('Far future task'), findsNothing);
+      // Completed items stay hidden while the filter is on.
+      expect(find.text('Done today task'), findsNothing);
+    });
+
     testWidgets('edit rules opens the dedicated rules page', (tester) async {
       await pumpTasks(tester);
       await tester.tap(find.byTooltip('View options'));
