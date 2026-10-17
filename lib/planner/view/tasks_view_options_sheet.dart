@@ -3,7 +3,10 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../bloc/tasks_view_options_cubit.dart';
 import '../model/task_filter.dart';
+import '../model/task_rule.dart';
 import 'task_filter_editor_sheet.dart';
+import 'task_rule_editor_sheet.dart';
+import 'task_rules_page.dart';
 
 Future<void> showTasksViewOptions(BuildContext context) {
   return showModalBottomSheet<void>(
@@ -14,17 +17,6 @@ Future<void> showTasksViewOptions(BuildContext context) {
   );
 }
 
-/// Fixed tint choices for the highlight rule. Null is the theme-default
-/// tint (the legacy week look); rows due today always glow orange on top.
-const _tintChoices = <int?>[
-  null,
-  0xFFFF9800,
-  0xFF42A5F5,
-  0xFF66BB6A,
-  0xFFAB47BC,
-  0xFFEC407A,
-];
-
 class _TasksViewOptionsSheet extends StatelessWidget {
   const _TasksViewOptionsSheet();
 
@@ -34,6 +26,7 @@ class _TasksViewOptionsSheet extends StatelessWidget {
     final cubit = context.read<TasksViewOptionsCubit>();
     final canClear = state.hasActiveOptions ||
         state.hasCustomFilters ||
+        state.hasCustomRules ||
         state.activeFilterId != 'all';
     return ConstrainedBox(
       constraints: BoxConstraints(
@@ -68,10 +61,9 @@ class _TasksViewOptionsSheet extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Text(
-              'A view hides everything outside it — including completed '
-              'and undated items, unless the view says otherwise. The '
-              'highlight only adds a cue (or hides, in Hide mode). '
-              'Nothing is added or synced.',
+              'A view hides everything outside it. Rules tint or hide '
+              'matching rows on top of the view — nothing is added or '
+              'synced.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
@@ -120,72 +112,45 @@ class _TasksViewOptionsSheet extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
                   child: Text(
-                    'Highlight',
+                    'Rules',
                     style: Theme.of(context).textTheme.labelLarge,
                   ),
                 ),
-                SwitchListTile(
-                  value: state.highlight.enabled,
-                  onChanged: cubit.setHighlightEnabled,
-                  secondary: const Icon(Icons.date_range_outlined),
-                  title: Text(
-                    state.highlight.hideMatching
-                        ? 'Hide matching items'
-                        : 'Highlight matching items',
-                  ),
-                  subtitle: const Text(
-                    'Tinted rows keep their list; hidden rows leave it. '
-                    'Pick Hide below to hide instead of tint.',
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                  child: Text(
+                    'Each rule highlights or hides the tasks it matches. '
+                    'Hiding always wins; the topmost matching highlight '
+                    'wins the tint.',
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
+                for (final rule in state.rules)
+                  _RuleRow(
+                    rule: rule,
+                    onToggled: (v) => cubit.setRuleEnabled(rule.id, v),
+                    onTap: () => showTaskRuleEditor(
+                      context,
+                      existing: rule,
+                    ),
+                  ),
                 Padding(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                  child: DropdownButtonFormField<TaskHighlightDate>(
-                    initialValue: state.highlight.date,
-                    decoration: const InputDecoration(
-                      labelText: 'Highlight window',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: [
-                      for (final d in TaskHighlightDate.values)
-                        DropdownMenuItem(
-                          value: d,
-                          child: Text(taskHighlightDateLabel(d)),
-                        ),
+                  child: Wrap(
+                    spacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () => showTaskRuleEditor(context),
+                        icon: const Icon(Icons.add),
+                        label: const Text('New rule'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () => showTaskRulesPage(context),
+                        icon: const Icon(Icons.tune_outlined),
+                        label: const Text('Edit rules'),
+                      ),
                     ],
-                    onChanged: state.highlight.enabled
-                        ? (d) {
-                            if (d != null) cubit.setHighlightDate(d);
-                          }
-                        : null,
-                  ),
-                ),
-                Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: _ColorRow(
-                    enabled: state.highlight.enabled,
-                    selected: state.highlight.hideMatching
-                        ? _HideSelected.hide
-                        : _HideSelected.show,
-                    colorValue: state.highlight.colorValue,
-                    onPickColor: (c) {
-                      cubit.setHighlightHideMatching(false);
-                      cubit.setHighlightColor(c);
-                    },
-                    onPickHide: () => cubit.setHighlightHideMatching(true),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-                  child: Text(
-                    state.highlight.hideMatching
-                        ? 'Hide mode: open items in the window leave both '
-                            'lists until you switch back.'
-                        : 'Open items in the window get a tinted row and a '
-                            'colored edge — items due today glow orange.',
-                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
               ],
@@ -196,8 +161,6 @@ class _TasksViewOptionsSheet extends StatelessWidget {
     );
   }
 }
-
-enum _HideSelected { show, hide }
 
 class _ViewTile extends StatelessWidget {
   final TaskFilter filter;
@@ -235,124 +198,56 @@ class _ViewTile extends StatelessWidget {
   }
 }
 
-class _ColorRow extends StatelessWidget {
-  final bool enabled;
-  final _HideSelected selected;
-  final int? colorValue;
-  final ValueChanged<int?> onPickColor;
-  final VoidCallback onPickHide;
+/// A rule row: tap opens the editor, the switch toggles the rule.
+class _RuleRow extends StatelessWidget {
+  final TaskRule rule;
+  final ValueChanged<bool> onToggled;
+  final VoidCallback onTap;
 
-  const _ColorRow({
-    required this.enabled,
-    required this.selected,
-    required this.colorValue,
-    required this.onPickColor,
-    required this.onPickHide,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Opacity(
-      opacity: enabled ? 1 : 0.5,
-      child: Wrap(
-        spacing: 10,
-        runSpacing: 10,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          for (final choice in _tintChoices)
-            _Swatch(
-              color: choice == null ? theme.colorScheme.tertiary : Color(choice),
-              tooltip: choice == null
-                  ? 'Theme tint'
-                  : 'Tint ${choice.toRadixString(16)}',
-              selected:
-                  selected == _HideSelected.show && colorValue == choice,
-              onTap: enabled ? () => onPickColor(choice) : null,
-            ),
-          _HideSwatch(
-            selected: selected == _HideSelected.hide,
-            onTap: enabled ? onPickHide : null,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Swatch extends StatelessWidget {
-  final Color color;
-  final String tooltip;
-  final bool selected;
-  final VoidCallback? onTap;
-
-  const _Swatch({
-    required this.color,
-    required this.tooltip,
-    required this.selected,
+  const _RuleRow({
+    required this.rule,
+    required this.onToggled,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
-      child: InkWell(
-        onTap: onTap,
-        customBorder: const CircleBorder(),
-        child: Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: selected
-                  ? Theme.of(context).colorScheme.primary
-                  : Theme.of(context).colorScheme.outlineVariant,
-              width: selected ? 3 : 1,
-            ),
-          ),
-          child: selected
-              ? Icon(Icons.check,
-                  size: 18, color: Theme.of(context).colorScheme.onPrimary)
-              : null,
-        ),
+    return ListTile(
+      dense: true,
+      leading: _RuleEffectIcon(rule: rule),
+      title: Text(rule.name),
+      subtitle: Text(describeTaskRule(rule)),
+      trailing: Switch(
+        value: rule.enabled,
+        onChanged: onToggled,
       ),
+      onTap: onTap,
     );
   }
 }
 
-class _HideSwatch extends StatelessWidget {
-  final bool selected;
-  final VoidCallback? onTap;
+/// Leading tint dot for highlight rules, eye-off for hide rules.
+class _RuleEffectIcon extends StatelessWidget {
+  final TaskRule rule;
 
-  const _HideSwatch({required this.selected, required this.onTap});
+  const _RuleEffectIcon({required this.rule});
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Tooltip(
-      message: 'Hide instead of tint',
-      child: InkWell(
-        onTap: onTap,
-        customBorder: const CircleBorder(),
-        child: Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: selected ? scheme.primary : scheme.outlineVariant,
-              width: selected ? 3 : 1,
-            ),
-          ),
-          child: Icon(
-            Icons.visibility_off_outlined,
-            size: 18,
-            color: selected ? scheme.primary : scheme.outline,
-          ),
-        ),
+    if (rule.isHide) {
+      return Icon(
+        Icons.visibility_off_outlined,
+        color: Theme.of(context).colorScheme.outline,
+      );
+    }
+    return Container(
+      width: 24,
+      height: 24,
+      decoration: BoxDecoration(
+        color: rule.colorValue == null
+            ? Theme.of(context).colorScheme.tertiary
+            : Color(rule.colorValue!),
+        shape: BoxShape.circle,
       ),
     );
   }

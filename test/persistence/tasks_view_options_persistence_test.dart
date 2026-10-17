@@ -1,5 +1,6 @@
 import 'package:a_fish_in_sea/planner/bloc/tasks_view_options_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/task_filter.dart';
+import 'package:a_fish_in_sea/planner/model/task_rule.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:mocktail/mocktail.dart';
@@ -17,7 +18,7 @@ void main() {
   });
 
   group('TasksViewOptions persistence', () {
-    test('round-trips filters, active id, and highlight', () {
+    test('round-trips filters, active id, and rules', () {
       final cubit = TasksViewOptionsCubit();
       addTearDown(cubit.close);
       cubit.addFilter(const TaskFilter(
@@ -27,8 +28,14 @@ void main() {
         kind: TaskFilterKind.homework,
         classKeys: ['Physics'],
       ));
-      cubit.setHighlightEnabled(true);
-      cubit.setHighlightColor(0xFFFF9800);
+      cubit.setRuleEnabled('rule:week', true);
+      cubit.setRuleColor('rule:week', 0xFFFF9800);
+      cubit.addRule(const TaskRule(
+        id: 'custom:hide',
+        selector: TaskFilter(
+            id: 'custom:hide', name: 'Hide', date: TaskFilterDate.today),
+        effect: TaskRuleEffect.hide,
+      ));
       final restored = cubit.fromJson(cubit.toJson(cubit.state));
       expect(restored, cubit.state);
     });
@@ -41,7 +48,9 @@ void main() {
         'dueFilter': 'overdue',
       });
       expect(restored?.activeFilterId, 'overdue');
-      expect(restored?.highlight.enabled, isTrue);
+      expect(restored?.rules, hasLength(1));
+      expect(restored?.rules.single.enabled, isTrue);
+      expect(restored?.rules.single.effect, TaskRuleEffect.highlight);
       expect(
         cubit.fromJson(const {'highlightDueThisWeek': true})?.activeFilterId,
         'all',
@@ -66,11 +75,19 @@ void main() {
           'not-a-map',
         ],
         'activeFilterId': 'missing',
-        'highlight': 'not-a-map',
+        'rules': [
+          {
+            'id': 'good-rule',
+            'effect': 'hide',
+            'selector': {'id': 'good-rule', 'name': 'G'}
+          },
+          {'id': 42},
+        ],
       });
       expect(restored?.filters.map((f) => f.id), ['all', 'good']);
       expect(restored?.activeFilterId, 'all');
-      expect(restored?.highlight, const TaskHighlight());
+      expect(restored?.rules.map((r) => r.id), ['good-rule']);
+      expect(restored?.rules.single.effect, TaskRuleEffect.hide);
     });
   });
 }

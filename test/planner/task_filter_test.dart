@@ -3,6 +3,7 @@ import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/planner/bloc/tasks_view_options_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/task_filter.dart';
+import 'package:a_fish_in_sea/planner/model/task_rule.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:mocktail/mocktail.dart';
@@ -252,12 +253,13 @@ void main() {
   });
 
   group('TasksViewOptionsCubit', () {
-    test('defaults to All with highlight off', () {
+    test('defaults to All with rules idle', () {
       final cubit = TasksViewOptionsCubit();
       addTearDown(cubit.close);
       expect(cubit.state.activeFilterId, 'all');
       expect(cubit.state.activeFilter.isShowAll, isTrue);
-      expect(cubit.state.highlight.enabled, isFalse);
+      expect(cubit.state.rules, hasLength(1));
+      expect(cubit.state.rules.single.enabled, isFalse);
       expect(cubit.state.hasActiveOptions, isFalse);
       expect(cubit.state.isFiltering, isFalse);
     });
@@ -286,10 +288,18 @@ void main() {
       cubit.deleteFilter('all');
       expect(cubit.state.filters.any((f) => f.id == 'all'), isTrue);
 
-      cubit.setHighlightEnabled(true);
+      cubit.setRuleEnabled('rule:week', true);
       expect(cubit.state.hasActiveOptions, isTrue);
       expect(cubit.state.isFiltering, isFalse);
-      cubit.setHighlightHideMatching(true);
+      cubit.addRule(TaskRule(
+        id: TaskRule.newId(),
+        enabled: true,
+        selector: TaskFilter(
+            id: 'hide',
+            name: 'Hide week',
+            date: TaskFilterDate.thisWeek),
+        effect: TaskRuleEffect.hide,
+      ));
       expect(cubit.state.isFiltering, isTrue);
       cubit.clearAll();
       expect(cubit.state, const TasksViewOptionsState());
@@ -299,13 +309,13 @@ void main() {
       final cubit = TasksViewOptionsCubit();
       addTearDown(cubit.close);
       cubit.setActiveFilter('overdue');
-      cubit.setHighlightEnabled(true);
-      cubit.setHighlightColor(0xFFFF9800);
+      cubit.setRuleEnabled('rule:week', true);
+      cubit.setRuleColor('rule:week', 0xFFFF9800);
       final restored = cubit.fromJson(cubit.toJson(cubit.state));
       expect(restored, cubit.state);
     });
 
-    test('legacy payloads map onto defaults', () {
+    test('legacy highlight payload migrates onto one rule', () {
       final cubit = TasksViewOptionsCubit();
       addTearDown(cubit.close);
       final restored = cubit.fromJson(const {
@@ -313,8 +323,10 @@ void main() {
         'dueFilter': 'today',
       });
       expect(restored?.activeFilterId, 'today');
-      expect(restored?.highlight.enabled, isTrue);
-      expect(restored?.highlight.date, TaskHighlightDate.thisWeek);
+      expect(restored?.rules, hasLength(1));
+      expect(restored?.rules.single.enabled, isTrue);
+      expect(restored?.rules.single.effect, TaskRuleEffect.highlight);
+      expect(restored?.rules.single.selector.date, TaskFilterDate.thisWeek);
       expect(
           cubit.fromJson(const {'dueFilter': 'renamed-value'})?.activeFilterId,
           'all');
@@ -336,7 +348,9 @@ void main() {
       expect(restored?.filters.map((f) => f.id),
           containsAll(['all', 'good', 'renamed']));
       expect(restored?.activeFilterId, 'all');
-      expect(restored?.highlight.enabled, isFalse);
+      // Garbage highlight maps onto a single disabled rule.
+      expect(restored?.rules, hasLength(1));
+      expect(restored?.rules.single.enabled, isFalse);
     });
   });
 

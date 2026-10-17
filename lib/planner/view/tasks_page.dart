@@ -32,6 +32,7 @@ import 'feed_manager.dart';
 import 'assignment_rules_sheet.dart';
 import 'syllabus_import_sheet.dart';
 import 'task_highlight_tint.dart';
+import 'tasks_view_filtering.dart';
 import 'tasks_view_options_sheet.dart';
 
 class TasksPage extends StatefulWidget {
@@ -435,56 +436,7 @@ String _estimateLine(AssignmentEstimate estimate) {
   return 'Est ~$minutes, ${describeTimeOfDay(start)}';
 }
 
-/// Reads the Tasks view options, falling back to defaults when the cubit
-/// isn't provided (widget tests pump TasksPage standalone).
-TasksViewOptionsState _viewOptions(BuildContext context) {
-  try {
-    return context.watch<TasksViewOptionsCubit>().state;
-  } catch (_) {
-    return const TasksViewOptionsState();
-  }
-}
-
-/// Applies the active view filter plus a highlight in "Hide" mode to
-/// [nodes]. The 'all' view skips matching entirely so the base lists show
-/// exactly what they always showed (including done homework); any other
-/// view keeps only matching nodes. A hiding highlight removes its matches
-/// on top, whatever the view.
-List<Node> _applyViewOptions(
-  List<Node> nodes,
-  TasksViewOptionsState viewOptions,
-  DateTime now,
-) {
-  var result = nodes;
-  final filter = viewOptions.activeFilter;
-  if (!filter.isShowAll) {
-    result = result.where((n) => filter.matches(n, now)).toList();
-  }
-  final highlight = viewOptions.highlight;
-  if (highlight.enabled && highlight.hideMatching) {
-    result = result.where((n) => !highlight.matches(n, now)).toList();
-  }
-  return result;
-}
-
-/// Ids tinted by the highlight rule (never the "Hide" mode — those rows
-/// are removed by [_applyViewOptions] instead).
-Set<String> _highlightIds(
-  NodeCubit nodeCubit,
-  TasksViewOptionsState viewOptions,
-  DateTime now,
-) {
-  final highlight = viewOptions.highlight;
-  if (!highlight.enabled || highlight.hideMatching) {
-    return const <String>{};
-  }
-  return {
-    for (final n in nodeCubit.state)
-      if (highlight.matches(n, now)) n.id,
-  };
-}
-
-/// Empty state shown when the active view (or a hiding highlight) leaves
+/// Empty state shown when the active view (or a hiding rule) leaves
 /// no rows. Offers a way back to the full list.
 class _FilteredEmpty extends StatelessWidget {
   final String filterName;
@@ -514,10 +466,7 @@ class _FilteredEmpty extends StatelessWidget {
               try {
                 final cubit = context.read<TasksViewOptionsCubit>();
                 cubit.setActiveFilter('all');
-                if (cubit.state.highlight.enabled &&
-                    cubit.state.highlight.hideMatching) {
-                  cubit.setHighlightEnabled(false);
-                }
+                cubit.disableHidingRules();
               } catch (_) {}
             },
             child: const Text('Show everything'),
@@ -589,13 +538,10 @@ class _TodoTab extends StatelessWidget {
       builder: (context, nodes) {
         final feedCubit = context.watch<FeedCubit>();
         final nodeCubit = context.read<NodeCubit>();
-        final viewOptions = _viewOptions(context);
+        final viewOptions = viewOptionsOf(context);
         final now = DateTime.now();
-        final highlightIds = _highlightIds(nodeCubit, viewOptions, now);
-        final highlightColor = viewOptions.highlight.enabled
-            ? viewOptions.highlight.colorValue
-            : null;
-        var open = _applyViewOptions(
+        final tints = taskTintMap(nodeCubit.state, viewOptions, now);
+        var open = applyTaskViewOptions(
           feedCubit.visibleNodes(nodeCubit.openNodes),
           viewOptions,
           now,
@@ -627,8 +573,9 @@ class _TodoTab extends StatelessWidget {
               node: node,
               showClass: true,
               now: now,
-              highlightMatched: highlightIds.contains(node.id),
-              highlightColorValue: highlightColor,
+              highlightMatched: tints.containsKey(node.id),
+              highlightColorValue: tints[node.id]?.colorValue,
+              highlightLabel: tints[node.id]?.label ?? 'Highlighted',
               feedById: feedById,
               nodeById: nodeById,
               indexById: indexes.byId,
@@ -726,13 +673,10 @@ class _HomeworkTabState extends State<_HomeworkTab>
     super.build(context);
     final nodeCubit = context.watch<NodeCubit>();
     final feedCubit = context.watch<FeedCubit>();
-    final viewOptions = _viewOptions(context);
+    final viewOptions = viewOptionsOf(context);
     final now = DateTime.now();
-    final highlightIds = _highlightIds(nodeCubit, viewOptions, now);
-    final highlightColor = viewOptions.highlight.enabled
-        ? viewOptions.highlight.colorValue
-        : null;
-    var imported = _applyViewOptions(
+    final tints = taskTintMap(nodeCubit.state, viewOptions, now);
+    var imported = applyTaskViewOptions(
       feedCubit.visibleNodes(
           nodeCubit.state.where((n) => n.isHomework).toList()),
       viewOptions,
@@ -972,8 +916,10 @@ class _HomeworkTabState extends State<_HomeworkTab>
                         node: node,
                         showClass: false,
                         now: now,
-                        highlightMatched: highlightIds.contains(node.id),
-                        highlightColorValue: highlightColor,
+                        highlightMatched: tints.containsKey(node.id),
+                        highlightColorValue: tints[node.id]?.colorValue,
+                        highlightLabel:
+                            tints[node.id]?.label ?? 'Highlighted',
                         feedById: feedById,
                         nodeById: nodeById,
                         indexById: indexes.byId,
@@ -1023,11 +969,13 @@ class _NodeTile extends StatelessWidget {
   final Node node;
   final bool showClass;
 
-  /// True when the highlight rule matches this node (open, due inside the
-  /// highlight window). [highlightColorValue] tints the row, or the theme
-  /// default when null; rows due today always glow orange on top.
+  /// True when a highlight rule matches this node (open, inside the
+  /// rule's window). [highlightColorValue] tints the row, or the theme
+  /// default when null; [highlightLabel] names the winning rule for
+  /// screen readers. Rows due today always glow orange on top.
   final bool highlightMatched;
   final int? highlightColorValue;
+  final String highlightLabel;
   // Hoisted per-list data (all optional for backwards compat): when
   // supplied the tile avoids per-tile `watch` subscriptions and O(n) scans.
   final DateTime? now;
@@ -1050,6 +998,7 @@ class _NodeTile extends StatelessWidget {
     required this.showClass,
     this.highlightMatched = false,
     this.highlightColorValue,
+    this.highlightLabel = 'Highlighted',
     this.now,
     this.feedById,
     this.nodeById,
@@ -1342,12 +1291,12 @@ class _NodeTile extends StatelessWidget {
       onLongPress: selecting ? onToggleSelection : onEnterSelection,
     );
     if (!highlightMatched) return tile;
-    // Tinted row plus a colored edge: the highlight rule matches this
-    // item. Due-today rows keep the hotter orange cue on top.
+    // Tinted row plus a colored edge: the winning highlight rule matched
+    // this item. Due-today rows keep the hotter orange cue on top.
     return TaskHighlightTint(
       hot: isDueTodayHighlight,
       colorValue: highlightColorValue,
-      semanticsLabel: 'Due this week',
+      semanticsLabel: highlightLabel,
       child: tile,
     );
   }

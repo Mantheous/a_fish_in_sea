@@ -294,6 +294,11 @@ List<TaskFilter> defaultTaskFilters() => const [
 enum TaskHighlightDate { overdue, today, tomorrow, thisWeek, next7Days }
 
 TaskFilterDate _highlightDateAsFilter(TaskHighlightDate date) =>
+    taskFilterDateFromHighlight(date);
+
+/// Public window mapping shared by the rules migration: a highlight
+/// window becomes the equivalent view-filter window.
+TaskFilterDate taskFilterDateFromHighlight(TaskHighlightDate date) =>
     switch (date) {
       TaskHighlightDate.overdue => TaskFilterDate.overdue,
       TaskHighlightDate.today => TaskFilterDate.today,

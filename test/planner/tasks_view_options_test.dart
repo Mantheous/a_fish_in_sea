@@ -8,6 +8,8 @@ import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/tasks_tab_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/tasks_view_options_cubit.dart';
+import 'package:a_fish_in_sea/planner/model/task_filter.dart';
+import 'package:a_fish_in_sea/planner/model/task_rule.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
 import 'package:a_fish_in_sea/planner/view/tasks_page.dart';
@@ -146,11 +148,17 @@ void main() {
         await tester.tap(find.byTooltip('View options'));
         await tester.pumpAndSettle();
         expect(find.text('Views'), findsOneWidget);
-        await tester.ensureVisible(find.byType(SwitchListTile));
+        expect(find.text('Rules'), findsOneWidget);
+        // The stock week rule is the only switch in the sheet: turning
+        // it on is the old highlight toggle. The sheet is taller than
+        // the test viewport, so look past the fold, then scroll to it.
+        await tester.ensureVisible(
+          find.byType(Switch, skipOffstage: false),
+        );
         await tester.pumpAndSettle();
-        await tester.tap(find.byType(SwitchListTile));
+        await tester.tap(find.byType(Switch));
         await tester.pumpAndSettle();
-        expect(viewOptions.state.highlight.enabled, isTrue);
+        expect(viewOptions.state.hasHighlightRule, isTrue);
         await tester.tap(find.byTooltip('Close'));
         await tester.pumpAndSettle();
 
@@ -218,7 +226,7 @@ void main() {
       final handle = tester.ensureSemantics();
       try {
         await pumpTasks(tester);
-        viewOptions.setHighlightEnabled(true);
+        viewOptions.setRuleEnabled('rule:week', true);
         await tester.pumpAndSettle();
 
         Finder tinted(Color color) => find.ancestor(
@@ -288,9 +296,9 @@ void main() {
       expect(find.text('Far future task'), findsNothing);
     });
 
-    testWidgets('clear resets highlight and filter', (tester) async {
+    testWidgets('clear resets rules and filter', (tester) async {
       await pumpTasks(tester);
-      viewOptions.setHighlightEnabled(true);
+      viewOptions.setRuleEnabled('rule:week', true);
       viewOptions.setActiveFilter('today');
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('View options'));
@@ -303,11 +311,15 @@ void main() {
       expect(find.text('Far future task'), findsOneWidget);
     });
 
-    testWidgets('hide mode removes matching rows instead of tinting',
+    testWidgets('hide rule removes matching rows instead of tinting',
         (tester) async {
       await pumpTasks(tester);
-      viewOptions.setHighlightEnabled(true);
-      viewOptions.setHighlightHideMatching(true);
+      viewOptions.addRule(const TaskRule(
+        id: 'hide-week',
+        selector: TaskFilter(
+            id: 'hide-week', name: 'Hide week', date: TaskFilterDate.thisWeek),
+        effect: TaskRuleEffect.hide,
+      ));
       await tester.pumpAndSettle();
 
       expect(viewOptions.state.isFiltering, isTrue);
@@ -318,10 +330,10 @@ void main() {
       expect(find.text('Far future task'), findsOneWidget);
     });
 
-    testWidgets('custom highlight color tints week rows', (tester) async {
+    testWidgets('custom rule color tints week rows', (tester) async {
       await pumpTasks(tester);
-      viewOptions.setHighlightEnabled(true);
-      viewOptions.setHighlightColor(0xFF42A5F5);
+      viewOptions.setRuleEnabled('rule:week', true);
+      viewOptions.setRuleColor('rule:week', 0xFF42A5F5);
       await tester.pumpAndSettle();
 
       final tinted = find.ancestor(
@@ -359,6 +371,27 @@ void main() {
       expect(viewOptions.state.filters, hasLength(4));
       expect(viewOptions.state.activeFilterId, startsWith('custom:'));
       expect(viewOptions.state.isFiltering, isTrue);
+    });
+
+    testWidgets('edit rules opens the dedicated rules page', (tester) async {
+      await pumpTasks(tester);
+      await tester.tap(find.byTooltip('View options'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.text('Edit rules', skipOffstage: false),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Edit rules'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Task rules'), findsOneWidget);
+      expect(find.text('Due this week'), findsOneWidget);
+      // Priority copy explains conflict resolution.
+      expect(find.textContaining('topmost matching highlight'), findsOneWidget);
+      // Toggling the stock rule on the page tints the list behind it.
+      await tester.tap(find.byType(Switch));
+      await tester.pumpAndSettle();
+      expect(viewOptions.state.hasHighlightRule, isTrue);
     });
 
     testWidgets('works without a TasksViewOptionsCubit provider',
