@@ -415,6 +415,48 @@ void main() {
       expect(find.text('Done today task'), findsNothing);
     });
 
+    testWidgets('weekday-anchored range ends at next Monday',
+        (tester) async {
+      await pumpTasks(tester);
+      await tester.tap(find.byTooltip('View options'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.text('New filter', skipOffstage: false),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('New filter'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(DropdownButtonFormField<TaskFilterDate>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Custom range').last);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.text('To next Monday', skipOffstage: false),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('To next Monday'));
+      await tester.pumpAndSettle();
+
+      await tester.dragUntilVisible(
+        find.text('Add filter'),
+        find.byType(ListView).last,
+        const Offset(0, -200),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add filter'));
+      await tester.pumpAndSettle();
+
+      expect(viewOptions.state.activeFilter.date, TaskFilterDate.custom);
+      expect(
+          describeTaskFilter(viewOptions.state.activeFilter),
+          contains('Monday of next week'));
+      expect(find.text('Overdue task'), findsOneWidget);
+      expect(find.text('Due today task'), findsOneWidget);
+      expect(find.text('Far future task'), findsNothing);
+      expect(find.text('Done today task'), findsNothing);
+    });
+
     testWidgets('edit rules opens the dedicated rules page', (tester) async {
       await pumpTasks(tester);
       await tester.tap(find.byTooltip('View options'));

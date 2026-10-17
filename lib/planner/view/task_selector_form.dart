@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../nodes/bloc/node_cubit.dart';
 import '../model/task_date_range.dart';
+import '../model/task_range_bound.dart';
 import '../model/task_filter.dart';
 
 /// The "which tasks" half of a view or rule editor: name, date window,
@@ -140,7 +141,9 @@ class _TaskSelectorFormState extends State<TaskSelectorForm> {
             if (d == TaskFilterDate.custom && next.customRange == null) {
               next = next.copyWith(
                 customRange: const TaskDateRange(
-                    startOffsetDays: 0, endOffsetDays: 7),
+                  start: TaskRangeBound.offset(0),
+                  end: TaskRangeBound.offset(7),
+                ),
               );
             }
             _emit(next);
@@ -150,7 +153,10 @@ class _TaskSelectorFormState extends State<TaskSelectorForm> {
           const SizedBox(height: 12),
           _CustomRangeSection(
             value: draft.customRange ??
-                const TaskDateRange(startOffsetDays: 0, endOffsetDays: 7),
+                const TaskDateRange(
+                  start: TaskRangeBound.offset(0),
+                  end: TaskRangeBound.offset(7),
+                ),
             onChanged: (range) =>
                 _emit(draft.copyWith(customRange: range)),
           ),
@@ -247,25 +253,21 @@ class _TaskSelectorFormState extends State<TaskSelectorForm> {
   }
 }
 
-/// The "which days" half of a custom window: optional start/end as day
-/// offsets from today, with presets and a resolved-date preview so a
-/// rolling window can be dialed in ("Sunday + 8 days" is start +1, end
-/// +9 when today is Saturday — the preview shows the actual dates).
+/// The "which days" half of a custom window: each end pins itself as no
+/// limit, N days from today, or a named weekday N weeks out — with
+/// presets and a resolved-date preview so a rolling window can be dialed
+/// in ("overdue to next Monday" is the second preset; "Sunday + 8 days"
+/// is From Sunday / To Sunday + 8 — the preview shows the actual dates).
 class _CustomRangeSection extends StatelessWidget {
   final TaskDateRange value;
   final ValueChanged<TaskDateRange> onChanged;
 
   const _CustomRangeSection({required this.value, required this.onChanged});
 
-  void _setStart(int? start) => onChanged(TaskDateRange(
-        startOffsetDays: start,
-        endOffsetDays: value.endOffsetDays,
-      ));
+  void _setStart(TaskRangeBound start) =>
+      onChanged(value.copyWith(start: start));
 
-  void _setEnd(int? end) => onChanged(TaskDateRange(
-        startOffsetDays: value.startOffsetDays,
-        endOffsetDays: end,
-      ));
+  void _setEnd(TaskRangeBound end) => onChanged(value.copyWith(end: end));
 
   @override
   Widget build(BuildContext context) {
@@ -280,52 +282,65 @@ class _CustomRangeSection extends StatelessWidget {
           children: [
             _PresetChip(
               label: 'Tomorrow or earlier',
-              selected: value.startOffsetDays == null &&
-                  value.endOffsetDays == 1,
+              selected: value.start.isUnbounded &&
+                  value.end == const TaskRangeBound.offset(1),
               onTap: () => onChanged(const TaskDateRange(
-                  startOffsetDays: null, endOffsetDays: 1)),
+                start: TaskRangeBound.unbounded(),
+                end: TaskRangeBound.offset(1),
+              )),
+            ),
+            _PresetChip(
+              label: 'To next Monday',
+              selected: value.start.isUnbounded &&
+                  value.end ==
+                      const TaskRangeBound.weekday(
+                          weekday: DateTime.monday, weeksOut: 1),
+              onTap: () => onChanged(const TaskDateRange(
+                start: TaskRangeBound.unbounded(),
+                end: TaskRangeBound.weekday(
+                    weekday: DateTime.monday, weeksOut: 1),
+              )),
             ),
             _PresetChip(
               label: 'Next 8 days',
-              selected: value.startOffsetDays == 0 &&
-                  value.endOffsetDays == 8,
+              selected: value.start == const TaskRangeBound.offset(0) &&
+                  value.end == const TaskRangeBound.offset(8),
               onTap: () => onChanged(const TaskDateRange(
-                  startOffsetDays: 0, endOffsetDays: 8)),
+                start: TaskRangeBound.offset(0),
+                end: TaskRangeBound.offset(8),
+              )),
             ),
             _PresetChip(
               label: 'Next 30 days',
-              selected: value.startOffsetDays == 0 &&
-                  value.endOffsetDays == 30,
+              selected: value.start == const TaskRangeBound.offset(0) &&
+                  value.end == const TaskRangeBound.offset(30),
               onTap: () => onChanged(const TaskDateRange(
-                  startOffsetDays: 0, endOffsetDays: 30)),
+                start: TaskRangeBound.offset(0),
+                end: TaskRangeBound.offset(30),
+              )),
             ),
           ],
         ),
         const SizedBox(height: 8),
-        _OffsetRow(
+        _BoundRow(
           label: 'From',
-          value: value.startOffsetDays,
-          unboundedLabel: 'No earlier limit (includes overdue)',
-          decrementTooltip: 'Start a day earlier',
-          incrementTooltip: 'Start a day later',
-          onUnboundedChanged: (unbounded) =>
-              _setStart(unbounded ? null : 0),
+          value: value.start,
+          anyLabel: 'Any time',
+          defaultOffset: 0,
           onChanged: _setStart,
         ),
-        _OffsetRow(
+        _BoundRow(
           label: 'To',
-          value: value.endOffsetDays,
-          unboundedLabel: 'No later limit',
-          decrementTooltip: 'End a day earlier',
-          incrementTooltip: 'End a day later',
-          onUnboundedChanged: (unbounded) => _setEnd(unbounded ? null : 7),
+          value: value.end,
+          anyLabel: 'No limit',
+          defaultOffset: 7,
           onChanged: _setEnd,
         ),
         Text(
           resolvedTaskDateRange(value, now),
           style: Theme.of(context).textTheme.bodySmall,
         ),
-        if (!value.isValid)
+        if (!value.isValidAt(now))
           Text(
             'Start is after end — no dated tasks match.',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -361,22 +376,110 @@ class _PresetChip extends StatelessWidget {
   }
 }
 
-class _OffsetRow extends StatelessWidget {
+/// One pinned end of the range: how it anchors (no limit, days from
+/// today, or a named weekday), plus the control for the chosen anchor.
+class _BoundRow extends StatelessWidget {
   final String label;
-  final int? value;
-  final String unboundedLabel;
-  final String decrementTooltip;
-  final String incrementTooltip;
-  final ValueChanged<bool> onUnboundedChanged;
-  final ValueChanged<int> onChanged;
+  final TaskRangeBound value;
+  final String anyLabel;
+  final int defaultOffset;
+  final ValueChanged<TaskRangeBound> onChanged;
 
-  const _OffsetRow({
+  const _BoundRow({
     required this.label,
     required this.value,
-    required this.unboundedLabel,
+    required this.anyLabel,
+    required this.defaultOffset,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            SizedBox(
+              width: 44,
+              child: Text(label,
+                  style: Theme.of(context).textTheme.labelLarge),
+            ),
+            Expanded(
+              child: Wrap(
+                spacing: 4,
+                children: [
+                  ChoiceChip(
+                    label: Text(anyLabel),
+                    selected: value.kind == TaskRangeBoundKind.unbounded,
+                    onSelected: (_) =>
+                        onChanged(const TaskRangeBound.unbounded()),
+                  ),
+                  ChoiceChip(
+                    label: const Text('Days'),
+                    selected: value.kind == TaskRangeBoundKind.offset,
+                    onSelected: (_) =>
+                        onChanged(TaskRangeBound.offset(defaultOffset)),
+                  ),
+                  ChoiceChip(
+                    label: const Text('Weekday'),
+                    selected: value.kind == TaskRangeBoundKind.weekday,
+                    onSelected: (_) => onChanged(
+                        const TaskRangeBound.weekday(
+                            weekday: DateTime.monday, weeksOut: 1)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            const SizedBox(width: 44),
+            Expanded(
+              child: switch (value.kind) {
+                TaskRangeBoundKind.unbounded => Text(
+                    label == 'From'
+                        ? 'Includes overdue items.'
+                        : 'Never cuts off the future.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                TaskRangeBoundKind.offset => _DayStepper(
+                    value: value.offsetDays,
+                    decrementTooltip: '$label a day earlier',
+                    incrementTooltip: '$label a day later',
+                    onChanged: (v) =>
+                        onChanged(TaskRangeBound.offset(v)),
+                  ),
+                TaskRangeBoundKind.weekday => _WeekdayPicker(
+                    weekday: value.weekday,
+                    weeksOut: value.weeksOut,
+                    onChanged: (weekday, weeksOut) => onChanged(
+                        TaskRangeBound.weekday(
+                            weekday: weekday, weeksOut: weeksOut)),
+                  ),
+              },
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+      ],
+    );
+  }
+}
+
+class _DayStepper extends StatelessWidget {
+  final int value;
+  final String decrementTooltip;
+  final String incrementTooltip;
+  final ValueChanged<int> onChanged;
+
+  const _DayStepper({
+    required this.value,
     required this.decrementTooltip,
     required this.incrementTooltip,
-    required this.onUnboundedChanged,
     required this.onChanged,
   });
 
@@ -390,79 +493,91 @@ class _OffsetRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final v = value;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
+    return Row(
       children: [
-        Row(
-          children: [
-            SizedBox(
-              width: 44,
-              child: Text(label,
-                  style: Theme.of(context).textTheme.labelLarge),
-            ),
-            if (v == null)
-              Expanded(child: Text(unboundedLabel))
-            else ...[
-              IconButton(
-                tooltip: decrementTooltip,
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.remove),
-                onPressed: v <= taskDateRangeMinOffset
-                    ? null
-                    : () => onChanged(
-                        clampTaskDateOffset(v - 1)),
-              ),
-              Expanded(
-                child: Center(
-                  child: Text(
-                    _valueLabel(v),
-                    style: Theme.of(context).textTheme.titleSmall,
-                  ),
-                ),
-              ),
-              IconButton(
-                tooltip: incrementTooltip,
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.add),
-                onPressed: v >= taskDateRangeMaxOffset
-                    ? null
-                    : () => onChanged(
-                        clampTaskDateOffset(v + 1)),
-              ),
-            ],
-          ],
+        IconButton(
+          tooltip: decrementTooltip,
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.remove),
+          onPressed: value <= taskDateRangeMinOffset
+              ? null
+              : () => onChanged(clampTaskDateOffset(value - 1)),
         ),
-        Row(
-          children: [
-            const SizedBox(width: 44),
-            Expanded(
-              child: InkWell(
-                onTap: () => onUnboundedChanged(v != null),
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(vertical: 4),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: Checkbox(
-                          value: v == null,
-                          onChanged: (b) =>
-                              onUnboundedChanged(b ?? false),
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      Flexible(child: Text(unboundedLabel)),
-                    ],
-                  ),
-                ),
-              ),
+        Expanded(
+          child: Center(
+            child: Text(
+              _valueLabel(value),
+              style: Theme.of(context).textTheme.titleSmall,
             ),
-          ],
+          ),
+        ),
+        IconButton(
+          tooltip: incrementTooltip,
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.add),
+          onPressed: value >= taskDateRangeMaxOffset
+              ? null
+              : () => onChanged(clampTaskDateOffset(value + 1)),
+        ),
+      ],
+    );
+  }
+}
+
+class _WeekdayPicker extends StatelessWidget {
+  final int weekday;
+  final int weeksOut;
+  final void Function(int weekday, int weeksOut) onChanged;
+
+  const _WeekdayPicker({
+    required this.weekday,
+    required this.weeksOut,
+    required this.onChanged,
+  });
+
+  static const _weekLabels = [
+    'This week',
+    'Next week',
+    'In 2 weeks',
+    'In 3 weeks'
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: DropdownButton<int>(
+            value: weekday,
+            isExpanded: true,
+            items: [
+              for (var d = DateTime.monday; d <= DateTime.sunday; d++)
+                DropdownMenuItem(
+                  value: d,
+                  child: Text(taskRangeWeekdayName(d)),
+                ),
+            ],
+            onChanged: (d) {
+              if (d != null) onChanged(d, weeksOut);
+            },
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: DropdownButton<int>(
+            value: weeksOut.clamp(0, _weekLabels.length - 1),
+            isExpanded: true,
+            items: [
+              for (var w = 0; w < _weekLabels.length; w++)
+                DropdownMenuItem(
+                  value: w,
+                  child: Text(_weekLabels[w]),
+                ),
+            ],
+            onChanged: (w) {
+              if (w != null) onChanged(weekday, w);
+            },
+          ),
         ),
       ],
     );
