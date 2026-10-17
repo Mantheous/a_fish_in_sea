@@ -140,6 +140,17 @@ Loop behavior: retries the auto-PR each poll; this ping repeats at most once/day
   fi
   echo "[build] #$N launching tmux session agent-$N"
   tmux new-session -d -s "agent-$N" "$DIR/builder-run.sh $N"
+  # Launch verification: a builder that dies seconds after launch leaves
+  # no log and (for some early exits) no retry stamp, so the dispatcher
+  # relaunches it every poll into the same wall. If the session is already
+  # gone, back the issue off loudly and move on to the next issue in this
+  # poll. A healthy builder runs for many minutes, so 10s is safe.
+  sleep 10
+  if ! tmux has-session -t "agent-$N" 2>/dev/null; then
+    echo "[build] #$N session agent-$N died within 10s of launch — backing off (retry in ~1h) and trying the next issue"
+    date +%s -d "@$(( $(date +%s) + 3600 ))" >"$CD_DIR/$N"
+    continue
+  fi
   # One builder per poll: the loop's model quota is serialized. The next
   # approved issue launches on the next poll (builder_running guard above).
   break
