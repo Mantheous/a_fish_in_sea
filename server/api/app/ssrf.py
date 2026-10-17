@@ -16,6 +16,7 @@ capped at 5MB.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import socket
 import urllib.parse
@@ -33,6 +34,22 @@ _RFC1918 = (
 )
 
 
+def _is_internal_ip(raw_ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    ip = raw_ip
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return (
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        or not ip.is_global
+        or (isinstance(ip, ipaddress.IPv4Address) and any(ip in net for net in _RFC1918))
+    )
+
+
 def assert_public_http_url(url: str) -> str:
     """Validate url and return it unchanged. Raises ValueError on policy
     violation (caller maps to HTTP 400 or a stored feed error)."""
@@ -48,39 +65,40 @@ def assert_public_http_url(url: str) -> str:
         addrinfo = socket.getaddrinfo(host, parsed.port or 0)
     except socket.gaierror:
         raise ValueError(f"Could not resolve feed host: {host}")
+    if not addrinfo:
+        raise ValueError(f"Could not resolve feed host: {host}")
     for _, _, _, _, sockaddr in addrinfo:
         try:
             ip = ipaddress.ip_address(sockaddr[0])
         except ValueError:
             raise ValueError(f"Could not resolve feed host: {host}")
-        if (
-            ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-            or any(ip in net for net in _RFC1918)
-        ):
+        if _is_internal_ip(ip):
             raise ValueError("Feed host resolves to an internal address")
     return url
 
 
 async def fetch_public_bytes(url: str, timeout: float = 30.0) -> tuple[bytes, str]:
-    """Fetch url with per-hop SSRF validation. Returns (body, etag)."""
+    """Fetch url with per-hop SSRF validation and streaming size enforcement."""
     current = url
     for _ in range(MAX_REDIRECTS + 1):
-        assert_public_http_url(current)
+        await asyncio.to_thread(assert_public_http_url, current)
         async with httpx.AsyncClient(
             timeout=timeout, follow_redirects=False
         ) as c:
-            resp = await c.get(current)
-        location = resp.headers.get("location")
-        if resp.status_code in (301, 302, 303, 307, 308) and location:
-            current = urllib.parse.urljoin(current, location)
-            continue
-        if resp.status_code >= 400:
-            raise ValueError(f"Feed returned {resp.status_code}")
-        if len(resp.content) > MAX_BYTES:
-            raise ValueError("Feed too large (>5MB)")
-        return resp.content, resp.headers.get("etag", "")
+            async with c.stream("GET", current) as resp:
+                location = resp.headers.get("location")
+                if resp.status_code in (301, 302, 303, 307, 308) and location:
+                    current = urllib.parse.urljoin(current, location)
+                    continue
+                if resp.status_code >= 400:
+                    raise ValueError(f"Feed returned {resp.status_code}")
+                cl = resp.headers.get("content-length")
+                if cl and cl.isdigit() and int(cl) > MAX_BYTES:
+                    raise ValueError("Feed too large (>5MB)")
+                chunks = bytearray()
+                async for chunk in resp.aiter_bytes():
+                    chunks.extend(chunk)
+                    if len(chunks) > MAX_BYTES:
+                        raise ValueError("Feed too large (>5MB)")
+                return bytes(chunks), resp.headers.get("etag", "")
     raise ValueError("Too many redirects")

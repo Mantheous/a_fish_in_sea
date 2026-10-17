@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
 from .db import init_db
+from .oauth_store import validate_fernet_key
 from .routers import auth, anki, canvas, feedback, fetch, google, imports, items, plaid, proxy, syllabus, sync, tokens
 
 log = logging.getLogger("a_fish_in_sea")
@@ -47,7 +48,34 @@ class _FishPrefixStrip:
                 scope = {**scope, "path": stripped, "raw_path": raw_stripped}
         await self.app(scope, receive, send)
 
-# Flutter web build lives at <repo>/build/web when `flutter build web`
+class _SecurityHeaders:
+    """Attach baseline browser hardening headers to every HTTP response."""
+
+    _HEADERS = (
+        (b"x-content-type-options", b"nosniff"),
+        (b"x-frame-options", b"DENY"),
+        (b"referrer-policy", b"strict-origin-when-cross-origin"),
+    )
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def _send(message):
+            if message.get("type") == "http.response.start":
+                headers = list(message.get("headers") or [])
+                existing = {k.lower() for k, _ in headers}
+                for k, v in self._HEADERS:
+                    if k not in existing:
+                        headers.append((k, v))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, _send)
 # has run. Served same-origin so the web app needs no CORS at all.
 WEB_BUILD_DIR = (
     Path(__file__).parent.parent.parent.parent / "build" / "web"
@@ -83,6 +111,8 @@ def create_app() -> FastAPI:
             "TOKEN_FERNET_KEY is empty: OAuth tokens are stored in "
             "plaintext. Set a Fernet key in .env."
         )
+    else:
+        validate_fernet_key(s.token_fernet_key)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
@@ -90,6 +120,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(_SecurityHeaders)
     # Strip the Tailnet subpath before routing (see _FishPrefixStrip).
     app.add_middleware(_FishPrefixStrip)
 
@@ -148,14 +179,15 @@ def _mount_web(app: FastAPI) -> None:
 
     @app.get("/{path:path}", include_in_schema=False)
     async def _spa(path: str):
-        candidate = WEB_BUILD_DIR / path
-        if path and candidate.is_file():
+        if path and "\x00" not in path:
             try:
+                candidate = (WEB_BUILD_DIR / path).resolve()
                 candidate.relative_to(WEB_BUILD_DIR)
-            except ValueError:
+            except (ValueError, OSError):
                 pass
             else:
-                return FileResponse(candidate)
+                if candidate.is_file():
+                    return FileResponse(candidate)
         return FileResponse(index)
 
 

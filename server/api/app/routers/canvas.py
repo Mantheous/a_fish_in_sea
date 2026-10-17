@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import canvas as c
 from ..db import get_session
-from ..deps import get_current_user
+from ..deps import require_jwt_user
 from ..models import User
 from ..oauth_store import (
     clear_connection,
@@ -71,7 +71,7 @@ def _canvas_error(e: Exception, reconnect_statuses=(401, 403)):
 
 @router.get("/status")
 async def status(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     row = await get_connection(session, user.id, _PROVIDER)
@@ -86,7 +86,7 @@ async def status(
 @router.post("/connect")
 async def connect(
     body: ConnectIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
     _rl: None = Depends(limit("canvas:connect", 30, 60, by_user=True)),
 ):
@@ -122,7 +122,7 @@ async def connect(
 
 @router.post("/disconnect")
 async def disconnect(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     await clear_connection(session, user.id, _PROVIDER)
@@ -133,7 +133,7 @@ async def disconnect(
 async def submissions(
     start_date: str | None = None,
     end_date: str | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
     _rl: None = Depends(limit("canvas:submissions", 60, 60, by_user=True)),
 ):

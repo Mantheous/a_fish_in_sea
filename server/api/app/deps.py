@@ -44,8 +44,16 @@ async def get_current_user(
     ).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=401, detail="Invalid token")
-    row.last_used_at = dt.datetime.now(dt.timezone.utc)
-    await session.commit()
+    now = dt.datetime.now(dt.timezone.utc)
+    last_used = row.last_used_at
+    if last_used is not None and last_used.tzinfo is None:
+        last_used = last_used.replace(tzinfo=dt.timezone.utc)
+    if last_used is None or (now - last_used) >= dt.timedelta(seconds=60):
+        try:
+            row.last_used_at = now
+            await session.commit()
+        except Exception:
+            await session.rollback()
     user = await session.get(User, row.user_id)
     if user is None:
         raise HTTPException(status_code=401, detail="Unknown user")
@@ -59,18 +67,48 @@ async def get_current_user(
     return user
 
 
-def require_scope(scope: str):
-    """Gate /items/* collection routes. JWT users bypass (full access);
+def is_api_token(user: User) -> bool:
+    return getattr(user, "_scopes", None) is not None
+
+
+def is_review_token(user: User) -> bool:
+    return bool(getattr(user, "_token_review", False))
+
+
+async def require_jwt_user(user: User = Depends(get_current_user)) -> User:
+    """Require an interactive user JWT (never a long-lived API token)."""
+    if is_api_token(user):
+        raise HTTPException(
+            status_code=403,
+            detail="This endpoint requires a user session (JWT), not an API token",
+        )
+    return user
+
+
+def check_token_scope(
+    user: User, *accepted_scopes: str, allow_review: bool = False
+) -> None:
+    """Verify API-token scopes and review-mode restrictions."""
+    scopes: list[str] | None = getattr(user, "_scopes", None)
+    if scopes is None:
+        return  # JWT: full access
+    if is_review_token(user) and not allow_review:
+        raise HTTPException(
+            status_code=403,
+            detail="Review-only tokens cannot access this endpoint; use POST /api/v1/imports",
+        )
+    if "sync" in scopes or any(s in scopes for s in accepted_scopes):
+        return
+    needed = accepted_scopes[0] if accepted_scopes else "sync"
+    raise HTTPException(status_code=403, detail=f"Missing scope: {needed}")
+
+
+def require_scope(scope: str, *, allow_review: bool = False):
+    """Gate routes by scope. JWT users bypass (full access);
     API tokens must carry the scope or the blanket 'sync' scope."""
 
     async def _check(user: User = Depends(get_current_user)) -> User:
-        scopes: list[str] | None = getattr(user, "_scopes", None)
-        if scopes is None:
-            return user  # JWT: full access
-        if "sync" in scopes or scope in scopes:
-            return user
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=403, detail=f"Missing scope: {scope}")
+        check_token_scope(user, scope, allow_review=allow_review)
+        return user
 
     return _check

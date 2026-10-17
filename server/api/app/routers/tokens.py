@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
-from ..deps import get_current_user
+from ..deps import require_jwt_user
 from ..models import COLLECTIONS, ApiToken, User
 from ..schemas import ApiTokenCreateIn, ApiTokenCreated, ApiTokenOut
 from ..security import hash_api_token, new_api_token
@@ -25,7 +25,7 @@ _VALID_SCOPES = {"sync"} | {
 @router.post("", response_model=ApiTokenCreated, status_code=201)
 async def create_token(
     body: ApiTokenCreateIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     plaintext, prefix, digest = new_api_token()
@@ -58,7 +58,7 @@ async def create_token(
 
 @router.get("", response_model=list[ApiTokenOut])
 async def list_tokens(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     rows = (
@@ -83,7 +83,7 @@ async def list_tokens(
 @router.delete("/{token_id}", status_code=204)
 async def revoke_token(
     token_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     row = await session.get(ApiToken, token_id)

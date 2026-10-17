@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import urllib.parse
 from typing import Any
 
 import httpx
@@ -171,9 +172,17 @@ async def list_planner_items(
                 )
                 if normalized is not None:
                     out.append(normalized)
-            url = _next_link(resp.headers.get("Link"))
-            if not url:
+            next_url = _next_link(resp.headers.get("Link"))
+            if not next_url:
                 break
+            parsed_next = urllib.parse.urlparse(next_url)
+            if parsed_next.scheme.lower() != "https" or validate_host(
+                parsed_next.hostname or ""
+            ) != validated:
+                raise CanvasAuthError(
+                    "Canvas pagination Link pointed outside the validated host."
+                )
+            url = next_url
     return out
 
 

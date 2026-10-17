@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import datetime as dt
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from .. import llm
+from ..ratelimit import limit
 
 router = APIRouter(tags=["syllabus"])
+
+_MAX_SYLLABUS_BODY_BYTES = 128 * 1024
 
 
 def _normalize_drafts(raw: list) -> list[dict]:
@@ -40,8 +43,17 @@ def _normalize_drafts(raw: list) -> list[dict]:
 
 
 @router.post("/syllabus/extract")
-async def syllabus_extract(body: dict):
-    text = body.get("text") or ""
+async def syllabus_extract(
+    request: Request,
+    body: dict,
+    _rl: None = Depends(limit("syllabus:extract", 15, 60)),
+):
+    raw_len = len(await request.body())
+    if raw_len > _MAX_SYLLABUS_BODY_BYTES:
+        return JSONResponse(
+            status_code=413, content={"error": "Syllabus payload too large"}
+        )
+    text = body.get("text") if isinstance(body, dict) else ""
     text = text.strip() if isinstance(text, str) else ""
     if not text:
         return JSONResponse(status_code=400, content={"error": "Missing text"})

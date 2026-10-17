@@ -24,7 +24,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
-from ..deps import get_current_user
+from ..deps import check_token_scope, get_current_user
 from ..models import COLLECTIONS, SyncItem, User
 from ..schemas import GuardedChange, PullOut, PushIn, PushOut, SyncRecord
 
@@ -33,6 +33,7 @@ router = APIRouter(prefix="/sync", tags=["sync"])
 logger = logging.getLogger(__name__)
 
 _MAX_LIMIT = 2000
+_SINGLETON_COLLECTIONS = ("settings", "waterfall", "plaid")
 
 # Mirrors the Dart client's SyncEngine._looksLikeDataLoss thresholds, with
 # a time window so clients that chunk their pushes (400 items per request)
@@ -109,6 +110,11 @@ async def pull(
             raise HTTPException(
                 status_code=400, detail=f"Unknown collections: {sorted(unknown)}"
             )
+    if wanted:
+        for c in sorted(wanted):
+            check_token_scope(user, f"{c}:read", f"{c}:write")
+    else:
+        check_token_scope(user, "sync")
     since_dt = _parse_since(since)
     stmt = select(SyncItem).where(SyncItem.user_id == user.id)
     if wanted:
@@ -131,6 +137,16 @@ async def push(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
+    for change in body.changes:
+        if change.collection not in COLLECTIONS:
+            raise HTTPException(
+                status_code=400, detail=f"Unknown collection: {change.collection}"
+            )
+    if body.changes:
+        for c in sorted({change.collection for change in body.changes}):
+            check_token_scope(user, f"{c}:write")
+    else:
+        check_token_scope(user, "sync")
     now = _now()
     applied: list[SyncRecord] = []
     guarded: list[GuardedChange] = []
@@ -207,9 +223,12 @@ async def push(
             )
             continue
         # Light envelope guard: item payload should carry its own id when
-        # the Dart model has one; 'settings' singleton is exempt. Unknown
-        # fields pass through untouched (forward-compat).
-        if change.collection != "settings" and isinstance(change.data, dict):
+        # the Dart model has one; singletons ('settings'/'waterfall'/'plaid')
+        # are exempt. Unknown fields pass through untouched (forward-compat).
+        if (
+            change.collection not in _SINGLETON_COLLECTIONS
+            and isinstance(change.data, dict)
+        ):
             payload_id = change.data.get("id")
             if payload_id is not None and str(payload_id) != change.item_id:
                 raise HTTPException(

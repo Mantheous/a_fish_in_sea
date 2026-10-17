@@ -54,8 +54,13 @@ def is_sandbox() -> bool:
     return os.getenv("PLAID_ENV", "sandbox") == "sandbox"
 
 
+_cached_client: plaid_api.PlaidApi | None = None
+_cached_client_key: tuple[str, str, str] | None = None
+
+
 def get_client() -> plaid_api.PlaidApi:
-    """Build a Plaid client from env. Raises PlaidConfigError without keys."""
+    """Build or reuse a Plaid client from env. Raises PlaidConfigError without keys."""
+    global _cached_client, _cached_client_key
     client_id = os.getenv("PLAID_CLIENT_ID")
     secret = os.getenv("PLAID_SECRET")
     if not client_id or not secret:
@@ -63,6 +68,9 @@ def get_client() -> plaid_api.PlaidApi:
             "Server is missing PLAID_CLIENT_ID / PLAID_SECRET"
         )
     env = os.getenv("PLAID_ENV", "sandbox")
+    key = (client_id, secret, env)
+    if _cached_client is not None and _cached_client_key == key:
+        return _cached_client
     host = plaid.Environment.Sandbox
     if env == "production":
         host = plaid.Environment.Production
@@ -74,7 +82,9 @@ def get_client() -> plaid_api.PlaidApi:
             "plaidVersion": "2020-09-14",
         },
     )
-    return plaid_api.PlaidApi(plaid.ApiClient(configuration))
+    _cached_client = plaid_api.PlaidApi(plaid.ApiClient(configuration))
+    _cached_client_key = key
+    return _cached_client
 
 
 def to_dict(obj) -> dict:
@@ -120,7 +130,7 @@ def format_plaid_error(e: "plaid.ApiException") -> dict:
 
 def plaid_error_response(e: "plaid.ApiException") -> JSONResponse:
     payload = format_plaid_error(e)
-    pretty_print_response(payload)
+    log_response(payload)
     return JSONResponse(status_code=e.status or 500, content=payload)
 
 

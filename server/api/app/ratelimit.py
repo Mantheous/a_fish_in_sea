@@ -20,9 +20,26 @@ from .models import User
 
 
 class RateLimiter:
+    _MAX_BUCKETS = 10000
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._hits: dict[str, deque[float]] = {}
+        self._windows: dict[str, float] = {}
+
+    def _evict_locked(self, now: float) -> None:
+        stale = [
+            k
+            for k, v in self._hits.items()
+            if not v or v[-1] <= now - self._windows.get(k, 60.0)
+        ]
+        for k in stale:
+            self._hits.pop(k, None)
+            self._windows.pop(k, None)
+        while len(self._hits) >= self._MAX_BUCKETS:
+            oldest = next(iter(self._hits))
+            self._hits.pop(oldest, None)
+            self._windows.pop(oldest, None)
 
     def allowed(
         self,
@@ -34,17 +51,22 @@ class RateLimiter:
         """Record a hit and return True when still within budget."""
         now = time.monotonic() if now is None else now
         with self._lock:
-            hits = self._hits.setdefault(key, deque())
+            hits = self._hits.get(key)
+            if hits is None:
+                if len(self._hits) >= self._MAX_BUCKETS:
+                    self._evict_locked(now)
+                hits = deque()
+            else:
+                # Move active key to end (LRU order)
+                self._hits.pop(key, None)
+            self._hits[key] = hits
+            self._windows[key] = max(window_s, self._windows.get(key, 0.0))
             cutoff = now - window_s
             while hits and hits[0] <= cutoff:
                 hits.popleft()
             if len(hits) >= max_calls:
                 return False
             hits.append(now)
-            if len(self._hits) > 10000:
-                # Drop empty buckets so memory can't grow unbounded.
-                for stale in [k for k, v in self._hits.items() if not v][:1000]:
-                    del self._hits[stale]
             return True
 
     def retry_after(self, key: str, max_calls: int, window_s: float) -> int:
@@ -57,6 +79,7 @@ class RateLimiter:
     def reset(self) -> None:
         with self._lock:
             self._hits.clear()
+            self._windows.clear()
 
 
 limiter = RateLimiter()
@@ -72,8 +95,18 @@ def _enforce(rl: RateLimiter, key: str, max_calls: int, window_s: float) -> None
 
 
 def _ip(request: Request) -> str:
-    if request.client is not None and request.client.host:
-        return request.client.host
+    host = request.client.host if request.client and request.client.host else ""
+    if host in ("127.0.0.1", "::1", "localhost"):
+        xff = (request.headers.get("x-forwarded-for") or "").strip()
+        if xff:
+            first = xff.split(",")[0].strip()
+            if first:
+                return first[:128]
+        real_ip = (request.headers.get("x-real-ip") or "").strip()
+        if real_ip:
+            return real_ip[:128]
+    if host:
+        return host
     return "unknown"
 
 

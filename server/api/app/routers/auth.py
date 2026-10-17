@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
-from ..deps import get_current_user
+from ..deps import get_current_user, require_jwt_user
 from ..models import User
 from ..ratelimit import limit
 from ..refresh_store import (
@@ -46,7 +47,11 @@ async def register(
         raise HTTPException(status_code=409, detail="Email already registered")
     user = User(email=email, password_hash=hash_password(body.password))
     session.add(user)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Email already registered")
     await session.refresh(user)
     refresh, _jti = await issue(session, user.id)
     return TokenPair(access_token=access_token(user.id), refresh_token=refresh)
@@ -109,7 +114,7 @@ async def logout(
 
 @router.post("/logout_all")
 async def logout_all(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     """Revoke all of the caller's refresh tokens (all devices)."""

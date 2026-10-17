@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from .. import anki as a
-from ..deps import get_current_user
+from ..deps import require_scope
 from ..models import User
 from ..ratelimit import limit
 
@@ -30,7 +30,7 @@ class InvokeIn(BaseModel):
 @router.post("/invoke")
 async def invoke(
     body: InvokeIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("sync")),
     _rl: None = Depends(limit("anki:invoke", 60, 60, by_user=True)),
 ):
     action = (body.action or "").strip()

@@ -17,17 +17,20 @@ import datetime as dt
 import urllib.parse
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
-from ..deps import get_current_user
+from ..deps import require_scope
 from ..models import FeedSnapshot, SyncItem, User
 from ..ratelimit import limit
-from ..ssrf import fetch_public_bytes
+from ..ssrf import MAX_ICS_BYTES, fetch_public_bytes
 
 router = APIRouter(prefix="/fetch", tags=["fetch"])
+
+_MAX_SNAPSHOTS_PER_USER = 50
 
 
 async def _fetch_url(url: str) -> tuple[bytes, str]:
@@ -46,8 +49,8 @@ def _now() -> dt.datetime:
 
 
 class RefreshIn(BaseModel):
-    feed_id: str = ""
-    url: str = ""  # fallback when the feed config hasn't synced yet
+    feed_id: str = Field(default="", max_length=256)
+    url: str = Field(default="", max_length=2048)  # fallback when the feed config hasn't synced yet
 
 
 class RefreshResult(BaseModel):
@@ -129,11 +132,45 @@ async def _store_snapshot(
     ).scalar_one_or_none()
     now = _now()
     if row is None:
+        all_snaps = list(
+            (
+                await session.execute(
+                    select(FeedSnapshot)
+                    .where(FeedSnapshot.user_id == user_id)
+                    .order_by(FeedSnapshot.fetched_at.asc(), FeedSnapshot.id.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        while len(all_snaps) >= _MAX_SNAPSHOTS_PER_USER:
+            await session.delete(all_snaps.pop(0))
         row = FeedSnapshot(
             user_id=user_id, feed_id=feed_id, url=url, ics=ics, etag=etag,
             status=status, error=error, fetched_at=now,
         )
         session.add(row)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            row = (
+                await session.execute(
+                    select(FeedSnapshot).where(
+                        and_(
+                            FeedSnapshot.user_id == user_id,
+                            FeedSnapshot.feed_id == feed_id,
+                        )
+                    )
+                )
+            ).scalar_one()
+            row.url = url
+            row.ics = ics
+            row.etag = etag
+            row.status = status
+            row.error = error
+            row.fetched_at = now
+            await session.commit()
     else:
         row.url = url
         row.ics = ics
@@ -141,7 +178,7 @@ async def _store_snapshot(
         row.status = status
         row.error = error
         row.fetched_at = now
-    await session.commit()
+        await session.commit()
     await session.refresh(row)
     return row
 
@@ -151,6 +188,8 @@ async def _refresh_one(
 ) -> RefreshResult:
     try:
         body, etag = await fetch_url(url)
+        if len(body) > MAX_ICS_BYTES:
+            raise ValueError("Feed too large (>5MB)")
     except Exception as e:
         row = await _store_snapshot(
             session, user_id, feed_id, url, "", "", "error", str(e)[:500]
@@ -179,7 +218,7 @@ async def _refresh_one(
 @router.post("/refresh", response_model=RefreshResult)
 async def refresh(
     body: RefreshIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("sync")),
     session: AsyncSession = Depends(get_session),
     _rl: None = Depends(limit("fetch:refresh", 60, 60, by_user=True)),
 ):
@@ -187,20 +226,25 @@ async def refresh(
     url = body.url.strip()
     if not feed_id and not url:
         raise HTTPException(status_code=400, detail="feed_id or url required")
-    if not url and feed_id:
+    if feed_id:
         for row in await _user_feeds(session, user.id):
-            if row.item_id == feed_id and isinstance(row.data, dict):
-                url = str(row.data.get("url", ""))
+            if row.item_id == feed_id:
+                if row.deleted:
+                    raise HTTPException(
+                        status_code=404, detail="Feed was deleted"
+                    )
+                if not url and isinstance(row.data, dict):
+                    url = str(row.data.get("url", ""))
                 break
     if urllib.parse.urlparse(url).scheme not in ("http", "https"):
         raise HTTPException(status_code=400, detail="Only http(s) feed urls supported")
-    key = feed_id or url
+    key = (feed_id or url)[:256]
     return await _refresh_one(session, user.id, key, url)
 
 
 @router.post("/refresh-due", response_model=RefreshDueOut)
 async def refresh_due(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("sync")),
     session: AsyncSession = Depends(get_session),
     _rl: None = Depends(limit("fetch:refresh-due", 60, 60, by_user=True)),
 ):
@@ -215,7 +259,7 @@ async def refresh_due(
 @router.get("/snapshot", response_model=SnapshotOut)
 async def snapshot(
     feed_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("sync")),
     session: AsyncSession = Depends(get_session),
 ):
     row = (
