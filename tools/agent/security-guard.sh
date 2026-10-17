@@ -73,17 +73,13 @@ Read-only. Follow your agent instructions exactly."
   # template is 'Verdict: safe | block', so any '<' or 'safe | block' text
   # is a template echo, not a real verdict.
   if [ -z "$VERDICT" ] || echo "$VERDICT" | grep -qF '<' || echo "$VERDICT" | grep -qF 'safe | block'; then
-    echo "[sec-guard] PR #$N audit produced no usable verdict — retried next poll, nothing labeled"
-    "$DIR/tg.sh" "⚠️ Security guardian audit for PR #$N produced no verdict (failed run) — retrying next poll:
-$(gh pr view "$N" --json url --jq .url 2>/dev/null || true)" || true
+    echo "[sec-guard] PR #$N audit produced no usable verdict — retried next poll, nothing labeled (no telegram: notify-quiet)"
     continue
   fi
   if ! gh pr comment "$N" --body "$AUDIT
 
 $GUARD_MARKER sha=$SHA" >/dev/null; then
-    echo "[sec-guard] PR #$N audit comment failed (gh hiccup) — retried next poll"
-    "$DIR/tg.sh" "⚠️ Security guardian could not post the audit for PR #$N — retrying next poll:
-$(gh pr view "$N" --json url --jq .url 2>/dev/null || true)" || true
+    echo "[sec-guard] PR #$N audit comment failed (gh hiccup) — retried next poll (no telegram: notify-quiet)"
     continue
   fi
   "$DIR/label.sh" "$N" remove "$PASS_LABEL" "$FAIL_LABEL" || true
@@ -97,9 +93,7 @@ Audit comment on the PR." || true
     "$DIR/label.sh" "$N" add "$PASS_LABEL" || true
     echo "[sec-guard] PR #$N safe — $VERDICT"
   else
-    echo "[sec-guard] PR #$N unrecognized verdict ($VERDICT) — leaving unlabeled, retried next poll"
-    "$DIR/tg.sh" "⚠️ Security guardian audit for PR #$N had an unrecognized verdict — retrying next poll:
-$(gh pr view "$N" --json url --jq .url 2>/dev/null || true)" || true
+    echo "[sec-guard] PR #$N unrecognized verdict ($VERDICT) — leaving unlabeled, retried next poll (no telegram: notify-quiet)"
   fi
 done
 
@@ -175,8 +169,7 @@ VERDICT="$(grep -m1 '^Verdict:' "$REPORT" || true)"
 # No usable verdict = failed audit run (template echo). Not safe, not
 # blocked: re-audited next poll. The template is 'Verdict: safe | block'.
 if [ -z "$VERDICT" ] || echo "$VERDICT" | grep -qF '<' || echo "$VERDICT" | grep -qF 'safe | block'; then
-  echo "[sec-guard] preflight audit for $DESC produced no usable verdict — not marking safe; retried next poll"
-  "$DIR/tg.sh" "⚠️ Security guardian preflight for $DESC produced no verdict (failed run) — not marking safe; retrying next poll" || true
+  echo "[sec-guard] preflight audit for $DESC produced no usable verdict — not marking safe; retried next poll (no telegram: notify-quiet)"
   exit 0
 fi
 if echo "$VERDICT" | grep -qi '^Verdict: block'; then
@@ -190,7 +183,6 @@ elif echo "$VERDICT" | grep -qi '^Verdict: safe'; then
   echo "$DESC" > "$DESC_MARKER"
   echo "[sec-guard] safe $DESC — $VERDICT"
 else
-  echo "[sec-guard] preflight audit for $DESC had an unrecognized verdict — not marking safe; retried next poll"
-  "$DIR/tg.sh" "⚠️ Security guardian preflight for $DESC had an unrecognized verdict — not marking safe; retrying next poll" || true
+  echo "[sec-guard] preflight audit for $DESC had an unrecognized verdict — not marking safe; retried next poll (no telegram: notify-quiet)"
 fi
 echo "[sec-guard] done"

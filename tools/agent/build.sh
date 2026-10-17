@@ -107,10 +107,8 @@ Builder run log (loop host): \`$WT/.agent-build.log\` — read it to verify the 
 This PR was opened by the loop dispatcher: the builder pushed its branch but its run ended before it created the PR itself (model rate limit at the finish line). The reviewer agent re-checks the diff against the plan and gates before any merge; treat anything unverified in the diff as review:changes-requested material, reworkable from \`$WT\`.$LOGLINE"
       if PR_URL="$(gh pr create --base main --head "$BRANCH" \
           --title "[agent #$N] $TITLE" --body "$BODY" 2>&1)"; then
-        echo "[build] #$N opened $PR_URL"
+        echo "[build] #$N opened $PR_URL (no telegram: notify-quiet)"
         rm -f "/tmp/opencode/agent-loop-reported/dispatcher-$N-no-pr" 2>/dev/null || true
-        "$DIR/tg.sh" "🔗 Dispatcher opened the PR for #$N (builder run ended before creating it): $TITLE
-$PR_URL" || true
       else
         echo "[build] #$N dispatcher could not open the PR: $PR_URL — needs a human"
         # A persistent `gh pr create` failure would otherwise re-ping every

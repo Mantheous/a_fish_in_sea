@@ -110,10 +110,7 @@ if [ -f "$REPORT" ]; then
   FINDINGS="$(grep -ci '^## Finding' "$REPORT" || true)"
 fi
 VERDICT="$(grep -m1 '^Verdict:' "$REPORT" 2>/dev/null || echo "Verdict: (no report written)")"
-echo "[ux-walk] $STAMP findings=$FINDINGS blockers=$BLOCKERS"
-"$DIR/tg.sh" "👵 UX walk $STAMP ($REASON): $FINDINGS findings, $BLOCKERS blockers
-$VERDICT
-Report: $REPORT" || echo "[ux-walk] telegram ping failed"
+echo "[ux-walk] $STAMP findings=$FINDINGS blockers=$BLOCKERS (no telegram: notify-quiet — blockers re-enter as triage plans, which do text)"
 
 # Blockers re-enter the normal loop as one triageable issue (screenshots
 # live on the loop host, readable by the triage/builder agents).

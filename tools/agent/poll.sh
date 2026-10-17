@@ -36,8 +36,8 @@ step() {
   echo "[agent-poll] step $name"
   "$@" || st=$?
   if [ "$st" -ne 0 ]; then
-    echo "[agent-poll] step $name failed (exit $st) — continuing the cycle"
-    "$REPO/tools/agent/tg.sh" "⚠️ Agent loop step '$name' failed this cycle (exit $st) — continuing; see journalctl --user -u agent-poll" || true
+    # Notify-quiet: step failures are transient (next poll retries) — journal only, no text.
+    echo "[agent-poll] step $name failed (exit $st) — continuing the cycle (no telegram: notify-quiet)"
   fi
 }
 

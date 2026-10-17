@@ -148,17 +148,12 @@ $REVIEW_MARKER"
   # cost an entire review cycle on 2026-10-13 (poll died at `gh pr
   # comment`, skipping data-guard/security-guard/deploy/ux-walk).
   if ! gh pr comment "$N" --body "$REVIEW" >/dev/null 2>&1; then
-    echo "[review] #$N could not post the verdict comment — re-reviewing next poll"
-    "$DIR/tg.sh" "⚠️ Review verdict for PR #$N could not be posted — gh hiccup, re-reviewing next poll:
-$(gh pr view "$N" --json url --jq .url 2>/dev/null || true)" || true
+    echo "[review] #$N could not post the verdict comment — re-reviewing next poll (no telegram: notify-quiet)"
     continue
   fi
   if [ "$VERDICT" = "changes-requested" ]; then
     "$DIR/label.sh" "$N" add "$FAIL_LABEL" || echo "[review] #$N could not label $FAIL_LABEL (see label.sh) — verdict comment still posted"
-    echo "[review] #$N changes requested"
-    "$DIR/tg.sh" "🧑‍⚖️ PR #$N review: changes requested
-$(echo "$REVIEW" | grep -m1 '^Plan fidelity:')
-$(gh pr view "$N" --json url --jq .url)" || true
+    echo "[review] #$N changes requested (no telegram: notify-quiet — auto-rework handles it; text only if rework exhausts)"
   else
     "$DIR/label.sh" "$N" add "$PASS_LABEL" || echo "[review] #$N could not label $PASS_LABEL"
     echo "[review] #$N passed"

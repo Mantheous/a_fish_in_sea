@@ -85,23 +85,19 @@ print(f'{kind}|{who}|{arg}|{feedback}')
     echo "[approve] #$N approved by @$WHO"
     if ! gh issue edit "$N" --remove-label agent-pending --add-label agent-approved >/dev/null \
         || ! gh issue comment "$N" --body "Approved by @$WHO — builder will pick this up automatically." >/dev/null; then
-      echo "[approve] #$N could not record the approval (gh hiccup) — retried next poll"
-      "$DIR/tg.sh" "⚠️ Could not record approval for #$N (gh hiccup) — retrying next poll: $URL" || true
+      echo "[approve] #$N could not record the approval (gh hiccup) — retried next poll (no telegram: notify-quiet)"
       continue
     fi
-    "$DIR/tg.sh" "✅ #$N approved (@$WHO) — builder starting: $TITLE
-$URL" || true
+    echo "[approve] #$N approved — builder starting (no telegram: notify-quiet)"
   else
     REASON="${ARG:-no reason given}"
     echo "[approve] #$N denied by @$WHO: $REASON"
     if ! gh issue comment "$N" --body "Denied by @$WHO: $REASON" >/dev/null \
         || ! gh issue close "$N" >/dev/null; then
-      echo "[approve] #$N could not record the denial (gh hiccup) — retried next poll"
-      "$DIR/tg.sh" "⚠️ Could not record denial for #$N (gh hiccup) — retrying next poll: $URL" || true
+      echo "[approve] #$N could not record the denial (gh hiccup) — retried next poll (no telegram: notify-quiet)"
       continue
     fi
-    "$DIR/tg.sh" "🚫 #$N denied (@$WHO): $REASON
-$TITLE" || true
+    echo "[approve] #$N denied (no telegram: notify-quiet)"
   fi
 done
 echo "[approve] done"

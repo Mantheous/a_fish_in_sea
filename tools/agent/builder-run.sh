@@ -197,7 +197,4 @@ if [[ "$PR_URL" == NONE* ]]; then
 else
   rm -f "/tmp/opencode/agent-loop-cd/$N"
 fi
-"$DIR/tg.sh" "🔨 Builder finished #$N: ${RATE_NOTE}$TITLE
-PR: $PR_URL
-$URL" || true
-echo "[builder] #$N done PR=$PR_URL"
+echo "[builder] #$N done PR=$PR_URL (no telegram: notify-quiet)"

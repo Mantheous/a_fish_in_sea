@@ -308,9 +308,7 @@ date -u +%FT%TZ >"$WALK_MARKER"
 rm -f "$FORCE_FILE"
 
 if [ ! -s "$OUT/breaches.txt" ]; then
-  echo "[perf-walk] $STAMP no regression (pull=${PULL}ms push=${PUSH}ms bundle=$BUNDLE_MB)"
-  "$DIR/tg.sh" "⚡ Perf walk $STAMP ($REASON): no regression — pull ${PULL}ms / push ${PUSH}ms, bundle $BUNDLE_MB
-Report: $REPORT" || echo "[perf-walk] telegram ping failed"
+  echo "[perf-walk] $STAMP no regression (pull=${PULL}ms push=${PUSH}ms bundle=$BUNDLE_MB) (no telegram: notify-quiet)"
   echo "[perf-walk] done"
   exit 0
 fi
@@ -335,17 +333,11 @@ if [ -n "${EXISTING:-}" ]; then
   gh issue comment "$EXISTING" --body "Perf walk $STAMP re-tripped ($REASON):
 
 $BODY" >/dev/null
-  echo "[perf-walk] #$EXISTING already open — breach appended"
-  "$DIR/tg.sh" "🐌 Perf walk $STAMP ($REASON): regression persists — $BREACH_SUM
-Updated #$EXISTING (no new issue; one open perf issue at a time)
-Report: $REPORT" || echo "[perf-walk] telegram ping failed"
+  echo "[perf-walk] #$EXISTING already open — breach appended (no telegram: notify-quiet — triage plan texts when actionable)"
 else
   TITLE="[perf $STAMP] regression: $BREACH_SUM"
   NEW_URL="$(gh issue create --title "$TITLE" --body "$BODY" \
     --label agent-pending --label perf-regression 2>/dev/null || true)"
-  echo "[perf-walk] regression issue filed: $NEW_URL"
-  "$DIR/tg.sh" "🐌 Perf walk $STAMP ($REASON): REGRESSION — $BREACH_SUM
-Issue: $NEW_URL
-Report: $REPORT" || echo "[perf-walk] telegram ping failed"
+  echo "[perf-walk] regression issue filed: $NEW_URL (no telegram: notify-quiet — triage plan texts when actionable)"
 fi
 echo "[perf-walk] done"

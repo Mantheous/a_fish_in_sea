@@ -33,6 +33,4 @@ if opencode run --auto --title "rework-#$N-r$ROUND" "$PROMPT" >"$WT/.agent-rewor
 else
   echo "[rework] #$N round $ROUND exited non-zero (see $WT/.agent-rework-$ROUND.log)"
 fi
-"$DIR/tg.sh" "🔧 Rework round $ROUND done for PR #$N
-$(gh pr view "$N" --json url --jq .url)" || true
-echo "[rework] #$N done"
+echo "[rework] #$N done (no telegram: notify-quiet)"

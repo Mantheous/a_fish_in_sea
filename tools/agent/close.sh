@@ -238,9 +238,5 @@ fi
 if [ "$ACTIONS" = "0" ]; then
   echo "[close] done — nothing to close or clean"
 else
-  echo "[close] done — $ACTIONS action(s)"
-  if [ "$DRY_RUN" = "0" ]; then
-    "$DIR/tg.sh" "🧹 Agent loop closed/cleaned $ACTIONS item(s):
-$REPORT" || echo "[close] telegram ping failed (actions still applied)"
-  fi
+  echo "[close] done — $ACTIONS action(s) (no telegram: notify-quiet)"
 fi
