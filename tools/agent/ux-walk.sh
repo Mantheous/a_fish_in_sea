@@ -14,6 +14,13 @@ set -euo pipefail
 REPO="$HOME/Repos/a_fish_in_sea"
 cd "$REPO"
 DIR="$REPO/tools/agent"
+
+# Serialized model quota: never stack a ux-walker LLM run on top of a live
+# builder/rework session (same guard build.sh/review.sh already use).
+loop_runs() {
+  tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^(agent-[0-9]|rework-[0-9])' || true
+}
+
 APP_URL="${UX_APP_URL:-http://127.0.0.1:8000/fish/}"
 BUILD_MARKER="build/web/.agent-build-desc"
 WALK_MARKER="build/web/.agent-ux-last"
@@ -52,6 +59,13 @@ if [ -z "$REASON" ]; then
   exit 0
 fi
 echo "[ux-walk] trigger: $REASON"
+
+# Don't stack a ux-walker LLM run on top of a live builder/rework session.
+RUNNING="$(loop_runs)"
+if [ "${RUNNING:-0}" -ge 1 ]; then
+  echo "[ux-walk] $RUNNING loop run(s) active — skipping ux walk this poll"
+  exit 0
+fi
 
 STAMP="$(date +%F-%H%M)"
 OUT="/tmp/opencode/ux-$STAMP"

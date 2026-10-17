@@ -20,6 +20,19 @@ cd "$REPO"
 DIR="$REPO/tools/agent"
 MARKER='<!-- agent-plan -->'
 
+# Serialized model quota: triage spawns headless opencode runs, so it must
+# not stack LLM calls on top of a live builder/rework session (the quota
+# death spiral build.sh/review.sh already guard against). Skip this poll
+# when any loop run is active; the next poll retries.
+loop_runs() {
+  tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^(agent-[0-9]|rework-[0-9])' || true
+}
+RUNNING="$(loop_runs)"
+if [ "${RUNNING:-0}" -ge 1 ]; then
+  echo "[triage] $RUNNING loop run(s) already active — skipping triage this poll so builders are not starved"
+  exit 0
+fi
+
 ISSUES_JSON="$(gh issue list --label agent-pending --state open --limit 20 \
   --json number,title,author,url)"
 COUNT="$(echo "$ISSUES_JSON" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
