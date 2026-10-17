@@ -234,6 +234,9 @@ async def approve(
                     status_code=502,
                     detail=f"GitHub filing failed: {row.github_error or 'unknown'}",
                 )
+    row.reviewed_by = user.email
+    row.reviewed_at = dt.datetime.now(dt.timezone.utc)
+    await session.commit()
     if body.trust_user and row.email:
         email = row.email.lower().strip()
         exists = (
@@ -244,11 +247,9 @@ async def approve(
         if exists is None:
             session.add(TrustedReporter(email=email, added_by=user.email))
             try:
-                await session.flush()
+                await session.commit()
             except IntegrityError:
                 await session.rollback()
-                row = await session.get(FeedbackReport, report_id)
-                assert row is not None
             else:
                 log.warning(
                     "feedback trust granted: %s by admin %s (via approve #%d)",
@@ -256,9 +257,6 @@ async def approve(
                     user.email,
                     row.id,
                 )
-    row.reviewed_by = user.email
-    row.reviewed_at = dt.datetime.now(dt.timezone.utc)
-    await session.commit()
     await session.refresh(row)
     return _to_admin_out(row)
 

@@ -434,25 +434,63 @@ void main() {
     await shared.engine.syncNow();
     expect(server.store['nodes']?.containsKey('alice-secret'), isTrue);
 
-    // Case 1: Alice signs out via engine.signOut() (keeps on-device data for
-    // Alice, records lastEmail='alice@example.com'), then Bob signs in.
+    // Case 2: Alice also adds an UNSYNCED offline item before signing out, then
+    // the app restarts (fresh SyncEngine constructed from persisted SyncMetaCubit)
+    // and Bob signs in. Zero of Alice's items leak to Bob's cloud, AND Alice's
+    // unsynced item is preserved in SyncMetaCubit.accountSnapshots across the
+    // restart so it comes back when Alice signs back in.
+    shared.nodes.addNode(
+      Node(id: 'alice-unsynced', title: 'Offline draft', createdAt: DateTime(2026)),
+    );
     shared.engine.signOut();
-    expect(shared.nodes.byId('alice-secret'), isNotNull);
+    expect(shared.nodes.byId('alice-unsynced'), isNotNull);
     expect(shared.meta.state.items, isEmpty);
     expect(shared.meta.state.lastEmail, 'alice@example.com');
+
+    // Simulate app restart: re-hydrate SyncMetaCubit from JSON and build a
+    // fresh SyncEngine over the existing cubits.
+    final rehydratedMeta = SyncMetaCubit();
+    rehydratedMeta.emit(
+      rehydratedMeta.fromJson(shared.meta.toJson(shared.meta.state))!,
+    );
+    final restartedEngine = SyncEngine(
+      client: server,
+      auth: shared.auth,
+      meta: rehydratedMeta,
+      events: shared.events,
+      feeds: shared.feeds,
+      nodes: shared.nodes,
+      transactions: TransactionsCubit(),
+      places: PlacesCubit(),
+      reporting: ReportingCubit(),
+      tracking: TrackingCubit(),
+      settings: shared.settings,
+      waterfall: WaterfallCubit(
+        nodeCubit: shared.nodes,
+        transactionsCubit: TransactionsCubit(),
+        plaidCubit: PlaidCubit(),
+      ),
+      plaid: PlaidCubit(),
+    );
 
     // Simulate Bob's empty cloud account on the server.
     server.store.clear();
 
-    // Case 2: Bob signs in on the shared device. SyncEngine snapshots Alice's
-    // local state and switches to a clean slate for Bob so zero of Alice's
-    // items leak into Bob's cloud account.
     await shared.auth.login('bob@example.com', 'password123');
-    shared.meta.reset(); // AuthPage resets cursor/items, preserving lastEmail
-    await shared.engine.syncNow();
+    rehydratedMeta.reset(); // AuthPage resets cursor/items, preserving lastEmail
+    await restartedEngine.syncNow();
 
     expect(shared.nodes.byId('alice-secret'), isNull);
+    expect(shared.nodes.byId('alice-unsynced'), isNull);
     expect(server.store['nodes']?.containsKey('alice-secret') ?? false, isFalse);
+    expect(server.store['nodes']?.containsKey('alice-unsynced') ?? false, isFalse);
+
+    // When Alice signs back in later, her unsynced offline item is restored
+    // from the persisted snapshot!
+    await shared.auth.login('alice@example.com', 'password123');
+    rehydratedMeta.reset();
+    await restartedEngine.syncNow();
+    expect(shared.nodes.byId('alice-unsynced')?.title, 'Offline draft');
   });
 
   test('signOut mid-sync fences in-flight sync so meta stays reset', () async {

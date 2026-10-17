@@ -297,11 +297,12 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
     try {
       final userId = json['userId'] as String?;
       if (userId == null || userId.isEmpty) return;
+      final hasItemKey = json.containsKey('itemId');
       final itemId = json['itemId'] as String?;
       emit(state.copyWith(
         userId: userId,
         itemId: itemId,
-        clearConnection: itemId == null,
+        clearConnection: hasItemKey && itemId == null && state.itemId != null,
       ));
     } catch (_) {}
   }

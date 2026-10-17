@@ -67,12 +67,6 @@ class SyncEngine {
   bool _running = false;
   int _epoch = 0;
 
-  /// Per-account local snapshots preserved when switching accounts on a shared
-  /// device so neither account loses unsynced local work nor leaks data into
-  /// the other account's cloud.
-  final Map<String, Map<String, Map<String, Map<String, dynamic>>>>
-      _accountSnapshots = {};
-
   SyncEngine({
     required this.client,
     required this.auth,
@@ -137,15 +131,22 @@ class SyncEngine {
     protectedDeletions.value = const [];
   }
 
-  void _snapshotLocalAccount(String email) {
-    if (email.isEmpty) return;
-    _accountSnapshots[email] = {
-      for (final c in collections) c: _extract(c),
-    };
+  Map<String, Map<String, Map<String, Map<String, dynamic>>>>
+      _withSnapshotFor(String email) {
+    final next =
+        Map<String, Map<String, Map<String, Map<String, dynamic>>>>.of(
+      meta.state.accountSnapshots,
+    );
+    if (email.isNotEmpty) {
+      next[email] = {
+        for (final c in collections) c: _extract(c),
+      };
+    }
+    return next;
   }
 
   void _restoreLocalAccountIfPresent(String email) {
-    final snap = _accountSnapshots[email];
+    final snap = meta.state.accountSnapshots[email];
     if (snap == null) return;
     for (final entry in snap.entries) {
       _apply(entry.key, entry.value);
@@ -153,27 +154,28 @@ class SyncEngine {
   }
 
   /// Epoch-fences any in-flight sync, revokes the session, disconnects Plaid,
-  /// and records the signed-out account's email in [SyncMetaCubit] (keeping
-  /// on-device data intact by default so unsynced local work is never lost,
-  /// while isolating it if a different account signs in next).
+  /// and records the signed-out account's email + snapshot in [SyncMetaCubit]
+  /// (keeping on-device data intact by default so unsynced local work is never
+  /// lost even across app restarts, while isolating it if a different account
+  /// signs in next).
   void signOut({bool clearLocalData = false}) {
     _epoch++;
     _running = false;
     status.value = EngineStatus.idle;
     lastError = null;
     final previousEmail = auth.state.email.trim().toLowerCase();
-    if (previousEmail.isNotEmpty) {
-      _snapshotLocalAccount(previousEmail);
-    }
+    final updatedSnapshots =
+        previousEmail.isNotEmpty ? _withSnapshotFor(previousEmail) : null;
     auth.logout();
     plaid.clearLocalSession();
     if (clearLocalData) {
       clearLocalAccountData();
-      meta.reset(clearLastEmail: true);
+      meta.reset(clearLastEmail: true, accountSnapshots: updatedSnapshots);
     } else {
       meta.reset(
         lastEmail:
             previousEmail.isEmpty ? meta.state.lastEmail : previousEmail,
+        accountSnapshots: updatedSnapshots,
       );
     }
   }
@@ -188,10 +190,14 @@ class SyncEngine {
         prevEmail.isNotEmpty &&
         currentEmail.isNotEmpty &&
         prevEmail != currentEmail) {
-      _snapshotLocalAccount(prevEmail);
+      final updatedSnapshots = _withSnapshotFor(prevEmail);
       clearLocalAccountData();
       _restoreLocalAccountIfPresent(currentEmail);
-      meta.reset(clearLastEmail: true, lastEmail: currentEmail);
+      meta.reset(
+        clearLastEmail: true,
+        lastEmail: currentEmail,
+        accountSnapshots: updatedSnapshots,
+      );
     } else if (currentEmail.isNotEmpty && prevEmail != currentEmail) {
       meta.save(lastEmail: currentEmail);
     }

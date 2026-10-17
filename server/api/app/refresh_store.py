@@ -67,11 +67,13 @@ async def redeem(session: AsyncSession, presented: str) -> tuple[int, str]:
         user_id, jti = decode_refresh(presented)
     except Exception:
         raise InvalidRefresh from None
-    if not jti:
-        raise InvalidRefresh
     user = await session.get(User, user_id)
     if user is None:
         raise InvalidRefresh
+    if jti is None:
+        # Pre-rotation legacy token (no jti claim): valid signature and existing
+        # user, so upgrade the session in place to a tracked refresh token.
+        return user_id, (await issue(session, user_id))[0]
     row = (
         await session.execute(
             select(RefreshToken).where(RefreshToken.jti == jti)

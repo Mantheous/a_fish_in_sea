@@ -86,6 +86,18 @@ async def fetch_public_bytes(url: str, timeout: float = 30.0) -> tuple[bytes, st
             timeout=timeout, follow_redirects=False
         ) as c:
             async with c.stream("GET", current) as resp:
+                stream = resp.extensions.get("network_stream")
+                if stream is not None and hasattr(stream, "get_extra_info"):
+                    peer = stream.get_extra_info("peername")
+                    if isinstance(peer, tuple) and peer:
+                        try:
+                            peer_ip = ipaddress.ip_address(peer[0])
+                        except ValueError:
+                            peer_ip = None
+                        if peer_ip is not None and _is_internal_ip(peer_ip):
+                            raise ValueError(
+                                "Feed host resolves to an internal address"
+                            )
                 location = resp.headers.get("location")
                 if resp.status_code in (301, 302, 303, 307, 308) and location:
                     current = urllib.parse.urljoin(current, location)

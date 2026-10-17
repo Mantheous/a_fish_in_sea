@@ -46,25 +46,35 @@ class SyncMetaState extends Equatable {
   /// device. Additive nullable field so old payloads load unchanged.
   final String? lastEmail;
 
+  /// Persisted per-account snapshots of local collections so switching
+  /// accounts on a shared device never loses unsynced local work across app
+  /// restarts AND never leaks one account's data into another account.
+  final Map<String, Map<String, Map<String, Map<String, dynamic>>>>
+      accountSnapshots;
+
   const SyncMetaState({
     this.cursor,
     this.items = const {},
     this.lastEmail,
+    this.accountSnapshots = const {},
   });
 
   SyncMetaState copyWith({
     String? cursor,
     Map<String, ItemMeta>? items,
     String? lastEmail,
+    Map<String, Map<String, Map<String, Map<String, dynamic>>>>?
+        accountSnapshots,
   }) =>
       SyncMetaState(
         cursor: cursor ?? this.cursor,
         items: items ?? this.items,
         lastEmail: lastEmail ?? this.lastEmail,
+        accountSnapshots: accountSnapshots ?? this.accountSnapshots,
       );
 
   @override
-  List<Object?> get props => [cursor, items, lastEmail];
+  List<Object?> get props => [cursor, items, lastEmail, accountSnapshots];
 }
 
 class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
@@ -77,6 +87,8 @@ class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
     Map<String, ItemMeta>? upsert,
     Set<String>? remove,
     String? lastEmail,
+    Map<String, Map<String, Map<String, Map<String, dynamic>>>>?
+        accountSnapshots,
   }) {
     final next = Map<String, ItemMeta>.of(state.items);
     if (upsert != null) next.addAll(upsert);
@@ -89,15 +101,24 @@ class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
       cursor: cursor ?? state.cursor,
       items: next,
       lastEmail: lastEmail ?? state.lastEmail,
+      accountSnapshots: accountSnapshots ?? state.accountSnapshots,
     ));
   }
 
   /// Clears sync position (sign-out / account switch). Preserves [lastEmail]
-  /// unless [clearLastEmail] is true so signing in as a different user can
-  /// detect the account change and avoid merging the previous user's data.
-  void reset({bool clearLastEmail = false, String? lastEmail}) =>
+  /// and [accountSnapshots] unless [clearLastEmail] is true so signing in as a
+  /// different user can detect the account change, preserve the previous
+  /// account's unsynced local state on disk, and avoid merging it into the
+  /// next user's account.
+  void reset({
+    bool clearLastEmail = false,
+    String? lastEmail,
+    Map<String, Map<String, Map<String, Map<String, dynamic>>>>?
+        accountSnapshots,
+  }) =>
       emit(SyncMetaState(
         lastEmail: lastEmail ?? (clearLastEmail ? null : state.lastEmail),
+        accountSnapshots: accountSnapshots ?? state.accountSnapshots,
       ));
 
   @override
@@ -114,11 +135,39 @@ class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
           );
         } catch (_) {}
       }
+      final rawSnaps = json['accountSnapshots'];
+      final snaps =
+          <String, Map<String, Map<String, Map<String, dynamic>>>>{};
+      if (rawSnaps is Map) {
+        for (final acct in rawSnaps.entries) {
+          try {
+            final collMap = <String, Map<String, Map<String, dynamic>>>{};
+            final rawColls = acct.value;
+            if (rawColls is Map) {
+              for (final coll in rawColls.entries) {
+                final itemMap = <String, Map<String, dynamic>>{};
+                final rawItems = coll.value;
+                if (rawItems is Map) {
+                  for (final item in rawItems.entries) {
+                    if (item.value is Map) {
+                      itemMap[item.key.toString()] =
+                          Map<String, dynamic>.from(item.value as Map);
+                    }
+                  }
+                }
+                collMap[coll.key.toString()] = itemMap;
+              }
+            }
+            snaps[acct.key.toString()] = collMap;
+          } catch (_) {}
+        }
+      }
       final rawEmail = json['lastEmail'];
       return SyncMetaState(
         cursor: json['cursor'] as String?,
         items: items,
         lastEmail: rawEmail is String && rawEmail.isNotEmpty ? rawEmail : null,
+        accountSnapshots: snaps,
       );
     } catch (_) {
       return const SyncMetaState();
@@ -133,5 +182,7 @@ class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
             e.key: {'hash': e.value.hash, 'serverTime': e.value.serverTime},
         },
         if (state.lastEmail != null) 'lastEmail': state.lastEmail,
+        if (state.accountSnapshots.isNotEmpty)
+          'accountSnapshots': state.accountSnapshots,
       };
 }
