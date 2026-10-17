@@ -1,3 +1,5 @@
+import 'package:equatable/equatable.dart';
+
 import 'package:a_fish_in_sea/finances/model/ledger_entry.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 
@@ -104,7 +106,7 @@ DateTime bucketStartFor(DisplayGranularity granularity, DateTime date) {
 /// The view is free to show just the totals or to expand the membership;
 /// the point of the type is that collapsing rows for readability can
 /// never destroy the granular data behind them.
-class LedgerBucket {
+class LedgerBucket extends Equatable {
   final DisplayGranularity granularity;
   final DateTime bucketStart;
 
@@ -117,6 +119,9 @@ class LedgerBucket {
     required this.bucketStart,
     required this.entries,
   });
+
+  @override
+  List<Object?> get props => [granularity, bucketStart, entries];
 
   bool get isCollapsible => entries.length > 1;
 

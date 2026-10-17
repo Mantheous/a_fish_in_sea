@@ -34,7 +34,8 @@ List<PlannedSlice> daySlices(
 ) {
   final dayStart = DateTime(day.year, day.month, day.day);
   final dayEnd = dayStart.add(const Duration(days: 1));
-  final visible = feeds.visibleEvents(calendar.state);
+  final onDay = calendar.eventsOnDay(day);
+  final visible = feeds.visibleEvents(onDay);
   final slices = <PlannedSlice>[];
   for (final event in visible) {
     if (event.allDay) {

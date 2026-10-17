@@ -63,7 +63,12 @@ class UndoCubit extends Cubit<UndoState> {
     if (!canUndo) return;
     final record = state.undoStack.last;
     for (final entry in record.entries.reversed) {
-      RevertableRegistry.byId(entry.cubitId)?.applyJson(entry.before);
+      final cubit = RevertableRegistry.byId(entry.cubitId);
+      if (entry.stateBefore != null) {
+        cubit?.applyState(entry.stateBefore);
+      } else {
+        cubit?.applyJson(entry.before);
+      }
     }
     emit(
       UndoState(
@@ -77,7 +82,12 @@ class UndoCubit extends Cubit<UndoState> {
     if (!canRedo) return;
     final record = state.redoStack.last;
     for (final entry in record.entries) {
-      RevertableRegistry.byId(entry.cubitId)?.applyJson(entry.after);
+      final cubit = RevertableRegistry.byId(entry.cubitId);
+      if (entry.stateAfter != null) {
+        cubit?.applyState(entry.stateAfter);
+      } else {
+        cubit?.applyJson(entry.after);
+      }
     }
     emit(
       UndoState(

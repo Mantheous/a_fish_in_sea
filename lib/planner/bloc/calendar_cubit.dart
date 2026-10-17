@@ -257,7 +257,12 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
       // SfCalendar recurrence expansion entirely.
       if (event.recurrenceRule.isEmpty) {
         final s = event.start;
-        if (!s.isBefore(dayStart) && s.isBefore(dayEnd)) result.add(event);
+        final e = event.allDay
+            ? event.endOfDay
+            : (event.end.isAfter(event.start)
+                ? event.end
+                : event.start.add(const Duration(hours: 1)));
+        if (s.isBefore(dayEnd) && e.isAfter(dayStart)) result.add(event);
         continue;
       }
       final occurrences = occurrencesOf(event, dayStart, dayEnd);

@@ -276,5 +276,26 @@ void main() {
       expect(narrow.single.granularity, DisplayGranularity.weekly);
       expect(wide.single.granularity, DisplayGranularity.daily);
     });
+
+    test('LedgerBucket supports value equality', () {
+      final b1 = LedgerBucket(
+        granularity: DisplayGranularity.daily,
+        bucketStart: DateTime(2026, 10, 7),
+        entries: [row('a', today)],
+      );
+      final b2 = LedgerBucket(
+        granularity: DisplayGranularity.daily,
+        bucketStart: DateTime(2026, 10, 7),
+        entries: [row('a', today)],
+      );
+      final b3 = LedgerBucket(
+        granularity: DisplayGranularity.weekly,
+        bucketStart: DateTime(2026, 10, 7),
+        entries: [row('a', today)],
+      );
+      expect(b1, equals(b2));
+      expect(b1.hashCode, equals(b2.hashCode));
+      expect(b1, isNot(equals(b3)));
+    });
   });
 }

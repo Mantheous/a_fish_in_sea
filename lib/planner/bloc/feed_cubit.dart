@@ -97,28 +97,28 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   void removeFeed(String feedId) {
     final feed = byId(feedId);
     if (feed == null) return;
-    final feedBefore = toJson(state);
+    final feedBefore = state;
     emit(state.where((f) => f.id != feedId).toList());
-    final calendarBefore = _calendarCubit.toJson(_calendarCubit.state);
+    final calendarBefore = _calendarCubit.state;
     _calendarCubit.removeFeedEvents(feedId);
-    final nodeBefore = _nodeCubit.toJson(_nodeCubit.state);
+    final nodeBefore = _nodeCubit.state;
     _nodeCubit.removeImportedNodesFor(feedId);
     UndoCubit.instance?.record(
       ChangeRecord(entries: [
         StateSnapshot(
           cubitId: changeId,
-          before: feedBefore,
-          after: toJson(state),
+          stateBefore: feedBefore,
+          stateAfter: state,
         ),
         StateSnapshot(
           cubitId: _calendarCubit.changeId,
-          before: calendarBefore,
-          after: _calendarCubit.toJson(_calendarCubit.state),
+          stateBefore: calendarBefore,
+          stateAfter: _calendarCubit.state,
         ),
         StateSnapshot(
           cubitId: _nodeCubit.changeId,
-          before: nodeBefore,
-          after: _nodeCubit.toJson(_nodeCubit.state),
+          stateBefore: nodeBefore,
+          stateAfter: _nodeCubit.state,
         ),
       ]),
     );

@@ -19,6 +19,13 @@ abstract class RevertableHydratedCubit<T> extends HydratedCubit<T>
   String get changeId => runtimeType.toString();
 
   @override
+  void applyState(Object? state) {
+    if (state is T) {
+      emit(state);
+    }
+  }
+
+  @override
   void applyJson(Map<String, dynamic>? json) {
     if (json == null) return;
     try {
@@ -37,13 +44,12 @@ abstract class RevertableHydratedCubit<T> extends HydratedCubit<T>
       emit(newState);
       return;
     }
-    final before = toJson(state) ?? const <String, dynamic>{};
+    final before = state;
     emit(newState);
-    final after = toJson(newState) ?? const <String, dynamic>{};
     undo.record(ChangeRecord.single(StateSnapshot(
       cubitId: changeId,
-      before: before,
-      after: after,
+      stateBefore: before,
+      stateAfter: newState,
     )));
   }
 
@@ -68,10 +74,6 @@ abstract class RevertableHydratedCubit<T> extends HydratedCubit<T>
     final beforeStates = <RevertableHydratedCubit, Object?>{
       for (final c in cubits) c: c.state,
     };
-    final befores = <RevertableHydratedCubit, Map<String, dynamic>>{
-      for (final c in cubits)
-        c: c.toJson(c.state) ?? const <String, dynamic>{},
-    };
     UndoCubit.suspend();
     try {
       action();
@@ -80,13 +82,17 @@ abstract class RevertableHydratedCubit<T> extends HydratedCubit<T>
     }
     final entries = <StateSnapshot>[];
     for (final c in cubits) {
-      if (identical(c.state, beforeStates[c])) continue;
+      final beforeState = beforeStates[c];
+      final afterState = c.state;
+      if (identical(beforeState, afterState)) continue;
       entries.add(StateSnapshot(
         cubitId: c.changeId,
-        before: befores[c]!,
-        after: c.toJson(c.state) ?? const <String, dynamic>{},
+        stateBefore: beforeState,
+        stateAfter: afterState,
       ));
     }
-    undo.record(ChangeRecord(entries: entries));
+    if (entries.isNotEmpty) {
+      undo.record(ChangeRecord(entries: entries));
+    }
   }
 }

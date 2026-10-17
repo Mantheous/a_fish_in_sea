@@ -2,6 +2,7 @@ import 'package:equatable/equatable.dart';
 
 abstract interface class Revertable {
   String get changeId;
+  void applyState(Object? state);
   void applyJson(Map<String, dynamic>? json);
 }
 
@@ -21,29 +22,37 @@ class RevertableRegistry {
 
 class StateSnapshot extends Equatable {
   final String cubitId;
-  final Map<String, dynamic> before;
-  final Map<String, dynamic> after;
+  final Object? stateBefore;
+  final Object? stateAfter;
+  final Map<String, dynamic>? before;
+  final Map<String, dynamic>? after;
 
   const StateSnapshot({
     required this.cubitId,
-    required this.before,
-    required this.after,
+    this.stateBefore,
+    this.stateAfter,
+    this.before,
+    this.after,
   });
 
   factory StateSnapshot.fromJson(Map<String, dynamic> json) => StateSnapshot(
         cubitId: json['cubitId'] as String,
-        before: Map<String, dynamic>.from(json['before'] as Map<dynamic, dynamic>),
-        after: Map<String, dynamic>.from(json['after'] as Map<dynamic, dynamic>),
+        before: json['before'] != null
+            ? Map<String, dynamic>.from(json['before'] as Map<dynamic, dynamic>)
+            : null,
+        after: json['after'] != null
+            ? Map<String, dynamic>.from(json['after'] as Map<dynamic, dynamic>)
+            : null,
       );
 
   Map<String, dynamic> toJson() => {
         'cubitId': cubitId,
-        'before': before,
-        'after': after,
+        'before': before ?? const <String, dynamic>{},
+        'after': after ?? const <String, dynamic>{},
       };
 
   @override
-  List<Object?> get props => [cubitId, before, after];
+  List<Object?> get props => [cubitId, stateBefore ?? before, stateAfter ?? after];
 }
 
 class ChangeRecord extends Equatable {
