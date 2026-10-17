@@ -2,10 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
+import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
+import 'package:a_fish_in_sea/planner/bloc/assignment_estimates_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/assignment_rules_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/calendar_draft_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
+import 'package:a_fish_in_sea/planner/model/assignment_estimate.dart';
 
 /// Stops a recording timer (if running) and asks what to do next.
 /// The stop settles both stores: a linked calendar event's timer stops
@@ -45,20 +51,85 @@ Future<void> showNodeFinishSheet(
   );
 }
 
+/// Schedules a follow-up the same way assignments are scheduled from the
+/// Tasks page: seeds a calendar draft and hands the user to the calendar
+/// to pick the time visually, instead of typing a date/time here.
+///
+/// The seed keeps the node's current block (same time-of-day, same length,
+/// one day later) or falls back to the estimate flow when there is no
+/// block to continue. Nothing is saved until the user presses Add on the
+/// calendar — the same guarantee the Tasks "Add to calendar" snackbar
+/// makes.
 Future<void> showFollowUpScheduler(
   BuildContext context, {
   required String nodeId,
 }) {
-  return showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    builder: (sheetContext) => Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
+  Node? node;
+  try {
+    node = context.read<NodeCubit>().byId(nodeId);
+  } catch (_) {
+    return Future.value();
+  }
+  if (node == null) return Future.value();
+
+  // Resolve the estimate/snap the same way the Tasks page does, best
+  // effort: standalone contexts may not provide every cubit.
+  AssignmentEstimate? estimate;
+  try {
+    final rules = context.read<AssignmentRulesCubit>().state;
+    var efforts = const <AssignmentTypeEffort>[];
+    try {
+      efforts = context.read<AssignmentEstimatesCubit>().state;
+    } catch (_) {}
+    estimate = resolveAssignmentEstimate(
+      node: node,
+      rules: rules,
+      efforts: efforts,
+    );
+  } catch (_) {}
+  var snap = 15;
+  try {
+    snap = context.read<SettingsCubit>().state.snapMinutes;
+  } catch (_) {}
+
+  final seed =
+      draftSeedForFollowUp(node, estimate: estimate, snapMinutes: snap);
+
+  CalendarDraftCubit? drafts;
+  try {
+    drafts = context.read<CalendarDraftCubit>();
+  } catch (_) {}
+  NavigationCubit? navigation;
+  try {
+    navigation = context.read<NavigationCubit>();
+  } catch (_) {}
+  ScaffoldMessengerState? messenger;
+  try {
+    messenger = ScaffoldMessenger.of(context);
+  } catch (_) {}
+
+  // Read everything above before closing the sheet: the caller's context
+  // belongs to the sheet being dismissed.
+  try {
+    if (ModalRoute.of(context) is ModalBottomSheetRoute) {
+      Navigator.of(context).pop();
+    }
+  } catch (_) {}
+
+  if (drafts == null) return Future.value();
+  drafts.requestDraft(seed);
+  try {
+    navigation?.setPage(PlannerPage.calendar);
+  } catch (_) {}
+  messenger?.showSnackBar(
+    const SnackBar(
+      content: Text(
+        'Pick a time on the calendar — nothing is saved until you press Add.',
       ),
-      child: _FollowUpSheet(nodeId: nodeId),
+      duration: Duration(seconds: 2),
     ),
   );
+  return Future.value();
 }
 
 class _FinishSheet extends StatelessWidget {
@@ -155,10 +226,7 @@ class _FinishSheet extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             OutlinedButton.icon(
-              onPressed: () {
-                Navigator.of(context).pop();
-                showFollowUpScheduler(context, nodeId: nodeId);
-              },
+              onPressed: () => showFollowUpScheduler(context, nodeId: nodeId),
               icon: const Icon(Icons.schedule, size: 18),
               label: const Text('Schedule follow-up'),
             ),
@@ -174,181 +242,3 @@ class _FinishSheet extends StatelessWidget {
   }
 }
 
-class _FollowUpSheet extends StatefulWidget {
-  final String nodeId;
-
-  const _FollowUpSheet({required this.nodeId});
-
-  @override
-  State<_FollowUpSheet> createState() => _FollowUpSheetState();
-}
-
-class _FollowUpSheetState extends State<_FollowUpSheet> {
-  late DateTime _date;
-  late TimeOfDay _start;
-  late TimeOfDay _end;
-
-  @override
-  void initState() {
-    super.initState();
-    DateTime base = DateTime.now().add(const Duration(days: 1));
-    TimeOfDay start = const TimeOfDay(hour: 9, minute: 0);
-    try {
-      final node = context.read<NodeCubit>().byId(widget.nodeId);
-      final planned = node?.schedule?.start;
-      if (planned != null) {
-        base = planned.add(const Duration(days: 1));
-        start = TimeOfDay.fromDateTime(planned);
-      } else if (node?.schedule?.due != null) {
-        base = node!.schedule!.due!;
-        start = TimeOfDay.fromDateTime(node.schedule!.due!);
-      }
-    } catch (_) {}
-    _date = DateTime(base.year, base.month, base.day);
-    _start = start;
-    final endMinutes = _start.hour * 60 + _start.minute + 60;
-    _end = TimeOfDay(hour: (endMinutes ~/ 60) % 24, minute: endMinutes % 60);
-  }
-
-  DateTime get _startDateTime => DateTime(
-        _date.year,
-        _date.month,
-        _date.day,
-        _start.hour,
-        _start.minute,
-      );
-
-  DateTime get _endDateTime {
-    var end = DateTime(
-      _date.year,
-      _date.month,
-      _date.day,
-      _end.hour,
-      _end.minute,
-    );
-    if (!end.isAfter(_startDateTime)) {
-      end = _startDateTime.add(const Duration(hours: 1));
-    }
-    return end;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final dateFormat = DateFormat('EEE, MMM d, yyyy');
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('Schedule follow-up',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 4),
-            Text(
-              'Sets the next planned work block on this node.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 12),
-            InkWell(
-              onTap: () async {
-                final picked = await showDatePicker(
-                  context: context,
-                  initialDate: _date,
-                  firstDate: DateTime(2000),
-                  lastDate: DateTime(2100),
-                );
-                if (picked != null) setState(() => _date = picked);
-              },
-              child: InputDecorator(
-                decoration: const InputDecoration(labelText: 'Date'),
-                child: Text(dateFormat.format(_date)),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: InkWell(
-                    onTap: () async {
-                      final picked = await showTimePicker(
-                        context: context,
-                        initialTime: _start,
-                      );
-                      if (picked == null) return;
-                      setState(() {
-                        _start = picked;
-                        if (_toMinutes(_end) <= _toMinutes(_start)) {
-                          final endMinutes =
-                              _start.hour * 60 + _start.minute + 60;
-                          _end = TimeOfDay(
-                            hour: (endMinutes ~/ 60) % 24,
-                            minute: endMinutes % 60,
-                          );
-                        }
-                      });
-                    },
-                    child: InputDecorator(
-                      decoration: const InputDecoration(labelText: 'Start'),
-                      child: Text(_start.format(context)),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: InkWell(
-                    onTap: () async {
-                      final picked = await showTimePicker(
-                        context: context,
-                        initialTime: _end,
-                      );
-                      if (picked != null) setState(() => _end = picked);
-                    },
-                    child: InputDecorator(
-                      decoration: const InputDecoration(labelText: 'End'),
-                      child: Text(_end.format(context)),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: () {
-                    try {
-                      context.read<NodeCubit>().setScheduleBlock(
-                            widget.nodeId,
-                            _startDateTime,
-                            _endDateTime,
-                          );
-                    } catch (_) {}
-                    Navigator.of(context).pop();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          'Follow-up scheduled for ${dateFormat.format(_date)} '
-                          'at ${_start.format(context)}',
-                        ),
-                      ),
-                    );
-                  },
-                  child: const Text('Save'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  static int _toMinutes(TimeOfDay time) => time.hour * 60 + time.minute;
-}

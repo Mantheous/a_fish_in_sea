@@ -142,4 +142,73 @@ void main() {
       expect(seed.start.hour, lessThan(23));
     });
   });
+
+  group('draftSeedForFollowUp', () {
+    test('shifts the current block one day forward, keeping time and length',
+        () {
+      final start = DateTime(2026, 10, 16, 14);
+      final seed = draftSeedForFollowUp(
+        Node(
+          id: 'n1',
+          title: 'Video Quiz',
+          createdAt: DateTime(2026),
+          feedId: 'math290',
+          schedule: ScheduleFacet(
+            due: DateTime(2026, 10, 18, 23),
+            start: start,
+            end: start.add(const Duration(hours: 2)),
+          ),
+        ),
+        now: DateTime(2026, 10, 16, 9),
+      );
+      expect(seed.id, calendarDraftEventId);
+      expect(seed.taskId, 'n1');
+      expect(seed.subject, 'Video Quiz');
+      expect(seed.start, DateTime(2026, 10, 17, 14));
+      expect(seed.end, DateTime(2026, 10, 17, 16));
+    });
+
+    test('falls back to the estimate flow when there is no block', () {
+      final seed = draftSeedForFollowUp(
+        Node(
+          id: 'n1',
+          title: 'Video Quiz 3.1',
+          createdAt: DateTime(2026),
+          feedId: 'math290',
+          schedule: ScheduleFacet(due: DateTime(2026, 10, 16, 23)),
+        ),
+        estimate: const AssignmentEstimate(
+          minutes: 45,
+          source: AssignmentEstimateSource.learned,
+        ),
+      );
+      expect(seed.id, calendarDraftEventId);
+      expect(seed.taskId, 'n1');
+      expect(seed.start, DateTime(2026, 10, 16, 9));
+      expect(seed.end, DateTime(2026, 10, 16, 9, 45));
+    });
+
+    test('a stale block falls back to a future estimate slot', () {
+      final now = DateTime(2026, 10, 16, 8);
+      final seed = draftSeedForFollowUp(
+        Node(
+          id: 'n1',
+          title: 'Old work',
+          createdAt: DateTime(2026),
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 1, 14),
+            end: DateTime(2026, 9, 1, 15),
+          ),
+        ),
+        now: now,
+        estimate: const AssignmentEstimate(
+          minutes: 30,
+          source: AssignmentEstimateSource.learned,
+        ),
+      );
+      expect(seed.start.isBefore(now), isFalse);
+      expect(seed.start, DateTime(2026, 10, 16, 9));
+      expect(seed.end, DateTime(2026, 10, 16, 9, 30));
+    });
+  });
 }

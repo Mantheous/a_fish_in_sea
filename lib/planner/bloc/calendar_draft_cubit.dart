@@ -90,6 +90,63 @@ PlannerEvent draftSeedFromNode(
   );
 }
 
+/// Seed for the "schedule follow-up" flow.
+///
+/// Same event shape as [draftSeedFromNode] so the calendar page handles it
+/// identically (ghost draft → pick a time → Add), but anchored on the next
+/// block instead of the current one: a node that already has a planned
+/// block keeps its duration and time-of-day, shifted one day forward, so
+/// the user drags from a sensible next slot instead of re-placing the
+/// block they just finished. Nodes without a planned block — or whose
+/// shifted block would still land in the past — fall back to
+/// [draftSeedFromNode] on the unplaced node, which sizes from the estimate
+/// and guarantees a future slot.
+PlannerEvent draftSeedForFollowUp(
+  Node node, {
+  DateTime? now,
+  AssignmentEstimate? estimate,
+  int snapMinutes = 15,
+}) {
+  final ref = now ?? DateTime.now();
+  final existing = node.schedule;
+  if (existing != null &&
+      existing.hasCalendarBlock &&
+      !existing.allDay &&
+      existing.start != null &&
+      existing.end != null) {
+    final duration = existing.end!.difference(existing.start!);
+    final start = existing.start!.add(const Duration(days: 1));
+    if (!start.isBefore(ref)) {
+      final safeDuration =
+          duration.isNegative ? const Duration(hours: 1) : duration;
+      return PlannerEvent(
+        id: calendarDraftEventId,
+        subject: node.title,
+        notes: node.notes,
+        start: start,
+        end: start.add(safeDuration),
+        classLabel: node.classLabel,
+        taskId: node.id,
+      );
+    }
+    final unplaced = node.copyWith(
+      schedule: existing.copyWith(clearStart: true, clearEnd: true),
+    );
+    return draftSeedFromNode(
+      unplaced,
+      now: ref,
+      estimate: estimate,
+      snapMinutes: snapMinutes,
+    );
+  }
+  return draftSeedFromNode(
+    node,
+    now: ref,
+    estimate: estimate,
+    snapMinutes: snapMinutes,
+  );
+}
+
 DateTime _atMinuteOfDay(DateTime day, int minute) =>
     DateTime(day.year, day.month, day.day)
         .add(Duration(minutes: minute.clamp(0, 24 * 60)));
