@@ -53,20 +53,44 @@ if [ -e "$WT" ]; then
     echo "[builder] #$N resuming previous builder work in $WT (WIP uncommitted changes are kept)"
     RESUME_IN_PLACE=1
   else
+    REPORTED_DIR="/tmp/opencode/agent-loop-reported"
+    mkdir -p "$REPORTED_DIR"
+    KEY="$REPORTED_DIR/builder-$N-conflict.no-pr"
+    # Auto-reclaim when provably lossless: our branch is checked out at
+    # exactly this path, it holds zero commits past origin/main, and the
+    # tree is clean (porcelain empty covers staged, unstaged, AND
+    # untracked files). Removing such a leftover destroys nothing — no
+    # commits, no uncommitted work — so start fresh instead of paging a
+    # human. Anything else (unique commits, dirty tree, branch checked out
+    # elsewhere, path that is not a repo checkout) stays on the human path
+    # below. Journal-only on reclaim: no Telegram ping for a self-healed
+    # stall; the normal "Builder finished" ping still fires at the end.
+    if [ "${IN_USE:-}" = "$WT" ] \
+      && [ -z "$(git log --oneline "origin/main..$BRANCH" 2>/dev/null || true)" ] \
+      && [ -d "$WT" ] \
+      && [ -z "$(git -C "$WT" status --porcelain 2>/dev/null || echo NOT-A-REPO)" ]; then
+      echo "[builder] #$N reclaiming empty leftover worktree $WT (branch $BRANCH identical to origin/main, tree clean) — no human action needed"
+      if git worktree remove "$WT" --force \
+        && { git branch -D "$BRANCH" 2>/dev/null || true; } \
+        && git worktree add "$WT" -b "$BRANCH" origin/main; then
+        rm -f "/tmp/opencode/agent-loop-cd/$N" "$KEY" 2>/dev/null || true
+      else
+        echo "[builder] #$N reclaim failed mid-way — backing off for a human to inspect"
+        write_retry_stamp
+        exit 1
+      fi
+    else
     echo "[builder] #$N worktree path $WT already exists (branch checked out there: ${IN_USE:-none}) — skipping, needs a human (remove it to retry)"
     write_retry_stamp
     # This path dies inside a detached tmux session, so without a ping the
     # stall is invisible until someone reads the journal — ping at most
     # once a day (same pattern as close.sh's no-PR report).
-    REPORTED_DIR="/tmp/opencode/agent-loop-reported"
-    mkdir -p "$REPORTED_DIR"
-    KEY="$REPORTED_DIR/builder-$N-conflict.no-pr"
     if [ ! -f "$KEY" ] || [ $(( $(date +%s) - $(stat -c %Y "$KEY") )) -ge 86400 ]; then
-      # Descriptive escalation: the loop refuses to delete a path it cannot
-      # prove it owns (no .agent-build.log marker) — it may hold a human's
-      # uncommitted work. Show the actual state so the human can tell at a
-      # glance whether it is safe to reclaim (often: empty branch, clean
-      # tree — a leftover the loop could not auto-reuse).
+      # Descriptive escalation: the leftover was NOT auto-reclaimable (it
+      # holds unique commits, uncommitted changes, or the branch is
+      # checked out somewhere unexpected), so the loop refuses to delete it
+      # — it may hold a human's work. Show the actual state so the human
+      # can decide at a glance.
       COMMITS="$(git log --oneline "origin/main..$BRANCH" 2>/dev/null | head -n 5 || true)"
       [ -n "${COMMITS:-}" ] || COMMITS="(none — branch is identical to origin/main)"
       if [ -d "$WT" ]; then
@@ -92,6 +116,7 @@ Loop behavior while blocked: issue backs off ~1h between retries; this ping repe
       touch "$KEY"
     fi
     exit 1
+    fi
   fi
 elif git show-ref --verify --quiet "refs/heads/$BRANCH"; then
   # Local branch exists without its worktree. `worktree add -b` refuses an
