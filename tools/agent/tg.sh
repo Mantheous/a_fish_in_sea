@@ -18,8 +18,8 @@ fi
 if [ -z "$CHAT" ] && [ -f "$ENV_FILE" ]; then
   CHAT="$(grep -E '^TELEGRAM_OPENCODE_CHAT_ID=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d ' ' || true)"
 fi
-[ -z "$CHAT" ] && CHAT="8474661718"
 if [ -z "$TOKEN" ]; then echo "tg: no bot token" >&2; exit 1; fi
+if [ -z "$CHAT" ]; then echo "tg: no chat id" >&2; exit 1; fi
 ISSUE=""
 if [ "${1:-}" = "--issue" ]; then
   ISSUE="${2:-}"

@@ -136,7 +136,8 @@ not do both, do not ask unless the file is missing.
 
 ### Ad-hoc, web target: deploy to the Tailnet funnel
 
-The user views the web app at `https://alauris.tail088878.ts.net/fish/`.
+The user views the web app at the `/fish/` URL configured in gitignored
+`DEBUG_PREFS.md`.
 Tailscale serve maps `/fish` → `http://127.0.0.1:8000` (prefix stripped)
 and the FastAPI server (`server/api`, `_mount_web` in `app/main.py`)
 serves `<repo>/build/web` from disk — no server restart or copy step
@@ -166,7 +167,7 @@ first, then deploy from the main checkout:
 
 Load the `wireless-debugging` skill and follow it (reconnect with
 `adb reconnect` / `adb connect` first — never re-pair unless auth fails;
-known device `mantheous-a16` via Tailscale). Then:
+resolve the target device via `tailscale status` or `DEBUG_PREFS.md`). Then:
 
 1. If a `flutter run` session already lives in tmux (`tmux capture-pane
    -p -t fish`), push a hot reload/restart: prefer the `dart` MCP

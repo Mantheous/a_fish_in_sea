@@ -43,7 +43,8 @@ class _AuthPageState extends State<AuthPage> {
       final ok = await call(email, _password.text);
       if (!mounted) return;
       if (ok) {
-        // Fresh baseline, then first pull-merge-push of all collections.
+        // Reset cursor/items (preserving lastEmail so SyncEngine detects
+        // account switches and never merges another user's local data).
         context.read<SyncMetaCubit>().reset();
         await context.read<SyncEngine>().syncNow();
       }

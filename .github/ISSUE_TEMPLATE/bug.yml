@@ -20,7 +20,7 @@ body:
     id: device
     attributes:
       label: Device / target
-      description: e.g. Android mantheous-a16, web at /fish/, Linux desktop
+      description: e.g. Android phone, web at /fish/, Linux desktop
     validations:
       required: false
   - type: textarea

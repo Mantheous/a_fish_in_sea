@@ -42,13 +42,29 @@ class SyncMetaState extends Equatable {
   /// '$collection/$itemId' -> meta.
   final Map<String, ItemMeta> items;
 
-  const SyncMetaState({this.cursor, this.items = const {}});
+  /// Normalized email of the account whose data currently lives on this
+  /// device. Additive nullable field so old payloads load unchanged.
+  final String? lastEmail;
 
-  SyncMetaState copyWith({String? cursor, Map<String, ItemMeta>? items}) =>
-      SyncMetaState(cursor: cursor ?? this.cursor, items: items ?? this.items);
+  const SyncMetaState({
+    this.cursor,
+    this.items = const {},
+    this.lastEmail,
+  });
+
+  SyncMetaState copyWith({
+    String? cursor,
+    Map<String, ItemMeta>? items,
+    String? lastEmail,
+  }) =>
+      SyncMetaState(
+        cursor: cursor ?? this.cursor,
+        items: items ?? this.items,
+        lastEmail: lastEmail ?? this.lastEmail,
+      );
 
   @override
-  List<Object?> get props => [cursor, items];
+  List<Object?> get props => [cursor, items, lastEmail];
 }
 
 class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
@@ -60,6 +76,7 @@ class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
     String? cursor,
     Map<String, ItemMeta>? upsert,
     Set<String>? remove,
+    String? lastEmail,
   }) {
     final next = Map<String, ItemMeta>.of(state.items);
     if (upsert != null) next.addAll(upsert);
@@ -71,12 +88,17 @@ class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
     emit(state.copyWith(
       cursor: cursor ?? state.cursor,
       items: next,
+      lastEmail: lastEmail ?? state.lastEmail,
     ));
   }
 
-  /// Clears sync position (sign-out / account switch). Local data stays;
-  /// the next sync re-baselines without pushing tombstones for everything.
-  void reset() => emit(const SyncMetaState());
+  /// Clears sync position (sign-out / account switch). Preserves [lastEmail]
+  /// unless [clearLastEmail] is true so signing in as a different user can
+  /// detect the account change and avoid merging the previous user's data.
+  void reset({bool clearLastEmail = false, String? lastEmail}) =>
+      emit(SyncMetaState(
+        lastEmail: lastEmail ?? (clearLastEmail ? null : state.lastEmail),
+      ));
 
   @override
   SyncMetaState? fromJson(Map<String, dynamic> json) {
@@ -92,9 +114,11 @@ class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
           );
         } catch (_) {}
       }
+      final rawEmail = json['lastEmail'];
       return SyncMetaState(
         cursor: json['cursor'] as String?,
         items: items,
+        lastEmail: rawEmail is String && rawEmail.isNotEmpty ? rawEmail : null,
       );
     } catch (_) {
       return const SyncMetaState();
@@ -108,5 +132,6 @@ class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
           for (final e in state.items.entries)
             e.key: {'hash': e.value.hash, 'serverTime': e.value.serverTime},
         },
+        if (state.lastEmail != null) 'lastEmail': state.lastEmail,
       };
 }

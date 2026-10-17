@@ -13,6 +13,19 @@ SyncClient _dummyClient() => SyncClient(
       refreshAccessToken: () async => null,
     );
 
+class _RefreshStubClient extends SyncClient {
+  final Future<Map<String, dynamic>> Function() _onRefresh;
+  _RefreshStubClient(this._onRefresh)
+      : super(
+          serverBase: () => '',
+          accessToken: () => null,
+          refreshAccessToken: () async => null,
+        );
+
+  @override
+  Future<Map<String, dynamic>> refresh(String refreshToken) => _onRefresh();
+}
+
 void main() {
   late Storage storage;
 
@@ -58,13 +71,55 @@ void main() {
     final cubit = SyncMetaCubit();
     cubit.save(
       cursor: '2026-09-12T00:00:00Z',
+      lastEmail: 'a@example.com',
       upsert: {
         'tasks/t1': const ItemMeta(hash: 'ab', serverTime: '2026-09-12T00:00:00Z')
       },
     );
     final restored = cubit.fromJson(cubit.toJson(cubit.state))!;
     expect(restored.cursor, '2026-09-12T00:00:00Z');
+    expect(restored.lastEmail, 'a@example.com');
     expect(restored.items['tasks/t1']?.hash, 'ab');
+
+    // Legacy payloads without lastEmail still load cleanly.
+    final legacy = cubit.fromJson({
+      'cursor': '2026-09-12T00:00:00Z',
+      'items': {
+        'tasks/t1': {'hash': 'ab', 'serverTime': '2026-09-12T00:00:00Z'},
+      },
+    })!;
+    expect(legacy.lastEmail, isNull);
+    expect(legacy.items['tasks/t1']?.hash, 'ab');
+  });
+
+  test('AuthCubit keeps tokens on transient refresh error and clears on 401',
+      () async {
+    var shouldThrow401 = false;
+    final client = _RefreshStubClient(() {
+      if (shouldThrow401) {
+        throw const SyncException(401, 'Invalid refresh token');
+      }
+      throw Exception('SocketException: network unreachable');
+    });
+    final cubit = AuthCubit(client: () => client);
+    final hydrated = cubit.fromJson({
+      'status': 'signedIn',
+      'email': 'a@example.com',
+      'accessToken': 'at-1',
+      'refreshToken': 'rt-1',
+    })!;
+    cubit.emit(hydrated);
+
+    // Transient network error: stays signed in with tokens intact.
+    expect(await cubit.refreshAccessToken(), isNull);
+    expect(cubit.state.isSignedIn, isTrue);
+    expect(cubit.state.refreshToken, 'rt-1');
+
+    // Explicit 401 from server: signs out and clears tokens.
+    shouldThrow401 = true;
+    expect(await cubit.refreshAccessToken(), isNull);
+    expect(cubit.state.isSignedIn, isFalse);
+    expect(cubit.state.refreshToken, isNull);
   });
 
   test('SyncMetaCubit tolerates corrupt entries', () {

@@ -65,6 +65,7 @@ class SyncEngine {
 
   Timer? _timer;
   bool _running = false;
+  int _epoch = 0;
 
   SyncEngine({
     required this.client,
@@ -114,31 +115,93 @@ class SyncEngine {
     _timer = null;
   }
 
+  /// Clears all local domain cubits and bank session state. Used on sign-out
+  /// and when switching to a different account so one user's local data can
+  /// never be merged/pushed into another user's cloud account.
+  void clearLocalAccountData() {
+    nodes.applyJson(const {'nodes': <dynamic>[]});
+    events.applyJson(const {'events': <dynamic>[]});
+    feeds.applyJson(const {'feeds': <dynamic>[]});
+    transactions.applySyncedJson(const {'transactions': <dynamic>[]});
+    places.applyJson(const {'places': <dynamic>[]});
+    reporting.applyJson(const {'days': <String, dynamic>{}});
+    tracking.applySyncedPoints(const <Map<String, dynamic>>[]);
+    waterfall.applySyncedConfig(const {'startingBalance': 0.0});
+    plaid.clearLocalSession();
+    protectedDeletions.value = const [];
+  }
+
+  /// Epoch-fences any in-flight sync, revokes the session, disconnects Plaid,
+  /// and clears local account data (or records the previous account email if
+  /// [clearLocalData] is false so a later sign-in by a different user still
+  /// starts clean).
+  void signOut({bool clearLocalData = true}) {
+    _epoch++;
+    _running = false;
+    status.value = EngineStatus.idle;
+    lastError = null;
+    final previousEmail = auth.state.email.trim().toLowerCase();
+    auth.logout();
+    plaid.clearLocalSession();
+    if (clearLocalData) {
+      clearLocalAccountData();
+      meta.reset(clearLastEmail: true);
+    } else {
+      meta.reset(
+        lastEmail:
+            previousEmail.isEmpty ? meta.state.lastEmail : previousEmail,
+      );
+    }
+  }
+
   /// Full pull-then-push. Reentrant calls collapse into the running one.
   Future<void> syncNow() async {
     if (_running) return;
     if (!auth.state.isSignedIn) return;
+    final currentEmail = auth.state.email.trim().toLowerCase();
+    final prevEmail = meta.state.lastEmail?.trim().toLowerCase();
+    if (prevEmail != null &&
+        prevEmail.isNotEmpty &&
+        currentEmail.isNotEmpty &&
+        prevEmail != currentEmail) {
+      clearLocalAccountData();
+      meta.reset(clearLastEmail: true, lastEmail: currentEmail);
+    } else if (currentEmail.isNotEmpty && prevEmail != currentEmail) {
+      meta.save(lastEmail: currentEmail);
+    }
+    final myEpoch = ++_epoch;
     _running = true;
     status.value = EngineStatus.syncing;
     try {
       final pull =
           await client.pull(since: meta.state.cursor, collections: collections);
+      if (_epoch != myEpoch || !auth.state.isSignedIn) return;
       _applyPull(pull.changes);
-      await _pushDiffs();
+      await _pushDiffs(myEpoch);
+      if (_epoch != myEpoch || !auth.state.isSignedIn) return;
       if (pull.serverTime.isNotEmpty) {
-        meta.save(cursor: pull.serverTime);
+        meta.save(
+          cursor: pull.serverTime,
+          lastEmail: currentEmail.isEmpty ? null : currentEmail,
+        );
       }
       lastSyncAt = DateTime.now();
       lastError = null;
       status.value = EngineStatus.idle;
     } on SyncException catch (e) {
-      lastError = e.message;
-      status.value = EngineStatus.error;
+      if (_epoch == myEpoch) {
+        lastError = e.message;
+        status.value = EngineStatus.error;
+      }
     } catch (e) {
-      lastError = e.toString();
-      status.value = EngineStatus.error;
+      if (_epoch == myEpoch) {
+        lastError = e.toString();
+        status.value = EngineStatus.error;
+      }
     } finally {
-      _running = false;
+      if (_epoch == myEpoch) {
+        _running = false;
+      }
     }
   }
 
@@ -194,7 +257,7 @@ class SyncEngine {
       }
       case 'settings': {
         final env = Map<String, dynamic>.from(settings.toJson(settings.state));
-        env.remove('icalProxyBase'); // retired override, never roams
+        _stripDeviceLocalFields('settings', env);
         return {'singleton': env};
       }
       case 'waterfall': {
@@ -206,13 +269,23 @@ class SyncEngine {
       }
       case 'plaid': {
         final env = plaid.toJson(plaid.state);
-        return {
-          'singleton':
-              env == null ? <String, dynamic>{} : Map<String, dynamic>.from(env)
-        };
+        final map =
+            env == null ? <String, dynamic>{} : Map<String, dynamic>.from(env);
+        _stripDeviceLocalFields('plaid', map);
+        return {'singleton': map};
       }
     }
     return {};
+  }
+
+  static void _stripDeviceLocalFields(
+      String collection, Map<String, dynamic> data) {
+    if (collection == 'settings') {
+      data.remove('icalProxyBase');
+      data.remove('ankiConnectHost');
+    } else if (collection == 'plaid') {
+      data.remove('wasConnected');
+    }
   }
 
   // ── Apply pull ──────────────────────────────────────────────────────
@@ -240,6 +313,7 @@ class SyncEngine {
         }
         if (m == null) {
           final merged = Map<String, dynamic>.from(r.data);
+          _stripDeviceLocalFields(collection, merged);
           // Fresh bookkeeping (new device, reset meta): same rule as a
           // conflict — a locally running timer is live truth, not stale.
           _preserveRunningTimer(collection, current[r.itemId], merged);
@@ -261,6 +335,7 @@ class SyncEngine {
         // push phase propagates the merged version back to the server.
         final local = current[r.itemId];
         final merged = Map<String, dynamic>.from(r.data);
+        _stripDeviceLocalFields(collection, merged);
         _preserveRunningTimer(collection, local, merged);
         if (local == null || contentHash(merged) != contentHash(local)) {
           current[r.itemId] = merged;
@@ -404,7 +479,7 @@ class SyncEngine {
     return false;
   }
 
-  Future<void> _pushDiffs() async {
+  Future<void> _pushDiffs(int myEpoch) async {
     // Group bookkeeping keys per collection so the guard can weigh a
     // collection's pending deletions against everything it tracks.
     final metaByCollection = <String, List<String>>{};
@@ -470,6 +545,7 @@ class SyncEngine {
       return;
     }
     final pushed = await client.push(changes);
+    if (_epoch != myEpoch || !auth.state.isSignedIn) return;
     final applied = pushed.applied;
     if (pushed.guarded.isNotEmpty) {
       debugPrint(

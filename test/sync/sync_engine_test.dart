@@ -421,4 +421,55 @@ void main() {
     );
     expect(contentHash(const {'a': 1}), isNot(contentHash(const {'a': 2})));
   });
+
+  test('switching accounts or signing out never leaks previous user data into next account',
+      () async {
+    final server = FakeSyncClient();
+    final shared = _Device(server);
+
+    await shared.auth.login('alice@example.com', 'password123');
+    shared.nodes.addNode(
+      Node(id: 'alice-secret', title: 'Alice secret task', createdAt: DateTime(2026)),
+    );
+    await shared.engine.syncNow();
+    expect(server.store['nodes']?.containsKey('alice-secret'), isTrue);
+
+    // Case 1: Alice signs out via engine.signOut(), then Bob signs in.
+    shared.engine.signOut();
+    expect(shared.nodes.state, isEmpty);
+    expect(shared.meta.state.items, isEmpty);
+
+    // Simulate Bob's empty cloud account on the server.
+    server.store.clear();
+
+    // Case 2: Even if Alice's data were still on disk when meta.reset() ran
+    // (e.g. account switch via AuthPage), SyncMetaCubit.lastEmail detects the
+    // different email and clears local cubits before pushing to Bob's cloud.
+    shared.nodes.addNode(
+      Node(id: 'stale-alice', title: 'Leftover', createdAt: DateTime(2026)),
+    );
+    shared.meta.reset(lastEmail: 'alice@example.com');
+    await shared.auth.login('bob@example.com', 'password123');
+    shared.meta.reset(); // AuthPage resets cursor/items, preserving lastEmail
+    await shared.engine.syncNow();
+
+    expect(shared.nodes.byId('stale-alice'), isNull);
+    expect(server.store['nodes']?.containsKey('stale-alice') ?? false, isFalse);
+  });
+
+  test('signOut mid-sync fences in-flight sync so meta stays reset', () async {
+    final server = FakeSyncClient();
+    final d = _Device(server);
+    await d.signIn();
+    d.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
+
+    final syncFuture = d.engine.syncNow();
+    d.engine.signOut();
+    await syncFuture;
+
+    expect(d.auth.state.isSignedIn, isFalse);
+    expect(d.meta.state.cursor, isNull);
+    expect(d.meta.state.items, isEmpty);
+    expect(d.nodes.state, isEmpty);
+  });
 }

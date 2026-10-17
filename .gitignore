@@ -43,9 +43,15 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/build/
 
 # Environment variables
 **/.env
+
+# Local personal financial spreadsheets, bank CSV exports, and DB snapshots
+*.xlsx
+lib/data/*.csv
+server/api/data/*.db*
 
 # Per-dev server token stores (local only; import once via
 # server/api `python -m app.migrate_json`, then delete)

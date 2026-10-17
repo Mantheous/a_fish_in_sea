@@ -7,8 +7,9 @@ happens after you have structured items in hand.
 
 ## 1. Server + credentials
 
-- Base URL: `https://alauris.tail088878.ts.net/fish/api/v1`
-  (requires this laptop's Tailscale; nothing else.)
+- Base URL: read `AFIS_BASE_URL` from a gitignored `.env` file (e.g.
+  `https://<your-tailnet-host>/fish/api/v1` or `http://127.0.0.1:8000/api/v1`).
+  Never hardcode the server hostname or IP address in tracked files.
 - Read the `afm_…` token from a gitignored file in this repo (e.g. `.env`
   → `AFIS_TOKEN=afm_…`). Never hardcode it, never echo it into output or
   logs. Every request carries: `Authorization: Bearer afm_…`.

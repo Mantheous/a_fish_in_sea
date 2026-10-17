@@ -297,11 +297,18 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
     try {
       final userId = json['userId'] as String?;
       if (userId == null || userId.isEmpty) return;
+      final itemId = json['itemId'] as String?;
       emit(state.copyWith(
         userId: userId,
-        itemId: json['itemId'] as String?,
+        itemId: itemId,
+        clearConnection: itemId == null,
       ));
     } catch (_) {}
+  }
+
+  /// Clears device-local bank connection state (sign-out / account switch).
+  void clearLocalSession() {
+    emit(PlaidState(userId: PlaidUserId.generate()));
   }
 
   @override

@@ -119,7 +119,15 @@ class AuthCubit extends HydratedCubit<AuthState> {
 
   Future<String?> _doRefresh() async {
     final refresh = state.refreshToken;
-    if (refresh == null || refresh.isEmpty) return null;
+    if (refresh == null || refresh.isEmpty) {
+      emit(state.copyWith(
+        status: AuthStatus.signedOut,
+        clearAccess: true,
+        clearRefresh: true,
+        error: 'Session expired — please sign in again.',
+      ));
+      return null;
+    }
     try {
       final tokens = await _client().refresh(refresh);
       final access = tokens['access_token'] as String?;
@@ -129,14 +137,22 @@ class AuthCubit extends HydratedCubit<AuthState> {
         status: AuthStatus.signedIn,
         accessToken: access,
         refreshToken: nextRefresh,
+        clearError: true,
       ));
       return access;
-    } catch (_) {
-      emit(state.copyWith(
+    } on SyncException catch (e) {
+      if (e.statusCode == 401 || e.statusCode == 403) {
+        emit(state.copyWith(
           status: AuthStatus.signedOut,
           clearAccess: true,
           clearRefresh: true,
-          error: 'Session expired — please sign in again.'));
+          error: 'Session expired — please sign in again.',
+        ));
+      }
+      return null;
+    } catch (_) {
+      // Transient transport error: keep stored tokens so a momentary network
+      // drop does not permanently sign the user out.
       return null;
     }
   }
@@ -163,13 +179,16 @@ class AuthCubit extends HydratedCubit<AuthState> {
   @override
   AuthState? fromJson(Map<String, dynamic> json) {
     try {
-      final status = AuthStatus.values.firstWhere(
+      final rawStatus = AuthStatus.values.firstWhere(
         (e) => e.name == json['status'],
         orElse: () => AuthStatus.signedOut,
       );
       final hasTokens = (json['accessToken'] as String?)?.isNotEmpty == true;
+      final status = !hasTokens
+          ? AuthStatus.signedOut
+          : (rawStatus == AuthStatus.working ? AuthStatus.signedIn : rawStatus);
       return AuthState(
-        status: hasTokens ? status : AuthStatus.signedOut,
+        status: status,
         email: json['email'] as String? ?? '',
         accessToken: json['accessToken'] as String?,
         refreshToken: json['refreshToken'] as String?,
@@ -181,7 +200,11 @@ class AuthCubit extends HydratedCubit<AuthState> {
 
   @override
   Map<String, dynamic> toJson(AuthState state) => {
-        'status': state.status.name,
+        'status': state.status == AuthStatus.working
+            ? (state.accessToken?.isNotEmpty == true
+                ? AuthStatus.signedIn.name
+                : AuthStatus.signedOut.name)
+            : state.status.name,
         'email': state.email,
         'accessToken': state.accessToken,
         'refreshToken': state.refreshToken,

@@ -20,8 +20,8 @@ fi
 if [ -z "$CHAT" ] && [ -f "$ENV_FILE" ]; then
   CHAT="$(grep -E '^TELEGRAM_OPENCODE_CHAT_ID=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d ' ' || true)"
 fi
-[ -z "$CHAT" ] && CHAT="8474661718"
 if [ -z "$TOKEN" ]; then echo "tg-callbacks: no bot token" >&2; exit 1; fi
+if [ -z "$CHAT" ]; then echo "tg-callbacks: no chat id" >&2; exit 1; fi
 OFFSET="0"
 [ -f "$OFFSET_FILE" ] && OFFSET="$(cat "$OFFSET_FILE" | tr -d ' ' || echo 0)"
 python3 - "$TOKEN" "$CHAT" "$OFFSET" "$OFFSET_FILE" <<'EOF'
