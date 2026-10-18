@@ -136,8 +136,7 @@ class NodeEventLink {
   }
 
   /// Marks many nodes done/open and mirrors completion onto their linked
-  /// calendar events, batched into two emits (one per store) so a bulk
-  /// check-off stays a single undo step per store. Returns the number of
+  /// calendar events as ONE undo step. Returns the number of
   /// nodes changed.
   static int setNodesDone(
     NodeCubit nodes,
@@ -147,51 +146,54 @@ class NodeEventLink {
     DateTime? now,
   }) {
     if (ids.isEmpty) return 0;
-    final changed = nodes.setDoneMany(ids, done: done, now: now);
-    if (changed == 0) return 0;
-    // Reverse `taskId` index built once: events seeded from a task point
-    // at it without a `calendarEventId` back-link, and must mirror too.
-    final byTaskId = <String, List<PlannerEvent>>{};
-    for (final event in calendar.state) {
-      final taskId = event.taskId;
-      if (taskId != null && ids.contains(taskId)) {
-        (byTaskId[taskId] ??= []).add(event);
+    var changed = 0;
+    RevertableHydratedCubit.atomic([nodes, calendar], () {
+      changed = nodes.setDoneMany(ids, done: done, now: now);
+      if (changed == 0) return;
+      // Reverse `taskId` index built once: events seeded from a task point
+      // at it without a `calendarEventId` back-link, and must mirror too.
+      final byTaskId = <String, List<PlannerEvent>>{};
+      for (final event in calendar.state) {
+        final taskId = event.taskId;
+        if (taskId != null && ids.contains(taskId)) {
+          (byTaskId[taskId] ??= []).add(event);
+        }
       }
-    }
-    final seen = <String>{};
-    final calUpdates = <PlannerEvent>[];
-    void consider(PlannerEvent event, Node node) {
-      if (!seen.add(event.id)) return;
-      if (event.done == node.isDone &&
-          event.completedAt == node.completedAt &&
-          event.failed == (node.status == NodeStatus.failed) &&
-          event.isTask) {
-        return;
+      final seen = <String>{};
+      final calUpdates = <PlannerEvent>[];
+      void consider(PlannerEvent event, Node node) {
+        if (!seen.add(event.id)) return;
+        if (event.done == node.isDone &&
+            event.completedAt == node.completedAt &&
+            event.failed == (node.status == NodeStatus.failed) &&
+            event.isTask) {
+          return;
+        }
+        calUpdates.add(
+          event.copyWith(
+            isTask: true,
+            done: node.isDone,
+            completedAt: node.completedAt,
+            clearCompletedAt: !node.isDone,
+            failed: node.status == NodeStatus.failed,
+          ),
+        );
       }
-      calUpdates.add(
-        event.copyWith(
-          isTask: true,
-          done: node.isDone,
-          completedAt: node.completedAt,
-          clearCompletedAt: !node.isDone,
-          failed: node.status == NodeStatus.failed,
-        ),
-      );
-    }
 
-    for (final id in ids) {
-      final node = nodes.byId(id);
-      if (node == null) continue;
-      for (final eventId in [node.calendarEventId, node.sourceEventId]) {
-        if (eventId == null) continue;
-        final event = calendar.byId(eventId);
-        if (event != null) consider(event, node);
+      for (final id in ids) {
+        final node = nodes.byId(id);
+        if (node == null) continue;
+        for (final eventId in [node.calendarEventId, node.sourceEventId]) {
+          if (eventId == null) continue;
+          final event = calendar.byId(eventId);
+          if (event != null) consider(event, node);
+        }
+        for (final event in byTaskId[id] ?? const <PlannerEvent>[]) {
+          consider(event, node);
+        }
       }
-      for (final event in byTaskId[id] ?? const <PlannerEvent>[]) {
-        consider(event, node);
-      }
-    }
-    if (calUpdates.isNotEmpty) calendar.updateEvents(calUpdates);
+      if (calUpdates.isNotEmpty) calendar.updateEvents(calUpdates);
+    });
     return changed;
   }
 

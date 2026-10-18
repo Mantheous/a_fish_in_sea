@@ -340,4 +340,52 @@ void main() {
       expect(nodeCubit.byId('done')?.isDone, isTrue);
     });
   });
+
+  group('delete/import undo restores every side (issue #74)', () {
+    Node homeworkNode(String id, DateTime base) => Node(
+          id: id,
+          title: 'Video Quiz 3.1',
+          createdAt: base,
+          sourceEventId: 'feed:$id',
+          feedId: 'math290',
+          classId: 'math290',
+          schedule: ScheduleFacet(due: base, start: base, end: base),
+        );
+
+    PlannerEvent linkedEvent(String id, String taskId) => PlannerEvent(
+          id: id,
+          subject: 'Video Quiz 3.1',
+          start: DateTime(2026, 9, 12, 9),
+          end: DateTime(2026, 9, 12, 10),
+          isTask: true,
+          taskId: taskId,
+        );
+
+    test('bulk mark-done mirrors in one undo step', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      final calendar = CalendarCubit();
+      final base = DateTime(2030, 2, 7, 9);
+      nodeCubit.addNode(
+          homeworkNode('n1', base).copyWith(calendarEventId: 'e1'));
+      calendar.addEvent(linkedEvent('e1', 'n1'));
+      final steps = undoCubit.state.undoStack.length;
+
+      final changed = NodeEventLink.setNodesDone(
+        nodeCubit,
+        calendar,
+        {'n1'},
+        done: true,
+      );
+
+      expect(changed, 1);
+      expect(nodeCubit.byId('n1')?.isDone, isTrue);
+      expect(calendar.byId('e1')?.done, isTrue);
+      expect(undoCubit.state.undoStack.length, steps + 1);
+
+      undoCubit.undo();
+      expect(nodeCubit.byId('n1')?.isDone, isFalse);
+      expect(calendar.byId('e1')?.done, isFalse);
+    });
+  });
 }
