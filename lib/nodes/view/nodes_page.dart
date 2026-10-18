@@ -837,13 +837,15 @@ class _NodeTile extends StatelessWidget {
           const SnackBar(content: Text('Rolled over to next period')),
         );
       case 'delete':
-        final eventId =
-            live.calendarEventId ?? live.sourceEventId;
-        cubit.deleteNode(live.id);
-        if (eventId != null) {
-          try {
-            context.read<CalendarCubit>().clearTaskLink(eventId);
-          } catch (_) {}
+        final undoCubit = context.read<UndoCubit>();
+        CalendarCubit? calendar;
+        try {
+          calendar = context.read<CalendarCubit>();
+        } catch (_) {}
+        if (calendar == null) {
+          cubit.deleteNode(live.id);
+        } else {
+          NodeEventLink.deleteNodesAndUnlink(cubit, calendar, {live.id});
         }
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
@@ -855,7 +857,7 @@ class _NodeTile extends StatelessWidget {
               persist: false,
               action: SnackBarAction(
                 label: 'Undo',
-                onPressed: () => context.read<UndoCubit>().undo(),
+                onPressed: undoCubit.undo,
               ),
             ),
           );
@@ -864,6 +866,7 @@ class _NodeTile extends StatelessWidget {
 
   void _assignRepeatingEvent(BuildContext context, Node live) async {
     final messenger = ScaffoldMessenger.of(context);
+    final undoCubit = context.read<UndoCubit>();
     CalendarCubit calendar;
     NodeCubit nodes;
     try {
@@ -908,7 +911,7 @@ class _NodeTile extends StatelessWidget {
           persist: false,
           action: SnackBarAction(
             label: 'Undo',
-            onPressed: () => context.read<UndoCubit>().undo(),
+            onPressed: undoCubit.undo,
           ),
         ),
       );

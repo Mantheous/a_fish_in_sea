@@ -1,4 +1,5 @@
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
+import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/assignment_rules_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/assignment_rule.dart';
@@ -150,6 +151,44 @@ void main() {
   });
 
   group('NodeCubit rule application', () {
+    test('rule plus existing due shift undo and redo together', () {
+      final undoCubit = UndoCubit();
+      final rules = AssignmentRulesCubit();
+      final nodes = NodeCubit();
+      final base = DateTime(2030, 2, 7, 9);
+      nodes.importFromFeed(
+        [event('event-assignment-1', 'Video Quiz 3.1', base)],
+        feed,
+      );
+
+      RevertableHydratedCubit.atomic([rules, nodes], () {
+        final created = rules.createRule(
+          feedId: 'math290',
+          templateKey: 'video quiz',
+          displayName: 'Video Quiz',
+          dueOffsetDays: -2,
+        );
+        nodes.retargetAssignmentDues(
+          feedId: created.feedId,
+          templateKey: created.templateKey,
+          newOffsetDays: created.dueOffsetDays,
+        );
+      });
+
+      expect(rules.state, hasLength(1));
+      expect(nodes.state.single.schedule?.due,
+          base.subtract(const Duration(days: 2)));
+      expect(undoCubit.state.undoStack.last.entries.map((e) => e.cubitId),
+          containsAll(['AssignmentRulesCubit', 'NodeCubit']));
+      undoCubit.undo();
+      expect(rules.state, isEmpty);
+      expect(nodes.state.single.schedule?.due, base);
+      undoCubit.redo();
+      expect(rules.state, hasLength(1));
+      expect(nodes.state.single.schedule?.due,
+          base.subtract(const Duration(days: 2)));
+    });
+
     test('fresh imports shift by the rule', () {
       UndoCubit();
       final nodes = NodeCubit();

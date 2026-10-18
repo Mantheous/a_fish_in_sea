@@ -1,5 +1,4 @@
-import 'package:hydrated_bloc/hydrated_bloc.dart';
-
+import '../../common/undo/revertable_hydrated_cubit.dart';
 import '../model/assignment_rule.dart';
 
 /// User rules for repeating homework types ("Video Quizzes are due 2 days
@@ -13,7 +12,7 @@ import '../model/assignment_rule.dart';
 /// automatically (via FeedCubit → NodeCubit.importFromFeed); existing
 /// items shift through the explicit Apply/Revert buttons in the rules
 /// sheet, each a single undoable NodeCubit write.
-class AssignmentRulesCubit extends HydratedCubit<List<AssignmentRule>> {
+class AssignmentRulesCubit extends RevertableHydratedCubit<List<AssignmentRule>> {
   AssignmentRulesCubit() : super(const []);
 
   AssignmentRule? byId(String id) {
@@ -78,12 +77,12 @@ class AssignmentRulesCubit extends HydratedCubit<List<AssignmentRule>> {
         if (r.id != rule.id) r,
       rule,
     ];
-    emit(next);
+    emitChange(next);
   }
 
   void deleteRule(String id) {
     if (byId(id) == null) return;
-    emit(state.where((r) => r.id != id).toList());
+    emitChange(state.where((r) => r.id != id).toList());
   }
 
   @override

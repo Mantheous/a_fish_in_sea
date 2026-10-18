@@ -12,6 +12,7 @@ import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_editor_schedule.dart';
+import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
 import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
@@ -1017,13 +1018,10 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     try {
       calendar = context.read<CalendarCubit>();
     } catch (_) {}
-    final eventId =
-        existing.calendarEventId ?? existing.sourceEventId;
-    nodes.deleteNode(existing.id);
-    if (eventId != null) {
-      try {
-        calendar?.clearTaskLink(eventId);
-      } catch (_) {}
+    if (calendar == null) {
+      nodes.deleteNode(existing.id);
+    } else {
+      NodeEventLink.deleteNodesAndUnlink(nodes, calendar, {existing.id});
     }
     navigator.pop();
     // Replace any banner still up from an earlier delete: queued

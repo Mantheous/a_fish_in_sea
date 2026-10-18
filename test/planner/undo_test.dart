@@ -205,6 +205,122 @@ void main() {
       );
     });
 
+    test('batch creates are one undo step', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+
+      RevertableHydratedCubit.atomic([nodeCubit], () {
+        for (var i = 0; i < 3; i++) {
+          nodeCubit.addNode(Node(
+            id: 'batch-$i',
+            title: 'Batch task $i',
+            createdAt: DateTime(2026),
+          ));
+        }
+      });
+
+      expect(nodeCubit.state, hasLength(3));
+      expect(undoCubit.state.undoStack, hasLength(1));
+      undoCubit.undo();
+      expect(nodeCubit.state, isEmpty);
+      undoCubit.redo();
+      expect(nodeCubit.state, hasLength(3));
+    });
+
+    test('atomic restores all stores and records nothing when a write fails', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      final calendar = CalendarCubit();
+
+      expect(
+        () => RevertableHydratedCubit.atomic([nodeCubit, calendar], () {
+          nodeCubit.addNode(Node(
+            id: 'partial',
+            title: 'Partial write',
+            createdAt: DateTime(2026),
+          ));
+          calendar.addEvent(PlannerEvent(
+            id: 'partial-event',
+            subject: 'Partial event',
+            start: DateTime(2026),
+            end: DateTime(2026, 1, 1, 1),
+          ));
+          throw StateError('later write failed');
+        }),
+        throwsStateError,
+      );
+
+      expect(nodeCubit.state, isEmpty);
+      expect(calendar.state, isEmpty);
+      expect(undoCubit.state.undoStack, isEmpty);
+    });
+
+    test('linked node delete is one undo step for node and reverse event link', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      final calendar = CalendarCubit();
+      nodeCubit.addNode(Node(
+        id: 'n1',
+        title: 'Task',
+        createdAt: DateTime(2026),
+      ));
+      calendar.addEvent(PlannerEvent(
+        id: 'e1',
+        subject: 'Task block',
+        start: DateTime(2026, 9, 12, 9),
+        end: DateTime(2026, 9, 12, 10),
+        isTask: true,
+        taskId: 'n1',
+      ));
+      final stepsBeforeDelete = undoCubit.state.undoStack.length;
+
+      final removed = NodeEventLink.deleteNodesAndUnlink(
+        nodeCubit,
+        calendar,
+        {'n1'},
+      );
+
+      expect(removed, 1);
+      expect(nodeCubit.byId('n1'), isNull);
+      expect(calendar.byId('e1')?.taskId, isNull);
+      expect(undoCubit.state.undoStack.length, stepsBeforeDelete + 1);
+      undoCubit.undo();
+      expect(nodeCubit.byId('n1'), isNotNull);
+      expect(calendar.byId('e1')?.taskId, 'n1');
+      expect(calendar.byId('e1')?.isTask, isTrue);
+    });
+
+    test('event delete and backing-node removal undo together', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      final calendar = CalendarCubit();
+      final event = PlannerEvent(
+        id: 'e1',
+        subject: 'Personal task',
+        start: DateTime(2026, 9, 12, 9),
+        end: DateTime(2026, 9, 12, 10),
+        isTask: true,
+        taskId: 'node:e1',
+      );
+      nodeCubit.addNode(Node(
+        id: 'node:e1',
+        title: 'Personal task',
+        createdAt: DateTime(2026),
+        calendarEventId: 'e1',
+      ));
+      calendar.addEvent(event);
+      final stepsBeforeDelete = undoCubit.state.undoStack.length;
+
+      NodeEventLink.deleteEventAndNodes(calendar, nodeCubit, event);
+
+      expect(calendar.byId('e1'), isNull);
+      expect(nodeCubit.byId('node:e1'), isNull);
+      expect(undoCubit.state.undoStack.length, stepsBeforeDelete + 1);
+      undoCubit.undo();
+      expect(calendar.byId('e1')?.taskId, 'node:e1');
+      expect(nodeCubit.byId('node:e1')?.calendarEventId, 'e1');
+    });
+
     test('clearing failed keeps done nodes done', () {
       UndoCubit();
       final nodeCubit = NodeCubit();

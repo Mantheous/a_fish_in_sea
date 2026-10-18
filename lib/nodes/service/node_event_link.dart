@@ -205,45 +205,49 @@ class NodeEventLink {
     Set<String> ids,
   ) {
     if (ids.isEmpty) return 0;
-    final eventIds = <String>{};
-    for (final id in ids) {
-      final node = nodes.byId(id);
-      if (node == null) continue;
-      for (final eventId in [node.calendarEventId, node.sourceEventId]) {
-        if (eventId != null) eventIds.add(eventId);
+    var removed = 0;
+    RevertableHydratedCubit.atomic([nodes, calendar], () {
+      final beforeNodes = nodes.state;
+      removed = nodes.deleteNodes(ids);
+      if (removed == 0) return;
+      final remainingIds = nodes.state.map((n) => n.id).toSet();
+      final removedIds = beforeNodes
+          .map((n) => n.id)
+          .where((id) => !remainingIds.contains(id))
+          .toSet();
+      final eventIds = <String>{};
+      for (final node in beforeNodes) {
+        if (!removedIds.contains(node.id)) continue;
+        for (final eventId in [node.calendarEventId, node.sourceEventId]) {
+          if (eventId != null) eventIds.add(eventId);
+        }
       }
-    }
-    // Events seeded from a deleted task point at it through `taskId`.
-    // They are kept and unlinked, never deleted — same as directly linked
-    // events below.
-    final reverseIds = <String>{};
-    for (final event in calendar.state) {
-      final taskId = event.taskId;
-      if (taskId != null && ids.contains(taskId)) {
-        reverseIds.add(event.id);
+      // Events seeded from any deleted task point at it through `taskId`.
+      // They are kept and unlinked, never deleted — same as directly linked
+      // events below.
+      for (final event in calendar.state) {
+        if (event.taskId != null && removedIds.contains(event.taskId)) {
+          eventIds.add(event.id);
+        }
       }
-    }
-    final removed = nodes.deleteNodes(ids);
-    if (removed == 0) return 0;
-    final calUpdates = <PlannerEvent>[];
-    for (final eventId in {...eventIds, ...reverseIds}) {
-      final event = calendar.byId(eventId);
-      if (event == null) continue;
-      if (!event.isTask && event.taskId == null && !event.done) continue;
-      calUpdates.add(
-        event.copyWith(
+      final calUpdates = <PlannerEvent>[];
+      for (final eventId in eventIds) {
+        final event = calendar.byId(eventId);
+        if (event == null) continue;
+        if (!event.isTask && event.taskId == null && !event.done) continue;
+        calUpdates.add(event.copyWith(
           isTask: false,
           clearTaskId: true,
           done: false,
           clearCompletedAt: true,
-        ),
-      );
-    }
-    if (calUpdates.isNotEmpty) calendar.updateEvents(calUpdates);
+        ));
+      }
+      if (calUpdates.isNotEmpty) calendar.updateEvents(calUpdates);
+    });
     return removed;
   }
 
-  /// Marks an event as actionable, creating its backing node.
+/// Marks an event as actionable, creating its backing node.
   static void markEventAsNode(
     CalendarCubit calendar,
     NodeCubit nodes,
@@ -282,15 +286,18 @@ class NodeEventLink {
 
   /// Deletes an event together with its backing nodes.
   /// One user gesture = one undo step (the silent node removal is folded
-  /// into the same record, so undo restores both).
+  /// into the same record, so undo restores both. A task-seeded standalone
+  /// node survives, but its personal event link is cleared in that record.
   static void deleteEventAndNodes(
     CalendarCubit calendar,
     NodeCubit nodes,
-    String eventId,
+    PlannerEvent event,
   ) {
     RevertableHydratedCubit.atomic([calendar, nodes], () {
-      nodes.removeNodesForEvent(eventId);
-      calendar.deleteEvent(eventId);
+      nodes.removeNodesForEvent(event.id);
+      if (event.taskId != null) nodes.clearCalendarEvent(event.taskId!);
+      nodes.clearCalendarEventForEvent(event.id);
+      calendar.deleteEvent(event.id);
     });
   }
 

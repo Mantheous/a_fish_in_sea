@@ -67,19 +67,36 @@ abstract class RevertableHydratedCubit<T> extends HydratedCubit<T>
     void Function() action,
   ) {
     final undo = UndoCubit.instance;
-    if (undo == null || UndoCubit.isSuspended) {
+    if (UndoCubit.isSuspended) {
       action();
       return;
     }
     final beforeStates = <RevertableHydratedCubit, Object?>{
       for (final c in cubits) c: c.state,
     };
-    UndoCubit.suspend();
+    final recordsUndo = undo != null;
+    if (recordsUndo) UndoCubit.suspend();
     try {
       action();
+    } catch (error, stackTrace) {
+      // A compound gesture must not leave half of its stores mutated when
+      // one of its later writes fails. Restore every changed participant
+      // before propagating the original error to the caller.
+      for (final c in cubits.reversed) {
+        final before = beforeStates[c];
+        if (identical(before, c.state)) continue;
+        try {
+          c.applyState(before);
+        } catch (_) {
+          // Preserve the original failure; captured cubit states should
+          // normally be accepted by their owning cubits.
+        }
+      }
+      Error.throwWithStackTrace(error, stackTrace);
     } finally {
-      UndoCubit.resume();
+      if (recordsUndo) UndoCubit.resume();
     }
+    if (undo == null) return;
     final entries = <StateSnapshot>[];
     for (final c in cubits) {
       final beforeState = beforeStates[c];
