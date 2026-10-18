@@ -43,6 +43,10 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
   }
 
   Future<void> _run(Future<ImportBatch> Function() call) async {
+    // Per-item buttons are disabled while busy, but a second tap can still
+    // land before the rebuild — ignore it instead of firing a concurrent
+    // request that 409s and shows a false error banner.
+    if (_busy) return;
     setState(() {
       _busy = true;
       _error = null;
@@ -50,7 +54,9 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
     try {
       final updated = await call();
       if (!mounted) return;
-      setState(() => _batch = updated);
+      // The server echoes conflict context, but a response that drops it
+      // for untouched rows must not wipe the warnings on screen.
+      setState(() => _batch = updated.withWarningsFrom(_batch));
       await _pullFresh();
     } catch (e) {
       if (!mounted) return;
@@ -96,6 +102,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
               itemBuilder: (context, i) => _StagedTile(
                   batchId: _batch.id,
                   item: _batch.items[i],
+                  busy: _busy,
                   onAct: _run,
                   service: _service,
                 ),
@@ -156,12 +163,14 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
 class _StagedTile extends StatelessWidget {
   final int batchId;
   final StagedItem item;
+  final bool busy;
   final ImportService service;
   final Future<void> Function(Future<ImportBatch> Function()) onAct;
 
   const _StagedTile({
     required this.batchId,
     required this.item,
+    required this.busy,
     required this.service,
     required this.onAct,
   });
@@ -240,31 +249,38 @@ class _StagedTile extends StatelessWidget {
                         tooltip: 'Approve',
                         icon: const Icon(Icons.check),
                         color: theme.colorScheme.primary,
-                        onPressed: () => onAct(
-                          () => DemoMode.isActive
-                              ? DemoCoordinator.demoApprove(
-                                  context, batchId,
-                                  itemIds: [item.itemId])
-                              : service.approve(
-                                  batchId,
-                                  itemIds: [
-                                    '${item.collection}:${item.itemId}'
-                                  ],
+                        // Disabled while a decision is in flight: a
+                        // double-tap would otherwise fire a concurrent
+                        // request that 409s into a false error banner.
+                        onPressed: busy
+                            ? null
+                            : () => onAct(
+                                  () => DemoMode.isActive
+                                      ? DemoCoordinator.demoApprove(
+                                          context, batchId,
+                                          itemIds: [item.itemId])
+                                      : service.approve(
+                                          batchId,
+                                          itemIds: [
+                                            '${item.collection}:${item.itemId}'
+                                          ],
+                                        ),
                                 ),
-                        ),
                       ),
                       IconButton(
                         tooltip: 'Discard',
                         icon: const Icon(Icons.close),
-                        onPressed: () => onAct(
-                          () => DemoMode.isActive
-                              ? DemoCoordinator.demoDiscard(
-                                  context, batchId, [item.itemId])
-                              : service.discard(
-                                  batchId,
-                                  ['${item.collection}:${item.itemId}'],
+                        onPressed: busy
+                            ? null
+                            : () => onAct(
+                                  () => DemoMode.isActive
+                                      ? DemoCoordinator.demoDiscard(
+                                          context, batchId, [item.itemId])
+                                      : service.discard(
+                                          batchId,
+                                          ['${item.collection}:${item.itemId}'],
+                                        ),
                                 ),
-                        ),
                       ),
                     ],
                   )

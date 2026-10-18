@@ -495,4 +495,5 @@ async def reject_batch(
     await session.commit()
     await session.refresh(batch)
     rows = await _batch_items(session, batch.id)
-    return _to_out(batch, rows)
+    existing = await _existing_map(session, user.id, rows)
+    return _to_out(batch, rows, existing)
