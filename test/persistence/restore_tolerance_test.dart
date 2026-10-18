@@ -252,6 +252,51 @@ void main() {
       expect(restored?.single.pendingTransactionId, 'pending_tx0');
     });
 
+    test('transaction node links round-trip; pre-node payloads load', () {
+      // Assigned + unassigned (reset) transactions must survive a restore.
+      final assigned = Transaction(
+        id: 'tx1',
+        accountId: 'a1',
+        amount: -62.40,
+        date: _day,
+        name: 'Groceries',
+        assignedNodeId: 'node:food',
+      );
+      expect(Transaction.fromJson(assigned.toJson()), assigned);
+      // Payloads written before node assignment existed carry no key.
+      final preNode = assigned.toJson()..remove('assignedNodeId');
+      expect(Transaction.fromJson(preNode).assignedNodeId, isNull);
+      // A node paid by a transaction, and one reset after unlink, load too.
+      final paid = Node(
+        id: 'n1',
+        title: 'Food',
+        createdAt: _day,
+        money: const MoneyFacet(
+          targetAmount: 62.40,
+          actualAmount: 62.40,
+          status: MoneyStatus.paid,
+          period: TimeScale.monthly,
+          linkedTransactionIds: ['tx1'],
+        ),
+      );
+      expect(Node.fromJson(paid.toJson()), paid);
+      final reset = Node(
+        id: 'n2',
+        title: 'Old',
+        createdAt: _day,
+        money: const MoneyFacet(
+          targetAmount: 62.40,
+          status: MoneyStatus.projected,
+        ),
+      );
+      expect(Node.fromJson(reset.toJson()), reset);
+      final cubit = NodeCubit();
+      final restored = cubit.fromJson({
+        'nodes': [paid.toJson(), reset.toJson()],
+      });
+      expect(restored?.map((n) => n.id), ['n1', 'n2']);
+    });
+
     test('PlacesCubit keeps valid places', () {
       final cubit = PlacesCubit();
       const good = Place(id: 'p1', name: 'Home', lat: 1.0, lng: 2.0);
