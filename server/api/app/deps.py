@@ -48,12 +48,14 @@ async def get_current_user(
     last_used = row.last_used_at
     if last_used is not None and last_used.tzinfo is None:
         last_used = last_used.replace(tzinfo=dt.timezone.utc)
+    # Touch last_used_at best-effort, with no per-GET commit. Committing on
+    # every authenticated GET serializes writers and is a lock/contention
+    # source under concurrent sync + token use; WAL + busy_timeout already
+    # guard the real write paths, and last_used_at is only an advisory
+    # "last seen" hint, so an in-memory touch that rolls back with the
+    # request session is acceptable.
     if last_used is None or (now - last_used) >= dt.timedelta(seconds=60):
-        try:
-            row.last_used_at = now
-            await session.commit()
-        except Exception:
-            await session.rollback()
+        row.last_used_at = now
     user = await session.get(User, row.user_id)
     if user is None:
         raise HTTPException(status_code=401, detail="Unknown user")

@@ -21,9 +21,10 @@ import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import get_session
+from ..db import dialect_insert, get_session
 from ..deps import check_token_scope, get_current_user
 from ..models import COLLECTIONS, SyncItem, User
 from ..schemas import GuardedChange, PullOut, PushIn, PushOut, SyncRecord
@@ -235,7 +236,56 @@ async def push(
                     status_code=400,
                     detail=f"data.id {payload_id!r} != item_id {change.item_id!r}",
                 )
-        existing = (
+        # Upsert (insert-or-update) so two requests racing for the same
+        # (user, collection, item_id) end with one success and one clean
+        # update instead of a unique-constraint 500. ON CONFLICT is atomic
+        # and dialect-agnostic (sqlite + postgres); IntegrityError is a
+        # last-resort fallback.
+        stmt = (
+            dialect_insert(SyncItem.__table__)
+            .values(
+                user_id=user.id,
+                collection=change.collection,
+                item_id=change.item_id,
+                data=change.data,
+                deleted=change.deleted,
+                rev=1,
+                updated_at=now,
+            )
+            .on_conflict_do_update(
+                index_elements=[
+                    SyncItem.user_id,
+                    SyncItem.collection,
+                    SyncItem.item_id,
+                ],
+                set_=dict(
+                    data=change.data,
+                    deleted=change.deleted,
+                    rev=SyncItem.rev + 1,
+                    updated_at=now,
+                ),
+            )
+        )
+        try:
+            await session.execute(stmt)
+        except IntegrityError:
+            await session.rollback()
+            existing = (
+                await session.execute(
+                    select(SyncItem).where(
+                        and_(
+                            SyncItem.user_id == user.id,
+                            SyncItem.collection == change.collection,
+                            SyncItem.item_id == change.item_id,
+                        )
+                    )
+                )
+            ).scalar_one()
+            existing.data = change.data
+            existing.deleted = change.deleted
+            existing.rev += 1
+            existing.updated_at = now
+        row = (
             await session.execute(
                 select(SyncItem).where(
                     and_(
@@ -245,25 +295,7 @@ async def push(
                     )
                 )
             )
-        ).scalar_one_or_none()
-        if existing is None:
-            row = SyncItem(
-                user_id=user.id,
-                collection=change.collection,
-                item_id=change.item_id,
-                data=change.data,
-                deleted=change.deleted,
-                rev=1,
-                updated_at=now,
-            )
-            session.add(row)
-            await session.flush()
-            applied.append(_to_record(row))
-        else:
-            existing.data = change.data
-            existing.deleted = change.deleted
-            existing.rev += 1
-            existing.updated_at = now
-            applied.append(_to_record(existing))
+        ).scalar_one()
+        applied.append(_to_record(row))
     await session.commit()
     return PushOut(applied=applied, server_time=now, guarded=guarded)

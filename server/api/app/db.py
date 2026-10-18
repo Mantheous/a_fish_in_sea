@@ -45,6 +45,7 @@ def engine():
                     cur.execute("PRAGMA busy_timeout=5000")
                     cur.execute("PRAGMA journal_mode=WAL")
                     cur.execute("PRAGMA synchronous=NORMAL")
+                    cur.execute("PRAGMA foreign_keys=ON")
                 except Exception:
                     pass
                 finally:
@@ -58,6 +59,23 @@ def session_factory() -> async_sessionmaker[AsyncSession]:
     if _session_factory is None:
         _session_factory = async_sessionmaker(engine(), expire_on_commit=False)
     return _session_factory
+
+
+_dialect_insert = None
+
+
+def dialect_insert(table):
+    """DML insert construct that supports ON CONFLICT DO UPDATE on the
+    configured dialect. SQLite and Postgres both compile this to the same
+    ON CONFLICT syntax, so the call sites stay dialect-agnostic."""
+    global _dialect_insert
+    if _dialect_insert is None:
+        if get_settings().database_url.startswith("sqlite"):
+            from sqlalchemy.dialects.sqlite import insert as _insert
+        else:
+            from sqlalchemy.dialects.postgresql import insert as _insert
+        _dialect_insert = _insert
+    return _dialect_insert(table)
 
 
 async def _backfill_api_tokens_review(conn) -> None:
