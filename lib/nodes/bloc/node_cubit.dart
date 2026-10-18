@@ -13,8 +13,10 @@ import 'package:a_fish_in_sea/planner/model/task.dart';
 import '../model/node.dart';
 import '../model/node_relations.dart';
 import '../service/event_schedule.dart';
+import '../service/node_batch_graph.dart';
 import '../service/node_feed.dart';
 import '../service/node_progress.dart';
+import '../service/node_recurrence_schedule.dart';
 import '../service/node_tree_ops.dart';
 
 /// Unified goals/tasks store. One DAG of [Node]s replaces Goal + Task +
@@ -107,29 +109,54 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     bool silent = false,
   }) {
     final errors = <String, String>{};
-    final valid = <Node>[];
+    final candidates = <Node>[];
     for (final n in upserts) {
       final unboundedError = validateUnbounded(n);
       if (unboundedError != null) {
         errors[n.id] = unboundedError;
         continue;
       }
-      final error = validateParents(n, n.parentIds);
-      if (error != null) {
-        errors[n.id] = error;
-        continue;
-      }
-      valid.add(n);
+      candidates.add(n);
     }
-    if (valid.isEmpty && removeIds.isEmpty) return errors;
-    final byId = {for (final n in valid) n.id: n};
+    if (candidates.isEmpty && removeIds.isEmpty) return errors;
+
+    final proposed = <String, Node>{
+      for (final n in state)
+        if (!removeIds.contains(n.id)) n.id: n,
+    }..addEntries(candidates.map((n) => MapEntry(n.id, n)));
+    final relationValid = <Node>[];
+    for (final n in candidates) {
+      final current = byId(n.id);
+      final changedStructure = current == null || !_sameStructure(current, n);
+      final relationError = changedStructure
+          ? validateNodeRelations(
+              draft: n,
+              all: proposed.values.toList(growable: false),
+              parentIds: n.parentIds,
+            )
+          : null;
+      if (relationError != null) {
+        errors[n.id] = relationError;
+      } else {
+        relationValid.add(n);
+      }
+    }
+    final graph = validateNodeBatchGraph(
+      current: state,
+      upserts: relationValid,
+      removeIds: removeIds,
+    );
+    errors.addAll(graph.errors);
+    if (graph.upserts.isEmpty && graph.removeIds.isEmpty) return errors;
+
+    final acceptedById = {for (final n in graph.upserts) n.id: n};
     final next = <Node>[];
     for (final n in state) {
-      if (removeIds.contains(n.id)) continue;
-      next.add(byId[n.id] ?? n);
+      if (graph.removeIds.contains(n.id)) continue;
+      next.add(acceptedById[n.id] ?? n);
     }
     final known = {for (final n in state) n.id};
-    for (final n in valid) {
+    for (final n in graph.upserts) {
       if (!known.contains(n.id)) next.add(n);
     }
     if (silent) {
@@ -1312,7 +1339,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     if (template == null || recurrence == null) return 0;
     final anchor =
         template.schedule?.due ?? template.schedule?.start ?? from;
-    var cursor = _firstOnOrAfter(anchor, recurrence, from);
+    var cursor = NodeRecurrenceSchedule.firstOnOrAfter(anchor, recurrence, from);
     final owned = existingIds != null;
     final known = existingIds ?? state.map((n) => n.id).toSet();
     final fresh = <Node>[];
@@ -1327,7 +1354,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         fresh.add(_spawnInstance(template, id, cursor));
         known.add(id);
       }
-      cursor = _next(cursor, recurrence);
+      cursor = NodeRecurrenceSchedule.next(anchor, cursor, recurrence);
       if (++guard > 5000) break;
     }
     if (fresh.isNotEmpty && !owned) emitSilent([...state, ...fresh]);
@@ -2114,64 +2141,6 @@ bool _sameAssignees(List<dynamic> a, List<dynamic> b) {
     if (a[i] != b[i]) return false;
   }
   return true;
-}
-
-DateTime _firstOnOrAfter(
-    DateTime anchor, NodeRecurrence recurrence, DateTime from) {
-  if (!anchor.isBefore(from)) return _snap(anchor, recurrence);
-  // Fast-forward monthly-ish recurrences without day-by-day iteration.
-  var cursor = _snap(from, recurrence);
-  var guard = 0;
-  while (cursor.isBefore(from)) {
-    cursor = _next(cursor, recurrence);
-    if (++guard > 5000) break;
-  }
-  return cursor;
-}
-
-DateTime _snap(DateTime date, NodeRecurrence recurrence) {
-  switch (recurrence.frequency) {
-    case TimeScale.monthly:
-      final day =
-          (recurrence.dayOfMonth ?? date.day).clamp(1, 28);
-      var candidate = DateTime(date.year, date.month, day);
-      if (candidate.isBefore(DateTime(date.year, date.month, date.day))) {
-        candidate = DateTime(date.year, date.month + 1, day);
-      }
-      return candidate;
-    case TimeScale.weekly:
-    case TimeScale.biweekly:
-      final target = recurrence.dayOfWeek ?? date.weekday;
-      var diff = target - date.weekday;
-      if (diff < 0) diff += 7;
-      final day = DateTime(date.year, date.month, date.day);
-      return day.add(Duration(days: diff));
-    case TimeScale.daily:
-    case TimeScale.quarterly:
-    case TimeScale.yearly:
-    case TimeScale.custom:
-      return DateTime(date.year, date.month, date.day);
-  }
-}
-
-DateTime _next(DateTime current, NodeRecurrence recurrence) {
-  switch (recurrence.frequency) {
-    case TimeScale.daily:
-      return current.add(const Duration(days: 1));
-    case TimeScale.weekly:
-      return current.add(const Duration(days: 7));
-    case TimeScale.biweekly:
-      return current.add(const Duration(days: 14));
-    case TimeScale.monthly:
-      final day = (recurrence.dayOfMonth ?? current.day).clamp(1, 28);
-      return DateTime(current.year, current.month + 1, day);
-    case TimeScale.quarterly:
-      return DateTime(current.year, current.month + 3, current.day);
-    case TimeScale.yearly:
-      return DateTime(current.year + 1, current.month, current.day);
-    case TimeScale.custom:
-      return current.add(Duration(days: recurrence.customPeriodDays ?? 30));
-  }
 }
 
 String _instanceId(String templateId, DateTime date, TimeScale frequency) {

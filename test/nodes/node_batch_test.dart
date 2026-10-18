@@ -141,6 +141,52 @@ void main() {
       expect(nodes.byId('bad'), isNull);
       expect(nodes.byId('good'), isNotNull);
     });
+
+    test('accepts a new parent and child in one batch', () {
+      final nodes = NodeCubit();
+      final errors = nodes.writeNodes(upserts: [
+        goalNode('parent'),
+        goalNode('child').copyWith(parentIds: ['parent']),
+      ]);
+
+      expect(errors, isEmpty);
+      expect(nodes.byId('child')?.parentIds, ['parent']);
+    });
+
+    test('rejects all candidate nodes participating in a batch cycle', () {
+      final nodes = NodeCubit();
+      final errors = nodes.writeNodes(upserts: [
+        goalNode('a').copyWith(parentIds: ['b']),
+        goalNode('b').copyWith(parentIds: ['a']),
+      ]);
+
+      expect(errors.keys.toSet(), {'a', 'b'});
+      expect(nodes.state, isEmpty);
+    });
+
+    test('rejects a batch child with a missing parent', () {
+      final nodes = NodeCubit();
+      final errors = nodes.writeNodes(upserts: [
+        goalNode('child').copyWith(parentIds: ['missing']),
+      ]);
+
+      expect(errors['child'], 'Parent node not found.');
+      expect(nodes.byId('child'), isNull);
+    });
+
+    test('refuses a removal that would leave a dangling child', () {
+      final nodes = NodeCubit();
+      nodes.writeNodes(upserts: [
+        goalNode('parent'),
+        goalNode('child').copyWith(parentIds: ['parent']),
+      ]);
+
+      final errors = nodes.writeNodes(removeIds: {'parent'});
+
+      expect(errors['parent'], isNotNull);
+      expect(nodes.byId('parent'), isNotNull);
+      expect(nodes.byId('child')?.parentIds, ['parent']);
+    });
   });
 
   group('NodeCubit batch equivalence with single writes', () {
