@@ -78,6 +78,50 @@ class ImportBatch {
   List<StagedItem> get pending => items.where((i) => i.isPending).toList();
   int get pendingCount => pending.length;
 
+  /// Fill conflict context the server omitted.
+  ///
+  /// Belt and suspenders for the review screen: a decision response that
+  /// drops [StagedItem.existing] for untouched rows would otherwise wipe
+  /// their "updates existing" warnings. A row in this batch that carries
+  /// no warning of its own inherits the one from the same row in
+  /// [previous]. Rows that already carry a warning are trusted as-is —
+  /// the server's fresh read wins over the stale one.
+  ImportBatch withWarningsFrom(ImportBatch previous) {
+    final oldByKey = <String, StagedItem>{
+      for (final i in previous.items) '${i.collection}:${i.itemId}': i,
+    };
+    var changed = false;
+    final merged = <StagedItem>[];
+    for (final n in items) {
+      final old = oldByKey['${n.collection}:${n.itemId}'];
+      final needsWarning =
+          n.existing == null && !n.existingDeleted && (old?.isUpdate ?? false);
+      if (!needsWarning) {
+        merged.add(n);
+        continue;
+      }
+      changed = true;
+      merged.add(StagedItem(
+        collection: n.collection,
+        itemId: n.itemId,
+        data: n.data,
+        status: n.status,
+        existing: old!.existing == null
+            ? null
+            : Map<String, dynamic>.from(old.existing!),
+        existingDeleted: old.existingDeleted,
+      ));
+    }
+    if (!changed) return this;
+    return ImportBatch(
+      id: id,
+      source: source,
+      status: status,
+      createdAt: createdAt,
+      items: merged,
+    );
+  }
+
   factory ImportBatch.fromJson(Map<String, dynamic> json) {
     final rawItems = json['items'];
     return ImportBatch(
