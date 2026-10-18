@@ -244,10 +244,12 @@ void main() {
         amount: -5.0,
         date: _day,
         name: 'Coffee',
+        pendingTransactionId: 'pending_tx0',
       ).toJson();
       final restored =
           cubit.fromJson(_withCorrupt('transactions', good));
       expect(restored?.map((t) => t.id), ['tx1']);
+      expect(restored?.single.pendingTransactionId, 'pending_tx0');
     });
 
     test('PlacesCubit keeps valid places', () {
@@ -453,6 +455,7 @@ void main() {
         amount: -5.0,
         date: _day,
         name: 'Coffee',
+        pendingTransactionId: 'pending_tx0',
       );
       expect(Transaction.fromJson(txn.toJson()), txn);
     });
