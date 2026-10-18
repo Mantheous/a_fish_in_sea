@@ -15,6 +15,7 @@ import '../../planner/model/assignment_rule.dart';
 import '../bloc/places_cubit.dart';
 import '../bloc/reporting_cubit.dart';
 import '../bloc/tracking_cubit.dart';
+import '../model/reported_entry.dart';
 import '../reporting_logic.dart';
 import '../service/location_service.dart';
 import '../stats_logic.dart';
@@ -92,17 +93,11 @@ class _StatsBodyState extends State<_StatsBody> {
       for (final day in rangeDays) ...sliceCache[dayKey(day)]!,
     ];
 
-    final reportedInRange =
-        <({String? eventId, DateTime start, DateTime end, String title})>[];
+    final reportedInRange = <ReportedEntry>[];
     for (final entries in reported.values) {
       for (final entry in entries) {
         if (!range.contains(entry.start)) continue;
-        reportedInRange.add((
-          eventId: entry.eventId,
-          start: entry.start,
-          end: entry.end,
-          title: entry.title,
-        ));
+        reportedInRange.add(entry);
       }
     }
 
@@ -711,9 +706,10 @@ class _DayTimeCard extends StatelessWidget {
                             borderRadius: BorderRadius.circular(3),
                           ),
                           BarChartRodData(
-                            toY: (days[i].trackedMinutes +
-                                    days[i].plannedMinutes)
-                                .toDouble(),
+                            // Net planned (no-timer) time only, not stacked
+                            // on top of tracked: with overlap already
+                            // removed this rod fits under the covered axis.
+                            toY: days[i].plannedMinutes.toDouble(),
                             width: 16,
                             borderRadius: BorderRadius.circular(3),
                             color: theme.colorScheme.primary
@@ -814,8 +810,8 @@ class _GoalsCard extends StatelessWidget {
                     : '${report.moneyGoalCount} money goals',
                 value: '\$${report.moneyActual.toStringAsFixed(0)} of '
                     '\$${report.moneyTarget.toStringAsFixed(0)}',
-                progress: (report.moneyActual / report.moneyTarget)
-                    .clamp(0.0, 1.0),
+                // A $0 target has no ratio; show empty, not NaN.
+                progress: report.moneyPct ?? 0,
               ),
             if (report.ankiGoalCount > 0)
               _GoalMetric(
