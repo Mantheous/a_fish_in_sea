@@ -33,11 +33,28 @@ _RFC1918 = (
     ipaddress.ip_network("192.168.0.0/16"),
 )
 
+# CGNAT / shared address space (RFC 6598, 100.64.0.0/10): Tailnet territory.
+# It is not loopback, link-local, multicast, or a LAN range, and
+# self-hosted Tailnet feeds must be fetchable, so it is explicitly NOT treated
+# as an internal address here. /api/ical still requires a signed-in user before
+# fetching a CGNAT target (see routers/proxy.py), so unauthenticated callers
+# cannot use the public funnel to probe private Tailnet services.
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
+
+def is_cgnat_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True for 100.64.0.0/10 (CGNAT/Tailnet) addresses."""
+    return isinstance(ip, ipaddress.IPv4Address) and ip in _CGNAT
+
 
 def _is_internal_ip(raw_ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     ip = raw_ip
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
+    # Explicit CGNAT handling: Tailnet addresses are allowed targets (auth is
+    # gated at the /api/ical proxy), so never treat them as internal.
+    if is_cgnat_ip(ip):
+        return False
     return (
         ip.is_loopback
         or ip.is_private
