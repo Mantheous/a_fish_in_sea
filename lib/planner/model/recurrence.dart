@@ -39,8 +39,11 @@ class RepeatConfig extends Equatable {
     return switch (endKind) {
       RepeatEndKind.never => base,
       RepeatEndKind.after => '$base;COUNT=${count < 1 ? 1 : count}',
+      // The editor switches to `until` before a date is picked, and Save
+      // can run before the picker returns — a null date must fall back
+      // to a sane default, never crash.
       RepeatEndKind.until =>
-        '$base;UNTIL=${_formatUntil(until!)}',
+        '$base;UNTIL=${_formatUntil(until ?? start.add(const Duration(days: 30)))}',
     };
   }
 
