@@ -148,4 +148,78 @@ void main() {
       expect(resized.end, DateTime(2026, 9, 7, 12, 0));
     });
   });
+
+  group('travelGhostToVisible', () {
+    test('stays put when the draft day is already visible', () {
+      final draft = _event(
+        start: DateTime(2026, 9, 9, 10, 0),
+        end: DateTime(2026, 9, 9, 11, 0),
+      );
+      final visible = [
+        DateTime(2026, 9, 7),
+        DateTime(2026, 9, 8),
+        DateTime(2026, 9, 9),
+        DateTime(2026, 9, 10),
+      ];
+      expect(
+        travelGhostToVisible(draft, visible, DateTime(2026, 9, 7)),
+        isNull,
+      );
+    });
+
+    test('follows the display date keeping wall-clock time', () {
+      final draft = _event(
+        start: DateTime(2026, 9, 9, 10, 7),
+        end: DateTime(2026, 9, 9, 11, 7),
+      );
+      final visible = [
+        DateTime(2026, 9, 16),
+        DateTime(2026, 9, 17),
+        DateTime(2026, 9, 18),
+      ];
+      final moved = travelGhostToVisible(
+        draft,
+        visible,
+        DateTime(2026, 9, 16),
+        snapMinutes: 15,
+      )!;
+      expect(moved.start, DateTime(2026, 9, 16, 10, 0));
+      expect(moved.end, DateTime(2026, 9, 16, 11, 0));
+    });
+
+    test('falls back to the middle visible date', () {
+      final draft = _event(
+        start: DateTime(2026, 9, 9, 10, 0),
+        end: DateTime(2026, 9, 9, 11, 0),
+      );
+      final visible = [
+        DateTime(2026, 10, 1),
+        DateTime(2026, 10, 2),
+        DateTime(2026, 10, 3),
+      ];
+      final moved = travelGhostToVisible(draft, visible, null)!;
+      expect(moved.start, DateTime(2026, 10, 2, 10, 0));
+      expect(moved.end, DateTime(2026, 10, 2, 11, 0));
+    });
+
+    test('moves all-day drafts by day', () {
+      final draft = _event(
+        start: DateTime(2026, 9, 9),
+        end: DateTime(2026, 9, 10),
+        allDay: true,
+      );
+      final visible = [DateTime(2026, 9, 16)];
+      final moved = travelGhostToVisible(
+        draft,
+        visible,
+        DateTime(2026, 9, 16),
+      )!;
+      expect(moved.start, DateTime(2026, 9, 16));
+      expect(moved.end, DateTime(2026, 9, 17));
+    });
+
+    test('ignores empty visible dates', () {
+      expect(travelGhostToVisible(_event(), [], DateTime(2026, 9, 16)), isNull);
+    });
+  });
 }

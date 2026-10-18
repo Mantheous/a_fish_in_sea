@@ -118,6 +118,7 @@ class _CalendarPageState extends State<CalendarPage> {
   double _handleDy = 0;
   double _handlePxPerMinute = 1;
   bool _ignoreNativeDragEnd = false;
+  bool _isDragging = false;
 
   bool get _isWide =>
       MediaQuery.of(context).size.width >= _wideBreakpoint;
@@ -598,6 +599,7 @@ class _CalendarPageState extends State<CalendarPage> {
                   onDragStart: _onDragStart,
                   onDragEnd: _onDragEnd,
                   onTap: _onTap,
+                  onViewChanged: _onViewChanged,
                   monthViewSettings: const MonthViewSettings(
                     showAgenda: true,
                     appointmentDisplayMode:
@@ -1511,6 +1513,7 @@ class _CalendarPageState extends State<CalendarPage> {
                         child: Text(
                           'Ghost preview on the calendar — drag it to move it, '
                           'drag a circle to resize (snaps to $snap min). '
+                          'Page with the arrows and the ghost follows. '
                           'Nothing is saved until you press Add.',
                           style: Theme.of(context)
                               .textTheme
@@ -1991,13 +1994,34 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   void _onDragStart(AppointmentDragStartDetails details) {
+    _isDragging = true;
     _suppressTap = true;
     if (_handleOriginal != null) {
       _ignoreNativeDragEnd = true;
     }
   }
 
+  /// Keeps the creation ghost on screen while the user pages with the
+  /// header arrows (or switches Day/Week/Month): when the draft day scrolls
+  /// out of view, the ghost travels to the newly visible date, keeping its
+  /// wall-clock time and duration so it can be dragged to its final slot.
+  /// A mid-drag page turn is left to the native drop target instead.
+  void _onViewChanged(ViewChangedDetails details) {
+    if (_drawerMode != _DrawerMode.creating) return;
+    final draft = _draftEvent;
+    if (draft == null || _isDragging) return;
+    final snap = context.read<SettingsCubit>().state.snapMinutes;
+    final traveled = travelGhostToVisible(
+      draft,
+      details.visibleDates,
+      _controller.displayDate,
+      snapMinutes: snap,
+    );
+    if (traveled != null) _updateDraftFromCalendar(traveled);
+  }
+
   Future<void> _onDragEnd(AppointmentDragEndDetails details) async {
+    _isDragging = false;
     if (_ignoreNativeDragEnd) {
       _ignoreNativeDragEnd = false;
       setState(() {});

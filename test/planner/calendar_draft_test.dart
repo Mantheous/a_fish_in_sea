@@ -18,6 +18,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:syncfusion_flutter_calendar/calendar.dart';
 
 class MockStorage extends Mock implements Storage {}
 
@@ -236,6 +237,63 @@ void main() {
     expect(calendarCubit.state, hasLength(1));
     expect(calendarCubit.state.first.subject, 'Homework block');
     expect(find.textContaining('Ghost preview'), findsNothing);
+  });
+
+  testWidgets('ghost follows the visible dates when paging with arrows',
+      (tester) async {
+    final calendarCubit = CalendarCubit();
+    final nodeCubit = NodeCubit();
+    final settingsCubit = SettingsCubit();
+    final draftCubit = CalendarDraftCubit();
+    final feedCubit = buildFeedCubit(calendarCubit, nodeCubit);
+
+    await pumpCalendar(
+      tester,
+      calendarCubit: calendarCubit,
+      feedCubit: feedCubit,
+      settingsCubit: settingsCubit,
+      draftCubit: draftCubit,
+    );
+
+    await tester.tap(find.byType(FloatingActionButton));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Ghost preview'), findsOneWidget);
+    final before =
+        tester.widget<EventEditorForm>(find.byType(EventEditorForm));
+    final beforeDay = before.initialDate!;
+    final beforeTime = before.initialTime!;
+
+    final calendar = tester.widget<SfCalendar>(find.byType(SfCalendar));
+    expect(calendar.onViewChanged, isNotNull);
+
+    final anchorDay = DateTime(
+      beforeDay.year,
+      beforeDay.month,
+      beforeDay.day,
+    ).add(const Duration(days: 7));
+    final visible = List<DateTime>.generate(
+      7,
+      (i) => anchorDay.add(Duration(days: i)),
+    );
+    // Real header-arrow paging moves the controller's display date into the
+    // new range before onViewChanged fires.
+    calendar.controller?.displayDate = anchorDay;
+    calendar.onViewChanged!(ViewChangedDetails(visible));
+    await tester.pumpAndSettle();
+
+    final after =
+        tester.widget<EventEditorForm>(find.byType(EventEditorForm));
+    // The ghost travels to the newly visible date so it can be dragged
+    // to its final slot, keeping its wall-clock time.
+    expect(after.initialDate, DateTime(
+      anchorDay.year,
+      anchorDay.month,
+      anchorDay.day,
+    ));
+    expect(after.initialTime!.hour, beforeTime.hour);
+    expect(after.initialTime!.minute, beforeTime.minute);
+    expect(find.textContaining('ghost follows'), findsOneWidget);
   });
 
   testWidgets('saving a task-seeded draft returns to the task menu',
