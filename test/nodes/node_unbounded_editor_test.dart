@@ -175,14 +175,15 @@ void main() {
 
     await tester.tap(find.text('Blocked'));
     await tester.pumpAndSettle();
-    // Unified schedule: day and time coexist, toggled by Day/Time.
+    // Day-only editor: due date inline, calendar times via Schedule.
     final dialog = find.byType(AlertDialog);
     expect(
         find.descendant(of: dialog, matching: find.text('Calendar block')),
         findsNothing);
     expect(find.text('Schedule'), findsOneWidget);
-    expect(find.text('Day'), findsOneWidget);
-    expect(find.text('Time'), findsOneWidget);
+    expect(find.text('Day'), findsNothing);
+    expect(find.text('Time'), findsNothing);
+    expect(find.textContaining('Schedule → Time'), findsOneWidget);
     await tester.tap(find.widgetWithText(FilledButton, 'Save'));
     await tester.pumpAndSettle();
 

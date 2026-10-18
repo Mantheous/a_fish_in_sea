@@ -17,10 +17,10 @@ import 'schedule_fields.dart';
 final _sheetDueFormat = DateFormat('EEE, MMM d');
 
 /// Unified schedule entry: the same sheet from the Tasks tile and from
-/// Nodes. Day mode edits the due date, Time mode edits the calendar
-/// block — both on the same [ScheduleFacet] backend. The last saved
-/// granularity is remembered per-device; the Day/Time toggle switches
-/// after opening without losing the other half.
+/// Nodes. Day mode edits the due date inline; Time mode always goes
+/// through the calendar — a time is a calendar event picked visually,
+/// never typed inline. The last saved granularity is remembered
+/// per-device; the Day/Time toggle switches after opening.
 Future<void> showScheduleSheet(
   BuildContext context, {
   required String nodeId,
@@ -128,6 +128,11 @@ class _ScheduleSheetState extends State<_ScheduleSheet> {
       estimate: _estimateFor(context, node),
       snapMinutes: _snapMinutes(context),
     );
+    try {
+      context.read<SchedulePrefsCubit>().setGranularity(
+            ScheduleGranularity.timed,
+          );
+    } catch (_) {}
     Navigator.of(context).pop();
     if (drafts == null) return;
     drafts.requestDraft(seed);
@@ -157,41 +162,27 @@ class _ScheduleSheetState extends State<_ScheduleSheet> {
       Navigator.of(context).pop();
       return;
     }
+    // Day mode only: due date inline, existing calendar block preserved.
+    // Time mode never saves here — it goes through the calendar (which
+    // writes the block) or clears the block below.
     final existing = node.schedule;
+    final due = _draft.due;
+    final fixed = _draft.fixed;
     ScheduleFacet? schedule;
-    if (_draft.mode == ScheduleGranularity.day) {
-      final due = _draft.due;
-      final fixed = _draft.fixed;
-      if (due != null || fixed) {
-        schedule = ScheduleFacet(
-          due: due,
-          start: existing?.start,
-          end: existing?.end,
-          allDay: existing?.allDay ?? false,
-          isFixed: fixed,
-        );
-      } else if (existing?.hasCalendarBlock ?? false) {
-        schedule = ScheduleFacet(
-          start: existing!.start,
-          end: existing.end,
-          allDay: existing.allDay,
-        );
-      }
-    } else {
-      if (_draft.hasBlock) {
-        schedule = ScheduleFacet(
-          due: existing?.due,
-          start: _draft.blockStart,
-          end: _draft.blockEnd,
-          allDay: false,
-          isFixed: existing?.isFixed ?? false,
-        );
-      } else if (existing?.due != null || (existing?.isFixed ?? false)) {
-        schedule = ScheduleFacet(
-          due: existing?.due,
-          isFixed: existing?.isFixed ?? false,
-        );
-      }
+    if (due != null || fixed) {
+      schedule = ScheduleFacet(
+        due: due,
+        start: existing?.start,
+        end: existing?.end,
+        allDay: existing?.allDay ?? false,
+        isFixed: fixed,
+      );
+    } else if (existing?.hasCalendarBlock ?? false) {
+      schedule = ScheduleFacet(
+        start: existing!.start,
+        end: existing.end,
+        allDay: existing.allDay,
+      );
     }
     final error = nodes.updateNode(node.copyWith(
       schedule: schedule,
@@ -206,7 +197,46 @@ class _ScheduleSheetState extends State<_ScheduleSheet> {
     try {
       context
           .read<SchedulePrefsCubit>()
-          .setGranularity(_draft.mode);
+          .setGranularity(ScheduleGranularity.day);
+    } catch (_) {}
+    Navigator.of(context).pop();
+  }
+
+  void _clearBlock() {
+    NodeCubit nodes;
+    try {
+      nodes = context.read<NodeCubit>();
+    } catch (_) {
+      Navigator.of(context).pop();
+      return;
+    }
+    final node = nodes.byId(widget.nodeId);
+    if (node == null) {
+      Navigator.of(context).pop();
+      return;
+    }
+    final existing = node.schedule;
+    ScheduleFacet? schedule;
+    if (existing?.due != null || (existing?.isFixed ?? false)) {
+      schedule = ScheduleFacet(
+        due: existing?.due,
+        isFixed: existing?.isFixed ?? false,
+      );
+    }
+    final error = nodes.updateNode(node.copyWith(
+      schedule: schedule,
+      clearSchedule: schedule == null,
+    ));
+    if (error != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error)),
+      );
+      return;
+    }
+    try {
+      context
+          .read<SchedulePrefsCubit>()
+          .setGranularity(ScheduleGranularity.timed);
     } catch (_) {}
     Navigator.of(context).pop();
   }
@@ -251,14 +281,8 @@ class _ScheduleSheetState extends State<_ScheduleSheet> {
             ScheduleFields(
               draft: _draft,
               onChanged: (next) => setState(() => _draft = next),
+              onPickCalendar: _pickOnCalendar,
             ),
-            const SizedBox(height: 8),
-            if (_draft.mode == ScheduleGranularity.timed)
-              OutlinedButton.icon(
-                onPressed: _pickOnCalendar,
-                icon: const Icon(Icons.calendar_month, size: 18),
-                label: const Text('Pick on calendar instead'),
-              ),
             const SizedBox(height: 8),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
@@ -267,11 +291,19 @@ class _ScheduleSheetState extends State<_ScheduleSheet> {
                   onPressed: () => Navigator.of(context).pop(),
                   child: const Text('Cancel'),
                 ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: _save,
-                  child: const Text('Save'),
-                ),
+                if (_draft.mode == ScheduleGranularity.day) ...[
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: _save,
+                    child: const Text('Save'),
+                  ),
+                ] else if (_draft.hasBlock) ...[
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: _clearBlock,
+                    child: const Text('Clear time'),
+                  ),
+                ],
               ],
             ),
           ],
