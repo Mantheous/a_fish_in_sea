@@ -237,6 +237,14 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     return merged;
   }
 
+  /// A sync already in flight fetched the feed BEFORE this write landed;
+  /// its snapshot would overwrite the write result a few milliseconds
+  /// later. Queue one more pass so the fresh server copy wins. With no
+  /// sync running there is no stale snapshot to guard against.
+  void _reconcileIfSyncInFlight(String feedId) {
+    if (isSyncing.value) _pendingFeedSyncs.add(feedId);
+  }
+
   /// Removes the local copies of a remotely deleted event (the whole
   /// series when Google deleted the master).
   void _removeDeletedLocally(PlannerEvent event, {required bool series}) {
@@ -247,8 +255,13 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     final key = seriesKeyFor(event);
     _calendarCubit.removeEventsSilently({
       event.id,
+      // Feed-scoped like the refetch this replaces: another feed mirroring
+      // the same master must not lose its rows.
       for (final e in _calendarCubit.state)
-        if (key != null && seriesKeyFor(e) == key) e.id,
+        if (e.feedId == event.feedId &&
+            key != null &&
+            seriesKeyFor(e) == key)
+          e.id,
     });
   }
 
@@ -333,6 +346,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     });
     if (error != null) return error;
     _applyWriteResult(saved, updated);
+    _reconcileIfSyncInFlight(feed.id);
     return null;
   }
 
@@ -394,7 +408,15 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     } catch (e) {
       return (error: e.toString(), created: null);
     }
+    if (event.recurrenceRule.isNotEmpty) {
+      // Google expands a recurring create into per-instance rows on the
+      // next fetch. Keep that refetch so the local calendar matches the
+      // shape every later resync will return.
+      await syncFeed(feed.id);
+      return (error: null, created: created);
+    }
     final merged = _applyWriteResult(created, event);
+    _reconcileIfSyncInFlight(feed.id);
     return (error: null, created: merged);
   }
 
@@ -436,6 +458,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     if (error != null) return error;
     // The refetch that used to remove the local copy is gone; drop it here.
     _removeDeletedLocally(event, series: series);
+    _reconcileIfSyncInFlight(feed.id);
     return null;
   }
 

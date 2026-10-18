@@ -1,6 +1,7 @@
+import 'dart:async';
+
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
-import 'package:a_fish_in_sea/nodes/model/node.dart';
-import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
+import 'package:a_fish_in_sea/nodes/model/node.dart';import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
@@ -631,6 +632,80 @@ void main() {
           ));
     });
 
+    test('a write during an in-flight sync is reconciled after it', () async {
+      final original = googleEvent();
+      calendarCubit.addEvent(original);
+      final updated = original.copyWith(subject: 'Dentist (moved)');
+      final firstFetch = Completer<List<PlannerEvent>>();
+      final secondFetch = Completer<List<PlannerEvent>>();
+      var fetches = 0;
+      when(() => googleService.fetchEvents(
+            calendarId: any(named: 'calendarId'),
+            feedId: any(named: 'feedId'),
+          )).thenAnswer((_) {
+        fetches++;
+        return fetches == 1 ? firstFetch.future : secondFetch.future;
+      });
+      when(() => googleService.updateEvent(
+            calendarId: any(named: 'calendarId'),
+            feedId: any(named: 'feedId'),
+            eventId: any(named: 'eventId'),
+            event: any(named: 'event'),
+            instanceEdit: any(named: 'instanceEdit'),
+          )).thenAnswer((_) async => updated);
+
+      final sync = feedCubit.syncFeed(googleFeed.id);
+      await pumpEventQueue();
+      expect(fetches, 1, reason: 'the pre-write fetch is in flight');
+
+      final error = await feedCubit.pushEventUpdate(updated);
+      expect(error, isNull);
+      expect(calendarCubit.byId(original.id)?.subject, 'Dentist (moved)');
+
+      // The stale snapshot from before the write lands after the write...
+      firstFetch.complete([original]);
+      await sync;
+      await pumpEventQueue();
+      expect(fetches, 2, reason: 'a reconcile pass was queued');
+      secondFetch.complete([updated]);
+      await pumpEventQueue();
+
+      expect(calendarCubit.byId(original.id)?.subject, 'Dentist (moved)');
+    });
+
+    test('recurring create keeps the refetch', () async {
+      final draft = PlannerEvent(
+        id: 'evt:tmp',
+        subject: 'New standup',
+        start: DateTime(2026, 9, 10, 12, 30),
+        end: DateTime(2026, 9, 10, 13, 30),
+        recurrenceRule: 'FREQ=WEEKLY;BYDAY=WE',
+      );
+      final created = googleEvent().copyWith(
+        subject: 'New standup',
+        recurrenceRule: 'FREQ=WEEKLY;BYDAY=WE',
+      );
+      when(() => googleService.createEvent(
+            calendarId: any(named: 'calendarId'),
+            feedId: any(named: 'feedId'),
+            event: any(named: 'event'),
+          )).thenAnswer((_) async => created);
+      stubSync([created]);
+
+      final result = await feedCubit.pushEventCreate(
+        feed: googleFeed,
+        event: draft,
+      );
+
+      expect(result.error, isNull);
+      // Google expands recurring creates into instance rows; the refetch
+      // is what makes local state match every later resync.
+      verify(() => googleService.fetchEvents(
+            calendarId: any(named: 'calendarId'),
+            feedId: any(named: 'feedId'),
+          )).called(1);
+    });
+
     test('pushEventDelete removes the event without a refetch', () async {
       final original = googleEvent();
       calendarCubit.addEvent(original);
@@ -701,7 +776,6 @@ void main() {
         subject: 'New standup',
         start: DateTime(2026, 9, 10, 12, 30),
         end: DateTime(2026, 9, 10, 13, 30),
-        recurrenceRule: 'FREQ=WEEKLY;BYDAY=WE',
       );
       final created = googleEvent().copyWith(subject: 'New standup');
       when(() => googleService.createEvent(
