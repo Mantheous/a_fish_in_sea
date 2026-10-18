@@ -458,23 +458,25 @@ void main() {
 
       await desktop.engine.syncNow();
 
-    // The phone's day default never roams: each device keeps its own
-    // visible window (refs #50).
-    expect(desktop.settings.state.defaultCalendarView, desktopView);
-    expect(
-      server.store['settings']?['singleton']?.data
-          .containsKey('defaultCalendarView'),
-      isFalse,
-    );
-    // Visible hours and the completed task still sync across devices.
-    expect(desktop.settings.state.dayStartHour, 7);
-    expect(desktop.settings.state.dayEndHour, 22);
-    expect(desktop.nodes.byId('weekly-plan-task')?.isDone, isTrue);
-    expect(
-      desktop.nodes.byId('weekly-plan-task')?.completedAt?.toUtc(),
-      DateTime.utc(2026, 10, 18, 14),
-    );
-  });
+      // The phone's day default never roams: each device keeps its own
+      // visible window (refs #50).
+      expect(desktop.settings.state.defaultCalendarView, desktopView);
+      expect(
+        server.store['settings']?['singleton']?.data.containsKey(
+          'defaultCalendarView',
+        ),
+        isFalse,
+      );
+      // Visible hours and the completed task still sync across devices.
+      expect(desktop.settings.state.dayStartHour, 7);
+      expect(desktop.settings.state.dayEndHour, 22);
+      expect(desktop.nodes.byId('weekly-plan-task')?.isDone, isTrue);
+      expect(
+        desktop.nodes.byId('weekly-plan-task')?.completedAt?.toUtc(),
+        DateTime.utc(2026, 10, 18, 14),
+      );
+    },
+  );
 
   test(
     'a local mutation triggers an automatic sync without the timer',
@@ -847,6 +849,43 @@ void main() {
     // Local data stays intact on sign-out.
     expect(d.nodes.byId('t1')?.title, 'v1');
   });
+
+  test(
+    'signOut(clearLocalData: true) wipes local cubits; re-login restores',
+    () async {
+      final server = FakeSyncClient();
+      final d = _Device(server);
+      await d.auth.login('a@example.com', 'password123');
+      d.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
+      await d.engine.syncNow();
+      expect(server.store['nodes']?.containsKey('t1'), isTrue);
+
+      // Unsynced offline item, then sign out removing on-device data.
+      d.nodes.addNode(
+        Node(id: 't2', title: 'offline only', createdAt: DateTime(2026)),
+      );
+      d.engine.signOut(clearLocalData: true);
+      expect(d.nodes.byId('t1'), isNull);
+      expect(d.nodes.byId('t2'), isNull);
+      expect(d.plaid.state.isConnected, isFalse);
+      expect(d.meta.state.items, isEmpty);
+      expect(d.meta.state.lastEmail, isNull);
+      expect(
+        d.meta.state.accountSnapshots.containsKey('a@example.com'),
+        isTrue,
+      );
+
+      // Same account signs back in (AuthPage resets cursor/items): the
+      // sign-out snapshot backfills local state and the previously-unsynced
+      // item uploads instead of being lost with the wipe.
+      await d.auth.login('a@example.com', 'password123');
+      d.meta.reset();
+      await d.engine.syncNow();
+      expect(d.nodes.byId('t1')?.title, 'v1');
+      expect(d.nodes.byId('t2')?.title, 'offline only');
+      expect(server.store['nodes']?.containsKey('t2'), isTrue);
+    },
+  );
 
   test(
     'returning to account A reseeds meta so conflicts merge instead of clobber',

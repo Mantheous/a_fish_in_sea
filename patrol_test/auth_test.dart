@@ -41,4 +41,38 @@ void main() {
 
     expect(find.byType(HomePage), findsOneWidget);
   });
+
+  patrolTest('sign out asks keep-or-remove, then returns to sign-in', ($) async {
+    final storage = MockStorage();
+    when(() => storage.read(any())).thenReturn(null);
+    when(() => storage.write(any(), any())).thenAnswer((_) async {});
+    when(() => storage.delete(any())).thenAnswer((_) async {});
+    when(() => storage.clear()).thenAnswer((_) async {});
+    HydratedBloc.storage = storage;
+
+    await $.pumpWidgetAndSettle(const MyApp());
+
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    await $(TextField).at(0).enterText('patrol-signout-$stamp@example.com');
+    await $(TextField).at(1).enterText('patrol-pass-1');
+    await $('Create account').tap();
+    await $.pumpAndSettle();
+    expect(find.byType(HomePage), findsOneWidget);
+
+    await $(Icons.menu).tap();
+    await $.pumpAndSettle();
+    await $('Settings').tap();
+    await $.pumpAndSettle();
+    await $('Bank connection').scrollTo();
+    expect($('Bank connection').visible, true);
+
+    await $('Sign out…').scrollTo();
+    await $('Sign out…').tap();
+    await $.pumpAndSettle();
+    expect($('Keep on this device').visible, true);
+
+    await $('Remove from this device').tap();
+    await $.pumpAndSettle();
+    expect($('Sign in to sync').visible, true);
+  });
 }
