@@ -4,6 +4,7 @@ import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/service/calendar_report.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_page.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_projection.dart';
+import 'package:a_fish_in_sea/planner/view/calendar_report_lane.dart';
 import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
 import 'package:a_fish_in_sea/reporting/model/reported_entry.dart';
 import 'package:flutter/material.dart';
@@ -97,7 +98,10 @@ void main() {
         ),
       ];
       final grouped = groupReportBlocksByDay(blocks);
-      expect(grouped[monday]!.map((b) => b.displayId), ['report:a', 'report:b']);
+      expect(grouped[monday]!.map((b) => b.displayId), [
+        'report:a',
+        'report:b',
+      ]);
       expect(grouped[DateTime(2026, 10, 6)]!.map((b) => b.displayId), [
         'report:c',
       ]);
@@ -148,13 +152,13 @@ void main() {
         'e1',
         reportLaneIdForDay(day),
       ]);
-      expect(projection.reportBlocksByLaneId[reportLaneIdForDay(day)], hasLength(1));
+      expect(
+        projection.reportBlocksByLaneId[reportLaneIdForDay(day)],
+        hasLength(1),
+      );
       expect(projection.reportById.keys, ['report:r1']);
       expect(projection.reportColorById, hasLength(1));
-      expect(
-        projection.shown.any((e) => isReportDisplayId(e.id)),
-        isFalse,
-      );
+      expect(projection.shown.any((e) => isReportDisplayId(e.id)), isFalse);
     });
 
     test('one lane per visible day', () {
@@ -164,10 +168,7 @@ void main() {
             DateTime(2026, 10, 5).add(Duration(days: i)),
         ],
       );
-      expect(
-        projection.shown.where((e) => isReportLaneId(e.id)),
-        hasLength(7),
-      );
+      expect(projection.shown.where((e) => isReportLaneId(e.id)), hasLength(7));
     });
 
     test('month-style mode keeps report blocks as appointments', () {
@@ -234,7 +235,7 @@ void main() {
       // Widget tests run as Android, where the calendar opens in the day
       // view: one visible day, one report lane.
       expect(
-        find.byKey(const Key('report-lane')),
+        find.byType(ReportLaneView),
         findsOneWidget,
         reason: 'the visible day should own a report lane',
       );
@@ -243,7 +244,7 @@ void main() {
       expect(find.byKey(const ValueKey('tile:report:r1')), findsNothing);
       expect(find.text('Report r1'), findsOneWidget);
 
-      final laneRect = tester.getRect(find.byKey(const Key('report-lane')));
+      final laneRect = tester.getRect(find.byType(ReportLaneView));
       final tileRect = tester.getRect(find.byKey(const ValueKey('tile:e1')));
       // Report lane on the left, planned event's column beside it with the
       // same width — neither is squished to half of the other.
@@ -281,15 +282,13 @@ void main() {
       await tester.tap(find.text('Week'));
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
-      final laneFinder = find.byKey(const Key('report-lane'));
+      final laneFinder = find.byType(ReportLaneView);
       expect(
         laneFinder,
         findsNWidgets(7),
         reason: 'each visible day should own a report lane',
       );
-      final mondayRect = tester.getRect(
-        find.byKey(const ValueKey('tile:e2')),
-      );
+      final mondayRect = tester.getRect(find.byKey(const ValueKey('tile:e2')));
       final laneRects = [
         for (var i = 0; i < 7; i++) tester.getRect(laneFinder.at(i)),
       ];
@@ -310,7 +309,7 @@ void main() {
       await tester.tap(find.text('Month'));
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
-      expect(find.byKey(const Key('report-lane')), findsNothing);
+      expect(find.byType(ReportLaneView), findsNothing);
       expect(
         find.byKey(const ValueKey('tile:report:r1')),
         findsWidgets,

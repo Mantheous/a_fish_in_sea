@@ -28,6 +28,7 @@ class CalendarProjection {
   List<PlannerEvent> _reportLanes = const [];
   Map<String, ReportBlock> reportById = const {};
   Map<String, Color> reportColorById = const {};
+
   /// Report blocks per report-lane id: what the lane's tile renders as
   /// time-positioned chips.
   Map<String, List<ReportBlock>> reportBlocksByLaneId = const {};
@@ -264,9 +265,7 @@ class CalendarProjection {
       final day = DateTime(visible.year, visible.month, visible.day);
       final lane = buildReportLaneEvent(day);
       lanes.add(lane);
-      final gridStart = day.add(
-        Duration(minutes: (startHour * 60).round()),
-      );
+      final gridStart = day.add(Duration(minutes: (startHour * 60).round()));
       final gridEnd = day.add(Duration(minutes: (endHour * 60).round()));
       byLane[lane.id] = [
         for (final block in grouped[day] ?? const <ReportBlock>[])

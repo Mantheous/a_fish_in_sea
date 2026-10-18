@@ -67,7 +67,9 @@ class ReportLaneView extends StatelessWidget {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final height = constraints.maxHeight;
-          final minutes = ((endHour - startHour) * 60).clamp(1, 24 * 60);
+          final minutes = ((endHour - startHour) * 60)
+              .clamp(1, 24 * 60)
+              .toDouble();
           if (!height.isFinite || height <= 0 || blocks.isEmpty) {
             return const SizedBox.shrink();
           }
@@ -84,7 +86,8 @@ class ReportLaneView extends StatelessWidget {
           final chips = <Widget>[];
           for (final block in blocks) {
             var lane = 0;
-            while (lane < laneEnds.length && block.start.isBefore(laneEnds[lane])) {
+            while (lane < laneEnds.length &&
+                block.start.isBefore(laneEnds[lane])) {
               lane++;
             }
             if (lane == laneEnds.length) {
@@ -92,14 +95,20 @@ class ReportLaneView extends StatelessWidget {
             } else {
               laneEnds[lane] = block.end;
             }
-            final top = block.start.difference(gridStart).inMinutes *
-                pxPerMinute;
-            final rawHeight =
-                block.end.difference(block.start).inMinutes * pxPerMinute;
-            final chipHeight = rawHeight < 3 ? 3.0 : rawHeight;
+            // Clamp to the grid's hour range: a block that starts before it
+            // (or ends after) keeps the visible part at the right offset.
+            final rawStart = block.start
+                .difference(gridStart)
+                .inMinutes
+                .toDouble();
+            final rawEnd = block.end.difference(gridStart).inMinutes.toDouble();
+            final top = rawStart.clamp(0, minutes).toDouble() * pxPerMinute;
+            final bottom = rawEnd.clamp(0, minutes).toDouble() * pxPerMinute;
+            final visible = bottom - top;
+            final chipHeight = visible < 3 ? 3.0 : visible;
             chips.add(
               Positioned(
-                top: top < 0 ? 0 : top,
+                top: top,
                 left: lane * 8.0,
                 right: 0,
                 height: chipHeight,
@@ -112,9 +121,7 @@ class ReportLaneView extends StatelessWidget {
               ),
             );
           }
-          return ClipRect(
-            child: Stack(children: chips),
-          );
+          return ClipRect(child: Stack(children: chips));
         },
       ),
     );
@@ -144,7 +151,8 @@ class _ReportChip extends StatelessWidget {
         behavior: HitTestBehavior.opaque,
         onTap: onTap,
         child: Tooltip(
-          message: '${block.title.isEmpty ? 'Report' : block.title}\n'
+          message:
+              '${block.title.isEmpty ? 'Report' : block.title}\n'
               '$timeLabel',
           waitDuration: const Duration(milliseconds: 500),
           child: Container(
@@ -152,8 +160,7 @@ class _ReportChip extends StatelessWidget {
             decoration: BoxDecoration(
               color: live ? color : color.withValues(alpha: 0.75),
               borderRadius: BorderRadius.circular(6),
-              border:
-                  live ? Border.all(color: _liveColor, width: 2) : null,
+              border: live ? Border.all(color: _liveColor, width: 2) : null,
             ),
             child: LayoutBuilder(
               builder: (context, constraints) {

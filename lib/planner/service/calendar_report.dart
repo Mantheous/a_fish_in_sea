@@ -153,27 +153,31 @@ List<ReportBlock> buildReportBlocks({
       if (end.difference(liveStart) < const Duration(minutes: 1)) {
         end = liveStart.add(const Duration(minutes: 1));
       }
-      blocks.add(ReportBlock(
-        displayId: 'report:live:${event.id}',
-        title: event.subject,
-        start: liveStart,
-        end: end,
-        kind: ReportBlockKind.live,
-        eventId: event.id,
-      ));
+      blocks.add(
+        ReportBlock(
+          displayId: 'report:live:${event.id}',
+          title: event.subject,
+          start: liveStart,
+          end: end,
+          kind: ReportBlockKind.live,
+          eventId: event.id,
+        ),
+      );
       continue;
     }
 
     final reported = _reportedInterval(event, linked);
     if (reported != null) {
-      blocks.add(ReportBlock(
-        displayId: 'report:timer:${event.id}',
-        title: event.subject,
-        start: reported.start,
-        end: reported.end,
-        kind: ReportBlockKind.timer,
-        eventId: event.id,
-      ));
+      blocks.add(
+        ReportBlock(
+          displayId: 'report:timer:${event.id}',
+          title: event.subject,
+          start: reported.start,
+          end: reported.end,
+          kind: ReportBlockKind.timer,
+          eventId: event.id,
+        ),
+      );
       continue;
     }
 
@@ -183,16 +187,18 @@ List<ReportBlock> buildReportBlocks({
         final end = entry.end.isAfter(entry.start)
             ? entry.end
             : entry.start.add(const Duration(hours: 1));
-        blocks.add(ReportBlock(
-          displayId: 'report:${entry.id}',
-          title: entry.title,
-          start: entry.start,
-          end: end,
-          kind: ReportBlockKind.accepted,
-          eventId: event.id,
-          entryId: entry.id,
-          status: entry.status,
-        ));
+        blocks.add(
+          ReportBlock(
+            displayId: 'report:${entry.id}',
+            title: entry.title,
+            start: entry.start,
+            end: end,
+            kind: ReportBlockKind.accepted,
+            eventId: event.id,
+            entryId: entry.id,
+            status: entry.status,
+          ),
+        );
       }
     }
   }
@@ -217,14 +223,16 @@ List<ReportBlock> buildReportBlocks({
       if (end.difference(liveStart) < const Duration(minutes: 1)) {
         end = liveStart.add(const Duration(minutes: 1));
       }
-      blocks.add(ReportBlock(
-        displayId: 'report:live:${node.id}',
-        title: node.title,
-        start: liveStart,
-        end: end,
-        kind: ReportBlockKind.live,
-        eventId: null,
-      ));
+      blocks.add(
+        ReportBlock(
+          displayId: 'report:live:${node.id}',
+          title: node.title,
+          start: liveStart,
+          end: end,
+          kind: ReportBlockKind.live,
+          eventId: null,
+        ),
+      );
       continue;
     }
     final actualStart = node.actualStart;
@@ -234,14 +242,16 @@ List<ReportBlock> buildReportBlocks({
       if (!end.isAfter(actualStart)) {
         end = actualStart.add(const Duration(minutes: 1));
       }
-      blocks.add(ReportBlock(
-        displayId: 'report:timer:${node.id}',
-        title: node.title,
-        start: actualStart,
-        end: end,
-        kind: ReportBlockKind.timer,
-        eventId: null,
-      ));
+      blocks.add(
+        ReportBlock(
+          displayId: 'report:timer:${node.id}',
+          title: node.title,
+          start: actualStart,
+          end: end,
+          kind: ReportBlockKind.timer,
+          eventId: null,
+        ),
+      );
     }
   }
 
@@ -249,15 +259,17 @@ List<ReportBlock> buildReportBlocks({
     final end = entry.end.isAfter(entry.start)
         ? entry.end
         : entry.start.add(const Duration(hours: 1));
-    blocks.add(ReportBlock(
-      displayId: 'report:${entry.id}',
-      title: entry.title,
-      start: entry.start,
-      end: end,
-      kind: ReportBlockKind.accepted,
-      entryId: entry.id,
-      status: entry.status,
-    ));
+    blocks.add(
+      ReportBlock(
+        displayId: 'report:${entry.id}',
+        title: entry.title,
+        start: entry.start,
+        end: end,
+        kind: ReportBlockKind.accepted,
+        entryId: entry.id,
+        status: entry.status,
+      ),
+    );
   }
 
   blocks.sort((a, b) => a.start.compareTo(b.start));
@@ -351,11 +363,11 @@ DateTime? reportLaneDayOf(String id) {
 /// point — Syncfusion's layout engine then places every planned event of
 /// that day beside it instead of on top of the reports.
 PlannerEvent buildReportLaneEvent(DateTime day) => PlannerEvent(
-      id: reportLaneIdForDay(day),
-      subject: '',
-      start: DateTime(day.year, day.month, day.day),
-      end: DateTime(day.year, day.month, day.day, 23, 59, 59),
-    );
+  id: reportLaneIdForDay(day),
+  subject: '',
+  start: DateTime(day.year, day.month, day.day),
+  end: DateTime(day.year, day.month, day.day, 23, 59, 59),
+);
 
 /// Groups report blocks by the calendar day they start on, keyed by
 /// midnight of that day. A block that crosses midnight stays with the day
