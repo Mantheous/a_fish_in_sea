@@ -17,6 +17,7 @@ import '../../nodes/service/node_event_sync.dart';
 import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_editor.dart';
 import '../../nodes/view/node_finish_sheet.dart';
+import '../../nodes/view/schedule_sheet.dart';
 import '../../reporting/bloc/reporting_cubit.dart';
 import '../../reporting/model/reported_entry.dart';
 import '../../reporting/view/day_review_screen.dart';
@@ -32,19 +33,21 @@ import '../service/event_reminders.dart';
 import 'calendar_data_source.dart';
 import 'calendar_projection.dart';
 import 'calendar_filter_sheet.dart';
+import 'calendar_side_panel.dart';
 import 'event_editor.dart';
 import 'feed_manager.dart';
+import 'tasks_panel.dart';
 
 const double _wideBreakpoint = 720;
-const double _drawerWidth = 360;
+/// Wide desktops land on the calendar with the task panel open; smaller
+/// (but still wide) windows stay calendar-first until the panel is opened.
+const double _panelDefaultBreakpoint = 1080;
 
 // Hoisted: DateFormat construction parses ICU skeletons — doing it per tile
 // per frame (30+ tiles) showed up in profiles.
 final _calendarTimeFormat = DateFormat('h:mm a');
 final _calendarMoveFormat = DateFormat('EEE, MMM d · h:mm a');
 final _calendarDayFormat = DateFormat('EEE, MMM d');
-
-enum _DrawerMode { closed, detail, creating, editing }
 
 class CalendarPage extends StatefulWidget {
   const CalendarPage({super.key});
@@ -57,7 +60,17 @@ class _CalendarPageState extends State<CalendarPage> {
   final CalendarController _controller = CalendarController();
   CalendarView _view = platformDefaultCalendarView;
   String? _selectedEventId;
-  _DrawerMode _drawerMode = _DrawerMode.closed;
+  /// What the side panel shows while open. [CalendarPanelMode.tasks] with
+  /// nothing selected is the panel's resting state.
+  CalendarPanelMode _panelMode = CalendarPanelMode.tasks;
+  /// Whether the side panel (wide screens only) is shown.
+  bool _panelOpen = false;
+  bool _appliedPanelDefault = false;
+  /// True when a pending draft was claimed as the page mounted (the user
+  /// navigated here from Tasks → Pick time on calendar): saving it returns
+  /// to Tasks. Seeds arriving while the page is already open (the side
+  /// panel's own schedule flow) keep the user on the calendar.
+  bool _seedFromPageMount = false;
   PlannerEvent? _draftEvent;
   String? _draftSeedSubject;
   String? _draftSeedNotes;
@@ -126,7 +139,10 @@ class _CalendarPageState extends State<CalendarPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final pending = context.read<CalendarDraftCubit>().takePending();
-      if (pending != null) _openCreator(seed: pending);
+      if (pending != null) {
+        _seedFromPageMount = true;
+        _openCreator(seed: pending);
+      }
     });
   }
 
@@ -140,6 +156,11 @@ class _CalendarPageState extends State<CalendarPage> {
         _view = CalendarView.day;
         _controller.view = _view;
       }
+    }
+    if (!_appliedPanelDefault) {
+      _appliedPanelDefault = true;
+      _panelOpen =
+          MediaQuery.of(context).size.width >= _panelDefaultBreakpoint;
     }
   }
 
@@ -156,15 +177,22 @@ class _CalendarPageState extends State<CalendarPage> {
   Widget build(BuildContext context) {
     final settings = context.watch<SettingsCubit>().state;
     final snap = settings.snapMinutes;
-    final drawerOpen = _isWide && _drawerMode != _DrawerMode.closed;
+    final panelVisible = _isWide && _panelOpen;
     // Narrow screens get a condensed single-row toolbar (icon-only
     // switches) and an abbreviated calendar header so the chrome above
     // the events stays one slim row tall.
     final compactHeader = !_isWide;
+    final addEventFab = FloatingActionButton.extended(
+      onPressed: _onAddPressed,
+      icon: const Icon(Icons.add),
+      label: const Text('Event'),
+    );
     return BlocListener<CalendarDraftCubit, PlannerEvent?>(
       listener: (context, pending) {
         if (pending != null) {
           context.read<CalendarDraftCubit>().clear();
+          // Live seed: the user is already here (side panel schedule flow).
+          _seedFromPageMount = false;
           _openCreator(seed: pending);
         }
       },
@@ -172,6 +200,14 @@ class _CalendarPageState extends State<CalendarPage> {
       appBar: AppBar(
         title: const Text('Calendar'),
         actions: [
+          if (_isWide)
+            IconButton(
+              tooltip: panelVisible ? 'Hide side panel' : 'Show tasks panel',
+              isSelected: panelVisible,
+              icon: const Icon(Icons.view_sidebar_outlined),
+              selectedIcon: const Icon(Icons.view_sidebar),
+              onPressed: _togglePanel,
+            ),
           Builder(
             builder: (buttonContext) {
               final hasHidden = buttonContext.watch<CalendarVisibilityCubit>()
@@ -196,15 +232,10 @@ class _CalendarPageState extends State<CalendarPage> {
         ],
       ),
       drawer: const AppDrawer(),
-      // Hidden while the side drawer is open: it floats above the drawer's
-      // lower rows (e.g. the editor's Add/Save) and would swallow their taps.
-      floatingActionButton: drawerOpen
-          ? null
-          : FloatingActionButton.extended(
-              onPressed: _onAddPressed,
-              icon: const Icon(Icons.add),
-              label: const Text('Event'),
-            ),
+      // The panel owns the right edge: with a task list up, the Event button
+      // floats over the calendar pane instead (Stack below); while a form is
+      // open it steps aside so it can't swallow Add/Save taps.
+      floatingActionButton: panelVisible ? null : addEventFab,
       body: Column(
         children: [
           if (compactHeader)
@@ -414,9 +445,9 @@ class _CalendarPageState extends State<CalendarPage> {
                       : const <String, List<ReportedEntry>>{},
                   showReports: sideBySide,
                   now: DateTime.now(),
-                  draft: wide && _drawerMode == _DrawerMode.creating
+                  draft: wide && _panelMode == CalendarPanelMode.creating
                       ? _draftEvent : null,
-                  edit: wide && _drawerMode == _DrawerMode.editing
+                  edit: wide && _panelMode == CalendarPanelMode.editing
                       ? _editPreview : null,
                   resize: _resizePreview,
                 );
@@ -500,13 +531,21 @@ class _CalendarPageState extends State<CalendarPage> {
                         bottom: 12,
                         child: _noReportHint(),
                       ),
+                    // With the panel open the Event button anchors to the
+                    // calendar pane instead of hovering over the panel.
+                    if (panelVisible && _panelMode == CalendarPanelMode.tasks)
+                      Positioned(
+                        right: 16,
+                        bottom: 16,
+                        child: addEventFab,
+                      ),
                   ],
                 );
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Expanded(child: calendarView),
-                    if (drawerOpen) _buildDrawer(snap),
+                    if (panelVisible) _buildSidePanel(snap),
                   ],
                 );
               },
@@ -1315,184 +1354,39 @@ class _CalendarPageState extends State<CalendarPage> {
     return calendarEventColor(event, feedColors);
   }
 
-  Widget _buildDrawer(int snap) {
-    final theme = Theme.of(context);
-    final String title;
-    switch (_drawerMode) {
-      case _DrawerMode.detail:
-        title = 'Event details';
-      case _DrawerMode.creating:
-        title = 'New event';
-      case _DrawerMode.editing:
-        title = 'Edit event';
-      case _DrawerMode.closed:
-        title = '';
-    }
-    return Container(
-      width: _drawerWidth,
-      decoration: BoxDecoration(
-        border: Border(left: BorderSide(color: theme.dividerColor)),
+  Widget _buildSidePanel(int snap) {
+    return CalendarSidePanel(
+      mode: _panelMode,
+      snapMinutes: snap,
+      selectedEventId: _selectedEventId,
+      draft: _draftEvent,
+      seedSubject: _draftSeedSubject,
+      seedNotes: _draftSeedNotes,
+      seedLocation: _draftSeedLocation,
+      seedClassLabel: _draftSeedClassLabel,
+      seedTaskId: _draftSeedTaskId,
+      tasksContent: TasksPanel(onTaskTap: _selectTaskOnCalendar),
+      onDraftChanged: _onDraftChanged,
+      onEditChanged: _onEditChanged,
+      onCreatingFinished: (saved) => _finishCreating(saved: saved),
+      onEditingFinished: _finishEditing,
+      onEditingCancelled: () => setState(() {
+        _panelMode = CalendarPanelMode.detail;
+        _editPreview = null;
+      }),
+      onEditRequested: () => setState(
+        () => _panelMode = CalendarPanelMode.editing,
       ),
-      child: Material(
-        color: theme.colorScheme.surface,
-        child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(title, style: theme.textTheme.titleMedium),
-                ),
-                IconButton(
-                  tooltip: 'Close panel',
-                  icon: const Icon(Icons.close),
-                  onPressed: _closeDrawer,
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-          if (_drawerMode == _DrawerMode.detail)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Text(
-                'Drag the event to move it · drag a circle to resize '
-                '(snaps to $snap min) · hold at the edge to turn the page',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-          Expanded(
-            child: BlocBuilder<CalendarCubit, List<PlannerEvent>>(
-              builder: (context, events) {
-                if (_drawerMode == _DrawerMode.creating) {
-                  final draft = _draftEvent;
-                  if (draft == null) {
-                    return const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Text('Preparing new event…'),
-                      ),
-                    );
-                  }
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                        child: Text(
-                          'Ghost preview on the calendar — drag it to move it, '
-                          'drag a circle to resize (snaps to $snap min). '
-                          'Page with the arrows and the ghost follows. '
-                          'Nothing is saved until you press Add.',
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodySmall
-                              ?.copyWith(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurfaceVariant,
-                              ),
-                        ),
-                      ),
-                      Expanded(
-                        child: EventEditorForm(
-                          key: const ValueKey('new:draft'),
-                          initialDate: DateTime(
-                            draft.start.year,
-                            draft.start.month,
-                            draft.start.day,
-                          ),
-                          initialTime: draft.allDay
-                              ? null
-                              : TimeOfDay.fromDateTime(draft.start),
-                          initialEndTime: draft.allDay
-                              ? null
-                              : TimeOfDay.fromDateTime(draft.end),
-                          initialSubject: _draftSeedSubject,
-                          initialNotes: _draftSeedNotes,
-                          initialLocation: _draftSeedLocation,
-                          initialClassLabel: _draftSeedClassLabel,
-                          initialTaskId: _draftSeedTaskId,
-                          onDraftChanged: _onDraftChanged,
-                          autofocusTitle: true,
-                          onFinished: () => _finishCreating(saved: true),
-                          onCancelled: () => _finishCreating(saved: false),
-                        ),
-                      ),
-                    ],
-                  );
-                }
-                final selectedId = _selectedEventId;
-                PlannerEvent? event;
-                if (selectedId != null) {
-                  for (final e in events) {
-                    if (e.id == selectedId) {
-                      event = e;
-                      break;
-                    }
-                  }
-                }
-                if (event == null) {
-                  return const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text('This event was deleted.'),
-                    ),
-                  );
-                }
-                if (_drawerMode == _DrawerMode.editing) {
-                  return EventEditorForm(
-                    key: ValueKey('edit:${event.id}'),
-                    existing: event,
-                    allowDelete: true,
-                    onDraftChanged: _onEditChanged,
-                    onFinished: () {
-                      final stillThere =
-                          context.read<CalendarCubit>().byId(event!.id);
-                      if (stillThere == null) {
-                        _closeDrawer();
-                      } else {
-                        setState(() {
-                          _drawerMode = _DrawerMode.detail;
-                          _editPreview = null;
-                        });
-                      }
-                    },
-                    onCancelled: () => setState(() {
-                      _drawerMode = _DrawerMode.detail;
-                      _editPreview = null;
-                    }),
-                  );
-                }
-                final detailEvent = event;
-                return SingleChildScrollView(
-                  child: EventDetailView(
-                    key: ValueKey('detail:${detailEvent.id}'),
-                    event: detailEvent,
-                    onEdit: () => setState(
-                      () => _drawerMode = _DrawerMode.editing,
-                    ),
-                    onReport: detailEvent.isTask
-                        ? () => _reportEvent(detailEvent)
-                        : null,
-                    onClose: _closeDrawer,
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-        ),
-      ),
+      onBack: _backFromPanel,
+      onClose: _closeDrawer,
+      onReport: _reportEvent,
     );
   }
 
   void _onAddPressed() {
-    if (_drawerMode == _DrawerMode.creating && _draftEvent != null) return;
+    if (_panelMode == CalendarPanelMode.creating && _draftEvent != null) {
+      return;
+    }
     final selected = _controller.selectedDate ?? DateTime.now();
     _openCreator(initialDate: selected);
   }
@@ -1521,10 +1415,75 @@ class _CalendarPageState extends State<CalendarPage> {
     }
     setState(() {
       _selectedEventId = event.id;
-      _drawerMode = _DrawerMode.detail;
+      _panelMode = CalendarPanelMode.detail;
+      _panelOpen = true;
       _editPreview = null;
       _clearDraft();
     });
+  }
+
+  /// Panel task tap: highlights the task's calendar entry, navigating the
+  /// calendar to its day, without replacing the task list. The node menu
+  /// stays one tap away in the tile's ⋮ menu. Falls back to the node's own
+  /// schedule block; when the task isn't on the calendar yet, points at
+  /// the schedule control instead of failing silently.
+  void _selectTaskOnCalendar(Node node) {
+    final calendar = context.read<CalendarCubit>();
+    PlannerEvent? target;
+    for (final id in [node.calendarEventId, node.sourceEventId]) {
+      if (id == null) continue;
+      final linked = calendar.byId(id);
+      if (linked != null) {
+        target = linked;
+        break;
+      }
+    }
+    if (target == null) {
+      // No direct link: prefer the next upcoming occurrence, then the
+      // earliest one, so seeded events and old series land usefully.
+      final now = DateTime.now();
+      PlannerEvent? next;
+      PlannerEvent? earliest;
+      for (final event in calendar.state) {
+        if (event.taskId != node.id) continue;
+        if (event.start.isBefore(now)) {
+          if (earliest == null || event.start.isBefore(earliest.start)) {
+            earliest = event;
+          }
+        } else if (next == null || event.start.isBefore(next.start)) {
+          next = event;
+        }
+      }
+      target = next ?? earliest;
+    }
+    final schedule = node.schedule;
+    final blockStart =
+        target == null && (schedule?.hasCalendarBlock ?? false)
+            ? schedule!.start
+            : null;
+    if (target == null && blockStart == null) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: const Text('Not on the calendar yet'),
+            duration: const Duration(seconds: 4),
+            // Action snackbars persist forever by default; this one must go.
+            persist: false,
+            action: SnackBarAction(
+              label: 'Schedule',
+              onPressed: () => showScheduleSheet(context, nodeId: node.id),
+            ),
+          ),
+        );
+      return;
+    }
+    final start = target?.start ?? blockStart!;
+    setState(() {
+      _selectedEventId = target?.id ?? nodeBlockId(node.id);
+      _editPreview = null;
+    });
+    _controller.displayDate = start;
   }
 
   void _setSideBySide(bool value) {
@@ -1691,7 +1650,8 @@ class _CalendarPageState extends State<CalendarPage> {
     }
     setState(() {
       _selectedEventId = null;
-      _drawerMode = _DrawerMode.creating;
+      _panelMode = CalendarPanelMode.creating;
+      _panelOpen = true;
       _draftEvent = draft;
       _draftSeedSubject = seed?.subject;
       _draftSeedNotes = seed?.notes;
@@ -1704,7 +1664,7 @@ class _CalendarPageState extends State<CalendarPage> {
   Future<void> _openSheetCreator(PlannerEvent draft) async {
     setState(() {
       _selectedEventId = null;
-      _drawerMode = _DrawerMode.creating;
+      _panelMode = CalendarPanelMode.creating;
       _draftEvent = draft;
       _draftSeedSubject = draft.subject.isEmpty ? null : draft.subject;
       _draftSeedNotes = draft.notes;
@@ -1775,27 +1735,85 @@ class _CalendarPageState extends State<CalendarPage> {
 
   void _closeDrawer() {
     setState(() {
-      _drawerMode = _DrawerMode.closed;
+      _panelOpen = false;
+      _panelMode = CalendarPanelMode.tasks;
       _selectedEventId = null;
       _editPreview = null;
+      _seedFromPageMount = false;
       _clearDraft();
     });
   }
 
-  /// Closes the create flow and, when the draft came from the task list
-  /// (Add to calendar) and was actually saved, returns to Tasks so the
-  /// next assignment can be scheduled without extra taps. Plain calendar
-  /// creates (no task link) and cancelled sheets stay on the calendar.
+  /// Opens the panel (task list) or closes it entirely. Reached from the
+  /// toolbar toggle (wide screens only).
+  void _togglePanel() {
+    if (_panelOpen) {
+      _closeDrawer();
+    } else {
+      setState(() => _panelOpen = true);
+    }
+  }
+
+  /// Header back arrow: leaves whatever the panel is showing for the task
+  /// list. A draft in progress is cancelled; an open edit falls back to the
+  /// event's detail. Closing the panel entirely stays on the ✕ / toggle.
+  void _backFromPanel() {
+    switch (_panelMode) {
+      case CalendarPanelMode.creating:
+        _finishCreating(saved: false);
+      case CalendarPanelMode.editing:
+        setState(() {
+          _panelMode = CalendarPanelMode.detail;
+          _editPreview = null;
+        });
+      case CalendarPanelMode.detail:
+      case CalendarPanelMode.tasks:
+        setState(() {
+          _panelMode = CalendarPanelMode.tasks;
+          _selectedEventId = null;
+          _editPreview = null;
+          _clearDraft();
+        });
+    }
+  }
+
+  /// Finishes the edit form: back to the event's detail when it still
+  /// exists, panel closed when it was deleted while editing.
+  void _finishEditing() {
+    final id = _selectedEventId;
+    final stillThere =
+        id == null ? null : context.read<CalendarCubit>().byId(id);
+    if (stillThere == null) {
+      _closeDrawer();
+    } else {
+      setState(() {
+        _panelMode = CalendarPanelMode.detail;
+        _editPreview = null;
+      });
+    }
+  }
+
+  /// Closes the create flow and falls back to the panel's task list. When
+  /// the draft was claimed as this page mounted (Tasks → Pick time on
+  /// calendar) and was actually saved, returns to Tasks so the next
+  /// assignment can be scheduled without extra taps; plain calendar
+  /// creates, cancelled drafts, and seeds delivered while the page was
+  /// already open (the side panel's own schedule flow) stay here.
   void _finishCreating({required bool saved}) {
     final taskId = _draftSeedTaskId;
+    final returnsToTasks = _seedFromPageMount &&
+        saved &&
+        taskId != null &&
+        taskId.isNotEmpty;
+    _seedFromPageMount = false;
     if (!mounted) return;
     setState(() {
-      _drawerMode = _DrawerMode.closed;
+      _panelMode = CalendarPanelMode.tasks;
       _selectedEventId = null;
       _editPreview = null;
       _clearDraft();
     });
-    if (saved && taskId != null && taskId.isNotEmpty) {
+    if (returnsToTasks) {
       try {
         context.read<NavigationCubit>().setPage(PlannerPage.tasks);
       } catch (_) {}
@@ -1827,7 +1845,7 @@ class _CalendarPageState extends State<CalendarPage> {
         details.date != null) {
       final date = details.date!;
       final tappedMidnight = date.hour == 0 && date.minute == 0;
-      if (_drawerMode == _DrawerMode.creating && _draftEvent != null) {
+      if (_panelMode == CalendarPanelMode.creating && _draftEvent != null) {
         _moveDraftTo(date, keepTimeOfDay: tappedMidnight);
         return;
       }
@@ -1880,7 +1898,7 @@ class _CalendarPageState extends State<CalendarPage> {
   /// wall-clock time and duration so it can be dragged to its final slot.
   /// A mid-drag page turn is left to the native drop target instead.
   void _onViewChanged(ViewChangedDetails details) {
-    if (_drawerMode != _DrawerMode.creating) return;
+    if (_panelMode != CalendarPanelMode.creating) return;
     final draft = _draftEvent;
     if (draft == null || _isDragging) return;
     final snap = context.read<SettingsCubit>().state.snapMinutes;
