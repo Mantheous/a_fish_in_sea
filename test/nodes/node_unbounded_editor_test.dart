@@ -154,7 +154,7 @@ void main() {
     expect(kept.schedule?.due, DateTime(2026, 10, 20));
   });
 
-  testWidgets('saving a goal drops its old calendar block, keeps the due',
+  testWidgets('saving a goal preserves its calendar block and due',
       (tester) async {
     final nodes = NodeCubit();
     expect(
@@ -175,19 +175,21 @@ void main() {
 
     await tester.tap(find.text('Blocked'));
     await tester.pumpAndSettle();
-    // No block picker anymore — calendar time comes from assigned events.
+    // Unified schedule: day and time coexist, toggled by Day/Time.
     final dialog = find.byType(AlertDialog);
     expect(
         find.descendant(of: dialog, matching: find.text('Calendar block')),
         findsNothing);
-    expect(find.textContaining('old calendar block'), findsOneWidget);
+    expect(find.text('Schedule'), findsOneWidget);
+    expect(find.text('Day'), findsOneWidget);
+    expect(find.text('Time'), findsOneWidget);
     await tester.tap(find.widgetWithText(FilledButton, 'Save'));
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
     final saved = nodes.byId('node:blocked')!;
     expect(saved.schedule?.due, DateTime(2026, 10, 20));
-    expect(saved.schedule?.start, isNull);
-    expect(saved.schedule?.end, isNull);
+    expect(saved.schedule?.start, DateTime(2026, 10, 12, 9));
+    expect(saved.schedule?.end, DateTime(2026, 10, 12, 10));
   });
 }
