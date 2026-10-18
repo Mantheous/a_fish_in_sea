@@ -385,4 +385,44 @@ void main() {
       await transactions.close();
     },
   );
+  test(
+    'removing a feed detaches scheduling and preserves completed goal history',
+    () {
+      seed();
+      RecurringGoalLink.reconcile(calendar, nodes);
+      final id = calendar.byId('e1')!.taskId!;
+      NodeEventLink.toggleNodeDone(nodes, calendar, id);
+      final archive = nodes.byId(id)!.calendarLink!.records;
+      nodes.removeImportedNodesFor('personal-calendar');
+      expect(nodes.byId(id)!.isDone, isTrue);
+      expect(nodes.byId(id)!.instanceOfId, 'goal');
+      expect(nodes.byId(id)!.sourceEventId, isNull);
+      expect(nodes.byId(id)!.calendarLink!.records, archive);
+    },
+  );
+
+  test('Learning Suite cleanup never prunes linked goal records', () {
+    seed();
+    nodes.updateNode(
+      nodes
+          .instancesOf('goal')
+          .first
+          .copyWith(notes: 'Daily Scripture Study preparation'),
+    );
+    RecurringGoalLink.reconcile(calendar, nodes);
+    final id = calendar.byId('e1')!.taskId!;
+    final before = nodes.byId(id)!;
+    nodes.importFromFeed(
+      [calendar.byId('e1')!],
+      const Feed(
+        id: 'personal-calendar',
+        name: 'Learning Suite',
+        url: 'https://example.test/feed',
+        kind: FeedKind.learningSuite,
+      ),
+    );
+    expect(nodes.byId(id), before);
+    expect(nodes.byId(id)!.calendarLink!.records, isNotEmpty);
+    expect(nodes.byId('e1'), isNull);
+  });
 }

@@ -1938,11 +1938,12 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   /// Deletes every homework node imported from [feedId]. Silent: feed
   /// removal records the composite undo itself.
   void removeImportedNodesFor(String feedId) {
-    emitSilent(
-      state
-          .where((n) => !(n.classId == feedId && n.sourceEventId != null))
-          .toList(),
-    );
+    final eventIds = {
+      for (final n in state)
+        if (n.classId == feedId && n.sourceEventId != null) n.sourceEventId!,
+    };
+    final next = detachEventNodes(state, eventIds);
+    if (!identical(next, state)) emitSilent(next);
   }
 
   /// Nodes from [feedId] that remain visible under feed visibility rules.

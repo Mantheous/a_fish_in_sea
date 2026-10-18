@@ -19,6 +19,7 @@ List<Node> importFeedNodes(
     base = base
         .where(
           (n) =>
+              (n.isInstance && n.calendarLink != null) ||
               n.classId != feed.id ||
               n.sourceEventId == null ||
               n.isDone ||
