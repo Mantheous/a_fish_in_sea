@@ -1,12 +1,65 @@
+import 'dart:convert';
+
+import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/demo/demo_coordinator.dart';
 import 'package:a_fish_in_sea/demo/demo_data.dart';
 import 'package:a_fish_in_sea/demo/demo_mode.dart';
 import 'package:a_fish_in_sea/demo/demo_storage.dart';
 import 'package:a_fish_in_sea/feedback/feedback_service.dart';
+import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
+import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
+import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
+import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
+import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/planner/bloc/assignment_estimates_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/assignment_rules_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/tasks_view_options_cubit.dart';
+import 'package:a_fish_in_sea/planner/model/assignment_estimate.dart';
+import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
+import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
+import 'package:a_fish_in_sea/planner/service/ical_service.dart';
+import 'package:a_fish_in_sea/reporting/bloc/places_cubit.dart';
+import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
+import 'package:a_fish_in_sea/reporting/bloc/tracking_cubit.dart';
+import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
+import 'package:a_fish_in_sea/demo/demo_cubit.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hydrated_bloc/hydrated_bloc.dart';
+
+/// In-memory [Storage] so the demo tour test never touches disk.
+class _MemoryStorage implements Storage {
+  final _map = <String, dynamic>{};
+
+  @override
+  dynamic read(String key) => _map[key];
+
+  @override
+  Future<void> write(String key, dynamic value) async {
+    _map[key] = value;
+  }
+
+  @override
+  Future<void> delete(String key) async {
+    _map.remove(key);
+  }
+
+  @override
+  Future<void> clear() async {
+    _map.clear();
+  }
+
+  @override
+  Future<void> close() async {}
+}
 
 void main() {
   test('DemoMode starts inactive and is never persisted', () {
@@ -205,5 +258,176 @@ void main() {
       DemoMode.isActive = false;
     }
     expect(DemoMode.isActive, isFalse);
+  });
+
+  testWidgets(
+      'exiting demo restores the real balance and learned estimates byte-identical',
+      (tester) async {
+    // Each test file runs in its own isolate and no earlier test in this
+    // file touches HydratedBloc, so installing a fresh in-memory box here
+    // (and leaving it) is safe; it never reaches disk.
+    HydratedBloc.storage = _MemoryStorage();
+    addTearDown(() {
+      DemoMode.isActive = false;
+    });
+
+    UndoCubit();
+    final nodes = NodeCubit();
+    final transactions = TransactionsCubit();
+    final plaid = PlaidCubit();
+    final waterfall = WaterfallCubit(
+      nodeCubit: nodes,
+      transactionsCubit: transactions,
+      plaidCubit: plaid,
+    );
+    final calendar = CalendarCubit();
+    final feeds = FeedCubit(
+      calendarCubit: calendar,
+      nodeCubit: nodes,
+      icalService: IcalService(),
+      googleService: GoogleCalendarService(
+        baseUrl: () => '',
+        userId: () => 'test-user',
+      ),
+      proxyBase: () => '',
+    );
+    final places = PlacesCubit();
+    final reporting = ReportingCubit();
+    final tracking = TrackingCubit();
+    final settings = SettingsCubit();
+    final visibility = CalendarVisibilityCubit();
+    final viewOptions = TasksViewOptionsCubit();
+    final rules = AssignmentRulesCubit();
+    final estimates = AssignmentEstimatesCubit();
+    final meta = SyncMetaCubit();
+    final demo = DemoCubit();
+    final navigation = NavigationCubit();
+    addTearDown(() async {
+      await demo.close();
+      await navigation.close();
+      await meta.close();
+      await estimates.close();
+      await rules.close();
+      await viewOptions.close();
+      await visibility.close();
+      await settings.close();
+      await tracking.close();
+      await reporting.close();
+      await places.close();
+      await feeds.close();
+      await calendar.close();
+      await waterfall.close();
+      await plaid.close();
+      await transactions.close();
+      await nodes.close();
+      await UndoCubit.instance?.close();
+    });
+
+    late BuildContext ctx;
+    await tester.pumpWidget(
+      MultiBlocProvider(
+        providers: [
+          BlocProvider.value(value: UndoCubit.instance!),
+          BlocProvider.value(value: demo),
+          BlocProvider.value(value: navigation),
+          BlocProvider.value(value: settings),
+          BlocProvider.value(value: meta),
+          BlocProvider.value(value: nodes),
+          BlocProvider.value(value: transactions),
+          BlocProvider.value(value: plaid),
+          BlocProvider.value(value: waterfall),
+          BlocProvider.value(value: calendar),
+          BlocProvider.value(value: visibility),
+          BlocProvider.value(value: viewOptions),
+          BlocProvider.value(value: rules),
+          BlocProvider.value(value: estimates),
+          BlocProvider.value(value: places),
+          BlocProvider.value(value: tracking),
+          BlocProvider.value(value: reporting),
+          BlocProvider.value(value: feeds),
+        ],
+        child: Builder(
+          builder: (c) {
+            ctx = c;
+            return const MaterialApp(home: Scaffold(body: SizedBox()));
+          },
+        ),
+      ),
+    );
+
+    // Seed real user data: a bank balance, one real class, learned time
+    // estimates for it.
+    plaid.emit(const PlaidState(
+      userId: 'real-user',
+      status: PlaidConnectionStatus.connected,
+      itemId: 'real-item',
+      currentBalance: 1234.56,
+    ));
+    estimates.emit([
+      AssignmentTypeEffort(
+        feedId: 'real-feed',
+        templateKey: 'quiz',
+        classLabel: 'Real Class',
+        displayName: 'Quiz',
+        samples: 3,
+        totalMinutes: 90,
+        minutes: const [30],
+        startMinutes: const [1140],
+        minMinutes: 30,
+        maxMinutes: 30,
+        updatedAt: DateTime(2026, 1, 1),
+      ),
+    ]);
+    feeds.addFeed(const Feed(
+      id: 'real-feed',
+      name: 'Real Class',
+      url: 'https://example.com/real.ics',
+    ));
+    // Flush the waterfall's Plaid subscription so the seeded balance lands
+    // before the pre-demo snapshot is taken.
+    await tester.pumpAndSettle();
+    expect(waterfall.state.startingBalance, 1234.56);
+
+    String snapOf(dynamic cubit) =>
+        jsonEncode(cubit.toJson(cubit.state));
+    Map<String, String> snapshotAll() => {
+          'feeds': snapOf(feeds),
+          'events': snapOf(calendar),
+          'nodes': snapOf(nodes),
+          'transactions': snapOf(transactions),
+          'plaid': snapOf(plaid),
+          'waterfall': snapOf(waterfall),
+          'places': snapOf(places),
+          'reporting': snapOf(reporting),
+          'tracking': snapOf(tracking),
+          'settings': snapOf(settings),
+          'visibility': snapOf(visibility),
+          'viewOptions': snapOf(viewOptions),
+          'rules': snapOf(rules),
+          'estimates': snapOf(estimates),
+          'syncMeta': snapOf(meta),
+        };
+    final before = snapshotAll();
+
+    await DemoCoordinator.enterDemo(ctx);
+    await tester.pumpAndSettle();
+    expect(DemoMode.isActive, isTrue);
+    // The mock bank balance lands in demo (proves the tour ran).
+    expect(waterfall.state.startingBalance, 10440.12);
+
+    await DemoCoordinator.exitDemo(ctx);
+    await tester.pumpAndSettle();
+    expect(DemoMode.isActive, isFalse);
+    expect(waterfall.state.startingBalance, 1234.56);
+    expect(
+      estimates.state.map((e) => e.feedId),
+      ['real-feed'],
+      reason: 'learned estimates for real classes survive the tour',
+    );
+    expect(
+      snapshotAll(),
+      before,
+      reason: 'every snapshotted cubit restores byte-identical',
+    );
   });
 }

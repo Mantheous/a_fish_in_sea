@@ -144,6 +144,7 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
         clearError: true,
       ));
       await Future<void>.delayed(const Duration(milliseconds: 600));
+      if (!DemoMode.isActive) return;
       _demoConnected();
       return;
     }

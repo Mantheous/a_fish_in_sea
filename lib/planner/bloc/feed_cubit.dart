@@ -12,6 +12,7 @@ import '../../nodes/model/node.dart';
 import '../../nodes/service/node_feed.dart';
 import '../../sync/sync_client.dart';
 import '../model/assignment_rule.dart';
+import 'assignment_estimates_cubit.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../service/canvas_service.dart';
@@ -48,6 +49,14 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   /// no shifts, exactly as before rules existed.
   final List<AssignmentRule> Function()? assignmentRulesProvider;
 
+  /// Learned per-class time estimates, dropped for a class only when the
+  /// user explicitly removes it ([removeFeed]/[removeOrphanedClass]) — and
+  /// folded into that action's undo record. Null (tests, or unwired trees)
+  /// means estimates are left untouched. Never touched on idle rebuilds:
+  /// entering/exiting demo swaps the whole feed list, which must not wipe
+  /// what the app learned about the user's real courses.
+  final AssignmentEstimatesCubit? estimatesCubit;
+
   final ValueNotifier<bool> isSyncing = ValueNotifier(false);
   DateTime? _lastAutoSync;
   Timer? _autoResyncTimer;
@@ -69,6 +78,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     this.syncClient,
     CanvasService? canvasService,
     this.assignmentRulesProvider,
+    this.estimatesCubit,
   })  : _calendarCubit = calendarCubit,
         _nodeCubit = nodeCubit,
         _icalService = icalService,
@@ -147,7 +157,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     _calendarCubit.removeFeedEvents(classId);
     final nodeBefore = _nodeCubit.state;
     _nodeCubit.removeImportedNodesFor(classId);
-    return [
+    final snapshots = [
       StateSnapshot(
         cubitId: _calendarCubit.changeId,
         stateBefore: calendarBefore,
@@ -159,6 +169,19 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
         stateAfter: _nodeCubit.state,
       ),
     ];
+    final estimates = estimatesCubit;
+    if (estimates != null) {
+      final estimatesBefore = estimates.state;
+      estimates.forgetFeed(classId);
+      if (!identical(estimatesBefore, estimates.state)) {
+        snapshots.add(StateSnapshot(
+          cubitId: estimates.changeId,
+          stateBefore: estimatesBefore,
+          stateAfter: estimates.state,
+        ));
+      }
+    }
+    return snapshots;
   }
 
   Feed? byId(String feedId) => _byIdMap[feedId];
@@ -590,6 +613,11 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     }
     isSyncing.value = true;
     _lastAutoSync = DateTime.now();
+    // Demo entry/exit swaps the whole feed list mid-sync: a sync that
+    // started in demo must not write into real storage after a quick exit
+    // (and vice versa). [_syncOne] bails per feed; the Canvas heal below
+    // is the only other writer, so skip it on a flip too.
+    final startedInDemo = DemoMode.isActive;
     // Status rows (lastSyncAt / lastError) change on every resync. Patch
     // them in ONE emit at the end: a multi-feed sync must rebuild feed
     // watchers once, not once per feed.
@@ -601,7 +629,9 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
       // Submitted-in-Canvas homework completes itself. Runs after the
       // iCal import so fresh nodes are covered too; failures never fail
       // the feed sync (reconnect is handled in the classes sheet).
-      await _applyCanvasCompletions(feeds);
+      if (DemoMode.isActive == startedInDemo) {
+        await _applyCanvasCompletions(feeds);
+      }
     } finally {
       _flushFeedStatuses(statusPatches);
       isSyncing.value = false;
