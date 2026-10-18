@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
 import 'package:a_fish_in_sea/sync/sync_client.dart';
 import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
@@ -99,7 +101,7 @@ void main() {
       if (shouldThrow401) {
         throw const SyncException(401, 'Invalid refresh token');
       }
-      throw Exception('SocketException: network unreachable');
+      throw const SocketException('network unreachable');
     });
     final cubit = AuthCubit(client: () => client);
     final hydrated = cubit.fromJson({
@@ -113,12 +115,55 @@ void main() {
     // Transient network error: stays signed in with tokens intact.
     expect(await cubit.refreshAccessToken(), isNull);
     expect(cubit.state.isSignedIn, isTrue);
+    expect(cubit.state.accessToken, 'at-1');
     expect(cubit.state.refreshToken, 'rt-1');
 
     // Explicit 401 from server: signs out and clears tokens.
     shouldThrow401 = true;
     expect(await cubit.refreshAccessToken(), isNull);
     expect(cubit.state.isSignedIn, isFalse);
+    expect(cubit.state.accessToken, isNull);
+    expect(cubit.state.refreshToken, isNull);
+  });
+
+  test('AuthCubit working state recovers safely across restart', () {
+    final cubit = AuthCubit(client: _dummyClient);
+    const working = AuthState(
+      status: AuthStatus.working,
+      email: 'a@example.com',
+      accessToken: 'at-1',
+      refreshToken: 'rt-1',
+    );
+
+    // toJson is the persisted snapshot; a login/refresh interrupted while
+    // working must not restore into a permanently wedged working state.
+    final persisted = cubit.toJson(working);
+    expect(persisted['status'], AuthStatus.signedIn.name);
+    final restored = cubit.fromJson(persisted)!;
+    expect(restored.status, AuthStatus.signedIn);
+    expect(restored.accessToken, 'at-1');
+    expect(restored.refreshToken, 'rt-1');
+
+    // Also tolerate older snapshots that wrote `working` directly.
+    final legacyRestore = cubit.fromJson({
+      ...persisted,
+      'status': AuthStatus.working.name,
+    })!;
+    expect(legacyRestore.status, AuthStatus.signedIn);
+  });
+
+  test('AuthCubit signs out when restored session has no refresh token',
+      () async {
+    final cubit = AuthCubit(client: _dummyClient);
+    cubit.emit(cubit.fromJson({
+      'status': AuthStatus.signedIn.name,
+      'email': 'a@example.com',
+      'accessToken': 'at-1',
+    })!);
+
+    expect(await cubit.refreshAccessToken(), isNull);
+    expect(cubit.state.status, AuthStatus.signedOut);
+    expect(cubit.state.accessToken, isNull);
     expect(cubit.state.refreshToken, isNull);
   });
 
