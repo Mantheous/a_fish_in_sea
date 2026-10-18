@@ -1,6 +1,7 @@
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
+import 'package:a_fish_in_sea/finances/service/plaid_service.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
@@ -18,9 +19,29 @@ import 'package:a_fish_in_sea/sync/sync_engine.dart';
 import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:mocktail/mocktail.dart';
 
 class MockStorage extends Mock implements Storage {}
+
+class _TestPlaidCubit extends PlaidCubit {
+  _TestPlaidCubit()
+      : super(
+          service: PlaidService(
+            baseUrl: 'https://plaid.test',
+            userId: 'test-user',
+            client: MockClient((_) async => http.Response('{}', 200)),
+          ),
+        );
+
+  void seedConnected(String itemId) {
+    emit(state.copyWith(
+      status: PlaidConnectionStatus.connected,
+      itemId: itemId,
+    ));
+  }
+}
 
 class _Row {
   Map<String, dynamic> data;
@@ -39,6 +60,7 @@ class FakeSyncClient extends SyncClient {
         );
 
   final store = <String, Map<String, _Row>>{};
+  var pushCalls = 0;
   var clock = DateTime.utc(2026, 9, 12);
 
   DateTime _tick() {
@@ -87,6 +109,7 @@ class FakeSyncClient extends SyncClient {
   @override
   Future<({List<SyncRecord> applied, Set<String> guarded})> push(
       List<Map<String, dynamic>> changes) async {
+    pushCalls++;
     final applied = <SyncRecord>[];
     for (final c in changes) {
       final coll =
@@ -119,6 +142,7 @@ class _Device {
   late final FeedCubit feeds;
   late final SyncEngine engine;
   late final SettingsCubit settings;
+  late final _TestPlaidCubit plaid;
 
   _Device(this.server) {
     auth = AuthCubit(client: () => server);
@@ -134,7 +158,7 @@ class _Device {
     );
     settings = SettingsCubit();
     final transactions = TransactionsCubit();
-    final plaid = PlaidCubit();
+    plaid = _TestPlaidCubit();
     final places = PlacesCubit();
     final reporting = ReportingCubit();
     final tracking = TrackingCubit();
@@ -300,6 +324,54 @@ void main() {
     final pushed =
         server.store['settings']?['singleton']?.data ?? const {};
     expect(pushed.containsKey('icalProxyBase'), isFalse);
+  });
+
+  test('settings and Plaid singletons do not ping-pong between devices', () async {
+    final server = FakeSyncClient();
+    final a = _Device(server);
+    final b = _Device(server);
+    await a.signIn();
+    await b.signIn();
+
+    a.settings.setAnkiConnectHost('http://desktop:8765');
+    b.settings.setAnkiConnectHost('http://phone-lan:8765');
+    a.plaid.seedConnected('item-1');
+
+    await a.engine.syncNow();
+    expect(server.store['settings']?['singleton']?.data['ankiConnectHost'],
+        isNull);
+    expect(server.store['plaid']?['singleton']?.data, {
+      'userId': a.plaid.state.userId,
+      'itemId': 'item-1',
+    });
+
+    await b.engine.syncNow();
+    expect(b.settings.state.ankiConnectHost, 'http://phone-lan:8765');
+    expect(b.plaid.state.itemId, 'item-1');
+    expect(b.plaid.state.isConnected, isFalse);
+
+    // A disconnected device must not overwrite the active identity or push
+    // its per-device host when its next sync sees no remote changes.
+    final pushesBeforeNoopSync = server.pushCalls;
+    await b.engine.syncNow();
+    expect(server.pushCalls, pushesBeforeNoopSync);
+    expect(server.store['settings']?['singleton']?.data['ankiConnectHost'],
+        isNull);
+    expect(server.store['plaid']?['singleton']?.data['itemId'], 'item-1');
+
+    // An explicit disconnect is represented by itemId:null and must clear
+    // the identity on the other device without a false-status echo.
+    await a.plaid.disconnect();
+    await a.engine.syncNow();
+    expect(server.store['plaid']?['singleton']?.data['itemId'], isNull);
+    await b.engine.syncNow();
+    expect(b.plaid.state.itemId, isNull);
+    expect(b.plaid.state.isConnected, isFalse);
+
+    final pushesBeforeDisconnectNoop = server.pushCalls;
+    await b.engine.syncNow();
+    expect(server.pushCalls, pushesBeforeDisconnectNoop);
+    expect(server.store['plaid']?['singleton']?.data['itemId'], isNull);
   });
 
   test('a running timer survives a conflicting pull (server-wins except timers)',
