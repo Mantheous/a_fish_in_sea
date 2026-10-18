@@ -117,6 +117,9 @@ class PullOut(BaseModel):
     changes: list[SyncRecord]
     server_time: dt.datetime
     has_more: bool = False
+    # Opaque keyset cursor for the next page. Additive so older clients can
+    # continue sending `since` and ignore this field.
+    next_cursor: str | None = None
 
 
 class GuardedChange(BaseModel):

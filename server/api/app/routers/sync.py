@@ -15,12 +15,14 @@ SYNC_ALLOW_MASS_DELETE=1 on the server.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import datetime as dt
 import logging
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -95,9 +97,50 @@ def _parse_since(raw: str | None) -> dt.datetime | None:
     return parsed
 
 
+def _encode_pull_cursor(row: SyncItem) -> str:
+    raw = f"{row.updated_at.isoformat()}|{row.id}".encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _parse_pull_cursor(raw: str) -> tuple[dt.datetime, int]:
+    try:
+        padded = raw + "=" * (-len(raw) % 4)
+        decoded = base64.urlsafe_b64decode(padded).decode("utf-8")
+        timestamp, row_id = decoded.rsplit("|", 1)
+        parsed = dt.datetime.fromisoformat(timestamp)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt.timezone.utc)
+        return parsed, int(row_id)
+    except (ValueError, UnicodeDecodeError, binascii.Error):
+        raise HTTPException(status_code=400, detail="Invalid 'cursor'")
+
+
+async def _lock_sync_user(session: AsyncSession, user: User) -> None:
+    """Serialize each user's pull watermark/read with their push commit.
+
+    Postgres uses a row lock. SQLite ignores FOR UPDATE, so a no-op UPDATE
+    acquires its database write lock and holds it until the request ends.
+    This prevents an in-flight push with an older timestamp from committing
+    just after a pull has advanced its watermark past that timestamp.
+    """
+    if session.bind is not None and session.bind.dialect.name == "sqlite":
+        # Authentication has already read the user in a deferred transaction.
+        # End that read snapshot before taking SQLite's writer lock; otherwise
+        # WAL mode cannot promote a stale read transaction to a write lock.
+        await session.commit()
+        await session.execute(
+            update(User).where(User.id == user.id).values(email=User.email)
+        )
+        return
+    await session.execute(
+        select(User.id).where(User.id == user.id).with_for_update()
+    )
+
+
 @router.get("/pull", response_model=PullOut)
 async def pull(
     since: str | None = Query(default=None),
+    cursor: str | None = Query(default=None),
     collections: str | None = Query(default=None),
     limit: int = Query(default=1000, ge=1, le=_MAX_LIMIT),
     user: User = Depends(get_current_user),
@@ -116,19 +159,35 @@ async def pull(
             check_token_scope(user, f"{c}:read", f"{c}:write")
     else:
         check_token_scope(user, "sync")
-    since_dt = _parse_since(since)
+    await _lock_sync_user(session, user)
+    # Capture the page watermark before reading rows. Push stamps are assigned
+    # after the per-user lock, so each pull sees all earlier commits and no
+    # later push can commit with a timestamp older than this watermark.
+    server_time = _now()
+    cursor_key = _parse_pull_cursor(cursor) if cursor else None
+    since_dt = None if cursor_key else _parse_since(since)
     stmt = select(SyncItem).where(SyncItem.user_id == user.id)
     if wanted:
         stmt = stmt.where(SyncItem.collection.in_(sorted(wanted)))
-    if since_dt is not None:
+    if cursor_key is not None:
+        cursor_time, cursor_id = cursor_key
+        stmt = stmt.where(
+            or_(
+                SyncItem.updated_at > cursor_time,
+                and_(SyncItem.updated_at == cursor_time, SyncItem.id > cursor_id),
+            )
+        )
+    elif since_dt is not None:
         stmt = stmt.where(SyncItem.updated_at > since_dt)
-    stmt = stmt.order_by(SyncItem.updated_at.asc()).limit(limit + 1)
+    stmt = stmt.order_by(SyncItem.updated_at.asc(), SyncItem.id.asc()).limit(limit + 1)
     rows = (await session.execute(stmt)).scalars().all()
     has_more = len(rows) > limit
+    page = rows[:limit]
     return PullOut(
-        changes=[_to_record(r) for r in rows[:limit]],
-        server_time=_now(),
+        changes=[_to_record(r) for r in page],
+        server_time=server_time,
         has_more=has_more,
+        next_cursor=_encode_pull_cursor(page[-1]) if has_more and page else None,
     )
 
 
@@ -148,7 +207,8 @@ async def push(
             check_token_scope(user, f"{c}:write")
     else:
         check_token_scope(user, "sync")
-    now = _now()
+    await _lock_sync_user(session, user)
+    guard_now = _now()
     applied: list[SyncRecord] = []
     guarded: list[GuardedChange] = []
 
@@ -187,7 +247,7 @@ async def push(
                             SyncItem.user_id == user.id,
                             SyncItem.collection.in_(collections),
                             SyncItem.deleted.is_(True),
-                            SyncItem.updated_at >= now - _GUARD_WINDOW,
+                            SyncItem.updated_at >= guard_now - _GUARD_WINDOW,
                         )
                     )
                     .group_by(SyncItem.collection)
@@ -211,6 +271,10 @@ async def push(
                     sorted({c for c, _ in blocked}),
                 )
 
+    # Timestamp after validation and guard queries, close to the actual row
+    # writes. This avoids assigning a push a timestamp from before a slow
+    # pre-write query when a pull watermark is captured concurrently.
+    now = _now()
     for change in body.changes:
         if change.collection not in COLLECTIONS:
             raise HTTPException(

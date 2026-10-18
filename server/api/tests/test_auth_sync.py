@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import datetime as dt
 import os
 import tempfile
+import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -120,6 +124,103 @@ def test_push_pull_roundtrip_all_collections(client: TestClient):
     again = client.get("/api/v1/sync/pull", headers=h, params={"since": server_time})
     assert again.status_code == 200
     assert again.json()["changes"] == []
+
+
+def test_pull_keyset_cursor_preserves_same_timestamp_rows_over_many_pages(
+    client: TestClient, monkeypatch
+):
+    from app.routers import sync as sync_router
+
+    tokens = _register(client, "pagination@example.com")
+    h = _auth("pagination@example.com", tokens)
+    fixed = dt.datetime.fromisoformat("2026-10-18T12:00:00+00:00")
+    monkeypatch.setattr(sync_router, "_now", lambda: fixed)
+    total = 1500
+    changes = [
+        {
+            "collection": "events",
+            "item_id": f"event-{index}",
+            "data": {"id": f"event-{index}"},
+        }
+        for index in range(total)
+    ]
+    for offset in range(0, total, 400):
+        pushed = client.post(
+            "/api/v1/sync/push",
+            headers=h,
+            json={"changes": changes[offset : offset + 400]},
+        )
+        assert pushed.status_code == 200, pushed.text
+
+    got: list[dict] = []
+    params: dict[str, str | int] = {"limit": 37}
+    while True:
+        page = client.get("/api/v1/sync/pull", headers=h, params=params)
+        assert page.status_code == 200, page.text
+        body = page.json()
+        got.extend(body["changes"])
+        if not body["has_more"]:
+            break
+        assert body["next_cursor"]
+        params = {"limit": 37, "cursor": body["next_cursor"]}
+
+    assert len(got) == total
+    assert len({record["item_id"] for record in got}) == total
+    assert len({record["updated_at"] for record in got}) == 1
+
+
+def test_pull_waits_for_inflight_push_before_advancing_watermark(
+    client: TestClient, monkeypatch
+):
+    from app.routers import sync as sync_router
+
+    tokens = _register(client, "concurrent-sync@example.com")
+    h = _auth("concurrent-sync@example.com", tokens)
+    row_written = threading.Event()
+    release_push = threading.Event()
+    original_to_record = sync_router._to_record
+
+    def pause_after_push_write(row):
+        if row.item_id == "concurrent-event":
+            row_written.set()
+            assert release_push.wait(5), "timed out waiting to release push request"
+        return original_to_record(row)
+
+    monkeypatch.setattr(sync_router, "_to_record", pause_after_push_write)
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="sync-request") as pool:
+        def run_push():
+            threading.current_thread().name = "push-request"
+            return client.post(
+                "/api/v1/sync/push",
+                headers=h,
+                json={
+                    "changes": [
+                        {
+                            "collection": "events",
+                            "item_id": "concurrent-event",
+                            "data": {"id": "concurrent-event"},
+                        }
+                    ]
+                },
+            )
+
+        push_future = pool.submit(run_push)
+        assert row_written.wait(5), "push did not reach its uncommitted write"
+        pull_future = pool.submit(
+            client.get, "/api/v1/sync/pull", headers=h
+        )
+        time.sleep(0.1)
+        assert not pull_future.done(), "pull passed the in-flight push lock"
+        release_push.set()
+        pushed = push_future.result(timeout=5)
+        pulled = pull_future.result(timeout=5)
+
+    assert pushed.status_code == 200, pushed.text
+    assert pulled.status_code == 200, pulled.text
+    assert any(
+        change["item_id"] == "concurrent-event"
+        for change in pulled.json()["changes"]
+    )
 
 
 def test_tombstone_propagates_delete(client: TestClient):
