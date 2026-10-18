@@ -314,6 +314,40 @@ def test_write_401_prompts_reconnect_not_502(client: TestClient, monkeypatch):
     assert body["needsReconnect"] is True
 
 
+def test_callback_error_param_is_escaped(client: TestClient):
+    """Reflected XSS guard: `?error=` text must be HTML-escaped (refs #59)."""
+    payload = "<script>alert(1)</script>"
+    r = client.get("/api/google/callback", params={"error": payload})
+    assert r.status_code == 400, r.text
+    assert "<script>" not in r.text
+    assert "&lt;script&gt;" in r.text
+
+
+def test_callback_upstream_error_is_escaped(
+    client: TestClient, monkeypatch
+):
+    """Upstream GoogleAuthError text in the callback must be escaped too."""
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "csecret")
+    h = _register(client, "gxss@example.com")
+    auth = client.get("/api/google/auth_url", headers=h)
+    assert auth.status_code == 200, auth.text
+    state = urllib.parse.parse_qs(
+        urllib.parse.urlparse(auth.json()["url"]).query
+    )["state"][0]
+
+    async def fake_redeem(code: str, redirect_uri: str):
+        raise g.GoogleAuthError("<script>alert(1)</script>")
+
+    monkeypatch.setattr(g, "redeem_code", fake_redeem)
+    r = client.get(
+        "/api/google/callback", params={"code": "c", "state": state}
+    )
+    assert r.status_code == 500, r.text
+    assert "<script>" not in r.text
+    assert "&lt;script&gt;" in r.text
+
+
 def test_dead_refresh_token_sanitized_with_reconnect(
     client: TestClient, monkeypatch
 ):
