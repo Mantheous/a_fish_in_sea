@@ -12,6 +12,7 @@ import 'package:a_fish_in_sea/planner/model/task.dart';
 
 import '../model/node.dart';
 import '../model/node_relations.dart';
+import '../service/event_schedule.dart';
 import '../service/node_feed.dart';
 import '../service/node_progress.dart';
 import '../service/node_tree_ops.dart';
@@ -191,6 +192,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
             due: event.start,
             start: event.start,
             end: event.end,
+            allDay: event.allDay,
           ),
           sourceEventId: event.id,
           feedId: event.feedId,
@@ -240,11 +242,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       title: event.subject,
       notes: hasNotes ? event.notes!.trim() : null,
       clearNotes: !hasNotes,
-      schedule: ScheduleFacet(
-        due: due,
-        start: event.start,
-        end: event.end,
-      ),
+      schedule: scheduleForEvent(event, due: due),
       assignees: event.assignees,
     );
   }
@@ -294,11 +292,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         createdAt: DateTime.now(),
         status: event.done ? NodeStatus.done : NodeStatus.open,
         completedAt: event.completedAt,
-        schedule: ScheduleFacet(
-          due: event.start,
-          start: event.start,
-          end: event.end,
-        ),
+        schedule: scheduleForEvent(event),
         classLabel: event.classLabel,
         calendarEventId: event.id,
         assignees: event.assignees,
@@ -1699,11 +1693,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         title: event.subject,
         notes: hasNotes ? event.notes!.trim() : null,
         clearNotes: !hasNotes,
-        schedule: ScheduleFacet(
-          due: due,
-          start: event.start,
-          end: event.end,
-        ),
+        schedule: scheduleForEvent(event, due: due),
         assignees: event.assignees,
       );
     }
@@ -1728,11 +1718,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       createdAt: DateTime.now(),
       status: event.done ? NodeStatus.done : NodeStatus.open,
       completedAt: event.completedAt,
-      schedule: ScheduleFacet(
-        due: event.start,
-        start: event.start,
-        end: event.end,
-      ),
+      schedule: scheduleForEvent(event),
       classLabel: event.classLabel,
       calendarEventId: event.id,
       assignees: event.assignees,
@@ -1856,11 +1842,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       createdAt: DateTime.now(),
       status: event.done ? NodeStatus.done : NodeStatus.open,
       completedAt: event.completedAt,
-      schedule: ScheduleFacet(
-        due: event.start,
-        start: event.start,
-        end: event.end,
-      ),
+      schedule: scheduleForEvent(event),
       sourceEventId: event.id,
       feedId: event.feedId,
       classId: event.feedId,
@@ -1999,12 +1981,9 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         createdAt: DateTime.now(),
         status: event.done ? NodeStatus.done : NodeStatus.open,
         completedAt: event.completedAt,
-        schedule: ScheduleFacet(
-          due: shift == 0
-              ? baseDue
-              : baseDue.add(Duration(days: shift)),
-          start: event.start,
-          end: event.end,
+        schedule: scheduleForEvent(
+          event,
+          due: shift == 0 ? baseDue : baseDue.add(Duration(days: shift)),
         ),
         sourceEventId: event.id,
         feedId: feed.id,

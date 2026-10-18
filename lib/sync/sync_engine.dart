@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../common/undo/undo_cubit.dart';
+import '../demo/demo_mode.dart';
 import '../finances/bloc/plaid_cubit.dart';
 import '../finances/bloc/transactions_cubit.dart';
 import '../finances/bloc/waterfall_cubit.dart';
@@ -15,6 +17,7 @@ import '../reporting/bloc/tracking_cubit.dart';
 import 'auth_cubit.dart';
 import 'sync_client.dart';
 import 'sync_meta_cubit.dart';
+import 'sync_timer_merge.dart';
 
 enum EngineStatus { idle, syncing, error }
 
@@ -191,6 +194,7 @@ class SyncEngine {
 
   /// Full pull-then-push. Reentrant calls collapse into the running one.
   Future<void> syncNow() async {
+    if (DemoMode.isActive) return;
     if (_running) return;
     if (!auth.state.isSignedIn) return;
     final currentEmail = auth.state.email.trim().toLowerCase();
@@ -364,6 +368,7 @@ class SyncEngine {
     }
     final upsertMeta = <String, ItemMeta>{};
     final removeMeta = <String>{};
+    var appliedRemoteChanges = false;
     for (final entry in byCollection.entries) {
       final collection = entry.key;
       if (!collections.contains(collection)) continue;
@@ -372,7 +377,7 @@ class SyncEngine {
       for (final r in entry.value) {
         final k = SyncMetaCubit.key(collection, r.itemId);
         final m = meta.state.items[k];
-        final seen = _stamp(r.updatedAt);
+        final seen = syncRecordStamp(r.updatedAt);
         if (r.deleted) {
           if (current.remove(r.itemId) != null) changed = true;
           removeMeta.add(k);
@@ -383,11 +388,11 @@ class SyncEngine {
           _stripDeviceLocalFields(collection, merged);
           // Fresh bookkeeping (new device, reset meta): same rule as a
           // conflict — a locally running timer is live truth, not stale.
-          _preserveRunningTimer(collection, current[r.itemId], merged);
+          preserveRunningTimer(collection, current[r.itemId], merged);
           current[r.itemId] = merged;
           changed = true;
           upsertMeta[k] = ItemMeta(
-              hash: contentHash(merged), serverTime: seen);
+              hash: contentHash(r.data), serverTime: seen);
           continue;
         }
         if (m.serverTime == seen) {
@@ -396,70 +401,33 @@ class SyncEngine {
         // Remote changed. No local change -> take server; local change
         // too -> conflict, server wins (documented policy). Both adopt
         // the merged copy; the running-timer carve-out inside
-        // [_preserveRunningTimer] is the only way local state survives
+        // [preserveRunningTimer] is the only way local state survives
         // a pull. When the merge resolves to the local copy (e.g. it
         // kept an earlier timer start), the meta is left alone so the
         // push phase propagates the merged version back to the server.
         final local = current[r.itemId];
         final merged = Map<String, dynamic>.from(r.data);
         _stripDeviceLocalFields(collection, merged);
-        _preserveRunningTimer(collection, local, merged);
+        preserveRunningTimer(collection, local, merged);
+        upsertMeta[k] = ItemMeta(
+          hash: contentHash(r.data),
+          serverTime: seen,
+        );
         if (local == null || contentHash(merged) != contentHash(local)) {
           current[r.itemId] = merged;
           changed = true;
-          upsertMeta[k] = ItemMeta(
-              hash: contentHash(merged), serverTime: seen);
         }
       }
-      if (changed) _apply(collection, current);
+      if (changed) {
+        _apply(collection, current);
+        appliedRemoteChanges = true;
+      }
     }
+    // Undo records hold collection snapshots. After a remote change, replaying
+    // a snapshot could erase items that arrived with this pull.
+    if (appliedRemoteChanges) UndoCubit.instance?.resetHistory();
     if (upsertMeta.isNotEmpty || removeMeta.isNotEmpty) {
       meta.save(upsert: upsertMeta, remove: removeMeta);
-    }
-  }
-
-  static String _stamp(DateTime t) => t.toUtc().toIso8601String();
-
-  /// A running timer is wall-clock truth, not last-write-wins data: taking
-  /// a server copy verbatim would silently stop a timer the user started
-  /// (e.g. a boot sync pulling the pre-start version after a rebuild).
-  /// When the local copy is recording, its start survives the merge; when
-  /// both sides record, the earliest start wins (the true start). A remote
-  /// stop still lands its reported interval — only the live start is kept.
-  ///
-  /// One exception: the remote record stopped *after* the local run
-  /// started ([actualEnd] later than the local start). That stop targets
-  /// this run (e.g. stopped on another device), so it wins and the local
-  /// timer clears. Older remote actuals predate the run — a previous
-  /// session — and never stop it.
-  static void _preserveRunningTimer(String collection,
-      Map<String, dynamic>? local, Map<String, dynamic> merged) {
-    if (collection != 'nodes' && collection != 'events') return;
-    final localStart = local?['timerStartedAt'];
-    if (localStart is! String || localStart.isEmpty) return;
-    final localDt = DateTime.tryParse(localStart);
-    if (localDt == null) return;
-    final remoteStart = merged['timerStartedAt'];
-    final remoteDt =
-        remoteStart is String && remoteStart.isNotEmpty
-            ? DateTime.tryParse(remoteStart)
-            : null;
-    // Both running: the earliest start is the true one (ISO strings alone
-    // are not safe to compare across local/UTC forms, so compare parsed
-    // instants).
-    if (remoteDt != null) {
-      if (localDt.isBefore(remoteDt)) {
-        merged['timerStartedAt'] = localStart;
-      }
-      return;
-    }
-    final remoteEndRaw = merged['actualEnd'];
-    final remoteEnd =
-        remoteEndRaw is String && remoteEndRaw.isNotEmpty
-            ? DateTime.tryParse(remoteEndRaw)
-            : null;
-    if (remoteEnd == null || !remoteEnd.isAfter(localDt)) {
-      merged['timerStartedAt'] = localStart;
     }
   }
 
@@ -630,7 +598,8 @@ class SyncEngine {
         removeMeta.add(k);
       } else {
         upsertMeta[k] = ItemMeta(
-            hash: contentHash(r.data), serverTime: _stamp(r.updatedAt));
+            hash: contentHash(r.data),
+            serverTime: syncRecordStamp(r.updatedAt));
       }
     }
     meta.save(upsert: upsertMeta, remove: removeMeta);

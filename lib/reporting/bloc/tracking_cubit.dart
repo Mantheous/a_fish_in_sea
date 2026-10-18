@@ -73,7 +73,7 @@ class TrackingCubit extends HydratedCubit<TrackingState> {
   }
 
   bool _isDuplicateOfLast(TrackedPoint last, TrackedPoint point) {
-    if (point.timestamp.difference(last.timestamp).inMinutes >= 1) {
+    if (point.timestamp.difference(last.timestamp).abs().inMinutes >= 1) {
       return false;
     }
     if (last.id == point.id) return true;
@@ -98,6 +98,7 @@ class TrackingCubit extends HydratedCubit<TrackingState> {
     if (next.length > maxPoints) {
       next = next.sublist(next.length - maxPoints);
     }
+    next.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     final cutoff = DateTime.now().subtract(const Duration(days: retentionDays));
     next = next.where((p) => p.timestamp.isAfter(cutoff)).toList();
     return next;

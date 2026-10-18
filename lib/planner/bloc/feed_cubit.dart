@@ -15,6 +15,7 @@ import '../model/assignment_rule.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../service/canvas_service.dart';
+import '../service/feed_event_merge.dart';
 import '../service/google_calendar_service.dart';
 import '../service/ical_service.dart';
 import 'calendar_cubit.dart';
@@ -22,6 +23,7 @@ import 'calendar_cubit.dart';
 class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   final CalendarCubit _calendarCubit;
   final NodeCubit _nodeCubit;
+  final Set<String> _pendingFeedSyncs = {};
   final IcalService _icalService;
   final GoogleCalendarService _googleService;
   final String Function() _proxyBase;
@@ -425,6 +427,10 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   Future<void> syncFeed(String feedId) async {
     final feed = byId(feedId);
     if (feed == null || !feed.enabled) return;
+    if (isSyncing.value) {
+      _pendingFeedSyncs.add(feedId);
+      return;
+    }
     await _sync([feed], force: true);
   }
 
@@ -439,10 +445,12 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   }
 
   Future<void> _sync(List<Feed> feeds, {required bool force}) async {
-    if (isSyncing.value) return;
+    if (isSyncing.value) {
+      _pendingFeedSyncs.addAll(feeds.map((f) => f.id));
+      return;
+    }
     isSyncing.value = true;
     _lastAutoSync = DateTime.now();
-    UndoCubit.instance?.resetHistory();
     try {
       for (final feed in feeds) {
         await _syncOne(feed);
@@ -453,14 +461,21 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
       await _applyCanvasCompletions(feeds);
     } finally {
       isSyncing.value = false;
+      if (_pendingFeedSyncs.isNotEmpty) {
+        final pending = _pendingFeedSyncs.toList();
+        _pendingFeedSyncs.clear();
+        unawaited(syncFeeds(pending));
+      }
     }
   }
 
   Future<void> _syncOne(Feed feed) async {
     try {
+      final startedInDemo = DemoMode.isActive;
       final fresh = feed.kind == FeedKind.google
           ? await _syncGoogle(feed)
           : await _syncIcal(feed);
+      if (DemoMode.isActive != startedInDemo) return;
       final now = DateTime.now();
       final previous = <String, PlannerEvent>{
         for (final e in _calendarCubit.state)
@@ -479,7 +494,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
         final old = previous[event.id];
         if (old != null) {
           if (old.isTask) {
-            return event.copyWith(
+            return preserveLocalFeedMetadata(event.copyWith(
               isTask: old.isTask,
               done: old.done,
               completedAt: old.completedAt,
@@ -496,7 +511,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
               timerStartedAt: old.timerStartedAt,
               clearTimerStartedAt: old.timerStartedAt == null,
               failed: old.failed,
-            );
+            ), old);
           }
           // The task flag is local-only (Google never stores it), so a
           // lost calendar flag must not wipe the mark while its backing
@@ -506,7 +521,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
           final backing = _nodeCubit.nodesForEventId(event.id);
           if (backing.isNotEmpty) {
             final shadow = backing.first;
-            return event.copyWith(
+            return preserveLocalFeedMetadata(event.copyWith(
               isTask: true,
               done: shadow.isDone,
               completedAt: shadow.completedAt,
@@ -524,9 +539,9 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
               timerStartedAt: old.timerStartedAt,
               clearTimerStartedAt: old.timerStartedAt == null,
               failed: old.failed,
-            );
+            ), old);
           }
-          return event.copyWith(
+          return preserveLocalFeedMetadata(event.copyWith(
             isTask: old.isTask,
             done: old.done,
             completedAt: old.completedAt,
@@ -543,7 +558,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
             timerStartedAt: old.timerStartedAt,
             clearTimerStartedAt: old.timerStartedAt == null,
             failed: old.failed,
-          );
+          ), old);
         }
         // Same heal for events the calendar has never seen (or lost):
         // a surviving node re-asserts the mark.

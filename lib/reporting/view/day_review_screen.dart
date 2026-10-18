@@ -121,7 +121,10 @@ class _DayReviewScreenState extends State<DayReviewScreen> {
     setState(() => _runningReport = true);
     try {
       final pending = await takePendingPoints();
-      if (!mounted) return;
+      if (!mounted) {
+        await restorePendingPoints(pending);
+        return;
+      }
       if (pending.isNotEmpty) {
         context.read<TrackingCubit>().mergePoints(pending);
       }

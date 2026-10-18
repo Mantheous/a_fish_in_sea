@@ -12,6 +12,7 @@ import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/schedule_prefs_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/node_editor_schedule.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
 import 'package:a_fish_in_sea/nodes/view/schedule_fields.dart';
 import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
@@ -710,24 +711,13 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         ? null
         : cubit.byId(opening.id) ?? opening;
 
-    ScheduleFacet? schedule;
-    // Due date and calendar block coexist on one facet: day mode edits
-    // the due date, time mode edits the block. Clearing one never clears
-    // the other — only clearing both (and unchecking fixed) clears it.
-    final hasValidBlock = _blockStart != null &&
-        _blockEnd != null &&
-        _blockEnd!.isAfter(_blockStart!);
-    if (_due != null || _dateFixed || hasValidBlock) {
-      schedule = ScheduleFacet(
-        due: _due,
-        start: hasValidBlock ? _blockStart : null,
-        end: hasValidBlock ? _blockEnd : null,
-        allDay: hasValidBlock
-            ? false
-            : (existing?.schedule?.allDay ?? false),
-        isFixed: _dateFixed,
-      );
-    }
+    var schedule = scheduleAfterEditorSave(
+      previous: existing?.schedule,
+      due: _due,
+      isFixed: _dateFixed,
+      start: _blockStart,
+      end: _blockEnd,
+    );
     try {
       context.read<SchedulePrefsCubit>().setGranularity(_scheduleMode);
     } catch (_) {}

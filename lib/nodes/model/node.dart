@@ -811,8 +811,8 @@ class Node extends Equatable {
         'classId': classId,
         'classLabel': classLabel,
         'actualStart': actualStart?.toIso8601String(),
-        'actualEnd': actualEnd?.toIso8601String(),
-        'timerStartedAt': timerStartedAt?.toIso8601String(),
+        'actualEnd': actualEnd?.toUtc().toIso8601String(),
+        'timerStartedAt': timerStartedAt?.toUtc().toIso8601String(),
         'assignees': assignees.map((a) => a.toJson()).toList(),
       };
 

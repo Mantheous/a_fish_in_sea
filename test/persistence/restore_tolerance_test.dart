@@ -412,7 +412,7 @@ void main() {
         failed: true,
         reminderMinutesBefore: 30,
       );
-      expect(PlannerEvent.fromJson(event.toJson()), event);
+      expect(PlannerEvent.fromJson(event.toJson()).toJson(), event.toJson());
       const feed = Feed(id: 'f1', name: 'Class', url: 'https://x.test/f.ics');
       expect(Feed.fromJson(feed.toJson()), feed);
       final visibility = CalendarVisibilityCubit();

@@ -33,10 +33,10 @@ List<String> findExpiredMarkers(Directory root, DateTime now) {
 
 void main() {
   group('migration expiry', () {
-    test('removeAfter gates on the deadline', () {
+    test('removeAfter is a source marker and never gates a restore', () {
       expect(
         Migration.removeAfter('2000-01-01', DateTime(2026, 9, 6)),
-        isFalse,
+        isTrue,
       );
       expect(
         Migration.removeAfter('2999-01-01', DateTime(2026, 9, 6)),

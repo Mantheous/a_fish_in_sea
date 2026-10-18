@@ -319,7 +319,11 @@ class _TrackingCardState extends State<_TrackingCard> {
 
   Future<void> _mergePending() async {
     final pending = await takePendingPoints();
-    if (!mounted || pending.isEmpty) return;
+    if (pending.isEmpty) return;
+    if (!mounted) {
+      await restorePendingPoints(pending);
+      return;
+    }
     try {
       context.read<TrackingCubit>().mergePoints(pending);
     } catch (_) {}
@@ -371,7 +375,7 @@ class _TrackingCardState extends State<_TrackingCard> {
       final trackingCubit = context.read<TrackingCubit>();
       var background = false;
       if (gpsAvailable) {
-        LocationService.startForegroundSampling(
+        background = await LocationService.startSingleSampler(
           intervalMinutes: interval,
           onTick: () async {
             final point = await samplePosition();
@@ -381,7 +385,6 @@ class _TrackingCardState extends State<_TrackingCard> {
             } catch (_) {}
           },
         );
-        background = await LocationService.startBackground(interval);
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

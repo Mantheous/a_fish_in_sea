@@ -64,6 +64,21 @@ void main() {
       cubit.mergePoints([point]);
       expect(cubit.state.points, hasLength(1));
     });
+
+    test('keeps backdated points and sorts the stored timeline', () {
+      final cubit = TrackingCubit();
+      final now = DateTime.now();
+      cubit.addPoint(TrackedPoint(
+        id: 'later', timestamp: now, lat: 40, lng: -111,
+      ));
+      cubit.addPoint(TrackedPoint(
+        id: 'earlier',
+        timestamp: now.subtract(const Duration(minutes: 5)),
+        lat: 40.01,
+        lng: -111.01,
+      ));
+      expect(cubit.state.points.map((p) => p.id), ['earlier', 'later']);
+    });
   });
 
   group('PlacesCubit', () {

@@ -1,6 +1,7 @@
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
+import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
@@ -213,6 +214,31 @@ void main() {
     expect(a.nodes.byId('t1')?.title, 'B edit');
   });
 
+  test('remote pull invalidates snapshots that could erase pulled items',
+      () async {
+    final undo = UndoCubit();
+    addTearDown(undo.close);
+    final server = FakeSyncClient();
+    final a = _Device(server);
+    final b = _Device(server);
+    await a.signIn();
+    await b.signIn();
+
+    a.nodes.addNode(Node(id: 't1', title: 'original', createdAt: DateTime(2026)));
+    await a.engine.syncNow();
+    a.nodes.updateNode(a.nodes.byId('t1')!.copyWith(title: 'edited'));
+    expect(undo.canUndo, isTrue);
+
+    b.nodes.addNode(Node(id: 't2', title: 'from B', createdAt: DateTime(2026)));
+    await b.engine.syncNow();
+    await a.engine.syncNow();
+
+    expect(a.nodes.byId('t2')?.title, 'from B');
+    expect(undo.canUndo, isFalse);
+    await a.engine.syncNow();
+    expect(server.store['nodes']?['t2']?.deleted, isFalse);
+  });
+
   test('delete on A propagates as tombstone to B', () async {
     final server = FakeSyncClient();
     final a = _Device(server);
@@ -303,7 +329,9 @@ void main() {
     final live = a.nodes.byId('t1')!;
     expect(live.title, 'B edit');
     expect(live.isTracking, isTrue);
-    expect(live.timerStartedAt, t0);
+    expect(live.timerStartedAt!.isAtSameMomentAs(t0), isTrue);
+    expect(server.store['nodes']?['t1']?.data['timerStartedAt'],
+        t0.toUtc().toIso8601String());
   });
 
   test('conflicting running timers keep the earliest start', () async {
@@ -324,9 +352,11 @@ void main() {
     await b.engine.syncNow();
 
     // The true (earliest) start wins on both sides.
-    expect(b.nodes.byId('t1')?.timerStartedAt, DateTime(2026, 9, 12, 8, 30));
+    expect(b.nodes.byId('t1')!.timerStartedAt!
+        .isAtSameMomentAs(DateTime(2026, 9, 12, 8, 30)), isTrue);
     await a.engine.syncNow();
-    expect(a.nodes.byId('t1')?.timerStartedAt, DateTime(2026, 9, 12, 8, 30));
+    expect(a.nodes.byId('t1')!.timerStartedAt!
+        .isAtSameMomentAs(DateTime(2026, 9, 12, 8, 30)), isTrue);
   });
 
   test('remote edit propagates to a device with no local changes', () async {
@@ -375,8 +405,8 @@ void main() {
     final live = a.nodes.byId('t1')!;
     expect(live.title, 'v1');
     expect(live.isTracking, isFalse);
-    expect(live.actualStart, DateTime(2026, 9, 12, 9));
-    expect(live.actualEnd, DateTime(2026, 9, 12, 9, 30));
+    expect(live.actualStart!.isAtSameMomentAs(DateTime(2026, 9, 12, 9)), isTrue);
+    expect(live.actualEnd!.isAtSameMomentAs(DateTime(2026, 9, 12, 9, 30)), isTrue);
   });
 
   test('old remote actuals never stop a restarted timer', () async {
@@ -411,7 +441,7 @@ void main() {
     final live = a.nodes.byId('t1')!;
     expect(live.title, 'B edit');
     expect(live.isTracking, isTrue);
-    expect(live.timerStartedAt, t0);
+    expect(live.timerStartedAt!.isAtSameMomentAs(t0), isTrue);
   });
 
   test('contentHash is stable and sensitive', () {

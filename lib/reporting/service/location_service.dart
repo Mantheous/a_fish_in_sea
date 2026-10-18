@@ -55,15 +55,25 @@ Future<void> appendPendingPoint(TrackedPoint point) async {
   } catch (_) {}
 }
 
+Future<void> restorePendingPoints(Iterable<TrackedPoint> points) async {
+  for (final point in points) {
+    await appendPendingPoint(point);
+  }
+}
+
 Future<List<TrackedPoint>> takePendingPoints() async {
   try {
     final file = await _pendingFile();
     if (!await file.exists()) return const [];
-    final raw = await file.readAsString();
+    final claimed = File(
+      '${file.path}.taking-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    final batch = await file.rename(claimed.path);
+    final raw = await batch.readAsString();
     final decoded = jsonDecode(raw);
     if (decoded is! List) {
       try {
-        await file.delete();
+        await batch.delete();
       } catch (_) {}
       return const [];
     }
@@ -76,7 +86,7 @@ Future<List<TrackedPoint>> takePendingPoints() async {
       } catch (_) {}
     }
     try {
-      await file.delete();
+      await batch.delete();
     } catch (_) {}
     return out;
   } catch (_) {
@@ -290,6 +300,22 @@ class LocationService {
     } catch (_) {
       return false;
     }
+  }
+
+  /// Starts one sampler: the background service when available, otherwise
+  /// the foreground timer used while the app is open.
+  static Future<bool> startSingleSampler({
+    required int intervalMinutes,
+    required Future<void> Function() onTick,
+  }) async {
+    final background = await startBackground(intervalMinutes);
+    if (!background) {
+      startForegroundSampling(
+        intervalMinutes: intervalMinutes,
+        onTick: onTick,
+      );
+    }
+    return background;
   }
 
   static Future<void> stopBackground() async {

@@ -111,6 +111,25 @@ void main() {
       expect(feedCubit.state.single.lastError, isNull);
     });
 
+    test('feed resync preserves local reminder and tags and undo history', () async {
+      feedCubit.addFeed(feed.copyWith(createTasks: false));
+      final undo = UndoCubit.instance!;
+      expect(undo.canUndo, isTrue);
+
+      await feedCubit.syncAll();
+      final event = calendarCubit.state.single.copyWith(
+        reminderMinutesBefore: 15,
+        tagIds: const ['important'],
+      );
+      calendarCubit.replaceFeedEvents('f1', [event]);
+      await feedCubit.syncFeed('f1');
+
+      final synced = calendarCubit.state.single;
+      expect(synced.reminderMinutesBefore, 15);
+      expect(synced.tagIds, ['important']);
+      expect(undo.canUndo, isTrue);
+    });
+
     test('sync errors are recorded on the feed', () async {
       when(() => client.get(any()))
           .thenAnswer((_) async => http.Response('boom', 500));
