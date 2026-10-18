@@ -166,23 +166,49 @@ async def pull(
     server_time = _now()
     cursor_key = _parse_pull_cursor(cursor) if cursor else None
     since_dt = None if cursor_key else _parse_since(since)
-    stmt = select(SyncItem).where(SyncItem.user_id == user.id)
+    filters = [SyncItem.user_id == user.id]
     if wanted:
-        stmt = stmt.where(SyncItem.collection.in_(sorted(wanted)))
+        filters.append(SyncItem.collection.in_(sorted(wanted)))
     if cursor_key is not None:
         cursor_time, cursor_id = cursor_key
-        stmt = stmt.where(
+        filters.append(
             or_(
                 SyncItem.updated_at > cursor_time,
                 and_(SyncItem.updated_at == cursor_time, SyncItem.id > cursor_id),
             )
         )
     elif since_dt is not None:
-        stmt = stmt.where(SyncItem.updated_at > since_dt)
+        filters.append(SyncItem.updated_at > since_dt)
+    stmt = select(SyncItem).where(*filters)
     stmt = stmt.order_by(SyncItem.updated_at.asc(), SyncItem.id.asc()).limit(limit + 1)
     rows = (await session.execute(stmt)).scalars().all()
     has_more = len(rows) > limit
     page = rows[:limit]
+    if cursor_key is None and has_more and page:
+        # Legacy clients only continue with `since=last.updated_at`, which
+        # cannot identify their position within a timestamp tie. Include the
+        # entire tie group at this page boundary so strict `>` resumes after it.
+        boundary_time = page[-1].updated_at
+        boundary_id = page[-1].id
+        tied_rows = (
+            await session.execute(
+                select(SyncItem)
+                .where(
+                    *filters,
+                    SyncItem.updated_at == boundary_time,
+                    SyncItem.id > boundary_id,
+                )
+                .order_by(SyncItem.id.asc())
+            )
+        ).scalars().all()
+        page.extend(tied_rows)
+        has_more = (
+            await session.execute(
+                select(SyncItem.id)
+                .where(*filters, SyncItem.updated_at > boundary_time)
+                .limit(1)
+            )
+        ).first() is not None
     return PullOut(
         changes=[_to_record(r) for r in page],
         server_time=server_time,

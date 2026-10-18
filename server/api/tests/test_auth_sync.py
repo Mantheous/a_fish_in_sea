@@ -169,6 +169,68 @@ def test_pull_keyset_cursor_preserves_same_timestamp_rows_over_many_pages(
     assert len({record["updated_at"] for record in got}) == 1
 
 
+def test_legacy_since_pagination_includes_boundary_timestamp_ties(
+    client: TestClient, monkeypatch
+):
+    from app.routers import sync as sync_router
+
+    tokens = _register(client, "legacy-pagination@example.com")
+    h = _auth("legacy-pagination@example.com", tokens)
+    first_time = dt.datetime.fromisoformat("2026-10-18T12:00:00+00:00")
+    monkeypatch.setattr(sync_router, "_now", lambda: first_time)
+    tied_changes = [
+        {
+            "collection": "events",
+            "item_id": f"tied-{index}",
+            "data": {"id": f"tied-{index}"},
+        }
+        for index in range(1500)
+    ]
+    for offset in range(0, len(tied_changes), 400):
+        pushed = client.post(
+            "/api/v1/sync/push",
+            headers=h,
+            json={"changes": tied_changes[offset : offset + 400]},
+        )
+        assert pushed.status_code == 200, pushed.text
+
+    later_time = first_time + dt.timedelta(seconds=1)
+    monkeypatch.setattr(sync_router, "_now", lambda: later_time)
+    later_changes = [
+        {
+            "collection": "events",
+            "item_id": f"later-{index}",
+            "data": {"id": f"later-{index}"},
+        }
+        for index in range(3)
+    ]
+    pushed = client.post(
+        "/api/v1/sync/push", headers=h, json={"changes": later_changes}
+    )
+    assert pushed.status_code == 200, pushed.text
+
+    # Simulate an old client: it ignores next_cursor and continues with the
+    # final record's timestamp as its strict `since` value.
+    since: str | None = None
+    got: list[dict] = []
+    while True:
+        params: dict[str, str | int] = {"limit": 37}
+        if since is not None:
+            params["since"] = since
+        page = client.get("/api/v1/sync/pull", headers=h, params=params)
+        assert page.status_code == 200, page.text
+        body = page.json()
+        got.extend(body["changes"])
+        if not body["has_more"]:
+            break
+        since = body["changes"][-1]["updated_at"]
+
+    assert len(got) == 1503
+    assert len({record["item_id"] for record in got}) == 1503
+    assert sum(record["item_id"].startswith("tied-") for record in got) == 1500
+    assert sum(record["item_id"].startswith("later-") for record in got) == 3
+
+
 def test_pull_waits_for_inflight_push_before_advancing_watermark(
     client: TestClient, monkeypatch
 ):
