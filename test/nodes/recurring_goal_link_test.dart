@@ -310,7 +310,7 @@ void main() {
     expect(nodes.byId(id)!.hasCalendarBlock, isFalse);
     RecurringGoalLink.reconcile(calendar, nodes);
     expect(calendar.byId('e1')!.isTask, isFalse);
-    NodeEventLink.deleteEventAndNodes(calendar, nodes, 'e1');
+    NodeEventLink.deleteEventAndNodes(calendar, nodes, calendar.byId('e1')!);
     expect(nodes.byId(id)!.isDone, isTrue);
     expect(calendar.byId('e1'), isNull);
   });

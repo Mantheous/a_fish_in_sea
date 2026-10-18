@@ -14,6 +14,8 @@ import '../../nodes/view/node_editor.dart';
 import '../../nodes/view/node_finish_sheet.dart';
 import '../../nodes/view/schedule_sheet.dart';
 import '../../nodes/view/timer_edit_sheet.dart';
+import '../../finances/bloc/transactions_cubit.dart';
+import '../../finances/service/node_transaction_cleanup.dart';
 import '../bloc/assignment_estimates_cubit.dart';
 import '../bloc/assignment_rules_cubit.dart';
 import '../bloc/calendar_cubit.dart';
@@ -132,9 +134,9 @@ class _TasksPageState extends State<TasksPage> {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text(changed == 1
-              ? '1 task marked done'
-              : '$changed tasks marked done'),
+          content: Text(
+            changed == 1 ? '1 task marked done' : '$changed tasks marked done',
+          ),
           duration: const Duration(seconds: 4),
           // Action snackbars persist forever by default; this one must go.
           persist: false,
@@ -163,9 +165,21 @@ class _TasksPageState extends State<TasksPage> {
       _clearSelection();
       return;
     }
-    final removed = calendar == null
-        ? nodes.deleteNodes(ids)
-        : NodeEventLink.deleteNodesAndUnlink(nodes, calendar, ids);
+    int removed;
+    try {
+      removed = deleteNodesAndClearAssignments(
+        nodes: nodes,
+        transactions: context.read<TransactionsCubit>(),
+        alsoTrack: calendar == null ? const [] : [calendar],
+        delete: () => calendar == null
+            ? nodes.deleteNodes(ids)
+            : NodeEventLink.deleteNodesAndUnlink(nodes, calendar, ids),
+      );
+    } catch (_) {
+      removed = calendar == null
+          ? nodes.deleteNodes(ids)
+          : NodeEventLink.deleteNodesAndUnlink(nodes, calendar, ids);
+    }
     setState(() {
       _selected.clear();
     });
@@ -175,7 +189,8 @@ class _TasksPageState extends State<TasksPage> {
       ..showSnackBar(
         SnackBar(
           content: Text(
-              removed == 1 ? '1 task deleted' : '$removed tasks deleted'),
+            removed == 1 ? '1 task deleted' : '$removed tasks deleted',
+          ),
           duration: const Duration(seconds: 4),
           // Action snackbars persist forever by default; this one must go.
           persist: false,
@@ -301,8 +316,7 @@ class _TasksPageState extends State<TasksPage> {
                               _selected.length == 1
                                   ? '1 selected'
                                   : '${_selected.length} selected',
-                              style:
-                                  Theme.of(context).textTheme.titleSmall,
+                              style: Theme.of(context).textTheme.titleSmall,
                             ),
                           ),
                           IconButton(
@@ -413,11 +427,7 @@ AssignmentEstimate _estimateFor(BuildContext context, Node node) {
   try {
     efforts = context.read<AssignmentEstimatesCubit>().state;
   } catch (_) {}
-  return resolveAssignmentEstimate(
-    node: node,
-    rules: rules,
-    efforts: efforts,
-  );
+  return resolveAssignmentEstimate(node: node, rules: rules, efforts: efforts);
 }
 
 /// "Est 45m" / "Est 1h 30m, usually 7 PM" for the tile's work line.
@@ -590,9 +600,8 @@ class _TodoTab extends StatelessWidget {
             _SelectAllRow(
               allSelected: allSelected,
               count: count,
-              onChanged: (select) => select
-                  ? onSelectAll(allIds)
-                  : onDeselectAll(allIds),
+              onChanged: (select) =>
+                  select ? onSelectAll(allIds) : onDeselectAll(allIds),
             ),
             Expanded(child: list),
           ],
@@ -613,8 +622,10 @@ class _EmptyTodo extends StatelessWidget {
         children: [
           const Icon(Icons.check_circle_outline, size: 48),
           const SizedBox(height: 8),
-          Text('Nothing to do!',
-              style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            'Nothing to do!',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           const SizedBox(height: 4),
           const Text('Add a node with the + button'),
           const SizedBox(height: 12),
@@ -670,7 +681,8 @@ class _HomeworkTabState extends State<_HomeworkTab>
     final tints = taskTintMap(nodeCubit.state, viewOptions, now);
     var imported = applyTaskViewOptions(
       feedCubit.visibleNodes(
-          nodeCubit.state.where((n) => n.isHomework).toList()),
+        nodeCubit.state.where((n) => n.isHomework).toList(),
+      ),
       viewOptions,
       now,
     );
@@ -780,12 +792,13 @@ class _HomeworkTabState extends State<_HomeworkTab>
                       due: n.schedule!.due,
                     ),
               ];
-              final rued =
-                  {for (final r in rules) r.groupKey};
+              final rued = {for (final r in rules) r.groupKey};
               unruledRepeating = detectRepeatingGroups(samples)
-                  .where((g) =>
-                      g.isRepeating &&
-                      !rued.contains('${g.feedId}|${g.templateKey}'))
+                  .where(
+                    (g) =>
+                        g.isRepeating &&
+                        !rued.contains('${g.feedId}|${g.templateKey}'),
+                  )
                   .length;
             } catch (_) {}
             return Column(
@@ -815,7 +828,8 @@ class _HomeworkTabState extends State<_HomeworkTab>
                                 width: 20,
                                 height: 20,
                                 child: CircularProgressIndicator(
-                                    strokeWidth: 2),
+                                  strokeWidth: 2,
+                                ),
                               )
                             : const Icon(Icons.refresh),
                         onPressed: syncing
@@ -857,8 +871,7 @@ class _HomeworkTabState extends State<_HomeworkTab>
             builder: (context) {
               final allIds = [for (final n in imported) n.id];
               final allSelected = allIds.every(widget.selected.contains);
-              final count =
-                  allIds.where(widget.selected.contains).length;
+              final count = allIds.where(widget.selected.contains).length;
               return _SelectAllRow(
                 allSelected: allSelected,
                 count: count,
@@ -897,11 +910,8 @@ class _HomeworkTabState extends State<_HomeworkTab>
                       shape: BoxShape.circle,
                     ),
                   ),
-                  title:
-                      Text(meta.name, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(
-                    '${groupOpenCount[groupKey]} to do',
-                  ),
+                  title: Text(meta.name, overflow: TextOverflow.ellipsis),
+                  subtitle: Text('${groupOpenCount[groupKey]} to do'),
                   children: [
                     for (final node in classNodes)
                       _NodeTile(
@@ -910,8 +920,7 @@ class _HomeworkTabState extends State<_HomeworkTab>
                         now: now,
                         highlightMatched: tints.containsKey(node.id),
                         highlightColorValue: tints[node.id]?.colorValue,
-                        highlightLabel:
-                            tints[node.id]?.label ?? 'Highlighted',
+                        highlightLabel: tints[node.id]?.label ?? 'Highlighted',
                         feedById: feedById,
                         nodeById: nodeById,
                         indexById: indexes.byId,
@@ -952,10 +961,9 @@ bool _isDueToday(DateTime due, DateTime now) {
 }
 
 /// Readable orange for "due today" cues in either brightness.
-Color _dueTodayColor(ThemeData theme) =>
-    theme.brightness == Brightness.dark
-        ? Colors.orange.shade300
-        : Colors.orange.shade800;
+Color _dueTodayColor(ThemeData theme) => theme.brightness == Brightness.dark
+    ? Colors.orange.shade300
+    : Colors.orange.shade800;
 
 class _NodeTile extends StatelessWidget {
   final Node node;
@@ -1010,9 +1018,8 @@ class _NodeTile extends StatelessWidget {
     // liveness from the hoisted map instead of subscribing every tile to
     // the full node list (N tiles × full-state subscription + O(n) byId
     // each = O(n²) per edit).
-    final live = nodeById?[node.id] ??
-        context.read<NodeCubit>().byId(node.id) ??
-        node;
+    final live =
+        nodeById?[node.id] ?? context.read<NodeCubit>().byId(node.id) ?? node;
     final failed = live.status == NodeStatus.failed;
     final effectiveNow = now ?? DateTime.now();
     final Color chipColor;
@@ -1035,13 +1042,13 @@ class _NodeTile extends StatelessWidget {
     }
     final hasChip = chipLabel.isNotEmpty;
     final theme = Theme.of(context);
-    final hasEvent = _hasCalendarEventFast(
-      live,
-      linkedEventIds: linkedEventIds,
-      linkedTaskIds: linkedTaskIds,
-    ) ??
-        _hasCalendarEvent(
-            live, context.read<CalendarCubit>().state);
+    final hasEvent =
+        _hasCalendarEventFast(
+          live,
+          linkedEventIds: linkedEventIds,
+          linkedTaskIds: linkedTaskIds,
+        ) ??
+        _hasCalendarEvent(live, context.read<CalendarCubit>().state);
     String? workLine;
     final plannedStart = live.schedule?.start;
     final plannedEnd = live.schedule?.end;
@@ -1054,9 +1061,10 @@ class _NodeTile extends StatelessWidget {
       workLine = planned == null
           ? 'Reported ${live.reportedDuration!.inMinutes}m'
           : 'Reported ${live.reportedDuration!.inMinutes}m '
-              '(planned ${planned.inMinutes}m)';
+                '(planned ${planned.inMinutes}m)';
     } else if (plannedStart != null && plannedEnd != null) {
-      workLine = 'Planned ${_timeFormat.format(plannedStart)} – '
+      workLine =
+          'Planned ${_timeFormat.format(plannedStart)} – '
           '${_timeFormat.format(plannedEnd)}';
     } else if (live.isHomework) {
       // Not placed yet: show what the app expects this to take, and the
@@ -1069,8 +1077,7 @@ class _NodeTile extends StatelessWidget {
               byId: indexById!,
               byParent: indexByParent!,
             )
-          : moneyActualForNode(
-              live, context.read<NodeCubit>().state);
+          : moneyActualForNode(live, context.read<NodeCubit>().state);
       workLine =
           '\$${actual.toStringAsFixed(2)} / \$${live.money!.effectiveTarget.toStringAsFixed(2)}';
     }
@@ -1078,9 +1085,8 @@ class _NodeTile extends StatelessWidget {
     // Due today outranks the custom tint: same highlight, hotter color.
     // (A highlighted row is always open — the highlight set is open-only
     // — so no extra status check is needed.)
-    final isDueTodayHighlight = highlightMatched &&
-        due != null &&
-        _isDueToday(due, effectiveNow);
+    final isDueTodayHighlight =
+        highlightMatched && due != null && _isDueToday(due, effectiveNow);
     final highlightTextColor = highlightColorValue == null
         ? theme.colorScheme.tertiary
         : Color(highlightColorValue!);
@@ -1096,13 +1102,12 @@ class _NodeTile extends StatelessWidget {
       title: Text(
         live.title,
         style: TextStyle(
-          decoration:
-              live.isDone || failed ? TextDecoration.lineThrough : null,
+          decoration: live.isDone || failed ? TextDecoration.lineThrough : null,
           color: failed
               ? theme.colorScheme.error
               : live.isDone
-                  ? theme.colorScheme.outline
-                  : null,
+              ? theme.colorScheme.outline
+              : null,
         ),
       ),
       subtitle: Column(
@@ -1144,14 +1149,14 @@ class _NodeTile extends StatelessWidget {
                     color: live.isOverdueAt(effectiveNow)
                         ? theme.colorScheme.error
                         : isDueTodayHighlight
-                            ? _dueTodayColor(theme)
-                            : highlightMatched
-                                ? highlightTextColor
-                                : null,
+                        ? _dueTodayColor(theme)
+                        : highlightMatched
+                        ? highlightTextColor
+                        : null,
                     fontWeight:
                         _isDueToday(due, effectiveNow) || highlightMatched
-                            ? FontWeight.bold
-                            : null,
+                        ? FontWeight.bold
+                        : null,
                   ),
                 ),
             ],
@@ -1164,10 +1169,8 @@ class _NodeTile extends StatelessWidget {
                         live.hasReported &&
                         live.reportedDuration != null)
                 ? InkWell(
-                    onTap: () => showEditNodeTimerSheet(
-                      context,
-                      nodeId: live.id,
-                    ),
+                    onTap: () =>
+                        showEditNodeTimerSheet(context, nodeId: live.id),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -1178,8 +1181,8 @@ class _NodeTile extends StatelessWidget {
                               color: failed
                                   ? theme.colorScheme.error
                                   : live.isTracking
-                                      ? theme.colorScheme.primary
-                                      : null,
+                                  ? theme.colorScheme.primary
+                                  : null,
                               fontWeight: failed || live.isTracking
                                   ? FontWeight.w600
                                   : null,
@@ -1201,8 +1204,8 @@ class _NodeTile extends StatelessWidget {
                       color: failed
                           ? theme.colorScheme.error
                           : live.isTracking
-                              ? theme.colorScheme.primary
-                              : null,
+                          ? theme.colorScheme.primary
+                          : null,
                       fontWeight: failed || live.isTracking
                           ? FontWeight.w600
                           : null,
@@ -1245,7 +1248,8 @@ class _NodeTile extends StatelessWidget {
                   },
           ),
           IconButton(
-            tooltip: (hasEvent ||
+            tooltip:
+                (hasEvent ||
                     live.schedule?.due != null ||
                     (live.schedule?.hasCalendarBlock ?? false))
                 ? 'Scheduled — tap to change'
@@ -1255,14 +1259,14 @@ class _NodeTile extends StatelessWidget {
             constraints: const BoxConstraints(),
             icon: Icon(
               Icons.schedule,
-              color: (hasEvent ||
+              color:
+                  (hasEvent ||
                       live.schedule?.due != null ||
                       (live.schedule?.hasCalendarBlock ?? false))
                   ? theme.colorScheme.primary
                   : null,
             ),
-            onPressed: () =>
-                showScheduleSheet(context, nodeId: live.id),
+            onPressed: () => showScheduleSheet(context, nodeId: live.id),
           ),
           PopupMenuButton<String>(
             padding: EdgeInsets.zero,
@@ -1277,10 +1281,7 @@ class _NodeTile extends StatelessWidget {
             },
             itemBuilder: (context) => const [
               PopupMenuItem(value: 'edit', child: Text('Edit')),
-              PopupMenuItem(
-                value: 'schedule',
-                child: Text('Schedule…'),
-              ),
+              PopupMenuItem(value: 'schedule', child: Text('Schedule…')),
               PopupMenuItem(value: 'delete', child: Text('Delete')),
             ],
           ),
@@ -1315,8 +1316,7 @@ class _NodeTile extends StatelessWidget {
     return linkedTaskIds.contains(node.id);
   }
 
-  static bool _hasCalendarEvent(
-      Node node, List<PlannerEvent> calendarEvents) {
+  static bool _hasCalendarEvent(Node node, List<PlannerEvent> calendarEvents) {
     final linkedId = node.calendarEventId;
     if (linkedId != null) {
       for (final event in calendarEvents) {
@@ -1336,10 +1336,33 @@ class _NodeTile extends StatelessWidget {
     try {
       calendar = context.read<CalendarCubit>();
     } catch (_) {}
-    if (calendar == null) {
+    TransactionsCubit? transactions;
+    try {
+      transactions = context.read<TransactionsCubit>();
+    } catch (_) {}
+    try {
+      if (transactions == null) {
+        if (calendar == null) {
+          nodes.deleteNode(node.id);
+        } else {
+          NodeEventLink.deleteNodesAndUnlink(nodes, calendar, {node.id});
+        }
+      } else {
+        deleteNodesAndClearAssignments(
+          nodes: nodes,
+          transactions: transactions,
+          delete: () {
+            if (calendar == null) {
+              nodes.deleteNode(node.id);
+            } else {
+              NodeEventLink.deleteNodesAndUnlink(nodes, calendar, {node.id});
+            }
+            return null;
+          },
+        );
+      }
+    } catch (_) {
       nodes.deleteNode(node.id);
-    } else {
-      NodeEventLink.deleteNodesAndUnlink(nodes, calendar, {node.id});
     }
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
