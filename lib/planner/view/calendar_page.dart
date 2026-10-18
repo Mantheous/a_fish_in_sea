@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
@@ -26,17 +25,16 @@ import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/calendar_visibility_cubit.dart';
 import '../bloc/feed_cubit.dart';
 import '../model/event_reschedule.dart';
-import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../bloc/settings_cubit.dart';
 import '../service/calendar_report.dart';
 import '../service/event_reminders.dart';
 import 'calendar_data_source.dart';
+import 'calendar_projection.dart';
 import 'calendar_filter_sheet.dart';
 import 'event_editor.dart';
 import 'feed_manager.dart';
 
-const int _personalEventColor = 0xFF6B8F8A;
 const double _wideBreakpoint = 720;
 const double _drawerWidth = 360;
 
@@ -71,13 +69,7 @@ class _CalendarPageState extends State<CalendarPage> {
   Timer? _liveTicker;
   Timer? _suppressTimer;
   PlannerCalendarDataSource? _dataSource;
-  List<PlannerEvent>? _cachedReportVisible;
-  List<Node>? _cachedReportNodes;
-  Map<String, List<ReportedEntry>>? _cachedReportEntries;
-  DateTime? _cachedReportTime;
-  List<ReportBlock>? _cachedReportBlocks;
-  Map<String, ReportBlock>? _cachedReportById;
-  List<PlannerEvent>? _cachedReportDisplayEvents;
+  final _projection = CalendarProjection();
   TimeSlotViewSettings? _slotSettingsCache;
   double? _slotStartHour;
   double? _slotEndHour;
@@ -155,16 +147,13 @@ class _CalendarPageState extends State<CalendarPage> {
   void dispose() {
     _liveTicker?.cancel();
     _suppressTimer?.cancel();
+    _dataSource?.dispose();
     _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final feedCubit = context.watch<FeedCubit>();
-    final feedColors = <String, Color>{
-      for (final feed in feedCubit.state) feed.id: feed.color,
-    };
     final settings = context.watch<SettingsCubit>().state;
     final snap = settings.snapMinutes;
     final drawerOpen = _isWide && _drawerMode != _DrawerMode.closed;
@@ -413,154 +402,29 @@ class _CalendarPageState extends State<CalendarPage> {
           Expanded(
             child: BlocBuilder<CalendarCubit, List<PlannerEvent>>(
               builder: (context, events) {
-                final feeds = context.watch<FeedCubit>();
-                final feedVisible = feeds.visibleEvents(events);
-                final feedById = {
-                  for (final feed in feeds.state) feed.id: feed,
-                };
-                final visible = context
-                    .watch<CalendarVisibilityCubit>()
-                    .filterVisible(feedVisible, feedById);
-                final preview = _resizePreview;
-                var shown = visible;
-                final draft = _draftEvent;
-                // Wide only: the side drawer leaves the calendar
-                // interactive, so the ghost can be dragged/resized live.
-                // On narrow screens the creator is a modal bottom sheet:
-                // the scrim dims the calendar ("grayed out") and swallows
-                // all gestures, so rendering the ghost there is a
-                // non-draggable teaser. Times are edited via the form.
-                if (draft != null &&
-                    _drawerMode == _DrawerMode.creating &&
-                    _isWide) {
-                  shown = [...shown, draft];
-                }
-                final editPreview = _editPreview;
-                if (editPreview != null &&
-                    _drawerMode == _DrawerMode.editing &&
-                    _isWide) {
-                  shown = [
-                    for (final e in shown)
-                      if (e.id == editPreview.id) editPreview else e,
-                  ];
-                }
-                if (preview != null) {
-                  shown = [
-                    for (final e in shown)
-                      if (e.id == preview.id) preview else e,
-                  ];
-                }
                 final sideBySide = _sideBySide;
-                var reportById = const <String, ReportBlock>{};
-                if (sideBySide) {
-                  final nodes = context.watch<NodeCubit>().state;
-                  final reports = context.watch<ReportingCubit>().state;
-                  final now = DateTime.now();
-                  final hasTracking = nodes.any((n) => n.isTracking) ||
-                      visible.any((e) => e.isTracking);
-                  // `visible` is a fresh filtered list each build, so compare
-                  // by contents (nodes/reports are cubit states: identical
-                  // when unchanged). Live timers re-resolve at most every 15s.
-                  final cacheValid = _cachedReportBlocks != null &&
-                      _cachedReportVisible != null &&
-                      listEquals(visible, _cachedReportVisible) &&
-                      identical(nodes, _cachedReportNodes) &&
-                      identical(reports, _cachedReportEntries) &&
-                      (!hasTracking ||
-                          (_cachedReportTime != null &&
-                              now.difference(_cachedReportTime!) <
-                                  const Duration(seconds: 15)));
-                  final List<ReportBlock> blocks;
-                  final List<PlannerEvent> displayEvents;
-                  final Map<String, ReportBlock> byIdMap;
-                  if (cacheValid) {
-                    blocks = _cachedReportBlocks!;
-                    displayEvents = _cachedReportDisplayEvents!;
-                    byIdMap = _cachedReportById!;
-                  } else {
-                    blocks = buildReportBlocks(
-                      visibleEvents: visible,
-                      nodes: nodes,
-                      reportsByDay: reports,
-                      now: now,
-                    );
-                    final byId = {for (final e in visible) e.id: e};
-                    displayEvents = [
-                      for (final block in blocks)
-                        reportBlockToDisplayEvent(
-                          block,
-                          template: block.eventId == null
-                              ? null
-                              : byId[block.eventId],
-                        ),
-                    ];
-                    byIdMap = {
-                      for (final block in blocks) block.displayId: block,
-                    };
-                    _cachedReportVisible = visible;
-                    _cachedReportNodes = nodes;
-                    _cachedReportEntries = reports;
-                    _cachedReportTime = now;
-                    _cachedReportBlocks = blocks;
-                    _cachedReportDisplayEvents = displayEvents;
-                    _cachedReportById = byIdMap;
-                  }
-                  shown = [...shown, ...displayEvents];
-                  reportById = byIdMap;
-                }
-                // Unified-node schedule blocks render as appointments.
-                // Taps/drags on `node:` ids route back to the node.
-                List<Node> nodeState = const [];
-                try {
-                  nodeState = context.watch<NodeCubit>().state;
-                  shown = [
-                    ...shown,
-                    ...nodeCalendarBlocks(nodeState),
-                  ];
-                } catch (_) {}
-                // ── Hoisted per-build tile data (not per tile) ──────────
-                // _eventColor (HSL round-trip + hash), _isMovable (O(F) byId
-                // scan), node scans (O(N) per tile), and assignee joins were
-                // all recomputed inside appointmentBuilder for every tile,
-                // every frame. Compute once here.
-                final colorById = <String, Color>{};
-                for (final e in shown) {
-                  colorById[e.id] = _eventColor(e, feedColors);
-                }
-                final remoteEditableFeedIds = <String>{};
-                for (final f in feeds.state) {
-                  if (f.kind == FeedKind.google &&
-                      f.calendarId != null &&
-                      f.calendarId!.isNotEmpty) {
-                    remoteEditableFeedIds.add(f.id);
-                  }
-                }
-                final nodeById = {for (final n in nodeState) n.id: n};
-                final nodeByEventId = <String, Node>{};
-                final trackingNodeIds = <String>{};
-                for (final n in nodeState) {
-                  final c = n.calendarEventId;
-                  if (c != null) nodeByEventId.putIfAbsent(c, () => n);
-                  final s = n.sourceEventId;
-                  if (s != null) nodeByEventId.putIfAbsent(s, () => n);
-                  if (n.calendarEventId == null && n.sourceEventId == null) {
-                    // plain nodes addressable by taskId link
-                  }
-                  nodeByEventId.putIfAbsent('task:${n.id}', () => n);
-                  if (n.isTracking) trackingNodeIds.add(n.id);
-                }
-                final trackingEventIds = <String>{};
-                for (final e in shown) {
-                  if (e.isTracking) trackingEventIds.add(e.id);
-                }
-                final assigneeLabelById = <String, String>{};
-                for (final e in shown) {
-                  if (e.assignees.isNotEmpty) {
-                    assigneeLabelById[e.id] = e.assignees
-                        .map((a) => a.displayName)
-                        .join(', ');
-                  }
-                }
+                final wide = _isWide;
+                _projection.update(
+                  events: events,
+                  feeds: context.watch<FeedCubit>().state,
+                  visibility: context.watch<CalendarVisibilityCubit>().state,
+                  nodes: context.watch<NodeCubit>().state,
+                  reports: sideBySide
+                      ? context.watch<ReportingCubit>().state
+                      : const <String, List<ReportedEntry>>{},
+                  showReports: sideBySide,
+                  now: DateTime.now(),
+                  draft: wide && _drawerMode == _DrawerMode.creating
+                      ? _draftEvent : null,
+                  edit: wide && _drawerMode == _DrawerMode.editing
+                      ? _editPreview : null,
+                  resize: _resizePreview,
+                );
+                final shown = _projection.shown;
+                final feedColors = _projection.feedColors;
+                final colorById = _projection.colorById;
+                final reportById = sideBySide
+                    ? _projection.reportById : const <String, ReportBlock>{};
                 if (_dataSource == null) {
                   _dataSource = PlannerCalendarDataSource(
                     shown,
@@ -591,12 +455,12 @@ class _CalendarPageState extends State<CalendarPage> {
                     sideBySide: sideBySide,
                     reportById: reportById,
                     colorById: colorById,
-                    remoteEditableFeedIds: remoteEditableFeedIds,
-                    nodeById: nodeById,
-                    nodeByEventId: nodeByEventId,
-                    trackingNodeIds: trackingNodeIds,
-                    trackingEventIds: trackingEventIds,
-                    assigneeLabelById: assigneeLabelById,
+                    remoteEditableFeedIds: _projection.remoteEditableFeedIds,
+                    nodeById: _projection.nodeById,
+                    nodeByEventId: _projection.nodeByEventId,
+                    trackingNodeIds: _projection.trackingNodeIds,
+                    trackingEventIds: _projection.trackingEventIds,
+                    assigneeLabelById: _projection.assigneeLabelById,
                   ),
                   onDragStart: _onDragStart,
                   onDragEnd: _onDragEnd,
@@ -1447,13 +1311,7 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   Color _eventColor(PlannerEvent event, Map<String, Color> feedColors) {
-    final label = event.classLabel;
-    if (label != null && label.isNotEmpty) return courseColor(label);
-    final eventColor = event.colorValue;
-    if (eventColor != null) return mutedCalendarColor(Color(eventColor));
-    final feedColor = feedColors[event.feedId];
-    if (feedColor != null) return mutedCalendarColor(feedColor);
-    return const Color(_personalEventColor);
+    return calendarEventColor(event, feedColors);
   }
 
   Widget _buildDrawer(int snap) {
