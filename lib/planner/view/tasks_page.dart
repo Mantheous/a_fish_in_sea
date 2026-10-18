@@ -105,6 +105,7 @@ class _TasksPageState extends State<TasksPage> {
       _selected.where((id) => nodes.byId(id) != null).toSet();
 
   void _markSelectedDone() {
+    final undoCubit = context.read<UndoCubit>();
     NodeCubit nodes;
     try {
       nodes = context.read<NodeCubit>();
@@ -139,13 +140,14 @@ class _TasksPageState extends State<TasksPage> {
           persist: false,
           action: SnackBarAction(
             label: 'Undo',
-            onPressed: () => context.read<UndoCubit>().undo(),
+            onPressed: undoCubit.undo,
           ),
         ),
       );
   }
 
   void _deleteSelected() {
+    final undoCubit = context.read<UndoCubit>();
     NodeCubit nodes;
     try {
       nodes = context.read<NodeCubit>();
@@ -179,7 +181,7 @@ class _TasksPageState extends State<TasksPage> {
           persist: false,
           action: SnackBarAction(
             label: 'Undo',
-            onPressed: () => context.read<UndoCubit>().undo(),
+            onPressed: undoCubit.undo,
           ),
         ),
       );
@@ -1328,12 +1330,16 @@ class _NodeTile extends StatelessWidget {
   }
 
   void _delete(BuildContext context, Node node) {
-    final eventId = node.calendarEventId ?? node.sourceEventId;
-    context.read<NodeCubit>().deleteNode(node.id);
-    if (eventId != null) {
-      try {
-        context.read<CalendarCubit>().clearTaskLink(eventId);
-      } catch (_) {}
+    final undoCubit = context.read<UndoCubit>();
+    final nodes = context.read<NodeCubit>();
+    CalendarCubit? calendar;
+    try {
+      calendar = context.read<CalendarCubit>();
+    } catch (_) {}
+    if (calendar == null) {
+      nodes.deleteNode(node.id);
+    } else {
+      NodeEventLink.deleteNodesAndUnlink(nodes, calendar, {node.id});
     }
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -1345,7 +1351,7 @@ class _NodeTile extends StatelessWidget {
           persist: false,
           action: SnackBarAction(
             label: 'Undo',
-            onPressed: () => context.read<UndoCubit>().undo(),
+            onPressed: undoCubit.undo,
           ),
         ),
       );

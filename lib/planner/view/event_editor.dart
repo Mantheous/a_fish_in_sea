@@ -2024,6 +2024,7 @@ class EventEditorFormState extends State<EventEditorForm> {
 
   void _delete(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
+    final undoCubit = context.read<UndoCubit>();
     final feedCubit = context.read<FeedCubit>();
     final calendarCubit = context.read<CalendarCubit>();
     final existing = widget.existing;
@@ -2058,15 +2059,22 @@ class EventEditorFormState extends State<EventEditorForm> {
     }
 
     if (!feedCubit.isRemoteEditable(existing)) {
-      calendarCubit.deleteEvent(existing.id);
-      clearTaskLink();
+      NodeCubit? nodes;
+      try {
+        nodes = context.read<NodeCubit>();
+      } catch (_) {}
+      if (nodes == null) {
+        calendarCubit.deleteEvent(existing.id);
+      } else {
+        NodeEventLink.deleteEventAndNodes(calendarCubit, nodes, existing);
+      }
       await EventReminderService.cancelReminder(existing.id);
       messenger.showSnackBar(
         SnackBar(
           content: const Text('Event deleted'),
           action: SnackBarAction(
             label: 'Undo',
-            onPressed: () => context.read<UndoCubit>().undo(),
+            onPressed: undoCubit.undo,
           ),
         ),
       );

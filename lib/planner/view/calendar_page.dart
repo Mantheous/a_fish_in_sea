@@ -1288,6 +1288,7 @@ class _CalendarPageState extends State<CalendarPage> {
     if (updated.start == previous.start && updated.end == previous.end) {
       return;
     }
+    final undoCubit = context.read<UndoCubit>();
     // A committed move is newer than the open edit form (native drag path):
     // drop its stale preview so the tile shows the committed times.
     // Callers repaint after this returns.
@@ -1315,7 +1316,7 @@ class _CalendarPageState extends State<CalendarPage> {
           content: Text(_movedText(updated)),
           action: SnackBarAction(
             label: 'Undo',
-            onPressed: () => context.read<UndoCubit>().undo(),
+            onPressed: undoCubit.undo,
           ),
         ),
       );
@@ -1329,7 +1330,7 @@ class _CalendarPageState extends State<CalendarPage> {
         content: Text(_movedText(updated)),
         action: SnackBarAction(
           label: 'Undo',
-          onPressed: () => context.read<UndoCubit>().undo(),
+          onPressed: undoCubit.undo,
         ),
       ),
     );
