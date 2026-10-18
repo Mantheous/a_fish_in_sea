@@ -22,6 +22,7 @@ import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:syncfusion_flutter_calendar/calendar.dart';
 
 class MockStorage extends Mock implements Storage {}
 
@@ -372,6 +373,40 @@ void main() {
     await b.engine.syncNow();
     expect(server.pushCalls, pushesBeforeDisconnectNoop);
     expect(server.store['plaid']?['singleton']?.data['itemId'], isNull);
+  });
+
+  test('calendar window settings and task completion sync across devices',
+      () async {
+    final server = FakeSyncClient();
+    final phone = _Device(server);
+    final desktop = _Device(server);
+    await phone.signIn();
+    await desktop.signIn();
+
+    phone.settings.setDefaultCalendarView(CalendarView.day);
+    phone.settings.setDayHours(7, 22);
+    phone.nodes.addNode(Node(
+      id: 'weekly-plan-task',
+      title: 'Prepare weekly plan',
+      createdAt: DateTime(2026),
+    ));
+    await phone.engine.syncNow();
+    phone.nodes.toggleDone(
+      'weekly-plan-task',
+      now: DateTime.utc(2026, 10, 18, 14),
+    );
+    await phone.engine.syncNow();
+
+    await desktop.engine.syncNow();
+
+    expect(desktop.settings.state.defaultCalendarView, CalendarView.day);
+    expect(desktop.settings.state.dayStartHour, 7);
+    expect(desktop.settings.state.dayEndHour, 22);
+    expect(desktop.nodes.byId('weekly-plan-task')?.isDone, isTrue);
+    expect(
+      desktop.nodes.byId('weekly-plan-task')?.completedAt,
+      DateTime.utc(2026, 10, 18, 14),
+    );
   });
 
   test('a running timer survives a conflicting pull (server-wins except timers)',
