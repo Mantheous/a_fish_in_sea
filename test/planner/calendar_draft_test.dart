@@ -35,7 +35,7 @@ void main() {
   });
 
   group('draftSeedFromNode', () {
-    test('builds a 9am ghost on the due date', () {
+    test('builds a noon ghost on the due date', () {
       final due = DateTime(2026, 9, 10, 23, 59);
       final seed = draftSeedFromNode(
         Node(
@@ -52,8 +52,8 @@ void main() {
       expect(seed.subject, 'Problem set 5');
       expect(seed.notes, 'Chapter 3');
       expect(seed.classLabel, 'Physics');
-      expect(seed.start, DateTime(2026, 9, 10, 9));
-      expect(seed.end, DateTime(2026, 9, 10, 10));
+      expect(seed.start, DateTime(2026, 9, 10, 12));
+      expect(seed.end, DateTime(2026, 9, 10, 13));
     });
 
     test('falls back to today when the task has no due date', () {
@@ -68,12 +68,12 @@ void main() {
       expect(seed.start.year, 2026);
       expect(seed.start.month, 9);
       expect(seed.start.day, 5);
-      // The default 9am slot has already passed, so the block starts at
+      // The default noon slot has already passed, so the block starts at
       // the current slot instead of in the past.
       expect(seed.start, DateTime(2026, 9, 5, 15, 30));
     });
 
-    test('keeps the default morning slot when it is still ahead', () {
+    test('keeps the default noon slot when it is still ahead', () {
       final now = DateTime(2026, 9, 5, 7, 30);
       final seed = draftSeedFromNode(
         Node(
@@ -82,8 +82,8 @@ void main() {
             createdAt: DateTime(2026)),
         now: now,
       );
-      expect(seed.start, DateTime(2026, 9, 5, 9));
-      expect(seed.end, DateTime(2026, 9, 5, 10));
+      expect(seed.start, DateTime(2026, 9, 5, 12));
+      expect(seed.end, DateTime(2026, 9, 5, 13));
     });
   });
 
