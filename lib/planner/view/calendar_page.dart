@@ -88,10 +88,20 @@ class _CalendarPageState extends State<CalendarPage> {
   Timer? _liveTicker;
   Timer? _suppressTimer;
   PlannerCalendarDataSource? _dataSource;
+  PlannerCalendarDataSource? _railDataSource;
+  final _railController = CalendarController();
   final _projection = CalendarProjection();
   TimeSlotViewSettings? _slotSettingsCache;
+  TimeSlotViewSettings? _railSlotSettingsCache;
   double? _slotStartHour;
   double? _slotEndHour;
+  // The plan grid and the report column are separate calendars; their time
+  // grids are kept on the same scroll offset (see [_onPlanScroll]).
+  ScrollPosition? _planScroll;
+  ScrollPosition? _railScroll;
+  bool _syncingScroll = false;
+  bool _initialScrollSynced = false;
+  bool _scrollSyncScheduled = false;
 
   TimeSlotViewSettings _slotSettings(double startHour, double endHour) {
     if (_slotSettingsCache == null ||
@@ -115,6 +125,25 @@ class _CalendarPageState extends State<CalendarPage> {
       _slotEndHour = endHour;
     }
     return _slotSettingsCache!;
+  }
+
+  /// Slot settings for the report column: same grid math as the plan
+  /// calendar (so the times line up row for row), without a time ruler.
+  TimeSlotViewSettings _railSlotSettings(double startHour, double endHour) {
+    if (_railSlotSettingsCache == null ||
+        _slotStartHour != startHour ||
+        _slotEndHour != endHour) {
+      _railSlotSettingsCache = TimeSlotViewSettings(
+        timeInterval: const Duration(minutes: 30),
+        startHour: startHour,
+        endHour: endHour,
+        // No time ruler and no labels: the plan calendar right beside it
+        // already shows the hours.
+        timeRulerSize: 0,
+        timeFormat: '',
+      );
+    }
+    return _railSlotSettingsCache!;
   }
 
   /// Schedules the tap-suppression reset. Cancelable so a pending reset
@@ -180,22 +209,196 @@ class _CalendarPageState extends State<CalendarPage> {
     _suppressTimer?.cancel();
     _controller.removePropertyChangedListener(_onCalendarControllerChanged);
     _dataSource?.dispose();
+    _railDataSource?.dispose();
+    _railController.dispose();
     _controller.dispose();
     super.dispose();
   }
 
   /// Navigation happens inside SfCalendar (header arrows, swipes): the
-  /// controller tells us the display date moved, and the report lanes must
-  /// follow it. Deferred to the frame's end — the controller can also be
-  /// updated from inside the calendar's own build.
+  /// controller tells us the display date moved, and the report column must
+  /// follow it (its own calendar, whose controller we drive). Deferred to the
+  /// frame's end — the controller can also be updated from inside the
+  /// calendar's own build.
   void _onCalendarControllerChanged(String property) {
     if (!_sideBySide || _view == CalendarView.month) return;
+    // Only touch the report calendar's controller while it is on screen:
+    // changing a calendar that is about to be removed schedules a post-frame
+    // relayout on a disposed state (Syncfusion calls setState there).
+    if (_railController.view != _controller.view) {
+      _railController.view = _controller.view;
+    }
+    final display = _controller.displayDate;
+    if (display != null && _railController.displayDate != display) {
+      _railController.displayDate = display;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) setState(() {});
     });
   }
 
-  /// The days the report lanes must cover: what the calendar shows right
+  /// Scroll the report column and the plan grid together: whichever one the
+  /// user scrolls, the other is moved to the same offset. Offsets are in the
+  /// same units because both grids share slot settings and a start hour.
+  bool _onPlanScroll(ScrollNotification notification) {
+    final position = _captureVerticalScroll(notification);
+    if (position != null) _planScroll = position;
+    _mirrorScroll(from: position, to: _railScroll);
+    return false;
+  }
+
+  bool _onRailScroll(ScrollNotification notification) {
+    final position = _captureVerticalScroll(notification);
+    if (position != null) _railScroll = position;
+    _mirrorScroll(from: position, to: _planScroll);
+    return false;
+  }
+
+  /// Syncfusion keeps its agenda's ScrollController private; the position of
+  /// the Scrollable that built a tile is the handle we do have. Tiles are
+  /// laid out before the first scroll, so this also gives the correct offset
+  /// for the first frame and one initial plan → report alignment.
+  void _rememberScrollPosition(BuildContext context, {required bool rail}) {
+    final position = Scrollable.maybeOf(context)?.position;
+    if (position == null ||
+        !position.hasPixels ||
+        position.axis != Axis.vertical) {
+      return;
+    }
+    if (rail) {
+      if (identical(_railScroll, position)) return;
+      _railScroll = position;
+    } else {
+      if (identical(_planScroll, position)) return;
+      _planScroll = position;
+    }
+    _scheduleInitialScrollSync();
+  }
+
+  /// Once both grids have positions, align the report column with the plan
+  /// grid (the plan grid auto-scrolls to the first appointment; the report
+  /// column starts at the top of the day).
+  void _scheduleInitialScrollSync() {
+    if (_initialScrollSynced || _scrollSyncScheduled) return;
+    _scrollSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollSyncScheduled = false;
+      if (!mounted || _initialScrollSynced) return;
+      final plan = _planScroll;
+      final rail = _railScroll;
+      if (plan == null || rail == null) return;
+      _initialScrollSynced = true;
+      _mirrorScroll(from: plan, to: rail);
+    });
+  }
+
+  ScrollPosition? _captureVerticalScroll(ScrollNotification notification) {
+    if (notification.metrics.axis != Axis.vertical) return null;
+    final context = notification.context;
+    if (context == null) return null;
+    // The documented way to reach the ScrollableState that sent the
+    // notification (see Flutter's Scrollable.build comment).
+    return Scrollable.maybeOf(context)?.position;
+  }
+
+  void _mirrorScroll({ScrollPosition? from, ScrollPosition? to}) {
+    if (_syncingScroll || from == null || to == null || !to.hasPixels) return;
+    final target = from.pixels.clamp(to.minScrollExtent, to.maxScrollExtent);
+    if ((to.pixels - target).abs() < 0.5) return;
+    _syncingScroll = true;
+    try {
+      to.jumpTo(target);
+    } finally {
+      _syncingScroll = false;
+    }
+  }
+
+  /// The report column's own calendar: same visible dates and time grid as
+  /// the plan calendar, but its appointments are the report lanes, whose
+  /// tiles paint the day's report chips.
+  Widget _railCalendar(SettingsState settings, bool compactHeader) {
+    return SfCalendar(
+      key: _railCalendarKey,
+      controller: _railController,
+      // Keep the hidden calendar on a cheap view: its month grid is never
+      // shown (the report column only exists in day/week).
+      view: _view == CalendarView.month ? CalendarView.day : _view,
+      dataSource: _railDataSource!,
+      firstDayOfWeek: 7,
+      allowDragAndDrop: false,
+      allowAppointmentResize: false,
+      appointmentBuilder: (context, details) => _railAppointmentBuilder(
+        context,
+        details,
+        settings.dayStartHour,
+        settings.dayEndHour,
+      ),
+      onTap: _onRailTap,
+      timeSlotViewSettings: _railSlotSettings(
+        settings.dayStartHour,
+        settings.dayEndHour,
+      ),
+      todayHighlightColor: Theme.of(context).colorScheme.primary,
+      // A short title keeps the two headers the same height without
+      // repeating the plan calendar's "October 2026" verbatim.
+      headerDateFormat: compactHeader ? 'MMM y' : 'MMM',
+      headerHeight: compactHeader ? 32 : 40,
+      headerStyle: compactHeader
+          ? const CalendarHeaderStyle(textStyle: TextStyle(fontSize: 14))
+          : const CalendarHeaderStyle(),
+      showNavigationArrow: false,
+    );
+  }
+
+  static const Key _railCalendarKey = Key('report-calendar');
+  static const Key _planCalendarKey = Key('plan-calendar');
+
+  /// Once the report column has been shown it stays mounted (just hidden):
+  /// removing a Syncfusion calendar from the tree can land its scheduled
+  /// relayout on a defunct state.
+  bool _railMounted = false;
+
+  Widget _railAppointmentBuilder(
+    BuildContext context,
+    CalendarAppointmentDetails details,
+    double startHour,
+    double endHour,
+  ) {
+    if (details.isMoreAppointmentRegion) return const SizedBox.shrink();
+    final raw = details.appointments.isNotEmpty
+        ? details.appointments.first
+        : null;
+    final event = raw is PlannerEvent ? raw : null;
+    if (event == null) return const SizedBox.shrink();
+    _rememberScrollPosition(context, rail: true);
+    // Invisible copies of the plan calendar's all-day events only exist to
+    // keep both headers the same height.
+    if (isReportPlaceholderId(event.id)) {
+      return const ExcludeSemantics(child: SizedBox.shrink());
+    }
+    final blocks = _projection.reportBlocksByLaneId[event.id];
+    if (blocks == null) return const SizedBox.shrink();
+    return ReportLaneView(
+      blocks: blocks,
+      day: reportLaneDayOf(event.id) ?? event.start,
+      startHour: startHour,
+      endHour: endHour,
+      colorFor: (block) =>
+          _projection.reportColorById[block.displayId] ??
+          const Color(defaultPersonalEventColor),
+      onTap: (block) {
+        _suppressNextTap();
+        _openReport(block.displayId);
+      },
+    );
+  }
+
+  /// The report column is read-only apart from its chips, which carry their
+  /// own tap handlers; an empty stretch of the column should not open
+  /// anything or create an event.
+  void _onRailTap(CalendarTapDetails details) {}
+
+  /// The days the report column must cover: what the calendar shows right
   /// now — the display date in the day view, its Sunday-start week in the
   /// week view. Lanes only exist while the Plan + Report view is on and a
   /// time-slot grid is visible (the month view keeps its agenda chips).
@@ -206,6 +409,14 @@ class _CalendarPageState extends State<CalendarPage> {
     // firstDayOfWeek is 7 (Sunday): back up to the week's first day.
     final start = day.subtract(Duration(days: day.weekday % 7));
     return [for (var i = 0; i < 7; i++) start.add(Duration(days: i))];
+  }
+
+  /// Report column width for a calendar area of [available] pixels: wide
+  /// enough for a chip's icon and title, never more than a quarter of the
+  /// space the plans get.
+  double _railWidthFor(double available) {
+    if (!available.isFinite) return 240;
+    return (available * 0.22).clamp(84.0, 260.0);
   }
 
   @override
@@ -499,12 +710,6 @@ class _CalendarPageState extends State<CalendarPage> {
                   final reportById = sideBySide
                       ? _projection.reportById
                       : const <String, ReportBlock>{};
-                  final reportBlocksByLaneId = reportLanes
-                      ? _projection.reportBlocksByLaneId
-                      : const <String, List<ReportBlock>>{};
-                  final reportColorById = reportLanes
-                      ? _projection.reportColorById
-                      : const <String, Color>{};
                   if (_dataSource == null) {
                     _dataSource = PlannerCalendarDataSource(
                       shown,
@@ -518,7 +723,27 @@ class _CalendarPageState extends State<CalendarPage> {
                   )) {
                     _dataSource!.update(shown, feedColors, colorById);
                   }
+                  if (reportLanes) {
+                    final rails = _projection.reportRails;
+                    if (_railDataSource == null) {
+                      _railDataSource = PlannerCalendarDataSource(
+                        rails,
+                        const {},
+                      );
+                    } else if (!_railDataSource!.matches(
+                      rails,
+                      const {},
+                      null,
+                    )) {
+                      _railDataSource!.update(rails, const {});
+                    }
+                    // The rail calendar is never removed from the tree
+                    // again: disposing a Syncfusion calendar mid-flight can
+                    // land its scheduled relayout on a defunct state.
+                    _railMounted = true;
+                  }
                   final calendar = SfCalendar(
+                    key: _planCalendarKey,
                     controller: _controller,
                     view: _view,
                     dataSource: _dataSource!,
@@ -537,10 +762,6 @@ class _CalendarPageState extends State<CalendarPage> {
                           context,
                           details,
                           reportById: reportById,
-                          reportBlocksByLaneId: reportBlocksByLaneId,
-                          reportColorById: reportColorById,
-                          laneStartHour: settings.dayStartHour,
-                          laneEndHour: settings.dayEndHour,
                           colorById: colorById,
                           remoteEditableFeedIds:
                               _projection.remoteEditableFeedIds,
@@ -578,21 +799,62 @@ class _CalendarPageState extends State<CalendarPage> {
                   // drawer or report hint must not dispose/recreate SfCalendar
                   // and regenerate every appointment (or leave its scheduled
                   // data-source callbacks pointing at a disposed state).
-                  final calendarView = Stack(
-                    children: [
-                      calendar,
-                      if (sideBySide && reportById.isEmpty)
-                        Positioned(
-                          left: 0,
-                          right: 0,
-                          bottom: 12,
-                          child: _noReportHint(),
-                        ),
-                      // With the panel open the Event button anchors to the
-                      // calendar pane instead of hovering over the panel.
-                      if (panelVisible && _panelMode == CalendarPanelMode.tasks)
-                        Positioned(right: 16, bottom: 16, child: addEventFab),
-                    ],
+                  //
+                  // The report column is its own calendar in the same stack:
+                  // one narrow column per visible day beside the untouched
+                  // plan grid, so plans keep the layouts they have in Plans
+                  // mode instead of being cut in half. Both grids stay
+                  // scrolled together (see _onPlanScroll/_onRailScroll).
+                  final calendarView = LayoutBuilder(
+                    builder: (context, constraints) {
+                      final railWidth = _railWidthFor(constraints.maxWidth);
+                      return Stack(
+                        children: [
+                          Positioned(
+                            left: reportLanes ? railWidth : 0,
+                            top: 0,
+                            right: 0,
+                            bottom: 0,
+                            child: NotificationListener<ScrollNotification>(
+                              onNotification: _onPlanScroll,
+                              child: calendar,
+                            ),
+                          ),
+                          if (_railMounted)
+                            Positioned(
+                              left: 0,
+                              top: 0,
+                              bottom: 0,
+                              width: railWidth,
+                              child: Visibility(
+                                visible: reportLanes,
+                                maintainState: true,
+                                child: NotificationListener<ScrollNotification>(
+                                  onNotification: _onRailScroll,
+                                  child: _railCalendar(settings, compactHeader),
+                                ),
+                              ),
+                            ),
+                          if (sideBySide && reportById.isEmpty)
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              bottom: 12,
+                              child: _noReportHint(),
+                            ),
+                          // With the panel open the Event button anchors to
+                          // the calendar pane instead of hovering over the
+                          // panel.
+                          if (panelVisible &&
+                              _panelMode == CalendarPanelMode.tasks)
+                            Positioned(
+                              right: 16,
+                              bottom: 16,
+                              child: addEventFab,
+                            ),
+                        ],
+                      );
+                    },
                   );
                   return Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -615,10 +877,6 @@ class _CalendarPageState extends State<CalendarPage> {
     BuildContext context,
     CalendarAppointmentDetails details, {
     required Map<String, ReportBlock> reportById,
-    Map<String, List<ReportBlock>>? reportBlocksByLaneId,
-    Map<String, Color>? reportColorById,
-    double laneStartHour = 0,
-    double laneEndHour = 24,
     Map<String, Color>? colorById,
     Set<String>? remoteEditableFeedIds,
     Map<String, Node>? nodeById,
@@ -644,26 +902,7 @@ class _CalendarPageState extends State<CalendarPage> {
         : null;
     final event = raw is PlannerEvent ? raw : null;
     if (event == null) return const SizedBox.shrink();
-    // Report lane: the day's left column. Its tile is the lane itself
-    // (background + time-positioned report chips), not an event tile.
-    final laneBlocks = reportBlocksByLaneId?[event.id];
-    if (laneBlocks != null) {
-      return ReportLaneView(
-        blocks: laneBlocks,
-        day: reportLaneDayOf(event.id) ?? event.start,
-        startHour: laneStartHour,
-        endHour: laneEndHour,
-        colorFor: (block) =>
-            reportColorById?[block.displayId] ??
-            const Color(defaultPersonalEventColor),
-        onTap: (block) {
-          // The calendar's own tap handler would otherwise also fire and
-          // treat the lane placeholder as a tapped event.
-          _suppressNextTap();
-          _openReport(block.displayId);
-        },
-      );
-    }
+    _rememberScrollPosition(context, rail: false);
     final report = reportById[event.id];
     final isDraft = event.id == calendarDraftEventId;
     final baseColor = colorById?[event.id] ?? _eventColor(event, feedColors);

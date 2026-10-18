@@ -51,21 +51,24 @@ void main() {
   ) async {
     await pumpGoldenPage(tester, const CalendarPage());
     await tester.pumpAndSettle();
-    final original = tester.state(find.byType(SfCalendar));
+    // The plan calendar specifically: the report column is a second
+    // calendar once Plan + Report has been opened.
+    final planCalendar = find.byKey(const Key('plan-calendar'));
+    final original = tester.state(planCalendar);
     await tester.tap(find.text('Plan + Report'));
     await tester.pumpAndSettle();
-    expect(identical(tester.state(find.byType(SfCalendar)), original), isTrue);
+    expect(identical(tester.state(planCalendar), original), isTrue);
     await tester.tap(find.text('Plans'));
     await tester.pumpAndSettle();
-    expect(identical(tester.state(find.byType(SfCalendar)), original), isTrue);
+    expect(identical(tester.state(planCalendar), original), isTrue);
     await tester.tap(find.byType(FloatingActionButton));
     await tester.pumpAndSettle();
-    expect(identical(tester.state(find.byType(SfCalendar)), original), isTrue);
+    expect(identical(tester.state(planCalendar), original), isTrue);
     await tester.ensureVisible(find.text('Cancel'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
-    expect(identical(tester.state(find.byType(SfCalendar)), original), isTrue);
+    expect(identical(tester.state(planCalendar), original), isTrue);
     expect(find.text('New event'), findsNothing);
     expect(find.byType(FloatingActionButton), findsOneWidget);
   });

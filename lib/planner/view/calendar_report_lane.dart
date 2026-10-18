@@ -156,6 +156,7 @@ class _ReportChip extends StatelessWidget {
               '$timeLabel',
           waitDuration: const Duration(milliseconds: 500),
           child: Container(
+            key: ValueKey('report-chip:${block.displayId}'),
             margin: const EdgeInsets.symmetric(vertical: 1),
             decoration: BoxDecoration(
               color: live ? color : color.withValues(alpha: 0.75),
@@ -165,8 +166,18 @@ class _ReportChip extends StatelessWidget {
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final height = constraints.maxHeight;
-                final showText = height.isInfinite || height >= 20;
-                final showTime = height.isInfinite || height >= 34;
+                final width = constraints.maxWidth;
+                // The report column can be a narrow strip (week view, or a
+                // small window): below roughly one icon plus a couple of
+                // letters the chip is just its colour bar, described by the
+                // tooltip/semantics for anyone who needs the words.
+                final compact = width.isFinite && width < 64;
+                final showText =
+                    !compact && (height.isInfinite || height >= 20);
+                final showTime =
+                    !compact &&
+                    (width.isInfinite || width >= 100) &&
+                    (height.isInfinite || height >= 34);
                 if (!showText) return const SizedBox.shrink();
                 return Padding(
                   padding: const EdgeInsets.fromLTRB(6, 3, 6, 3),
