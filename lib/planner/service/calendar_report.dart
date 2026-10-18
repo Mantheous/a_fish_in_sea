@@ -45,6 +45,21 @@ ReportedEntry? findReportEntryForEvent(
   return fallback;
 }
 
+/// Finds the manual entry a report display id points at
+/// (`report:<entryId>`). Timer and live ids carry their event id instead,
+/// so those lookups come back null here.
+ReportedEntry? findReportEntryByDisplayId(
+  Map<String, List<ReportedEntry>> reportsByDay,
+  String displayId,
+) {
+  for (final entries in reportsByDay.values) {
+    for (final entry in entries) {
+      if ('report:${entry.id}' == displayId) return entry;
+    }
+  }
+  return null;
+}
+
 /// Builds a new manual report entry seeded from a task-event's planned
 /// (or already timer-logged) time. The id reuses the auto-report scheme
 /// (`rep:<eventId>`) so saving it via [ReportingCubit.upsertEntry] cleanly

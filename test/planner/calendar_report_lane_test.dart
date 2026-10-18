@@ -52,6 +52,23 @@ void main() {
     });
   });
 
+  group('findReportEntryByDisplayId', () {
+    test('matches manual entries, ignores timer/live display ids', () {
+      final reports = <String, List<ReportedEntry>>{
+        '2026-10-05': [
+          _accepted(
+            id: 'r1',
+            start: DateTime(2026, 10, 5, 9),
+            end: DateTime(2026, 10, 5, 10),
+          ),
+        ],
+      };
+      expect(findReportEntryByDisplayId(reports, 'report:r1')?.id, 'r1');
+      expect(findReportEntryByDisplayId(reports, 'report:timer:e1'), isNull);
+      expect(findReportEntryByDisplayId(reports, 'report:live:e1'), isNull);
+    });
+  });
+
   group('groupReportBlocksByDay', () {
     test('keys blocks by the day they start on', () {
       final monday = DateTime(2026, 10, 5);
@@ -250,14 +267,54 @@ void main() {
       expect(chipRect.top - tileRect.top, closeTo(6.7, 4));
       expect(chipRect.height, closeTo(60, 4));
 
-      // Week view: one lane per visible day.
+      // Week view: one lane per visible day, and a day with no reports of
+      // its own still keeps its lane on the left of that day's column.
+      final monday = DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ).add(const Duration(days: 1));
+      final mondayStart = DateTime(monday.year, monday.month, monday.day, 10);
+      calendar.addEvent(_event('e2', mondayStart));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
       await tester.tap(find.text('Week'));
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
+      final laneFinder = find.byKey(const Key('report-lane'));
       expect(
-        find.byKey(const Key('report-lane')),
+        laneFinder,
         findsNWidgets(7),
         reason: 'each visible day should own a report lane',
+      );
+      final mondayRect = tester.getRect(
+        find.byKey(const ValueKey('tile:e2')),
+      );
+      final laneRects = [
+        for (var i = 0; i < 7; i++) tester.getRect(laneFinder.at(i)),
+      ];
+      final leftLane = laneRects.where(
+        (rect) =>
+            rect.left < mondayRect.left &&
+            (rect.right - mondayRect.left).abs() < 2,
+      );
+      expect(
+        leftLane,
+        hasLength(1),
+        reason: "Monday's plan sits in the column right of its own lane",
+      );
+      expect((leftLane.single.width - mondayRect.width).abs(), lessThan(12));
+      expect(leftLane.single.top, lessThan(mondayRect.top));
+
+      // Month view keeps report blocks as agenda chips (no lanes there).
+      await tester.tap(find.text('Month'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.byKey(const Key('report-lane')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('tile:report:r1')),
+        findsWidgets,
+        reason: 'month cells still show report blocks as tiny tiles',
       );
     });
 

@@ -1592,12 +1592,10 @@ class _CalendarPageState extends State<CalendarPage> {
     final calendar = context.read<CalendarCubit>();
     ReportedEntry? entry;
     try {
-      final reporting = context.read<ReportingCubit>();
-      for (final entries in reporting.state.values) {
-        for (final e in entries) {
-          if ('report:${e.id}' == displayId) entry = e;
-        }
-      }
+      entry = findReportEntryByDisplayId(
+        context.read<ReportingCubit>().state,
+        displayId,
+      );
     } catch (_) {}
     var eventId = entry?.eventId;
     if (eventId == null) {
