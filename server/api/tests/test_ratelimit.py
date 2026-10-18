@@ -79,3 +79,30 @@ def test_oversize_push_rejected(client: TestClient):
         json={"changes": [{"collection": "tasks", "item_id": "t1", "data": {"id": "t1"}}]},
     )
     assert ok.status_code == 200, ok.text
+
+
+def test_limiter_stays_bounded_under_key_churn():
+    rl = RateLimiter()
+    now = 1000.0
+    # Churn far more keys than the bucket cap.
+    for i in range(rl._MAX_BUCKETS + 5000):
+        rl.allowed(f"key-{i}", 5, 60, now=now + i * 0.001)
+    assert len(rl._hits) <= rl._MAX_BUCKETS, len(rl._hits)
+    assert len(rl._windows) <= rl._MAX_BUCKETS
+
+
+def test_stale_buckets_swept_periodically():
+    rl = RateLimiter()
+    # An old key that should be reclaimed.
+    rl.allowed("old", 5, 60, now=1000.0)
+    # Enough new keys to trigger a stale sweep (_SWEEP_EVERY insertions).
+    for i in range(rl._SWEEP_EVERY):
+        rl.allowed(f"new-{i}", 5, 60, now=2000.0)
+    assert "old" not in rl._hits, "stale bucket should have been swept"
+
+    # A key accessed at the sweep time is not considered stale and survives.
+    rl2 = RateLimiter()
+    rl2.allowed("recent", 5, 60, now=5000.0)
+    for i in range(rl2._SWEEP_EVERY):
+        rl2.allowed(f"n-{i}", 5, 60, now=5000.0)
+    assert "recent" in rl2._hits, "recent bucket should survive the sweep"
