@@ -892,6 +892,29 @@ void main() {
       );
       expect(looksLikeLearningSuiteAssignment('Quiz 1', null), isTrue);
     });
+
+    test('feed-event nodes keep the event all-day flag', () {
+      final cubit = NodeCubit();
+      final allDay = PlannerEvent(
+        id: 'evt:allday-1',
+        subject: 'All-day workshop',
+        start: DateTime(2030, 3, 2),
+        end: DateTime(2030, 3, 4),
+        allDay: true,
+        feedId: 'canvas',
+        sourceUid: 'allday-1',
+      );
+      cubit.ensureNodesForFeedEvents([allDay]);
+      expect(cubit.byId('evt:allday-1')?.schedule?.allDay, isTrue);
+
+      final cubit2 = NodeCubit();
+      cubit2.ensureNodeForFeedEvent(allDay);
+      expect(cubit2.byId('evt:allday-1')?.schedule?.allDay, isTrue);
+      expect(cubit2.byId('evt:allday-1')?.schedule?.start,
+          DateTime(2030, 3, 2));
+      expect(
+          cubit2.byId('evt:allday-1')?.schedule?.end, DateTime(2030, 3, 4));
+    });
   });
 
   group('event links', () {

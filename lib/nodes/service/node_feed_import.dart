@@ -83,6 +83,7 @@ List<Node> importFeedNodes(
           due: newBaseDue,
           start: event.start,
           end: event.end,
+          allDay: event.allDay,
         ),
       ),
     );
