@@ -1,4 +1,6 @@
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
+import 'package:a_fish_in_sea/planner/view/calendar_page.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
@@ -7,7 +9,11 @@ import 'package:a_fish_in_sea/planner/view/calendar_projection.dart';
 import 'package:a_fish_in_sea/reporting/model/reported_entry.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+
 import 'package:syncfusion_flutter_calendar/calendar.dart';
+
+import '../goldens/golden_app.dart';
 
 final _day = DateTime(2026, 10, 18, 9);
 PlannerEvent _event(String id, {String? feedId}) => PlannerEvent(
@@ -40,6 +46,65 @@ class _CountedEvent extends PlannerEvent {
 }
 
 void main() {
+  testWidgets('opening and cancelling a draft keeps the calendar mounted', (
+    tester,
+  ) async {
+    await pumpGoldenPage(tester, const CalendarPage());
+    await tester.pumpAndSettle();
+    final original = tester.state(find.byType(SfCalendar));
+    await tester.tap(find.text('Plan + Report'));
+    await tester.pumpAndSettle();
+    expect(identical(tester.state(find.byType(SfCalendar)), original), isTrue);
+    await tester.tap(find.text('Plans'));
+    await tester.pumpAndSettle();
+    expect(identical(tester.state(find.byType(SfCalendar)), original), isTrue);
+    await tester.tap(find.byType(FloatingActionButton));
+    await tester.pumpAndSettle();
+    expect(identical(tester.state(find.byType(SfCalendar)), original), isTrue);
+    await tester.ensureVisible(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(identical(tester.state(find.byType(SfCalendar)), original), isTrue);
+    expect(find.text('New event'), findsNothing);
+    expect(find.byType(FloatingActionButton), findsOneWidget);
+  });
+
+  testWidgets('native node drop commits from stored schedule', (tester) async {
+    await pumpGoldenPage(tester, const CalendarPage());
+    final context = tester.element(find.byType(CalendarPage));
+    final nodes = context.read<NodeCubit>();
+    nodes.addNode(
+      Node(
+        id: 'dragged',
+        title: 'Drag node',
+        createdAt: _day,
+        schedule: ScheduleFacet(
+          start: _day,
+          end: _day.add(const Duration(hours: 1)),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final movedStart = _day.add(const Duration(hours: 2));
+    final moved = PlannerEvent(
+      id: 'node:dragged',
+      subject: 'Drag node',
+      start: movedStart,
+      end: movedStart.add(const Duration(hours: 1)),
+    );
+    final calendar = tester.widget<SfCalendar>(find.byType(SfCalendar));
+    calendar.onDragEnd!(
+      AppointmentDragEndDetails(moved, null, null, movedStart),
+    );
+    await tester.pumpAndSettle();
+    expect(nodes.byId('dragged')!.schedule!.start, movedStart);
+    expect(
+      nodes.byId('dragged')!.schedule!.end,
+      movedStart.add(const Duration(hours: 1)),
+    );
+  });
+
   test('2730 custom appointment lookups avoid quadratic equality scans', () {
     final events = List.generate(2730, (i) => _CountedEvent('$i'));
     final source = PlannerCalendarDataSource(events, const {});
@@ -243,6 +308,11 @@ void main() {
     update(nextNodes: [nodes.single.copyWith(title: 'Updated')]);
     expect(projection.shown.first, event);
     expect(projection.shown.last.subject, 'Updated');
+    final nodeResize = projection.shown.last.copyWith(
+      end: _day.add(const Duration(hours: 4)),
+    );
+    update(resize: nodeResize);
+    expect(projection.shown.last, nodeResize);
   });
 
   test(

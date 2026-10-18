@@ -148,18 +148,22 @@ class CalendarProjection {
     _shownDraft = draft;
     _shownEdit = edit;
     _shownResize = resize;
-    // Match the existing precedence: resize wins over editor preview;
-    // derived reports and node blocks are appended after preview overlays.
+    // Resize wins over the editor preview for both stored events and
+    // synthesized node blocks. Node resize handles need the same live
+    // feedback as ordinary event handles.
     shown = [
-      for (final event in [..._visible, if (draft != null) draft])
+      for (final event in [
+        ..._visible,
+        if (draft != null) draft,
+        ...reportEvents,
+        ..._nodeBlocks,
+      ])
         if (resize != null && event.id == resize.id)
           resize
         else if (edit != null && event.id == edit.id)
           edit
         else
           event,
-      ...reportEvents,
-      ..._nodeBlocks,
     ];
     final colors = <String, Color>{};
     final retainedColors = Map<PlannerEvent, Color>.identity();

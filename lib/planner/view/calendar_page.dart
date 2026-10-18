@@ -486,26 +486,27 @@ class _CalendarPageState extends State<CalendarPage> {
                       : const CalendarHeaderStyle(),
                   showNavigationArrow: true,
                 );
-                final Widget calendarView =
-                    (sideBySide && reportById.isEmpty)
-                        ? Stack(
-                            children: [
-                              calendar,
-                              Positioned(
-                                left: 0,
-                                right: 0,
-                                bottom: 12,
-                                child: _noReportHint(),
-                              ),
-                            ],
-                          )
-                        : calendar;
-                if (!drawerOpen) return calendarView;
+                // Keep the calendar at a stable tree position. Opening a
+                // drawer or report hint must not dispose/recreate SfCalendar
+                // and regenerate every appointment (or leave its scheduled
+                // data-source callbacks pointing at a disposed state).
+                final calendarView = Stack(
+                  children: [
+                    calendar,
+                    if (sideBySide && reportById.isEmpty)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 12,
+                        child: _noReportHint(),
+                      ),
+                  ],
+                );
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Expanded(child: calendarView),
-                    _buildDrawer(snap),
+                    if (drawerOpen) _buildDrawer(snap),
                   ],
                 );
               },
@@ -1934,7 +1935,7 @@ class _CalendarPageState extends State<CalendarPage> {
               .read<NodeCubit>()
               .byId(nodeIdFromBlockId(appointment.id));
         } catch (_) {}
-        if (node == null || node.schedule?.start == null) {
+        if (node == null || node.schedule?.hasCalendarBlock != true) {
           if (mounted) setState(() {});
           return;
         }
@@ -1944,7 +1945,13 @@ class _CalendarPageState extends State<CalendarPage> {
           droppingTime,
           snapMinutes: snap,
         );
-        await _commitReschedule(appointment, shifted);
+        // Syncfusion already moved its callback object. Compare with the
+        // stored schedule so a real node move is not mistaken for a no-op.
+        final schedule = node.schedule!;
+        await _commitReschedule(
+          appointment.copyWith(start: schedule.start, end: schedule.end),
+          shifted,
+        );
         return;
       }
       if (appointment is! PlannerEvent || droppingTime == null) {
