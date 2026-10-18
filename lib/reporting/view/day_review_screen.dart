@@ -81,7 +81,9 @@ class _DayReviewScreenState extends State<DayReviewScreen> {
     try {
       final pending = await takePendingPoints();
       if (!mounted) {
-        await restorePendingPoints(pending);
+        // The take already removed the batch from disk: put it back so the
+        // next merge still picks it up instead of losing it.
+        if (pending.isNotEmpty) await requeuePendingPoints(pending);
         return;
       }
       if (pending.isNotEmpty) {

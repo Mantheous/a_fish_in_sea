@@ -310,6 +310,7 @@ class _TrackingCard extends StatefulWidget {
 
 class _TrackingCardState extends State<_TrackingCard> {
   bool _busy = false;
+  Timer? _poll;
 
   @override
   void initState() {
@@ -317,16 +318,44 @@ class _TrackingCardState extends State<_TrackingCard> {
     _mergePending();
   }
 
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  void _startPendingPoll(int intervalMinutes, TrackingCubit trackingCubit) {
+    _stopPendingPoll();
+    _poll = Timer.periodic(Duration(minutes: intervalMinutes), (_) {
+      if (!mounted ||
+          trackingCubit.isClosed ||
+          !trackingCubit.state.isRecording) {
+        _stopPendingPoll();
+        return;
+      }
+      _mergePending();
+    });
+  }
+
+  void _stopPendingPoll() {
+    _poll?.cancel();
+    _poll = null;
+  }
+
   Future<void> _mergePending() async {
     final pending = await takePendingPoints();
     if (pending.isEmpty) return;
     if (!mounted) {
-      await restorePendingPoints(pending);
+      // The take already removed the batch from disk: put it back so the
+      // next mount (or Day review) still merges it instead of losing it.
+      await requeuePendingPoints(pending);
       return;
     }
     try {
       context.read<TrackingCubit>().mergePoints(pending);
-    } catch (_) {}
+    } catch (_) {
+      await requeuePendingPoints(pending);
+    }
   }
 
   Future<void> _toggle() async {
@@ -336,6 +365,7 @@ class _TrackingCardState extends State<_TrackingCard> {
     if (tracking.state.isRecording) {
       setState(() => _busy = true);
       try {
+        _stopPendingPoll();
         LocationService.stopForegroundSampling();
         await LocationService.stopBackground();
         tracking.stopRecording();
@@ -375,16 +405,26 @@ class _TrackingCardState extends State<_TrackingCard> {
       final trackingCubit = context.read<TrackingCubit>();
       var background = false;
       if (gpsAvailable) {
-        background = await LocationService.startSingleSampler(
-          intervalMinutes: interval,
-          onTick: () async {
-            final point = await samplePosition();
-            if (point == null || trackingCubit.isClosed) return;
-            try {
-              trackingCubit.addPoint(point);
-            } catch (_) {}
-          },
-        );
+        // One sampler at a time: the background service keeps recording with
+        // the app closed, so when it starts the in-app poller stays off and
+        // the card picks up its batches on a poll timer instead. Foreground
+        // sampling is the fallback when background is unavailable.
+        background = await LocationService.startBackground(interval);
+        if (!mounted) return;
+        if (background) {
+          _startPendingPoll(interval, trackingCubit);
+        } else {
+          LocationService.startForegroundSampling(
+            intervalMinutes: interval,
+            onTick: () async {
+              final point = await samplePosition();
+              if (point == null || trackingCubit.isClosed) return;
+              try {
+                trackingCubit.addPoint(point);
+              } catch (_) {}
+            },
+          );
+        }
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
