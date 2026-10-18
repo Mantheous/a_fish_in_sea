@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../nodes/bloc/node_cubit.dart';
+import '../../nodes/service/node_calendar.dart';
+import '../bloc/calendar_cubit.dart';
 import '../model/task_date_range.dart';
 import '../model/task_range_bound.dart';
 import '../model/task_filter.dart';
@@ -73,9 +75,21 @@ class _TaskSelectorFormState extends State<TaskSelectorForm> {
       final cubit = context.read<NodeCubit>();
       final now = DateTime.now();
       if (draft.isShowAll) return cubit.openNodes.length;
+      // Same planned set as the lists: keys of the schedule-tint counts,
+      // so the preview agrees with what the applied view will keep.
+      Set<String>? plannedIds;
+      if (draft.planned != TaskFilterPlanned.all) {
+        try {
+          final events = context.read<CalendarCubit>().state;
+          plannedIds =
+              futureCalendarEntryCounts(cubit.state, events, now).keys.toSet();
+        } catch (_) {
+          // No calendar here: matching falls back to the node's own block.
+        }
+      }
       var count = 0;
       for (final n in cubit.openNodes) {
-        if (draft.matches(n, now)) count++;
+        if (draft.matches(n, now, plannedNodeIds: plannedIds)) count++;
       }
       return count;
     } catch (_) {

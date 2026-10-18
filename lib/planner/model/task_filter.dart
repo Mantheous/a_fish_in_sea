@@ -24,7 +24,10 @@ enum TaskFilterDate {
 enum TaskFilterKind { both, personal, homework }
 
 /// Restriction on calendar planning. [plannedOnly] keeps items with a
-/// calendar block (start + end); [unplannedOnly] keeps items without one.
+/// future, non-all-day calendar entry; [unplannedOnly] keeps items
+/// without one. This is the schedule button's tint condition, fed by the
+/// same source (`futureCalendarEntryCounts` keys), so a tinted clock
+/// always reads as planned and an untinted one as unplanned.
 enum TaskFilterPlanned { all, plannedOnly, unplannedOnly }
 
 DateTime _day(DateTime d) => DateTime(d.year, d.month, d.day);
@@ -141,7 +144,15 @@ class TaskFilter extends Equatable {
       classKeys.isEmpty &&
       planned == TaskFilterPlanned.all;
 
-  bool matches(Node node, DateTime now) {
+  /// True when [node] passes every criterion.
+  ///
+  /// [plannedNodeIds] is the canonical planned set — the keys of
+  /// `futureCalendarEntryCounts` (nodes with a future, non-all-day calendar
+  /// entry; the schedule button tints exactly these). Callers with calendar
+  /// data must pass it so the planned narrows match the tint. Null (standalone
+  /// embeds, previews without a calendar) falls back to node-local data: only
+  /// a future, non-all-day own block counts.
+  bool matches(Node node, DateTime now, {Set<String>? plannedNodeIds}) {
     if (node.status == NodeStatus.open) {
       // Always kept (subject to the criteria below).
     } else if (node.status == NodeStatus.done && showCompleted) {
@@ -167,10 +178,10 @@ class TaskFilter extends Equatable {
       case TaskFilterPlanned.all:
         break;
       case TaskFilterPlanned.plannedOnly:
-        if (!(node.schedule?.hasCalendarBlock ?? false)) return false;
+        if (!_isPlanned(node, now, plannedNodeIds)) return false;
         break;
       case TaskFilterPlanned.unplannedOnly:
-        if (node.schedule?.hasCalendarBlock ?? false) return false;
+        if (_isPlanned(node, now, plannedNodeIds)) return false;
         break;
     }
     if (date == TaskFilterDate.all) return true;
@@ -289,6 +300,24 @@ class TaskFilter extends Equatable {
         planned,
         customRange,
       ];
+}
+
+/// Whether [node] counts as planned for [TaskFilterPlanned]: the schedule
+/// button's tint condition. With [plannedNodeIds] (the canonical set from
+/// `futureCalendarEntryCounts`) membership is the whole answer — the tile
+/// tint and the filter share one source. Without calendar data, fall back
+/// to the node's own block so standalone embeds still behave sensibly.
+bool _isPlanned(Node node, DateTime now, Set<String>? plannedNodeIds) {
+  if (plannedNodeIds != null) return plannedNodeIds.contains(node.id);
+  final schedule = node.schedule;
+  final start = schedule?.start;
+  if (schedule == null ||
+      start == null ||
+      schedule.end == null ||
+      schedule.allDay) {
+    return false;
+  }
+  return start.isAfter(now);
 }
 
 /// The three legacy views as editable presets: All shows everything,

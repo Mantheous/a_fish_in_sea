@@ -43,11 +43,20 @@ class TodoTaskList extends StatelessWidget {
         final nodeCubit = context.read<NodeCubit>();
         final viewOptions = viewOptionsOf(context);
         final now = DateTime.now();
-        final tints = taskTintMap(nodeCubit.state, viewOptions, now);
+        // One calendar pass per build: the counts drive the schedule tint
+        // and, through their key set, the Planned/Unplanned filter — so a
+        // tinted clock always reads as planned.
+        final calendarState = context.watch<CalendarCubit>().state;
+        final upcomingCounts =
+            futureCalendarEntryCounts(nodes, calendarState, now);
+        final plannedIds = upcomingCounts.keys.toSet();
+        final tints = taskTintMap(nodeCubit.state, viewOptions, now,
+            plannedNodeIds: plannedIds);
         var open = applyTaskViewOptions(
           feedCubit.visibleNodes(nodeCubit.openNodes),
           viewOptions,
           now,
+          plannedNodeIds: plannedIds,
         );
         if (open.isEmpty) {
           return viewOptions.isFiltering
@@ -55,10 +64,8 @@ class TodoTaskList extends StatelessWidget {
               : const EmptyTodoList();
         }
         // Precompute once per list build (not per tile): calendar link set,
-        // upcoming-entry counts, feed map, node indexes, and a single `now`.
-        // Tiles receive plain data and use `read` — no per-tile full-state
-        // watches.
-        final calendarState = context.watch<CalendarCubit>().state;
+        // feed map, node indexes, and a single `now`. Tiles receive plain
+        // data and use `read` — no per-tile full-state watches.
         final linkedEventIds = <String>{};
         final linkedTaskIds = <String>{};
         for (final e in calendarState) {
@@ -66,8 +73,6 @@ class TodoTaskList extends StatelessWidget {
           final t = e.taskId;
           if (t != null) linkedTaskIds.add(t);
         }
-        final upcomingCounts =
-            futureCalendarEntryCounts(nodes, calendarState, now);
         final feedById = {for (final f in feedCubit.state) f.id: f};
         final nodeById = {for (final n in nodes) n.id: n};
         final indexes = buildNodeIndexes(nodes);
