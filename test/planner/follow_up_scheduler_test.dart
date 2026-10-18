@@ -139,8 +139,8 @@ void main() {
     final seed = draftCubit.state;
     expect(seed, isNotNull);
     expect(seed!.taskId, 'node:follow2');
-    expect(seed.start, DateTime(dueDay.year, dueDay.month, dueDay.day, 9));
-    expect(seed.end, DateTime(dueDay.year, dueDay.month, dueDay.day, 10));
+    expect(seed.start, DateTime(dueDay.year, dueDay.month, dueDay.day, 12));
+    expect(seed.end, DateTime(dueDay.year, dueDay.month, dueDay.day, 13));
     expect(navigationCubit.state, PlannerPage.calendar);
   });
 }

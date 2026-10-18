@@ -1511,12 +1511,12 @@ class _CalendarPageState extends State<CalendarPage> {
       target = next ?? earliest;
     }
     final schedule = node.schedule;
-    final blockStart = target == null && (schedule?.hasCalendarBlock ?? false)
+    final blockStart = target == null && isSeedableBlock(schedule)
         ? schedule!.start
         : null;
     if (target == null && blockStart == null) {
       // Nothing on the calendar yet: jump straight into a ghost block on
-      // the task's due date (its habitual slot when one is learned)
+      // the task's due date (noon by default, inside the visible hours)
       // instead of asking how to schedule it. The ⋮ menu keeps the full
       // schedule sheet for choosing day vs. time by hand.
       final snap = context.read<SettingsCubit>().state.snapMinutes;
