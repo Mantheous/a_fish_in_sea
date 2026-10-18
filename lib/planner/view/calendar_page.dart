@@ -34,6 +34,7 @@ import 'calendar_projection.dart';
 import 'calendar_filter_sheet.dart';
 import 'calendar_report_lane.dart';
 import 'calendar_side_panel.dart';
+import 'calendar_tile_metrics.dart';
 import 'event_editor.dart';
 import 'feed_manager.dart';
 import 'task_tile_helpers.dart';
@@ -100,6 +101,10 @@ class _CalendarPageState extends State<CalendarPage> {
         timeInterval: const Duration(minutes: 30),
         startHour: startHour,
         endHour: endHour,
+        // Zero-duration events lay out at 0px without this: invisible and
+        // untappable, though they still show in lists and the month agenda.
+        // Every timed tile gets at least the app's minimum event span.
+        minimumAppointmentDuration: minimumTileDuration,
         // Default is 'h a' (e.g. "9 AM"), which renders 9:00 and 9:30
         // identically. Include minutes so each 30-min line is distinct.
         timeFormat: 'h:mm a',
@@ -701,9 +706,11 @@ class _CalendarPageState extends State<CalendarPage> {
         ReportBlockKind.accepted => '$range · accepted',
       };
     }
-    final durationMinutes = event.end.isAfter(event.start)
-        ? event.end.difference(event.start).inSeconds / 60.0
-        : 60.0;
+    // Resize-handle drags convert px → minutes with this span, so it must
+    // match what the tile actually renders: zero-duration events now show
+    // at the visible floor instead of the old 60-minute fallback, which
+    // made their handles move four times too fast.
+    final durationMinutes = tileDuration(event).inSeconds / 60.0;
     final Widget tile = Opacity(
       key: ValueKey('tile:${event.id}'),
       opacity: isDraft ? 0.85 : 1,
