@@ -25,7 +25,17 @@ class CalendarProjection {
   Map<String, List<ReportedEntry>>? _reportSource;
   DateTime? _reportTime;
   List<PlannerEvent> _reportEvents = const [];
+  List<PlannerEvent> _reportLanes = const [];
   Map<String, ReportBlock> reportById = const {};
+  Map<String, Color> reportColorById = const {};
+
+  /// Report blocks per report-lane id: what the lane's tile renders as
+  /// time-positioned chips.
+  Map<String, List<ReportBlock>> reportBlocksByLaneId = const {};
+  bool _laneMode = false;
+  List<DateTime>? _laneDays;
+  double _laneStartHour = 0;
+  double _laneEndHour = 24;
   bool _hasTracking = false;
   List<PlannerEvent>? _shownVisible;
   List<PlannerEvent>? _shownNodes;
@@ -52,6 +62,10 @@ class CalendarProjection {
     required Map<String, List<ReportedEntry>> reports,
     required bool showReports,
     required DateTime now,
+    bool showReportLanes = false,
+    List<DateTime> visibleDays = const <DateTime>[],
+    double visibleStartHour = 0,
+    double visibleEndHour = 24,
     PlannerEvent? draft,
     PlannerEvent? edit,
     PlannerEvent? resize,
@@ -59,6 +73,9 @@ class CalendarProjection {
     final feedsChanged = !identical(feeds, _feedSource);
     final eventsChanged = !identical(events, _eventSource);
     final nodesChanged = !identical(nodes, _nodeSource);
+    // Lane mode needs the visible day(s) to place one report lane per day.
+    // Without them (and in the month view) report blocks stay appointments.
+    final laneMode = showReportLanes && visibleDays.isNotEmpty;
     if (feedsChanged) {
       feedColors = {for (final feed in feeds) feed.id: feed.color};
       remoteEditableFeedIds = {
@@ -112,6 +129,11 @@ class CalendarProjection {
         (!identical(_visible, _reportVisible) ||
             !identical(nodes, _reportNodes) ||
             !identical(reports, _reportSource) ||
+            laneMode != _laneMode ||
+            (laneMode &&
+                (!_sameDays(visibleDays, _laneDays) ||
+                    visibleStartHour != _laneStartHour ||
+                    visibleEndHour != _laneEndHour)) ||
             (_hasTracking &&
                 (_reportTime == null ||
                     now.difference(_reportTime!) >=
@@ -128,12 +150,31 @@ class CalendarProjection {
           reportBlockToDisplayEvent(block, template: byId[block.eventId]),
       ];
       reportById = {for (final block in blocks) block.displayId: block};
+      // Chips live in the lane tile now, so their colors come straight from
+      // the block's template (course/label/feed) instead of the calendar's
+      // colorById, which only covers appointments in `shown`.
+      reportColorById = {
+        for (final event in _reportEvents)
+          event.id: calendarEventColor(event, feedColors),
+      };
+      _rebuildReportLanes(
+        blocks: blocks,
+        days: visibleDays,
+        startHour: visibleStartHour,
+        endHour: visibleEndHour,
+      );
+      _laneMode = laneMode;
+      _laneDays = List<DateTime>.of(visibleDays);
+      _laneStartHour = visibleStartHour;
+      _laneEndHour = visibleEndHour;
       _reportVisible = _visible;
       _reportNodes = nodes;
       _reportSource = reports;
       _reportTime = now;
     }
-    final reportEvents = showReports ? _reportEvents : const <PlannerEvent>[];
+    final reportEvents = !showReports
+        ? const <PlannerEvent>[]
+        : (_laneMode ? _reportLanes : _reportEvents);
     if (identical(_shownVisible, _visible) &&
         identical(_shownNodes, _nodeBlocks) &&
         identical(_shownReports, reportEvents) &&
@@ -197,6 +238,51 @@ class CalendarProjection {
     final leaf = calendarLeafIdForEvent(event, feed);
     return !visibility.isHidden(leaf) &&
         !visibility.isHidden(groupIdForLeaf(leaf, feed));
+  }
+
+  /// One report lane per visible day: a full-day placeholder appointment
+  /// whose tile the calendar page paints as the day's report column. The
+  /// planned events of that day render in the lanes beside it.
+  ///
+  /// Blocks outside the grid's hour range are dropped from the lane (they
+  /// would paint nothing); the lane itself stays so every day in the report
+  /// view reads the same way.
+  void _rebuildReportLanes({
+    required List<ReportBlock> blocks,
+    required List<DateTime> days,
+    required double startHour,
+    required double endHour,
+  }) {
+    if (days.isEmpty) {
+      _reportLanes = const [];
+      reportBlocksByLaneId = const {};
+      return;
+    }
+    final grouped = groupReportBlocksByDay(blocks);
+    final lanes = <PlannerEvent>[];
+    final byLane = <String, List<ReportBlock>>{};
+    for (final visible in days) {
+      final day = DateTime(visible.year, visible.month, visible.day);
+      final lane = buildReportLaneEvent(day);
+      lanes.add(lane);
+      final gridStart = day.add(Duration(minutes: (startHour * 60).round()));
+      final gridEnd = day.add(Duration(minutes: (endHour * 60).round()));
+      byLane[lane.id] = [
+        for (final block in grouped[day] ?? const <ReportBlock>[])
+          if (block.end.isAfter(gridStart) && block.start.isBefore(gridEnd))
+            block,
+      ];
+    }
+    _reportLanes = lanes;
+    reportBlocksByLaneId = byLane;
+  }
+
+  bool _sameDays(List<DateTime> days, List<DateTime>? previous) {
+    if (previous == null || days.length != previous.length) return false;
+    for (var i = 0; i < days.length; i++) {
+      if (days[i] != previous[i]) return false;
+    }
+    return true;
   }
 }
 

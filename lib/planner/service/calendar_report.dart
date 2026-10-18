@@ -45,6 +45,21 @@ ReportedEntry? findReportEntryForEvent(
   return fallback;
 }
 
+/// Finds the manual entry a report display id points at
+/// (`report:<entryId>`). Timer and live ids carry their event id instead,
+/// so those lookups come back null here.
+ReportedEntry? findReportEntryByDisplayId(
+  Map<String, List<ReportedEntry>> reportsByDay,
+  String displayId,
+) {
+  for (final entries in reportsByDay.values) {
+    for (final entry in entries) {
+      if ('report:${entry.id}' == displayId) return entry;
+    }
+  }
+  return null;
+}
+
 /// Builds a new manual report entry seeded from a task-event's planned
 /// (or already timer-logged) time. The id reuses the auto-report scheme
 /// (`rep:<eventId>`) so saving it via [ReportingCubit.upsertEntry] cleanly
@@ -138,27 +153,31 @@ List<ReportBlock> buildReportBlocks({
       if (end.difference(liveStart) < const Duration(minutes: 1)) {
         end = liveStart.add(const Duration(minutes: 1));
       }
-      blocks.add(ReportBlock(
-        displayId: 'report:live:${event.id}',
-        title: event.subject,
-        start: liveStart,
-        end: end,
-        kind: ReportBlockKind.live,
-        eventId: event.id,
-      ));
+      blocks.add(
+        ReportBlock(
+          displayId: 'report:live:${event.id}',
+          title: event.subject,
+          start: liveStart,
+          end: end,
+          kind: ReportBlockKind.live,
+          eventId: event.id,
+        ),
+      );
       continue;
     }
 
     final reported = _reportedInterval(event, linked);
     if (reported != null) {
-      blocks.add(ReportBlock(
-        displayId: 'report:timer:${event.id}',
-        title: event.subject,
-        start: reported.start,
-        end: reported.end,
-        kind: ReportBlockKind.timer,
-        eventId: event.id,
-      ));
+      blocks.add(
+        ReportBlock(
+          displayId: 'report:timer:${event.id}',
+          title: event.subject,
+          start: reported.start,
+          end: reported.end,
+          kind: ReportBlockKind.timer,
+          eventId: event.id,
+        ),
+      );
       continue;
     }
 
@@ -168,16 +187,18 @@ List<ReportBlock> buildReportBlocks({
         final end = entry.end.isAfter(entry.start)
             ? entry.end
             : entry.start.add(const Duration(hours: 1));
-        blocks.add(ReportBlock(
-          displayId: 'report:${entry.id}',
-          title: entry.title,
-          start: entry.start,
-          end: end,
-          kind: ReportBlockKind.accepted,
-          eventId: event.id,
-          entryId: entry.id,
-          status: entry.status,
-        ));
+        blocks.add(
+          ReportBlock(
+            displayId: 'report:${entry.id}',
+            title: entry.title,
+            start: entry.start,
+            end: end,
+            kind: ReportBlockKind.accepted,
+            eventId: event.id,
+            entryId: entry.id,
+            status: entry.status,
+          ),
+        );
       }
     }
   }
@@ -202,14 +223,16 @@ List<ReportBlock> buildReportBlocks({
       if (end.difference(liveStart) < const Duration(minutes: 1)) {
         end = liveStart.add(const Duration(minutes: 1));
       }
-      blocks.add(ReportBlock(
-        displayId: 'report:live:${node.id}',
-        title: node.title,
-        start: liveStart,
-        end: end,
-        kind: ReportBlockKind.live,
-        eventId: null,
-      ));
+      blocks.add(
+        ReportBlock(
+          displayId: 'report:live:${node.id}',
+          title: node.title,
+          start: liveStart,
+          end: end,
+          kind: ReportBlockKind.live,
+          eventId: null,
+        ),
+      );
       continue;
     }
     final actualStart = node.actualStart;
@@ -219,14 +242,16 @@ List<ReportBlock> buildReportBlocks({
       if (!end.isAfter(actualStart)) {
         end = actualStart.add(const Duration(minutes: 1));
       }
-      blocks.add(ReportBlock(
-        displayId: 'report:timer:${node.id}',
-        title: node.title,
-        start: actualStart,
-        end: end,
-        kind: ReportBlockKind.timer,
-        eventId: null,
-      ));
+      blocks.add(
+        ReportBlock(
+          displayId: 'report:timer:${node.id}',
+          title: node.title,
+          start: actualStart,
+          end: end,
+          kind: ReportBlockKind.timer,
+          eventId: null,
+        ),
+      );
     }
   }
 
@@ -234,15 +259,17 @@ List<ReportBlock> buildReportBlocks({
     final end = entry.end.isAfter(entry.start)
         ? entry.end
         : entry.start.add(const Duration(hours: 1));
-    blocks.add(ReportBlock(
-      displayId: 'report:${entry.id}',
-      title: entry.title,
-      start: entry.start,
-      end: end,
-      kind: ReportBlockKind.accepted,
-      entryId: entry.id,
-      status: entry.status,
-    ));
+    blocks.add(
+      ReportBlock(
+        displayId: 'report:${entry.id}',
+        title: entry.title,
+        start: entry.start,
+        end: end,
+        kind: ReportBlockKind.accepted,
+        entryId: entry.id,
+        status: entry.status,
+      ),
+    );
   }
 
   blocks.sort((a, b) => a.start.compareTo(b.start));
@@ -297,4 +324,62 @@ PlannerEvent reportBlockToDisplayEvent(
     classLabel: template?.classLabel,
     colorValue: template?.colorValue,
   );
+}
+
+/// Id prefix of the invisible full-day appointment that claims the first
+/// lane of a day column in the Plan + Report view, so the report blocks get
+/// a column of their own instead of every planned tile being cut in half.
+const String reportLaneIdPrefix = 'reportlane:';
+
+bool isReportLaneId(String id) => id.startsWith(reportLaneIdPrefix);
+
+String reportLaneIdForDay(DateTime day) {
+  final month = day.month.toString().padLeft(2, '0');
+  final dayOfMonth = day.day.toString().padLeft(2, '0');
+  return '$reportLaneIdPrefix${day.year}-$month-$dayOfMonth';
+}
+
+/// The day a report-lane id stands for, or null when [id] is not a lane id.
+DateTime? reportLaneDayOf(String id) {
+  if (!isReportLaneId(id)) return null;
+  final parts = id.substring(reportLaneIdPrefix.length).split('-');
+  if (parts.length != 3) return null;
+  final year = int.tryParse(parts[0]);
+  final month = int.tryParse(parts[1]);
+  final day = int.tryParse(parts[2]);
+  if (year == null || month == null || day == null) return null;
+  final parsed = DateTime(year, month, day);
+  // DateTime normalizes overflow (2026-13-45 rolls into 2027); only accept
+  // a canonical date so a stray id can never invent a day.
+  if (parsed.year != year || parsed.month != month || parsed.day != day) {
+    return null;
+  }
+  return parsed;
+}
+
+/// A full-day placeholder appointment. It never renders as an event: the
+/// calendar page's appointment builder turns its tile into the report lane
+/// (background + time-positioned report chips). Being an appointment is the
+/// point — Syncfusion's layout engine then places every planned event of
+/// that day beside it instead of on top of the reports.
+PlannerEvent buildReportLaneEvent(DateTime day) => PlannerEvent(
+  id: reportLaneIdForDay(day),
+  subject: '',
+  start: DateTime(day.year, day.month, day.day),
+  end: DateTime(day.year, day.month, day.day, 23, 59, 59),
+);
+
+/// Groups report blocks by the calendar day they start on, keyed by
+/// midnight of that day. A block that crosses midnight stays with the day
+/// it started on so it renders in one lane.
+Map<DateTime, List<ReportBlock>> groupReportBlocksByDay(
+  List<ReportBlock> blocks,
+) {
+  final grouped = <DateTime, List<ReportBlock>>{};
+  for (final block in blocks) {
+    final start = block.start;
+    final day = DateTime(start.year, start.month, start.day);
+    grouped.putIfAbsent(day, () => []).add(block);
+  }
+  return grouped;
 }

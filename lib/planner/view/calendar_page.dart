@@ -33,12 +33,14 @@ import '../service/event_reminders.dart';
 import 'calendar_data_source.dart';
 import 'calendar_projection.dart';
 import 'calendar_filter_sheet.dart';
+import 'calendar_report_lane.dart';
 import 'calendar_side_panel.dart';
 import 'event_editor.dart';
 import 'feed_manager.dart';
 import 'tasks_panel.dart';
 
 const double _wideBreakpoint = 720;
+
 /// Wide desktops land on the calendar with the task panel open; smaller
 /// (but still wide) windows stay calendar-first until the panel is opened.
 const double _panelDefaultBreakpoint = 1080;
@@ -60,12 +62,15 @@ class _CalendarPageState extends State<CalendarPage> {
   final CalendarController _controller = CalendarController();
   CalendarView _view = platformDefaultCalendarView;
   String? _selectedEventId;
+
   /// What the side panel shows while open. [CalendarPanelMode.tasks] with
   /// nothing selected is the panel's resting state.
   CalendarPanelMode _panelMode = CalendarPanelMode.tasks;
+
   /// Whether the side panel (wide screens only) is shown.
   bool _panelOpen = false;
   bool _appliedPanelDefault = false;
+
   /// True when a pending draft was claimed as the page mounted (the user
   /// navigated here from Tasks → Pick time on calendar): saving it returns
   /// to Tasks. Seeds arriving while the page is already open (the side
@@ -115,6 +120,7 @@ class _CalendarPageState extends State<CalendarPage> {
       _suppressTap = false;
     });
   }
+
   PlannerEvent? _resizePreview;
   // Live preview of the event being edited in the side drawer: the edit
   // form owns its time/label state until Save, so without this the tile
@@ -127,8 +133,7 @@ class _CalendarPageState extends State<CalendarPage> {
   bool _ignoreNativeDragEnd = false;
   bool _isDragging = false;
 
-  bool get _isWide =>
-      MediaQuery.of(context).size.width >= _wideBreakpoint;
+  bool get _isWide => MediaQuery.of(context).size.width >= _wideBreakpoint;
   bool _appliedNarrowDefault = false;
 
   @override
@@ -136,6 +141,7 @@ class _CalendarPageState extends State<CalendarPage> {
     super.initState();
     _view = context.read<SettingsCubit>().state.defaultCalendarView;
     _controller.view = _view;
+    _controller.addPropertyChangedListener(_onCalendarControllerChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final pending = context.read<CalendarDraftCubit>().takePending();
@@ -159,8 +165,7 @@ class _CalendarPageState extends State<CalendarPage> {
     }
     if (!_appliedPanelDefault) {
       _appliedPanelDefault = true;
-      _panelOpen =
-          MediaQuery.of(context).size.width >= _panelDefaultBreakpoint;
+      _panelOpen = MediaQuery.of(context).size.width >= _panelDefaultBreakpoint;
     }
   }
 
@@ -168,9 +173,34 @@ class _CalendarPageState extends State<CalendarPage> {
   void dispose() {
     _liveTicker?.cancel();
     _suppressTimer?.cancel();
+    _controller.removePropertyChangedListener(_onCalendarControllerChanged);
     _dataSource?.dispose();
     _controller.dispose();
     super.dispose();
+  }
+
+  /// Navigation happens inside SfCalendar (header arrows, swipes): the
+  /// controller tells us the display date moved, and the report lanes must
+  /// follow it. Deferred to the frame's end — the controller can also be
+  /// updated from inside the calendar's own build.
+  void _onCalendarControllerChanged(String property) {
+    if (!_sideBySide || _view == CalendarView.month) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  /// The days the report lanes must cover: what the calendar shows right
+  /// now — the display date in the day view, its Sunday-start week in the
+  /// week view. Lanes only exist while the Plan + Report view is on and a
+  /// time-slot grid is visible (the month view keeps its agenda chips).
+  List<DateTime> _visibleDaysForLane() {
+    final display = _controller.displayDate ?? DateTime.now();
+    final day = DateTime(display.year, display.month, display.day);
+    if (_view == CalendarView.day) return [day];
+    // firstDayOfWeek is 7 (Sunday): back up to the week's first day.
+    final start = day.subtract(Duration(days: day.weekday % 7));
+    return [for (var i = 0; i < 7; i++) start.add(Duration(days: i))];
   }
 
   @override
@@ -197,103 +227,194 @@ class _CalendarPageState extends State<CalendarPage> {
         }
       },
       child: Scaffold(
-      appBar: AppBar(
-        title: const Text('Calendar'),
-        actions: [
-          if (_isWide)
-            IconButton(
-              tooltip: panelVisible ? 'Hide side panel' : 'Show tasks panel',
-              isSelected: panelVisible,
-              icon: const Icon(Icons.view_sidebar_outlined),
-              selectedIcon: const Icon(Icons.view_sidebar),
-              onPressed: _togglePanel,
-            ),
-          Builder(
-            builder: (buttonContext) {
-              final hasHidden = buttonContext.watch<CalendarVisibilityCubit>()
-                  .state
-                  .hasHidden;
-              return Badge(
-                isLabelVisible: hasHidden,
-                child: IconButton(
-                  tooltip: 'Calendars',
-                  icon: const Icon(Icons.layers_outlined),
-                  onPressed: () => showCalendarFilterSheet(buttonContext),
-                ),
-              );
-            },
-          ),
-          IconButton(
-            tooltip: 'Manage classes',
-            icon: const Icon(Icons.sync),
-            onPressed: () => showFeedManager(context),
-          ),
-          const UndoRedoActions(),
-        ],
-      ),
-      drawer: const AppDrawer(),
-      // The panel owns the right edge: with a task list up, the Event button
-      // floats over the calendar pane instead (Stack below); while a form is
-      // open it steps aside so it can't swallow Add/Save taps.
-      floatingActionButton: panelVisible ? null : addEventFab,
-      body: Column(
-        children: [
-          if (compactHeader)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-              child: Row(
-                children: [
-                  Expanded(
-                    flex: 3,
-                    child: SegmentedButton<CalendarView>(
-                      segments: const [
-                        ButtonSegment(
-                          value: CalendarView.day,
-                          icon: Icon(Icons.view_day),
-                          tooltip: 'Day (tap again for today)',
-                        ),
-                        ButtonSegment(
-                          value: CalendarView.week,
-                          icon: Icon(Icons.view_column),
-                          tooltip: 'Week (tap again for today)',
-                        ),
-                        ButtonSegment(
-                          value: CalendarView.month,
-                          icon: Icon(Icons.calendar_view_month),
-                          tooltip: 'Month (tap again for today)',
-                        ),
-                      ],
-                      selected: {_view},
-                      emptySelectionAllowed: true,
-                      showSelectedIcon: false,
-                      style: const ButtonStyle(
-                        visualDensity: VisualDensity.compact,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      onSelectionChanged: (selection) {
-                        if (selection.isEmpty || selection.first == _view) {
-                          _goToToday();
-                        } else {
-                          setState(() => _view = selection.first);
-                          _controller.view = _view;
-                        }
-                      },
-                    ),
+        appBar: AppBar(
+          title: const Text('Calendar'),
+          actions: [
+            if (_isWide)
+              IconButton(
+                tooltip: panelVisible ? 'Hide side panel' : 'Show tasks panel',
+                isSelected: panelVisible,
+                icon: const Icon(Icons.view_sidebar_outlined),
+                selectedIcon: const Icon(Icons.view_sidebar),
+                onPressed: _togglePanel,
+              ),
+            Builder(
+              builder: (buttonContext) {
+                final hasHidden = buttonContext
+                    .watch<CalendarVisibilityCubit>()
+                    .state
+                    .hasHidden;
+                return Badge(
+                  isLabelVisible: hasHidden,
+                  child: IconButton(
+                    tooltip: 'Calendars',
+                    icon: const Icon(Icons.layers_outlined),
+                    onPressed: () => showCalendarFilterSheet(buttonContext),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    flex: 2,
+                );
+              },
+            ),
+            IconButton(
+              tooltip: 'Manage classes',
+              icon: const Icon(Icons.sync),
+              onPressed: () => showFeedManager(context),
+            ),
+            const UndoRedoActions(),
+          ],
+        ),
+        drawer: const AppDrawer(),
+        // The panel owns the right edge: with a task list up, the Event button
+        // floats over the calendar pane instead (Stack below); while a form is
+        // open it steps aside so it can't swallow Add/Save taps.
+        floatingActionButton: panelVisible ? null : addEventFab,
+        body: Column(
+          children: [
+            if (compactHeader)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: SegmentedButton<CalendarView>(
+                        segments: const [
+                          ButtonSegment(
+                            value: CalendarView.day,
+                            icon: Icon(Icons.view_day),
+                            tooltip: 'Day (tap again for today)',
+                          ),
+                          ButtonSegment(
+                            value: CalendarView.week,
+                            icon: Icon(Icons.view_column),
+                            tooltip: 'Week (tap again for today)',
+                          ),
+                          ButtonSegment(
+                            value: CalendarView.month,
+                            icon: Icon(Icons.calendar_view_month),
+                            tooltip: 'Month (tap again for today)',
+                          ),
+                        ],
+                        selected: {_view},
+                        emptySelectionAllowed: true,
+                        showSelectedIcon: false,
+                        style: const ButtonStyle(
+                          visualDensity: VisualDensity.compact,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        onSelectionChanged: (selection) {
+                          if (selection.isEmpty || selection.first == _view) {
+                            _goToToday();
+                          } else {
+                            setState(() => _view = selection.first);
+                            _controller.view = _view;
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 2,
+                      child: SegmentedButton<bool>(
+                        segments: const [
+                          ButtonSegment(
+                            value: false,
+                            icon: Icon(Icons.calendar_month),
+                            tooltip: 'Plans',
+                          ),
+                          ButtonSegment(
+                            value: true,
+                            icon: Icon(Icons.fact_check),
+                            tooltip: 'Plan + Report',
+                          ),
+                        ],
+                        selected: {_sideBySide},
+                        showSelectedIcon: false,
+                        style: const ButtonStyle(
+                          visualDensity: VisualDensity.compact,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        onSelectionChanged: (selection) {
+                          _setSideBySide(selection.first);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 360),
+                          child: SegmentedButton<CalendarView>(
+                            segments: const [
+                              ButtonSegment(
+                                value: CalendarView.day,
+                                icon: Icon(Icons.view_day),
+                                label: Text('Day'),
+                                tooltip: 'Day (tap again for today)',
+                              ),
+                              ButtonSegment(
+                                value: CalendarView.week,
+                                icon: Icon(Icons.view_column),
+                                label: Text('Week'),
+                                tooltip: 'Week (tap again for today)',
+                              ),
+                              ButtonSegment(
+                                value: CalendarView.month,
+                                icon: Icon(Icons.calendar_view_month),
+                                label: Text('Month'),
+                                tooltip: 'Month (tap again for today)',
+                              ),
+                            ],
+                            selected: {_view},
+                            emptySelectionAllowed: true,
+                            showSelectedIcon: false,
+                            style: const ButtonStyle(
+                              visualDensity: VisualDensity.compact,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              textStyle: WidgetStatePropertyAll(
+                                TextStyle(fontSize: 13),
+                              ),
+                            ),
+                            onSelectionChanged: (selection) {
+                              if (selection.isEmpty ||
+                                  selection.first == _view) {
+                                _goToToday();
+                              } else {
+                                setState(() => _view = selection.first);
+                                _controller.view = _view;
+                              }
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 360),
                     child: SegmentedButton<bool>(
                       segments: const [
                         ButtonSegment(
                           value: false,
                           icon: Icon(Icons.calendar_month),
-                          tooltip: 'Plans',
+                          label: Text('Plans'),
                         ),
                         ButtonSegment(
                           value: true,
                           icon: Icon(Icons.fact_check),
-                          tooltip: 'Plan + Report',
+                          label: Text('Plan + Report'),
                         ),
                       ],
                       selected: {_sideBySide},
@@ -301,258 +422,185 @@ class _CalendarPageState extends State<CalendarPage> {
                       style: const ButtonStyle(
                         visualDensity: VisualDensity.compact,
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        textStyle: WidgetStatePropertyAll(
+                          TextStyle(fontSize: 13),
+                        ),
                       ),
                       onSelectionChanged: (selection) {
                         _setSideBySide(selection.first);
                       },
                     ),
                   ),
-                ],
-              ),
-            )
-          else ...[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 360),
-                        child: SegmentedButton<CalendarView>(
-                          segments: const [
-                            ButtonSegment(
-                              value: CalendarView.day,
-                              icon: Icon(Icons.view_day),
-                              label: Text('Day'),
-                              tooltip: 'Day (tap again for today)',
-                            ),
-                            ButtonSegment(
-                              value: CalendarView.week,
-                              icon: Icon(Icons.view_column),
-                              label: Text('Week'),
-                              tooltip: 'Week (tap again for today)',
-                            ),
-                            ButtonSegment(
-                              value: CalendarView.month,
-                              icon: Icon(Icons.calendar_view_month),
-                              label: Text('Month'),
-                              tooltip: 'Month (tap again for today)',
-                            ),
-                          ],
-                          selected: {_view},
-                          emptySelectionAllowed: true,
-                          showSelectedIcon: false,
-                          style: const ButtonStyle(
-                            visualDensity: VisualDensity.compact,
-                            tapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
-                            textStyle: WidgetStatePropertyAll(
-                              TextStyle(fontSize: 13),
-                            ),
-                          ),
-                          onSelectionChanged: (selection) {
-                            if (selection.isEmpty || selection.first == _view) {
-                              _goToToday();
-                            } else {
-                              setState(() => _view = selection.first);
-                              _controller.view = _view;
-                            }
-                          },
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 360),
-                  child: SegmentedButton<bool>(
-                    segments: const [
-                      ButtonSegment(
-                        value: false,
-                        icon: Icon(Icons.calendar_month),
-                        label: Text('Plans'),
-                      ),
-                      ButtonSegment(
-                        value: true,
-                        icon: Icon(Icons.fact_check),
-                        label: Text('Plan + Report'),
-                      ),
-                    ],
-                    selected: {_sideBySide},
-                    showSelectedIcon: false,
-                    style: const ButtonStyle(
-                      visualDensity: VisualDensity.compact,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      textStyle: WidgetStatePropertyAll(
-                        TextStyle(fontSize: 13),
-                      ),
-                    ),
-                    onSelectionChanged: (selection) {
-                      _setSideBySide(selection.first);
-                    },
-                  ),
                 ),
               ),
-            ),
-          ],
-          if (_sideBySide)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-              child: Text(
-                'Left: plan · Right: report (timer logs + accepted '
-                'auto-reports) · red = recording now · ▶ on a tile starts recording',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color:
-                          Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                textAlign: TextAlign.center,
+            ],
+            if (_sideBySide)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                child: Text(
+                  'Each day: reports in their own column on the left, plans '
+                  'beside them · red = recording now · ▶ on a tile starts '
+                  'recording',
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
               ),
+            // Toggl-style running-entry bar: always visible while an event
+            // timer is recording, with elapsed time and Stop.
+            _RecordingBannerSlot(
+              onOpen: (event) {
+                PlannerEvent? live;
+                try {
+                  live = context.read<CalendarCubit>().byId(event.id) ?? event;
+                } catch (_) {
+                  live = event;
+                }
+                _openDetail(live);
+              },
             ),
-          // Toggl-style running-entry bar: always visible while an event
-          // timer is recording, with elapsed time and Stop.
-          _RecordingBannerSlot(
-            onOpen: (event) {
-              PlannerEvent? live;
-              try {
-                live =
-                    context.read<CalendarCubit>().byId(event.id) ?? event;
-              } catch (_) {
-                live = event;
-              }
-              _openDetail(live);
-            },
-          ),
-          Expanded(
-            child: BlocBuilder<CalendarCubit, List<PlannerEvent>>(
-              builder: (context, events) {
-                final sideBySide = _sideBySide;
-                final wide = _isWide;
-                _projection.update(
-                  events: events,
-                  feeds: context.watch<FeedCubit>().state,
-                  visibility: context.watch<CalendarVisibilityCubit>().state,
-                  nodes: context.watch<NodeCubit>().state,
-                  reports: sideBySide
-                      ? context.watch<ReportingCubit>().state
-                      : const <String, List<ReportedEntry>>{},
-                  showReports: sideBySide,
-                  now: DateTime.now(),
-                  draft: wide && _panelMode == CalendarPanelMode.creating
-                      ? _draftEvent : null,
-                  edit: wide && _panelMode == CalendarPanelMode.editing
-                      ? _editPreview : null,
-                  resize: _resizePreview,
-                );
-                final shown = _projection.shown;
-                final feedColors = _projection.feedColors;
-                final colorById = _projection.colorById;
-                final reportById = sideBySide
-                    ? _projection.reportById : const <String, ReportBlock>{};
-                if (_dataSource == null) {
-                  _dataSource = PlannerCalendarDataSource(
+            Expanded(
+              child: BlocBuilder<CalendarCubit, List<PlannerEvent>>(
+                builder: (context, events) {
+                  final sideBySide = _sideBySide;
+                  final wide = _isWide;
+                  final reportLanes = sideBySide && _view != CalendarView.month;
+                  _projection.update(
+                    events: events,
+                    feeds: context.watch<FeedCubit>().state,
+                    visibility: context.watch<CalendarVisibilityCubit>().state,
+                    nodes: context.watch<NodeCubit>().state,
+                    reports: sideBySide
+                        ? context.watch<ReportingCubit>().state
+                        : const <String, List<ReportedEntry>>{},
+                    showReports: sideBySide,
+                    showReportLanes: reportLanes,
+                    visibleDays: reportLanes ? _visibleDaysForLane() : const [],
+                    visibleStartHour: settings.dayStartHour,
+                    visibleEndHour: settings.dayEndHour,
+                    now: DateTime.now(),
+                    draft: wide && _panelMode == CalendarPanelMode.creating
+                        ? _draftEvent
+                        : null,
+                    edit: wide && _panelMode == CalendarPanelMode.editing
+                        ? _editPreview
+                        : null,
+                    resize: _resizePreview,
+                  );
+                  final shown = _projection.shown;
+                  final feedColors = _projection.feedColors;
+                  final colorById = _projection.colorById;
+                  final reportById = sideBySide
+                      ? _projection.reportById
+                      : const <String, ReportBlock>{};
+                  final reportBlocksByLaneId = reportLanes
+                      ? _projection.reportBlocksByLaneId
+                      : const <String, List<ReportBlock>>{};
+                  final reportColorById = reportLanes
+                      ? _projection.reportColorById
+                      : const <String, Color>{};
+                  if (_dataSource == null) {
+                    _dataSource = PlannerCalendarDataSource(
+                      shown,
+                      feedColors,
+                      colorById,
+                    );
+                  } else if (!_dataSource!.matches(
                     shown,
                     feedColors,
                     colorById,
+                  )) {
+                    _dataSource!.update(shown, feedColors, colorById);
+                  }
+                  final calendar = SfCalendar(
+                    controller: _controller,
+                    view: _view,
+                    dataSource: _dataSource!,
+                    firstDayOfWeek: 7,
+                    allowDragAndDrop: true,
+                    allowAppointmentResize: false,
+                    dragAndDropSettings: const DragAndDropSettings(
+                      allowNavigation: true,
+                      allowScroll: true,
+                      autoNavigateDelay: Duration(milliseconds: 500),
+                      showTimeIndicator: true,
+                    ),
+                    appointmentBuilder: (context, details) =>
+                        _appointmentBuilder(
+                          feedColors,
+                          context,
+                          details,
+                          reportById: reportById,
+                          reportBlocksByLaneId: reportBlocksByLaneId,
+                          reportColorById: reportColorById,
+                          laneStartHour: settings.dayStartHour,
+                          laneEndHour: settings.dayEndHour,
+                          colorById: colorById,
+                          remoteEditableFeedIds:
+                              _projection.remoteEditableFeedIds,
+                          nodeById: _projection.nodeById,
+                          nodeByEventId: _projection.nodeByEventId,
+                          trackingNodeIds: _projection.trackingNodeIds,
+                          trackingEventIds: _projection.trackingEventIds,
+                          assigneeLabelById: _projection.assigneeLabelById,
+                        ),
+                    onDragStart: _onDragStart,
+                    onDragEnd: _onDragEnd,
+                    onTap: _onTap,
+                    onViewChanged: _onViewChanged,
+                    monthViewSettings: const MonthViewSettings(
+                      showAgenda: true,
+                      appointmentDisplayMode:
+                          MonthAppointmentDisplayMode.appointment,
+                      agendaItemHeight: 44,
+                    ),
+                    timeSlotViewSettings: _slotSettings(
+                      settings.dayStartHour,
+                      settings.dayEndHour,
+                    ),
+                    todayHighlightColor: Theme.of(context).colorScheme.primary,
+                    headerDateFormat: compactHeader ? 'MMM y' : null,
+                    headerHeight: compactHeader ? 32 : 40,
+                    headerStyle: compactHeader
+                        ? const CalendarHeaderStyle(
+                            textStyle: TextStyle(fontSize: 14),
+                          )
+                        : const CalendarHeaderStyle(),
+                    showNavigationArrow: true,
                   );
-                } else if (!_dataSource!.matches(shown, feedColors, colorById)) {
-                  _dataSource!.update(shown, feedColors, colorById);
-                }
-                final calendar = SfCalendar(
-                  controller: _controller,
-                  view: _view,
-                  dataSource: _dataSource!,
-                  firstDayOfWeek: 7,
-                  allowDragAndDrop: true,
-                  allowAppointmentResize: false,
-                  dragAndDropSettings: const DragAndDropSettings(
-                    allowNavigation: true,
-                    allowScroll: true,
-                    autoNavigateDelay: Duration(milliseconds: 500),
-                    showTimeIndicator: true,
-                  ),
-                  appointmentBuilder: (context, details) =>
-                      _appointmentBuilder(
-                    feedColors,
-                    context,
-                    details,
-                    sideBySide: sideBySide,
-                    reportById: reportById,
-                    colorById: colorById,
-                    remoteEditableFeedIds: _projection.remoteEditableFeedIds,
-                    nodeById: _projection.nodeById,
-                    nodeByEventId: _projection.nodeByEventId,
-                    trackingNodeIds: _projection.trackingNodeIds,
-                    trackingEventIds: _projection.trackingEventIds,
-                    assigneeLabelById: _projection.assigneeLabelById,
-                  ),
-                  onDragStart: _onDragStart,
-                  onDragEnd: _onDragEnd,
-                  onTap: _onTap,
-                  onViewChanged: _onViewChanged,
-                  monthViewSettings: const MonthViewSettings(
-                    showAgenda: true,
-                    appointmentDisplayMode:
-                        MonthAppointmentDisplayMode.appointment,
-                    agendaItemHeight: 44,
-                  ),
-                  timeSlotViewSettings: _slotSettings(
-                    settings.dayStartHour,
-                    settings.dayEndHour,
-                  ),
-                  todayHighlightColor: Theme.of(context).colorScheme.primary,
-                  headerDateFormat: compactHeader ? 'MMM y' : null,
-                  headerHeight: compactHeader ? 32 : 40,
-                  headerStyle: compactHeader
-                      ? const CalendarHeaderStyle(
-                          textStyle: TextStyle(fontSize: 14),
-                        )
-                      : const CalendarHeaderStyle(),
-                  showNavigationArrow: true,
-                );
-                // Keep the calendar at a stable tree position. Opening a
-                // drawer or report hint must not dispose/recreate SfCalendar
-                // and regenerate every appointment (or leave its scheduled
-                // data-source callbacks pointing at a disposed state).
-                final calendarView = Stack(
-                  children: [
-                    calendar,
-                    if (sideBySide && reportById.isEmpty)
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 12,
-                        child: _noReportHint(),
-                      ),
-                    // With the panel open the Event button anchors to the
-                    // calendar pane instead of hovering over the panel.
-                    if (panelVisible && _panelMode == CalendarPanelMode.tasks)
-                      Positioned(
-                        right: 16,
-                        bottom: 16,
-                        child: addEventFab,
-                      ),
-                  ],
-                );
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(child: calendarView),
-                    if (panelVisible) _buildSidePanel(snap),
-                  ],
-                );
-              },
+                  // Keep the calendar at a stable tree position. Opening a
+                  // drawer or report hint must not dispose/recreate SfCalendar
+                  // and regenerate every appointment (or leave its scheduled
+                  // data-source callbacks pointing at a disposed state).
+                  final calendarView = Stack(
+                    children: [
+                      calendar,
+                      if (sideBySide && reportById.isEmpty)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 12,
+                          child: _noReportHint(),
+                        ),
+                      // With the panel open the Event button anchors to the
+                      // calendar pane instead of hovering over the panel.
+                      if (panelVisible && _panelMode == CalendarPanelMode.tasks)
+                        Positioned(right: 16, bottom: 16, child: addEventFab),
+                    ],
+                  );
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(child: calendarView),
+                      if (panelVisible) _buildSidePanel(snap),
+                    ],
+                  );
+                },
+              ),
             ),
-          ),
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }
@@ -561,8 +609,11 @@ class _CalendarPageState extends State<CalendarPage> {
     Map<String, Color> feedColors,
     BuildContext context,
     CalendarAppointmentDetails details, {
-    required bool sideBySide,
     required Map<String, ReportBlock> reportById,
+    Map<String, List<ReportBlock>>? reportBlocksByLaneId,
+    Map<String, Color>? reportColorById,
+    double laneStartHour = 0,
+    double laneEndHour = 24,
     Map<String, Color>? colorById,
     Set<String>? remoteEditableFeedIds,
     Map<String, Node>? nodeById,
@@ -583,15 +634,34 @@ class _CalendarPageState extends State<CalendarPage> {
         ),
       );
     }
-    final raw =
-        details.appointments.isNotEmpty ? details.appointments.first : null;
+    final raw = details.appointments.isNotEmpty
+        ? details.appointments.first
+        : null;
     final event = raw is PlannerEvent ? raw : null;
     if (event == null) return const SizedBox.shrink();
+    // Report lane: the day's left column. Its tile is the lane itself
+    // (background + time-positioned report chips), not an event tile.
+    final laneBlocks = reportBlocksByLaneId?[event.id];
+    if (laneBlocks != null) {
+      return ReportLaneView(
+        blocks: laneBlocks,
+        day: reportLaneDayOf(event.id) ?? event.start,
+        startHour: laneStartHour,
+        endHour: laneEndHour,
+        colorFor: (block) =>
+            reportColorById?[block.displayId] ??
+            const Color(defaultPersonalEventColor),
+        onTap: (block) {
+          // The calendar's own tap handler would otherwise also fire and
+          // treat the lane placeholder as a tapped event.
+          _suppressNextTap();
+          _openReport(block.displayId);
+        },
+      );
+    }
     final report = reportById[event.id];
-    final laneSplit = sideBySide && _view != CalendarView.month;
     final isDraft = event.id == calendarDraftEventId;
-    final baseColor =
-        colorById?[event.id] ?? _eventColor(event, feedColors);
+    final baseColor = colorById?[event.id] ?? _eventColor(event, feedColors);
     var color = isDraft ? baseColor.withValues(alpha: 0.55) : baseColor;
     if (event.isTask && event.done) {
       color = color.withValues(alpha: 0.55);
@@ -613,8 +683,9 @@ class _CalendarPageState extends State<CalendarPage> {
     } else {
       movable = _isMovable(event) && selected;
     }
-    final displaySubject =
-        isDraft && event.subject.trim().isEmpty ? 'New event' : event.subject;
+    final displaySubject = isDraft && event.subject.trim().isEmpty
+        ? 'New event'
+        : event.subject;
     final String timeLabel;
     if (report == null) {
       timeLabel = event.allDay
@@ -634,300 +705,288 @@ class _CalendarPageState extends State<CalendarPage> {
         ? event.end.difference(event.start).inSeconds / 60.0
         : 60.0;
     final Widget tile = Opacity(
+      key: ValueKey('tile:${event.id}'),
       opacity: isDraft ? 0.85 : 1,
       child: Container(
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(6),
-        border: (selected || isDraft)
-            ? Border.all(color: Colors.white, width: 2)
-            : report?.kind == ReportBlockKind.live
-                ? Border.all(
-                    color: const Color(0xFFFF5252),
-                    width: 2,
-                  )
-                : null,
-        boxShadow: selected
-            ? const [
-                BoxShadow(
-                  color: Colors.black38,
-                  blurRadius: 6,
-                  offset: Offset(0, 2),
-                ),
-              ]
-            : null,
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          // details.bounds doesn't always match the rendered box, so all
-          // sizing decisions use the measured height (falling back to the
-          // reported bounds when unbounded).
-          final realHeight = constraints.maxHeight.isFinite
-              ? constraints.maxHeight
-              : details.bounds.height;
-          final showText = realHeight.isInfinite || realHeight >= 20;
-          final showTime = realHeight.isInfinite || realHeight >= 34;
-          final twoLines =
-              realHeight.isInfinite || realHeight >= 58;
-          final maxWidth =
-              constraints.maxWidth.isFinite ? constraints.maxWidth : null;
-          // A 15-min event measures ~15px tall here (40px per 30-min
-          // interval minus the calendar's appointment insets), so the
-          // floor sits just under that: anything shorter can't show two
-          // tappable circles and falls back to the edit form.
-          final showHandles = movable &&
-              !event.allDay &&
-              (realHeight.isInfinite || realHeight >= 12) &&
-              (maxWidth == null || maxWidth >= 48);
-          // Full-size circles need room (both 28px grabs stacked plus the
-          // title row). Below that — e.g. a 15-min event is ~25px at the
-          // 30-min/50px interval — fall back to compact circles so a
-          // shortened event can still be dragged long again. Without this
-          // the handles vanished the moment a drag made the tile short.
-          final compactHandles = showHandles &&
-              !((realHeight.isInfinite || realHeight >= 58) &&
-                  (maxWidth == null || maxWidth >= 96));
-          // Very short tiles can't stack two grabs vertically without the
-          // circles landing on top of each other, so offset them to
-          // opposite corners (start = top-left, end = bottom-right).
-          final tightHandles = compactHandles &&
-              realHeight.isFinite &&
-              realHeight < 40;
-          final pxPerMinute = (realHeight.isFinite ? realHeight : details.bounds.height) /
-              durationMinutes.clamp(1.0, 1440.0);
-          Widget body = Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (report?.kind == ReportBlockKind.live)
-                    const Padding(
-                      padding: EdgeInsets.only(right: 3),
-                      child: Icon(
-                        Icons.fiber_manual_record,
-                        size: 12,
-                        color: Color(0xFFFF5252),
-                      ),
-                    ),
-                  if (report?.kind == ReportBlockKind.timer)
-                    const Padding(
-                      padding: EdgeInsets.only(right: 3),
-                      child: Icon(
-                        Icons.timer_outlined,
-                        size: 12,
-                        color: Colors.white,
-                      ),
-                    ),
-                  if (report?.kind == ReportBlockKind.accepted)
-                    const Padding(
-                      padding: EdgeInsets.only(right: 3),
-                      child: Icon(
-                        Icons.fact_check,
-                        size: 12,
-                        color: Colors.white,
-                      ),
-                    ),
-                  if (isDraft)
-                    const Padding(
-                      padding: EdgeInsets.only(right: 3),
-                      child: Icon(
-                        Icons.edit_calendar,
-                        size: 12,
-                        color: Colors.white,
-                      ),
-                    ),
-                  if (event.isTask)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 1),
-                      child: GestureDetector(
-                        onTapDown: (_) => _suppressNextTap(),
-                        child: IconTheme(
-                          data: const IconThemeData(color: Colors.white),
-                          child: _blockCheckbox(
-                            event: event,
-                            size: 20,
-                            doneColor: Colors.white,
-                            nodeById: nodeById,
-                            nodeByEventId: nodeByEventId,
-                            liveEvent: event,
-                          ),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(6),
+          border: (selected || isDraft)
+              ? Border.all(color: Colors.white, width: 2)
+              : report?.kind == ReportBlockKind.live
+              ? Border.all(color: const Color(0xFFFF5252), width: 2)
+              : null,
+          boxShadow: selected
+              ? const [
+                  BoxShadow(
+                    color: Colors.black38,
+                    blurRadius: 6,
+                    offset: Offset(0, 2),
+                  ),
+                ]
+              : null,
+        ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // details.bounds doesn't always match the rendered box, so all
+            // sizing decisions use the measured height (falling back to the
+            // reported bounds when unbounded).
+            final realHeight = constraints.maxHeight.isFinite
+                ? constraints.maxHeight
+                : details.bounds.height;
+            final showText = realHeight.isInfinite || realHeight >= 20;
+            final showTime = realHeight.isInfinite || realHeight >= 34;
+            final twoLines = realHeight.isInfinite || realHeight >= 58;
+            final maxWidth = constraints.maxWidth.isFinite
+                ? constraints.maxWidth
+                : null;
+            // A 15-min event measures ~15px tall here (40px per 30-min
+            // interval minus the calendar's appointment insets), so the
+            // floor sits just under that: anything shorter can't show two
+            // tappable circles and falls back to the edit form.
+            final showHandles =
+                movable &&
+                !event.allDay &&
+                (realHeight.isInfinite || realHeight >= 12) &&
+                (maxWidth == null || maxWidth >= 48);
+            // Full-size circles need room (both 28px grabs stacked plus the
+            // title row). Below that — e.g. a 15-min event is ~25px at the
+            // 30-min/50px interval — fall back to compact circles so a
+            // shortened event can still be dragged long again. Without this
+            // the handles vanished the moment a drag made the tile short.
+            final compactHandles =
+                showHandles &&
+                !((realHeight.isInfinite || realHeight >= 58) &&
+                    (maxWidth == null || maxWidth >= 96));
+            // Very short tiles can't stack two grabs vertically without the
+            // circles landing on top of each other, so offset them to
+            // opposite corners (start = top-left, end = bottom-right).
+            final tightHandles =
+                compactHandles && realHeight.isFinite && realHeight < 40;
+            final pxPerMinute =
+                (realHeight.isFinite ? realHeight : details.bounds.height) /
+                durationMinutes.clamp(1.0, 1440.0);
+            Widget body = Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (report?.kind == ReportBlockKind.live)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 3),
+                        child: Icon(
+                          Icons.fiber_manual_record,
+                          size: 12,
+                          color: Color(0xFFFF5252),
                         ),
                       ),
-                    ),
-                  Flexible(
-                    child: Text(
-                      displaySubject,
-                      maxLines: twoLines ? 2 : 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        fontStyle:
-                            isDraft ? FontStyle.italic : FontStyle.normal,
-                        decoration: event.isTask && event.done
-                            ? TextDecoration.lineThrough
-                            : null,
-                      ),
-                    ),
-                  ),
-                  if (event.assignees.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 3),
-                      child: Tooltip(
-                        message: assigneeLabelById?[event.id] ??
-                            event.assignees
-                                .map((a) => a.displayName)
-                                .join(', '),
-                        child: const Icon(
-                          Icons.group,
+                    if (report?.kind == ReportBlockKind.timer)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 3),
+                        child: Icon(
+                          Icons.timer_outlined,
                           size: 12,
                           color: Colors.white,
                         ),
                       ),
+                    if (report?.kind == ReportBlockKind.accepted)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 3),
+                        child: Icon(
+                          Icons.fact_check,
+                          size: 12,
+                          color: Colors.white,
+                        ),
+                      ),
+                    if (isDraft)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 3),
+                        child: Icon(
+                          Icons.edit_calendar,
+                          size: 12,
+                          color: Colors.white,
+                        ),
+                      ),
+                    if (event.isTask)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 1),
+                        child: GestureDetector(
+                          onTapDown: (_) => _suppressNextTap(),
+                          child: IconTheme(
+                            data: const IconThemeData(color: Colors.white),
+                            child: _blockCheckbox(
+                              event: event,
+                              size: 20,
+                              doneColor: Colors.white,
+                              nodeById: nodeById,
+                              nodeByEventId: nodeByEventId,
+                              liveEvent: event,
+                            ),
+                          ),
+                        ),
+                      ),
+                    Flexible(
+                      child: Text(
+                        displaySubject,
+                        maxLines: twoLines ? 2 : 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          fontStyle: isDraft
+                              ? FontStyle.italic
+                              : FontStyle.normal,
+                          decoration: event.isTask && event.done
+                              ? TextDecoration.lineThrough
+                              : null,
+                        ),
+                      ),
                     ),
+                    if (event.assignees.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 3),
+                        child: Tooltip(
+                          message:
+                              assigneeLabelById?[event.id] ??
+                              event.assignees
+                                  .map((a) => a.displayName)
+                                  .join(', '),
+                          child: const Icon(
+                            Icons.group,
+                            size: 12,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                if (showTime) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    timeLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white, fontSize: 11),
+                  ),
                 ],
-              ),
-              if (showTime) ...[
-                const SizedBox(height: 2),
-                Text(
-                  timeLabel,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                  ),
-                ),
               ],
-            ],
-          );
-          // Belt and braces: never let text overflow a cramped box.
-          if (maxWidth != null) {
-            body = SizedBox(
-              width: maxWidth,
-              height: realHeight.isFinite ? realHeight : null,
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.topLeft,
-                child: SizedBox(width: maxWidth, child: body),
-              ),
             );
-          }
-          return Stack(
-            // Hard edge: nothing (badge, handles) may paint outside the
-            // tile. With Clip.none a 28px badge on a ~20px 15-min tile
-            // overflowed onto the empty grid and read as a floating ▶
-            // disconnected from any event.
-            clipBehavior: Clip.hardEdge,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
-                child: showText ? body : const SizedBox.shrink(),
-              ),
-              if (showHandles)
-                // Narrow grab area centered on the visible circle: a
-                // full-width strip would swallow taps on the header row
-                // (title, checkbox, play button) whenever handles show.
-                // Compact tiles use a slimmer strip so the smaller circle
-                // stays clear of the title on narrow week columns.
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: Center(
-                    child: SizedBox(
-                      width: compactHandles ? 40 : 48,
-                      child: _resizeHandle(
-                        top: true,
-                        event: event,
-                        color: baseColor,
-                        pxPerMinute: pxPerMinute,
-                        compact: compactHandles,
-                        tight: tightHandles,
+            // Belt and braces: never let text overflow a cramped box.
+            if (maxWidth != null) {
+              body = SizedBox(
+                width: maxWidth,
+                height: realHeight.isFinite ? realHeight : null,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.topLeft,
+                  child: SizedBox(width: maxWidth, child: body),
+                ),
+              );
+            }
+            return Stack(
+              // Hard edge: nothing (badge, handles) may paint outside the
+              // tile. With Clip.none a 28px badge on a ~20px 15-min tile
+              // overflowed onto the empty grid and read as a floating ▶
+              // disconnected from any event.
+              clipBehavior: Clip.hardEdge,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
+                  child: showText ? body : const SizedBox.shrink(),
+                ),
+                if (showHandles)
+                  // Narrow grab area centered on the visible circle: a
+                  // full-width strip would swallow taps on the header row
+                  // (title, checkbox, play button) whenever handles show.
+                  // Compact tiles use a slimmer strip so the smaller circle
+                  // stays clear of the title on narrow week columns.
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: SizedBox(
+                        width: compactHandles ? 40 : 48,
+                        child: _resizeHandle(
+                          top: true,
+                          event: event,
+                          color: baseColor,
+                          pxPerMinute: pxPerMinute,
+                          compact: compactHandles,
+                          tight: tightHandles,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              if (showHandles)
-                Positioned(
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
-                  child: Center(
-                    child: SizedBox(
-                      width: compactHandles ? 40 : 48,
-                      child: _resizeHandle(
-                        top: false,
-                        event: event,
-                        color: baseColor,
-                        pxPerMinute: pxPerMinute,
-                        compact: compactHandles,
-                        tight: tightHandles,
+                if (showHandles)
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: SizedBox(
+                        width: compactHandles ? 40 : 48,
+                        child: _resizeHandle(
+                          top: false,
+                          event: event,
+                          color: baseColor,
+                          pxPerMinute: pxPerMinute,
+                          compact: compactHandles,
+                          tight: tightHandles,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              // Toggl-style one-tap recording badge, pinned top-right so it
-              // never shrinks with the title text and always sits above the
-              // full-size resize handles. Compact handles (short selected
-              // tiles) take priority instead: the badge would bury the
-              // smaller circle — start recording from the open detail view.
-              // Covers timed tiles in day/week views that
-              // are big enough to hold it (28px badge + offsets); smaller
-              // tiles (15-min events, thin side-by-side halves, crowded
-              // overlaps) skip it — an overflowing badge reads as a
-              // floating ▶ disconnected from any tile. Month cells stay
-              // clean (too many tiny tiles to tap reliably).
-              if (report == null &&
-                  !isDraft &&
-                  !event.allDay &&
-                  !isReportDisplayId(event.id) &&
-                  !isNodeBlockId(event.id) &&
-                  !compactHandles &&
-                  _view != CalendarView.month &&
-                  (realHeight.isInfinite || realHeight >= 30) &&
-                  (maxWidth == null || maxWidth >= 36))
-                Positioned(
-                  top: 2,
-                  right: 2,
-                  child: _tilePlayBadge(
-                    event,
-                    backing: _backingNodeFor(
-                      context,
+                // Toggl-style one-tap recording badge, pinned top-right so it
+                // never shrinks with the title text and always sits above the
+                // full-size resize handles. Compact handles (short selected
+                // tiles) take priority instead: the badge would bury the
+                // smaller circle — start recording from the open detail view.
+                // Covers timed tiles in day/week views that
+                // are big enough to hold it (28px badge + offsets); smaller
+                // tiles (15-min events, thin side-by-side halves, crowded
+                // overlaps) skip it — an overflowing badge reads as a
+                // floating ▶ disconnected from any tile. Month cells stay
+                // clean (too many tiny tiles to tap reliably).
+                if (report == null &&
+                    !isDraft &&
+                    !event.allDay &&
+                    !isReportDisplayId(event.id) &&
+                    !isNodeBlockId(event.id) &&
+                    !compactHandles &&
+                    _view != CalendarView.month &&
+                    (realHeight.isInfinite || realHeight >= 30) &&
+                    (maxWidth == null || maxWidth >= 36))
+                  Positioned(
+                    top: 2,
+                    right: 2,
+                    child: _tilePlayBadge(
                       event,
-                      nodeByEventId: nodeByEventId,
-                      nodeById: nodeById,
-                    ),
-                    tracking: _tileTrackingFor(
-                      event,
-                      nodeByEventId: nodeByEventId,
-                      nodeById: nodeById,
-                      trackingNodeIds: trackingNodeIds,
-                      trackingEventIds: trackingEventIds,
+                      backing: _backingNodeFor(
+                        context,
+                        event,
+                        nodeByEventId: nodeByEventId,
+                        nodeById: nodeById,
+                      ),
+                      tracking: _tileTrackingFor(
+                        event,
+                        nodeByEventId: nodeByEventId,
+                        nodeById: nodeById,
+                        trackingNodeIds: trackingNodeIds,
+                        trackingEventIds: trackingEventIds,
+                      ),
                     ),
                   ),
-                ),
-            ],
-          );
-        },
-      ),
+              ],
+            );
+          },
+        ),
       ),
     );
-    if (!laneSplit) return tile;
-    const spacer = Expanded(child: SizedBox.shrink());
-    if (report != null) {
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [spacer, Expanded(child: tile)],
-      );
-    }
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [Expanded(child: tile), spacer],
-    );
+    return tile;
   }
 
   Widget _resizeHandle({
@@ -951,8 +1010,7 @@ class _CalendarPageState extends State<CalendarPage> {
         : (tight ? Alignment.bottomRight : Alignment.bottomCenter);
     return GestureDetector(
       behavior: HitTestBehavior.deferToChild,
-      onVerticalDragStart: (_) =>
-          _onHandleDragStart(event, top, pxPerMinute),
+      onVerticalDragStart: (_) => _onHandleDragStart(event, top, pxPerMinute),
       onVerticalDragUpdate: _onHandleDragUpdate,
       onVerticalDragEnd: (_) => _onHandleDragEnd(),
       onVerticalDragCancel: _onHandleDragCancel,
@@ -968,7 +1026,9 @@ class _CalendarPageState extends State<CalendarPage> {
             right: tight ? 6 : 0,
           ),
           child: Semantics(
-            label: top ? 'Drag to change start time' : 'Drag to change end time',
+            label: top
+                ? 'Drag to change start time'
+                : 'Drag to change end time',
             child: Container(
               width: diameter,
               height: diameter,
@@ -1000,6 +1060,7 @@ class _CalendarPageState extends State<CalendarPage> {
 
   bool _isMovable(PlannerEvent event) {
     if (isReportDisplayId(event.id)) return false;
+    if (isReportLaneId(event.id)) return false;
     if (isNodeBlockId(event.id)) return true;
     if (!event.isFromFeed) return event.recurrenceRule.isEmpty;
     if (!mounted) return false;
@@ -1010,6 +1071,7 @@ class _CalendarPageState extends State<CalendarPage> {
   /// per tile per frame.
   bool _isMovableFast(PlannerEvent event, Set<String> remoteEditableFeedIds) {
     if (isReportDisplayId(event.id)) return false;
+    if (isReportLaneId(event.id)) return false;
     if (isNodeBlockId(event.id)) return true;
     if (!event.isFromFeed) return event.recurrenceRule.isEmpty;
     final feedId = event.feedId;
@@ -1053,14 +1115,17 @@ class _CalendarPageState extends State<CalendarPage> {
 
   /// Node backing a calendar event, if any (same triple-match the detail
   /// sheet uses). Null for plain events.
-  Node? _backingNodeFor(BuildContext context, PlannerEvent event,
-      {Map<String, Node>? nodeByEventId, Map<String, Node>? nodeById}) {
+  Node? _backingNodeFor(
+    BuildContext context,
+    PlannerEvent event, {
+    Map<String, Node>? nodeByEventId,
+    Map<String, Node>? nodeById,
+  }) {
     // Fast path: hoisted maps from the outer builder (no watch, O(1)).
     if (nodeByEventId != null) {
-      final hit = nodeByEventId[event.id] ??
-          (event.taskId == null
-              ? null
-              : nodeByEventId['task:${event.taskId}']);
+      final hit =
+          nodeByEventId[event.id] ??
+          (event.taskId == null ? null : nodeByEventId['task:${event.taskId}']);
       if (hit != null) return hit;
       if (nodeById != null && event.taskId != null) {
         return nodeById[event.taskId];
@@ -1092,10 +1157,9 @@ class _CalendarPageState extends State<CalendarPage> {
     }
     Node? backing;
     if (nodeByEventId != null) {
-      backing = nodeByEventId[event.id] ??
-          (event.taskId == null
-              ? null
-              : nodeByEventId['task:${event.taskId}']);
+      backing =
+          nodeByEventId[event.id] ??
+          (event.taskId == null ? null : nodeByEventId['task:${event.taskId}']);
       backing ??= event.taskId == null ? null : nodeById?[event.taskId!];
     }
     if (backing != null) {
@@ -1156,15 +1220,15 @@ class _CalendarPageState extends State<CalendarPage> {
         node = nodeById?[id] ?? context.read<NodeCubit>().byId(id);
       } catch (_) {}
       if (node != null) {
-        return NodeCheckbox(
-            node: node, size: size, doneColor: doneColor);
+        return NodeCheckbox(node: node, size: size, doneColor: doneColor);
       }
     }
     // Pre-resolve backing from hoisted maps so the checkbox itself needs
     // no cubit subscription (it used to watch both cubits per tile).
     Node? backing;
     if (nodeByEventId != null || nodeById != null) {
-      backing = nodeByEventId?[event.id] ??
+      backing =
+          nodeByEventId?[event.id] ??
           (event.taskId == null
               ? null
               : nodeByEventId?['task:${event.taskId}']) ??
@@ -1202,28 +1266,25 @@ class _CalendarPageState extends State<CalendarPage> {
     if (isNodeBlockId(previous.id)) {
       Node? node;
       try {
-        node = context
-            .read<NodeCubit>()
-            .byId(nodeIdFromBlockId(previous.id));
+        node = context.read<NodeCubit>().byId(nodeIdFromBlockId(previous.id));
       } catch (_) {}
       if (node == null) return;
       final s = node.schedule;
-      context.read<NodeCubit>().updateNode(node.copyWith(
-            schedule: ScheduleFacet(
-              due: s?.due,
-              start: updated.start,
-              end: updated.end,
-              allDay: updated.allDay,
-              isFixed: s?.isFixed ?? false,
-            ),
-          ));
+      context.read<NodeCubit>().updateNode(
+        node.copyWith(
+          schedule: ScheduleFacet(
+            due: s?.due,
+            start: updated.start,
+            end: updated.end,
+            allDay: updated.allDay,
+            isFixed: s?.isFixed ?? false,
+          ),
+        ),
+      );
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(_movedText(updated)),
-          action: SnackBarAction(
-            label: 'Undo',
-            onPressed: undoCubit.undo,
-          ),
+          action: SnackBarAction(label: 'Undo', onPressed: undoCubit.undo),
         ),
       );
       return;
@@ -1240,10 +1301,7 @@ class _CalendarPageState extends State<CalendarPage> {
     messenger.showSnackBar(
       SnackBar(
         content: Text(_movedText(updated)),
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: undoCubit.undo,
-        ),
+        action: SnackBarAction(label: 'Undo', onPressed: undoCubit.undo),
       ),
     );
     if (!previous.isFromFeed) return;
@@ -1258,9 +1316,9 @@ class _CalendarPageState extends State<CalendarPage> {
       } else {
         unawaited(EventReminderService.scheduleReminder(previous));
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error)));
     }
   }
 
@@ -1276,11 +1334,7 @@ class _CalendarPageState extends State<CalendarPage> {
         'open the event to edit it instead.';
   }
 
-  void _onHandleDragStart(
-    PlannerEvent event,
-    bool top,
-    double pxPerMinute,
-  ) {
+  void _onHandleDragStart(PlannerEvent event, bool top, double pxPerMinute) {
     _suppressTap = true;
     _handleOriginal = event;
     _handleTop = top;
@@ -1374,9 +1428,8 @@ class _CalendarPageState extends State<CalendarPage> {
         _panelMode = CalendarPanelMode.detail;
         _editPreview = null;
       }),
-      onEditRequested: () => setState(
-        () => _panelMode = CalendarPanelMode.editing,
-      ),
+      onEditRequested: () =>
+          setState(() => _panelMode = CalendarPanelMode.editing),
       onBack: _backFromPanel,
       onClose: _closeDrawer,
       onReport: _reportEvent,
@@ -1401,15 +1454,15 @@ class _CalendarPageState extends State<CalendarPage> {
     showNodeEditor(context, existing: node);
   }
 
-  void _openDetail(PlannerEvent event) {    if (!_isWide) {
+  void _openDetail(PlannerEvent event) {
+    if (!_isWide) {
       if (_selectedEventId != null) {
         setState(() => _selectedEventId = null);
       }
       showEventDetail(
         context,
         event: event,
-        onReport:
-            event.isTask ? () => _reportEvent(event) : null,
+        onReport: event.isTask ? () => _reportEvent(event) : null,
       );
       return;
     }
@@ -1457,10 +1510,9 @@ class _CalendarPageState extends State<CalendarPage> {
       target = next ?? earliest;
     }
     final schedule = node.schedule;
-    final blockStart =
-        target == null && (schedule?.hasCalendarBlock ?? false)
-            ? schedule!.start
-            : null;
+    final blockStart = target == null && (schedule?.hasCalendarBlock ?? false)
+        ? schedule!.start
+        : null;
     if (target == null && blockStart == null) {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
@@ -1490,13 +1542,10 @@ class _CalendarPageState extends State<CalendarPage> {
     if (_sideBySide == value) return;
     setState(() => _sideBySide = value);
     if (value) {
-      _liveTicker ??= Timer.periodic(
-        const Duration(seconds: 30),
-        (_) {
-          if (!mounted) return;
-          setState(() {});
-        },
-      );
+      _liveTicker ??= Timer.periodic(const Duration(seconds: 30), (_) {
+        if (!mounted) return;
+        setState(() {});
+      });
     } else {
       _liveTicker?.cancel();
       _liveTicker = null;
@@ -1525,8 +1574,7 @@ class _CalendarPageState extends State<CalendarPage> {
       reporting.upsertEntry(day, entry);
     }
     if (!mounted) return;
-    final saved =
-        findReportEntryForEvent(reporting.state, event.id) ?? entry;
+    final saved = findReportEntryForEvent(reporting.state, event.id) ?? entry;
     await showReportedEditor(context, day: day, entry: saved);
   }
 
@@ -1534,12 +1582,10 @@ class _CalendarPageState extends State<CalendarPage> {
     final calendar = context.read<CalendarCubit>();
     ReportedEntry? entry;
     try {
-      final reporting = context.read<ReportingCubit>();
-      for (final entries in reporting.state.values) {
-        for (final e in entries) {
-          if ('report:${e.id}' == displayId) entry = e;
-        }
-      }
+      entry = findReportEntryByDisplayId(
+        context.read<ReportingCubit>().state,
+        displayId,
+      );
     } catch (_) {}
     var eventId = entry?.eventId;
     if (eventId == null) {
@@ -1569,22 +1615,22 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   PlannerEvent _asDraft(PlannerEvent event) => PlannerEvent(
-        id: calendarDraftEventId,
-        subject: event.subject,
-        notes: event.notes,
-        location: event.location,
-        start: event.start,
-        end: event.end,
-        allDay: event.allDay,
-        recurrenceRule: event.recurrenceRule,
-        classLabel: event.classLabel,
-        colorValue: event.colorValue,
-        taskId: event.taskId,
-        isTask: event.isTask,
-        done: event.done,
-        completedAt: event.completedAt,
-        placeId: event.placeId,
-      );
+    id: calendarDraftEventId,
+    subject: event.subject,
+    notes: event.notes,
+    location: event.location,
+    start: event.start,
+    end: event.end,
+    allDay: event.allDay,
+    recurrenceRule: event.recurrenceRule,
+    classLabel: event.classLabel,
+    colorValue: event.colorValue,
+    taskId: event.taskId,
+    isTask: event.isTask,
+    done: event.done,
+    completedAt: event.completedAt,
+    placeId: event.placeId,
+  );
 
   PlannerEvent _initialDraft({
     DateTime? initialDate,
@@ -1602,7 +1648,12 @@ class _CalendarPageState extends State<CalendarPage> {
     if (initialTime != null) {
       start = snapToInterval(
         DateTime(
-            day.year, day.month, day.day, initialTime.hour, initialTime.minute),
+          day.year,
+          day.month,
+          day.day,
+          initialTime.hour,
+          initialTime.minute,
+        ),
         snap,
       );
     } else {
@@ -1611,8 +1662,13 @@ class _CalendarPageState extends State<CalendarPage> {
     var end = initialEndTime == null
         ? start.add(const Duration(hours: 1))
         : snapToInterval(
-            DateTime(day.year, day.month, day.day, initialEndTime.hour,
-                initialEndTime.minute),
+            DateTime(
+              day.year,
+              day.month,
+              day.day,
+              initialEndTime.hour,
+              initialEndTime.minute,
+            ),
             snap,
           );
     if (!end.isAfter(start)) end = start.add(const Duration(hours: 1));
@@ -1639,10 +1695,7 @@ class _CalendarPageState extends State<CalendarPage> {
   }) {
     final draft = seed != null
         ? _asDraft(seed)
-        : _initialDraft(
-            initialDate: initialDate,
-            initialTime: initialTime,
-          );
+        : _initialDraft(initialDate: initialDate, initialTime: initialTime);
     _focusOnDraft(draft.start);
     if (!_isWide) {
       _openSheetCreator(draft);
@@ -1674,12 +1727,13 @@ class _CalendarPageState extends State<CalendarPage> {
     });
     final saved = await showEventEditor(
       context,
-      initialDate:
-          DateTime(draft.start.year, draft.start.month, draft.start.day),
-      initialTime:
-          draft.allDay ? null : TimeOfDay.fromDateTime(draft.start),
-      initialEndTime:
-          draft.allDay ? null : TimeOfDay.fromDateTime(draft.end),
+      initialDate: DateTime(
+        draft.start.year,
+        draft.start.month,
+        draft.start.day,
+      ),
+      initialTime: draft.allDay ? null : TimeOfDay.fromDateTime(draft.start),
+      initialEndTime: draft.allDay ? null : TimeOfDay.fromDateTime(draft.end),
       initialSubject: _draftSeedSubject,
       initialNotes: _draftSeedNotes,
       initialLocation: _draftSeedLocation,
@@ -1781,8 +1835,9 @@ class _CalendarPageState extends State<CalendarPage> {
   /// exists, panel closed when it was deleted while editing.
   void _finishEditing() {
     final id = _selectedEventId;
-    final stillThere =
-        id == null ? null : context.read<CalendarCubit>().byId(id);
+    final stillThere = id == null
+        ? null
+        : context.read<CalendarCubit>().byId(id);
     if (stillThere == null) {
       _closeDrawer();
     } else {
@@ -1801,10 +1856,8 @@ class _CalendarPageState extends State<CalendarPage> {
   /// already open (the side panel's own schedule flow) stay here.
   void _finishCreating({required bool saved}) {
     final taskId = _draftSeedTaskId;
-    final returnsToTasks = _seedFromPageMount &&
-        saved &&
-        taskId != null &&
-        taskId.isNotEmpty;
+    final returnsToTasks =
+        _seedFromPageMount && saved && taskId != null && taskId.isNotEmpty;
     _seedFromPageMount = false;
     if (!mounted) return;
     setState(() {
@@ -1827,6 +1880,9 @@ class _CalendarPageState extends State<CalendarPage> {
           ? details.appointments!.first
           : null;
       if (raw is PlannerEvent && raw.id == calendarDraftEventId) return;
+      // Lane placeholder taps (the empty part of a report column) are not
+      // events; the chips handle their own taps.
+      if (raw is PlannerEvent && isReportLaneId(raw.id)) return;
       if (raw is PlannerEvent && isReportDisplayId(raw.id)) {
         _openReport(raw.id);
         return;
@@ -1926,7 +1982,8 @@ class _CalendarPageState extends State<CalendarPage> {
       final appointment = details.appointment;
       final droppingTime = details.droppingTime;
       if (appointment is PlannerEvent &&
-          isReportDisplayId(appointment.id)) {
+          (isReportDisplayId(appointment.id) ||
+              isReportLaneId(appointment.id))) {
         if (mounted) setState(() {});
         return;
       }
@@ -1941,17 +1998,16 @@ class _CalendarPageState extends State<CalendarPage> {
         }
         return;
       }
-      if (appointment is PlannerEvent &&
-          isNodeBlockId(appointment.id)) {
+      if (appointment is PlannerEvent && isNodeBlockId(appointment.id)) {
         if (droppingTime == null) {
           if (mounted) setState(() {});
           return;
         }
         Node? node;
         try {
-          node = context
-              .read<NodeCubit>()
-              .byId(nodeIdFromBlockId(appointment.id));
+          node = context.read<NodeCubit>().byId(
+            nodeIdFromBlockId(appointment.id),
+          );
         } catch (_) {}
         if (node == null || node.schedule?.hasCalendarBlock != true) {
           if (mounted) setState(() {});
@@ -1982,13 +2038,13 @@ class _CalendarPageState extends State<CalendarPage> {
         }
         return;
       }
-      final event = context.read<CalendarCubit>().byId(appointment.id) ??
-          appointment;
+      final event =
+          context.read<CalendarCubit>().byId(appointment.id) ?? appointment;
       if (!_isMovable(event)) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(_blockedMessage(event))),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(_blockedMessage(event))));
         }
         return;
       }
@@ -2014,9 +2070,7 @@ class _CalendarPageState extends State<CalendarPage> {
       final cubit = context.read<CalendarCubit>();
       final feedCubit = context.read<FeedCubit>();
       final visibility = context.read<CalendarVisibilityCubit>();
-      final feedById = {
-        for (final feed in feedCubit.state) feed.id: feed,
-      };
+      final feedById = {for (final feed in feedCubit.state) feed.id: feed};
       // Set-based visibility (was O(F) byId per event); skip non-recurring
       // up front — only recurring series need occurrence expansion, and
       // expansion is the expensive part of this tap path.
@@ -2042,8 +2096,7 @@ class _CalendarPageState extends State<CalendarPage> {
         final occurrences = cubit.occurrencesOf(event, dayStart, dayEnd);
         if (occurrences.isEmpty) continue;
         final exact = occurrences.any(
-          (o) =>
-              o.hour == tappedDate.hour && o.minute == tappedDate.minute,
+          (o) => o.hour == tappedDate.hour && o.minute == tappedDate.minute,
         );
         if (exact) return event;
         candidates.add(event);
@@ -2052,7 +2105,6 @@ class _CalendarPageState extends State<CalendarPage> {
     }
     return null;
   }
-
 }
 
 /// Watches for a running event timer and shows [_RecordingBanner] while
@@ -2151,21 +2203,18 @@ class _RecordingBannerState extends State<_RecordingBanner> {
                   children: [
                     Text(
                       'Recording · ${_elapsed(startedAt)}',
-                      style: Theme.of(context)
-                          .textTheme
-                          .labelMedium
-                          ?.copyWith(
-                            color: scheme.onErrorContainer,
-                            fontWeight: FontWeight.w700,
-                          ),
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: scheme.onErrorContainer,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                     Text(
                       widget.event.subject,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: scheme.onErrorContainer,
-                          ),
+                        color: scheme.onErrorContainer,
+                      ),
                     ),
                   ],
                 ),
