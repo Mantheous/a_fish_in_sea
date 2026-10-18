@@ -485,7 +485,9 @@ Set<String> ancestorIds(String nodeId, List<Node> all) {
 /// User-built goal-tree nodes: excludes auto-imported homework
 /// ([Node.isHomework]) and personal calendar links (`calendarEventId`).
 /// Those live in Tasks/Calendar; Nodes is the goal tree.
-bool isGoalNode(Node n) => !n.isHomework && n.calendarEventId == null;
+bool isGoalNode(Node n) =>
+    (n.isInstance && n.calendarLink != null) ||
+    (!n.isHomework && n.calendarEventId == null);
 
 /// Goal-tree subset of [all].
 List<Node> goalNodes(List<Node> all) => all.where(isGoalNode).toList();
