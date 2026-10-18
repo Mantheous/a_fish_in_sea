@@ -10,6 +10,7 @@ import '../finances/bloc/transactions_cubit.dart';
 import '../finances/bloc/waterfall_cubit.dart';
 import '../navigation/bloc/navigation_cubit.dart';
 import '../nodes/bloc/node_cubit.dart';
+import '../feedback/feedback_service.dart';
 import '../nodes/model/node.dart';
 import '../planner/bloc/assignment_rules_cubit.dart';
 import '../planner/bloc/assignment_estimates_cubit.dart';
@@ -274,6 +275,33 @@ class DemoCoordinator {
     }
     await Future<void>.delayed(const Duration(milliseconds: 300));
     return DemoData.importBatch(DateTime.now());
+  }
+
+  // ── Demo feedback ────────────────────────────────────────────────
+  //
+  // The feedback endpoints need a signed-in session, so the demo tab shows
+  // seeded read-only reports and never calls the server.
+
+  static ({
+    FeedbackStatus status,
+    List<FeedbackReport> mine,
+    List<FeedbackReport> pending,
+    List<TrustedReporter> trusted,
+  }) demoFeedback() {
+    if (!DemoMode.isActive) {
+      return (
+        status: const FeedbackStatus(),
+        mine: const [],
+        pending: const [],
+        trusted: const [],
+      );
+    }
+    return (
+      status: const FeedbackStatus(),
+      mine: DemoData.demoReports(DateTime.now()),
+      pending: const [],
+      trusted: const [],
+    );
   }
 
   static void _applyStagedItem(

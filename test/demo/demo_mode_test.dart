@@ -1,6 +1,8 @@
+import 'package:a_fish_in_sea/demo/demo_coordinator.dart';
 import 'package:a_fish_in_sea/demo/demo_data.dart';
 import 'package:a_fish_in_sea/demo/demo_mode.dart';
 import 'package:a_fish_in_sea/demo/demo_storage.dart';
+import 'package:a_fish_in_sea/feedback/feedback_service.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
@@ -155,5 +157,53 @@ void main() {
           n.schedule!.due!.isBefore(today)),
       isTrue,
     );
+  });
+
+  test('demo feedback reports are seeded read-only content', () {
+    final now = DateTime.now();
+    final reports = DemoData.demoReports(now);
+    expect(reports.length, 2);
+    expect(reports.every((r) => r.email == DemoMode.demoEmail), isTrue);
+    expect(reports.any((r) => r.kind == 'bug' && r.status == 'filed'), isTrue);
+    expect(
+      reports.any((r) => r.kind == 'feature' && r.status == 'pending'),
+      isTrue,
+    );
+    // Each report parses back through the real fromJson.
+    for (final report in reports) {
+      final parsed = FeedbackReport.fromJson({
+        'id': report.id,
+        'kind': report.kind,
+        'title': report.title,
+        'description': report.description,
+        'device': report.device,
+        'extra': report.extra,
+        'status': report.status,
+        'email': report.email,
+      });
+      expect(parsed.id, report.id);
+      expect(parsed.status, report.status);
+    }
+  });
+
+  test('demoFeedback is empty outside demo mode and seeded inside it', () {
+    expect(DemoMode.isActive, isFalse);
+    final outside = DemoCoordinator.demoFeedback();
+    expect(outside.status.isAdmin, isFalse);
+    expect(outside.mine, isEmpty);
+    expect(outside.pending, isEmpty);
+    expect(outside.trusted, isEmpty);
+
+    DemoMode.isActive = true;
+    try {
+      final inside = DemoCoordinator.demoFeedback();
+      expect(inside.status.isAdmin, isFalse);
+      expect(inside.mine, hasLength(2));
+      expect(inside.pending, isEmpty);
+      expect(inside.trusted, isEmpty);
+    } finally {
+      DemoMode.isActive = false;
+    }
+    expect(DemoMode.isActive, isFalse);
   });
 }

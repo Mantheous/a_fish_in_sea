@@ -5,6 +5,23 @@ import 'package:a_fish_in_sea/sync/sync_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
+/// Serves raw bodies (garbage, empty, or valid JSON) with a fixed status.
+class _RawStubClient extends http.BaseClient {
+  final List<http.Request> requests = [];
+  final List<String> bodies;
+  _RawStubClient(this.bodies);
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    requests.add(request as http.Request);
+    return http.StreamedResponse(
+      Stream.value(utf8.encode(bodies.removeAt(0))),
+      200,
+      headers: {'content-type': 'application/json'},
+      request: request,
+    );
+  }
+}
+
 /// Serves canned pull pages in order and records every request.
 class _StubClient extends http.BaseClient {
   final List<http.Request> requests = [];
@@ -188,5 +205,26 @@ void main() {
         0,
       )),
     );
+  });
+
+  test('apiGet returns null for empty or garbled JSON instead of {}', () async {
+    final stub = _RawStubClient([
+      '',                              // empty body
+      '<html>captive portal</html>',   // proxy HTML
+      'not json at all',               // garbage
+      '{"ok": true}',                  // valid JSON still decodes
+    ]);
+    final client = SyncClient(
+      serverBase: () => 'http://localhost:8000',
+      accessToken: () => 'tok',
+      refreshAccessToken: () async => 'tok',
+      client: stub,
+    );
+
+    expect(await client.apiGet('/api/one'), isNull);
+    expect(await client.apiGet('/api/two'), isNull);
+    expect(await client.apiGet('/api/three'), isNull);
+    expect(await client.apiGet('/api/four'), equals({'ok': true}));
+    expect(stub.requests, hasLength(4));
   });
 }

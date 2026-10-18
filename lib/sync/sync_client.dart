@@ -127,12 +127,16 @@ class SyncClient {
     return h;
   }
 
+  /// Decodes the response body, or returns `null` when it is empty or not
+  /// valid JSON (captive portals and proxies often return HTML instead).
+  /// Callers must treat `null` as "no data" — list endpoints as an empty
+  /// list, map endpoints as an empty map.
   dynamic _decode(http.Response r) {
     dynamic body;
     try {
-      body = r.body.isEmpty ? {} : jsonDecode(r.body);
+      body = r.body.isEmpty ? null : jsonDecode(r.body);
     } catch (_) {
-      body = {};
+      body = null;
     }
     if (r.statusCode >= 400) {
       final msg = body is Map && body['detail'] != null
@@ -207,7 +211,7 @@ class SyncClient {
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({'email': email, 'password': password}),
     ));
-    return Map<String, dynamic>.from(_decode(r) as Map);
+    return Map<String, dynamic>.from((_decode(r) ?? const <String, dynamic>{}));
   }
 
   Future<Map<String, dynamic>> login(String email, String password) async {
@@ -216,7 +220,7 @@ class SyncClient {
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({'email': email, 'password': password}),
     ));
-    return Map<String, dynamic>.from(_decode(r) as Map);
+    return Map<String, dynamic>.from((_decode(r) ?? const <String, dynamic>{}));
   }
 
   Future<Map<String, dynamic>> refresh(String refreshToken) async {
@@ -225,7 +229,7 @@ class SyncClient {
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({'refresh_token': refreshToken}),
     ));
-    return Map<String, dynamic>.from(_decode(r) as Map);
+    return Map<String, dynamic>.from((_decode(r) ?? const <String, dynamic>{}));
   }
 
   /// Best-effort server-side logout: revokes the refresh token so it
@@ -264,8 +268,10 @@ class SyncClient {
       if (collections != null && collections.isNotEmpty) {
         query['collections'] = collections.join(',');
       }
-      final body =
-          Map<String, dynamic>.from(await _getAuthed('/api/v1/sync/pull', query));
+      final body = Map<String, dynamic>.from(
+        await _getAuthed('/api/v1/sync/pull', query) ??
+            const <String, dynamic>{},
+      );
       final changes = (body['changes'] as List? ?? const [])
           .map((e) => SyncRecord.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList();
@@ -306,7 +312,9 @@ class SyncClient {
     for (var i = 0; i < changes.length; i += chunk) {
       final slice = changes.sublist(i, min(i + chunk, changes.length));
       final body = Map<String, dynamic>.from(
-          await _postAuthed('/api/v1/sync/push', {'changes': slice}));
+        await _postAuthed('/api/v1/sync/push', {'changes': slice}) ??
+            const <String, dynamic>{},
+      );
       applied.addAll(
           ((body['applied'] as List? ?? const []).map((e) =>
               SyncRecord.fromJson(Map<String, dynamic>.from(e as Map)))));
@@ -324,7 +332,7 @@ class SyncClient {
 
   Future<Map<String, dynamic>> health() async {
     final r = await _withTimeout(_client.get(Uri.parse('$_base/api/health')));
-    return Map<String, dynamic>.from(_decode(r) as Map);
+    return Map<String, dynamic>.from((_decode(r) ?? const <String, dynamic>{}));
   }
 
   // ── Scoped API tokens (Settings → API tokens) ────────────────────────
@@ -346,8 +354,11 @@ class SyncClient {
     List<String> scopes = const ['sync'],
     bool review = false,
   }) async {
-    final body = Map<String, dynamic>.from(await _postAuthed(
-        '/api/v1/tokens', {'name': name, 'scopes': scopes, 'review': review}));
+    final body = Map<String, dynamic>.from(
+      await _postAuthed(
+              '/api/v1/tokens', {'name': name, 'scopes': scopes, 'review': review}) ??
+          const <String, dynamic>{},
+    );
     return (
       info: ApiToken.fromJson(body),
       token: body['token'] as String? ?? '',
@@ -399,7 +410,8 @@ class SyncClient {
     try {
       final body = await _getAuthed(
           '/api/v1/fetch/snapshot', {'feed_id': feedId});
-      return Map<String, dynamic>.from(body as Map);
+      if (body is! Map) return null;
+      return Map<String, dynamic>.from(body);
     } on SyncException catch (e) {
       if (e.statusCode == 404 || e.statusCode == 401) return null;
       rethrow;
