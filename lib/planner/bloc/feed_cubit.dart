@@ -20,6 +20,13 @@ import '../service/google_calendar_service.dart';
 import '../service/ical_service.dart';
 import 'calendar_cubit.dart';
 
+/// One feed's pending status change while a batched sync is running.
+typedef _FeedStatusPatch = ({
+  DateTime? lastSyncAt,
+  bool clearError,
+  String? error,
+});
+
 class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   final CalendarCubit _calendarCubit;
   final NodeCubit _nodeCubit;
@@ -185,7 +192,8 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   static const String googleReconnectMessage =
       'Google account needs reconnect — open Feeds to reconnect.';
 
-  Future<String?> _pushAndResync(
+  /// Runs one remote write and maps its failure to a user-facing message.
+  Future<String?> _pushRemote(
     String feedId,
     Future<void> Function() push,
   ) async {
@@ -198,8 +206,50 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     } catch (e) {
       return e.toString();
     }
+    return null;
+  }
+
+  /// Push + full feed refetch. Only used when ONE write can change many
+  /// local events (series edits): the write response alone cannot tell us
+  /// how Google re-shaped every other occurrence.
+  Future<String?> _pushAndResync(
+    String feedId,
+    Future<void> Function() push,
+  ) async {
+    final error = await _pushRemote(feedId, push);
+    if (error != null) return error;
     await syncFeed(feedId);
     return null;
+  }
+
+  /// Applies the canonical event returned by a single-event write. The
+  /// response is authoritative for Google-visible fields, so the full feed
+  /// refetch that used to hold the editor's save spinner is not needed.
+  /// Returns the merged local copy.
+  PlannerEvent _applyWriteResult(PlannerEvent saved, PlannerEvent local) {
+    final merged = preserveLocalFieldsOnWrite(saved, local);
+    _calendarCubit.applySyncedEvent(merged);
+    // Defensive: if Google ever answers a write with a different id, keep
+    // one copy rather than leaving the old local row behind.
+    if (saved.id != local.id) {
+      _calendarCubit.removeEventsSilently({local.id});
+    }
+    return merged;
+  }
+
+  /// Removes the local copies of a remotely deleted event (the whole
+  /// series when Google deleted the master).
+  void _removeDeletedLocally(PlannerEvent event, {required bool series}) {
+    if (!series) {
+      _calendarCubit.removeEventsSilently({event.id});
+      return;
+    }
+    final key = seriesKeyFor(event);
+    _calendarCubit.removeEventsSilently({
+      event.id,
+      for (final e in _calendarCubit.state)
+        if (key != null && seriesKeyFor(e) == key) e.id,
+    });
   }
 
   /// Resolves the remote id for a series-wide write. Real Google masters
@@ -226,10 +276,12 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     return null;
   }
 
-  /// Pushes a Google event to the server, then re-syncs the feed so local
-  /// state matches. With [series] true the series master is patched
-  /// (whole series); otherwise the event's own id is patched (for a
-  /// recurring instance that edits just that occurrence).
+  /// Pushes a Google event to the server and applies the returned copy
+  /// locally, preserving local-only fields. Single-event writes never
+  /// refetch the feed; [series] writes do, because one master patch
+  /// re-shapes every occurrence. With [series] true the series master is
+  /// patched (whole series); otherwise the event's own id is patched (for
+  /// a recurring instance that edits just that occurrence).
   /// Returns null on success, else an error message.
   Future<String?> pushEventUpdate(
     PlannerEvent updated, {
@@ -255,18 +307,38 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     if (remoteId == null || remoteId.isEmpty) {
       return 'This event can only be edited locally.';
     }
-    return _pushAndResync(feed.id, () async {
-      await _googleService.updateEvent(
+    if (series) {
+      // A series write re-shapes every other occurrence, which the single
+      // write response cannot describe. Keep the full refetch for this
+      // path; single-event edits apply the response directly.
+      return _pushAndResync(feed.id, () async {
+        await _googleService.updateEvent(
+          calendarId: feed.calendarId!,
+          feedId: feed.id,
+          eventId: remoteId,
+          event: updated,
+          instanceEdit: false,
+        );
+      });
+    }
+    var saved = updated;
+    final error = await _pushRemote(feed.id, () async {
+      saved = await _googleService.updateEvent(
         calendarId: feed.calendarId!,
         feedId: feed.id,
         eventId: remoteId,
         event: updated,
-        instanceEdit: !series && updated.isRecurringInstance,
+        instanceEdit: updated.isRecurringInstance,
       );
     });
+    if (error != null) return error;
+    _applyWriteResult(saved, updated);
+    return null;
   }
 
-  /// Creates [event] on the Google calendar backing [feed], then re-syncs.
+  /// Creates [event] on the Google calendar backing [feed]. The created
+  /// event is applied locally from the write response — no refetch, so the
+  /// editor closes on one round trip.
   /// Returns a record with an error message (null on success) and the
   /// created event as returned by the server.
   Future<({String? error, PlannerEvent? created})> pushEventCreate({
@@ -322,12 +394,13 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     } catch (e) {
       return (error: e.toString(), created: null);
     }
-    await syncFeed(feed.id);
-    return (error: null, created: created);
+    final merged = _applyWriteResult(created, event);
+    return (error: null, created: merged);
   }
 
-  /// Deletes a Google event on the server and re-syncs. With [series] true
-  /// the whole series is deleted, otherwise just that occurrence.
+  /// Deletes a Google event on the server and drops the local copy. With
+  /// [series] true the whole series is deleted, otherwise just that
+  /// occurrence.
   /// Returns null on success, else an error message.
   Future<String?> pushEventDelete(
     PlannerEvent event, {
@@ -354,12 +427,16 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     if (remoteId == null || remoteId.isEmpty) {
       return 'This event can only be deleted locally.';
     }
-    return _pushAndResync(feed.id, () async {
+    final error = await _pushRemote(feed.id, () async {
       await _googleService.deleteEvent(
         calendarId: feed.calendarId!,
         eventId: remoteId,
       );
     });
+    if (error != null) return error;
+    // The refetch that used to remove the local copy is gone; drop it here.
+    _removeDeletedLocally(event, series: series);
+    return null;
   }
 
   /// Fetches the series master for a recurring instance, or null.
@@ -462,15 +539,20 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     }
     isSyncing.value = true;
     _lastAutoSync = DateTime.now();
+    // Status rows (lastSyncAt / lastError) change on every resync. Patch
+    // them in ONE emit at the end: a multi-feed sync must rebuild feed
+    // watchers once, not once per feed.
+    final statusPatches = <String, _FeedStatusPatch>{};
     try {
       for (final feed in feeds) {
-        await _syncOne(feed);
+        await _syncOne(feed, statusPatches);
       }
       // Submitted-in-Canvas homework completes itself. Runs after the
       // iCal import so fresh nodes are covered too; failures never fail
       // the feed sync (reconnect is handled in the classes sheet).
       await _applyCanvasCompletions(feeds);
     } finally {
+      _flushFeedStatuses(statusPatches);
       isSyncing.value = false;
       if (_pendingFeedSyncs.isNotEmpty) {
         final pending = _pendingFeedSyncs.toList();
@@ -480,7 +562,10 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     }
   }
 
-  Future<void> _syncOne(Feed feed) async {
+  Future<void> _syncOne(
+    Feed feed,
+    Map<String, _FeedStatusPatch> statusPatches,
+  ) async {
     try {
       final startedInDemo = DemoMode.isActive;
       final fresh = feed.kind == FeedKind.google
@@ -599,7 +684,8 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
           assignmentRules: assignmentRulesProvider?.call() ?? const [],
         );
       }
-      _updateFeedStatus(
+      _queueFeedStatus(
+        statusPatches,
         feed.id,
         lastSyncAt: DateTime.now(),
         clearError: true,
@@ -608,7 +694,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
       final message = e is GoogleCalendarException && e.needsReconnect
           ? googleReconnectMessage
           : e.toString();
-      _updateFeedStatus(feed.id, error: message);
+      _queueFeedStatus(statusPatches, feed.id, error: message);
     }
   }
 
@@ -813,17 +899,56 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     bool clearError = false,
     String? error,
   }) {
-    emit(
-      state
-          .map((f) => f.id == feedId
-              ? f.copyWith(
-                  lastSyncAt: lastSyncAt,
-                  clearLastError: clearError,
-                  lastError: error,
-                )
-              : f)
-          .toList(),
+    var changed = false;
+    final next = state.map((f) {
+      if (f.id != feedId) return f;
+      final updated = f.copyWith(
+        lastSyncAt: lastSyncAt,
+        clearLastError: clearError,
+        lastError: error,
+      );
+      if (updated != f) changed = true;
+      return updated;
+    }).toList();
+    if (changed) emit(next);
+  }
+
+  /// Records a status change for [feedId] during a batched sync. The last
+  /// patch per feed wins; [_flushFeedStatuses] applies them all at once.
+  void _queueFeedStatus(
+    Map<String, _FeedStatusPatch> patches,
+    String feedId, {
+    DateTime? lastSyncAt,
+    bool clearError = false,
+    String? error,
+  }) {
+    final previous = patches[feedId];
+    patches[feedId] = (
+      lastSyncAt: lastSyncAt ?? previous?.lastSyncAt,
+      clearError: clearError || (previous?.clearError ?? false),
+      error: error ?? previous?.error,
     );
+  }
+
+  void _flushFeedStatuses(Map<String, _FeedStatusPatch> patches) {
+    if (patches.isEmpty) return;
+    var changed = false;
+    final next = <Feed>[];
+    for (final feed in state) {
+      final patch = patches[feed.id];
+      if (patch == null) {
+        next.add(feed);
+        continue;
+      }
+      final updated = feed.copyWith(
+        lastSyncAt: patch.lastSyncAt,
+        clearLastError: patch.clearError,
+        lastError: patch.error,
+      );
+      if (updated != feed) changed = true;
+      next.add(updated);
+    }
+    if (changed) emit(next);
   }
 
   @override

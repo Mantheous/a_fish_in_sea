@@ -213,9 +213,39 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
 
   PlannerEvent? byId(String eventId) => _byIdMap[eventId];
 
+  /// Replaces one feed's events as a silent (non-undoable) sync emit.
+  /// Skips the emit entirely when the feed's events are unchanged: every
+  /// emit resets the calendar data source, so a no-op resync must not
+  /// rebuild the whole calendar.
   void replaceFeedEvents(String feedId, List<PlannerEvent> events) {
+    final current = <String, PlannerEvent>{
+      for (final e in state)
+        if (e.feedId == feedId) e.id: e,
+    };
+    if (current.length == events.length &&
+        events.every((e) => current[e.id] == e)) {
+      return;
+    }
     final kept = state.where((e) => e.feedId != feedId).toList();
     emit([...kept, ...events]);
+  }
+
+  /// Applies the canonical copy of an event returned by a remote write.
+  /// Silent like [replaceFeedEvents]: sync results never enter undo history.
+  void applySyncedEvent(PlannerEvent event) {
+    if (_byIdMap.containsKey(event.id)) {
+      emit([for (final e in state) e.id == event.id ? event : e]);
+    } else {
+      emit([...state, event]);
+    }
+  }
+
+  /// Removes events confirmed deleted on the remote side. Silent for the
+  /// same reason as [applySyncedEvent]; the caller owns any undo record.
+  void removeEventsSilently(Set<String> eventIds) {
+    if (eventIds.isEmpty) return;
+    final next = state.where((e) => !eventIds.contains(e.id)).toList();
+    if (next.length != state.length) emit(next);
   }
 
   void removeFeedEvents(String feedId) {
