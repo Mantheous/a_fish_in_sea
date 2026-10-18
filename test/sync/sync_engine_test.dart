@@ -348,6 +348,7 @@ void main() {
 
     await b.engine.syncNow();
     expect(b.settings.state.ankiConnectHost, 'http://phone-lan:8765');
+    expect(a.settings.state.ankiConnectHost, 'http://desktop:8765');
     expect(b.plaid.state.itemId, 'item-1');
     expect(b.plaid.state.isConnected, isFalse);
 
