@@ -17,7 +17,6 @@ import '../../nodes/service/node_event_sync.dart';
 import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_editor.dart';
 import '../../nodes/view/node_finish_sheet.dart';
-import '../../nodes/view/schedule_sheet.dart';
 import '../../reporting/bloc/reporting_cubit.dart';
 import '../../reporting/model/reported_entry.dart';
 import '../../reporting/view/day_review_screen.dart';
@@ -37,6 +36,7 @@ import 'calendar_report_lane.dart';
 import 'calendar_side_panel.dart';
 import 'event_editor.dart';
 import 'feed_manager.dart';
+import 'task_tile_helpers.dart';
 import 'tasks_panel.dart';
 
 const double _wideBreakpoint = 720;
@@ -1478,8 +1478,9 @@ class _CalendarPageState extends State<CalendarPage> {
   /// Panel task tap: highlights the task's calendar entry, navigating the
   /// calendar to its day, without replacing the task list. The node menu
   /// stays one tap away in the tile's ⋮ menu. Falls back to the node's own
-  /// schedule block; when the task isn't on the calendar yet, points at
-  /// the schedule control instead of failing silently.
+  /// schedule block; a task that isn't on the calendar yet jumps straight
+  /// into a ghost block on its due date instead of asking how to schedule
+  /// it.
   void _selectTaskOnCalendar(Node node) {
     final calendar = context.read<CalendarCubit>();
     PlannerEvent? target;
@@ -1514,20 +1515,18 @@ class _CalendarPageState extends State<CalendarPage> {
         ? schedule!.start
         : null;
     if (target == null && blockStart == null) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: const Text('Not on the calendar yet'),
-            duration: const Duration(seconds: 4),
-            // Action snackbars persist forever by default; this one must go.
-            persist: false,
-            action: SnackBarAction(
-              label: 'Schedule',
-              onPressed: () => showScheduleSheet(context, nodeId: node.id),
-            ),
-          ),
-        );
+      // Nothing on the calendar yet: jump straight into a ghost block on
+      // the task's due date (its habitual slot when one is learned)
+      // instead of asking how to schedule it. The ⋮ menu keeps the full
+      // schedule sheet for choosing day vs. time by hand.
+      final snap = context.read<SettingsCubit>().state.snapMinutes;
+      final seed = draftSeedFromNode(
+        node,
+        estimate: estimateForNode(context, node),
+        snapMinutes: snap,
+      );
+      _seedFromPageMount = false;
+      _openCreator(seed: seed);
       return;
     }
     final start = target?.start ?? blockStart!;
@@ -1832,20 +1831,27 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   /// Finishes the edit form: back to the event's detail when it still
-  /// exists, panel closed when it was deleted while editing.
+  /// exists; when it was just deleted, back to the task list — deleting an
+  /// event must not close the panel. (Narrow screens keep their sheet
+  /// behaviour: the editor sheet dismisses itself.)
   void _finishEditing() {
     final id = _selectedEventId;
     final stillThere = id == null
         ? null
         : context.read<CalendarCubit>().byId(id);
     if (stillThere == null) {
-      _closeDrawer();
-    } else {
       setState(() {
-        _panelMode = CalendarPanelMode.detail;
+        _panelMode = CalendarPanelMode.tasks;
+        _selectedEventId = null;
         _editPreview = null;
+        _clearDraft();
       });
+      return;
     }
+    setState(() {
+      _panelMode = CalendarPanelMode.detail;
+      _editPreview = null;
+    });
   }
 
   /// Closes the create flow and falls back to the panel's task list. When

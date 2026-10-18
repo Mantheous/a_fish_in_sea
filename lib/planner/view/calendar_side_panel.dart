@@ -1,12 +1,23 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../bloc/calendar_cubit.dart';
+import '../bloc/calendar_panel_cubit.dart';
 import '../model/planner_event.dart';
 import 'event_editor.dart';
 
-/// Width of the right-hand side panel on wide screens.
-const double calendarPanelWidth = 360;
+/// Key for the drag handle that resizes the panel.
+const Key calendarPanelResizeHandleKey = Key('calendar-panel-resize-handle');
+
+/// Grab strip at the panel's left edge. Pressing and dragging horizontally
+/// resizes the panel; the strip stays translucent so the few pixels it
+/// overlaps keep receiving taps.
+const double _resizeHandleWidth = 8;
+
+/// Minimum width the calendar keeps beside the panel when sizing.
+const double _minCalendarWidth = 360;
 
 /// What the side panel shows: the task list when nothing is selected, or
 /// the selected event's detail / editor.
@@ -79,74 +90,119 @@ class CalendarSidePanel extends StatelessWidget {
       CalendarPanelMode.editing => 'Edit event',
       CalendarPanelMode.tasks => 'Tasks',
     };
-    return Container(
-      width: calendarPanelWidth,
-      decoration: BoxDecoration(
-        border: Border(left: BorderSide(color: theme.dividerColor)),
-      ),
-      child: Material(
-        color: theme.colorScheme.surface,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(4, 12, 8, 8),
-              child: Row(
-                children: [
-                  if (mode == CalendarPanelMode.tasks)
-                    const SizedBox(width: 8)
-                  else
-                    IconButton(
-                      tooltip: switch (mode) {
-                        CalendarPanelMode.creating => 'Cancel new event',
-                        CalendarPanelMode.editing => 'Back to details',
-                        _ => 'Back to tasks',
-                      },
-                      visualDensity: VisualDensity.compact,
-                      icon: const Icon(Icons.arrow_back),
-                      onPressed: onBack,
-                    ),
-                  Expanded(
-                    child: Text(title, style: theme.textTheme.titleMedium),
-                  ),
-                  IconButton(
-                    tooltip: 'Close panel',
-                    icon: const Icon(Icons.close),
-                    onPressed: onClose,
-                  ),
-                ],
+    final width = _panelWidth(context);
+    return SizedBox(
+      width: width,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                border: Border(left: BorderSide(color: theme.dividerColor)),
               ),
-            ),
-            const Divider(height: 1),
-            if (mode == CalendarPanelMode.detail)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                child: Text(
-                  'Drag the event to move it · drag a circle to resize '
-                  '(snaps to $snapMinutes min) · hold at the edge to turn '
-                  'the page',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
+              child: Material(
+                color: theme.colorScheme.surface,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(4, 12, 8, 8),
+                      child: Row(
+                        children: [
+                          if (mode == CalendarPanelMode.tasks)
+                            const SizedBox(width: 8)
+                          else
+                            IconButton(
+                              tooltip: switch (mode) {
+                                CalendarPanelMode.creating => 'Cancel new event',
+                                CalendarPanelMode.editing => 'Back to details',
+                                _ => 'Back to tasks',
+                              },
+                              visualDensity: VisualDensity.compact,
+                              icon: const Icon(Icons.arrow_back),
+                              onPressed: onBack,
+                            ),
+                          Expanded(
+                            child: Text(title, style: theme.textTheme.titleMedium),
+                          ),
+                          IconButton(
+                            tooltip: 'Close panel',
+                            icon: const Icon(Icons.close),
+                            onPressed: onClose,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    if (mode == CalendarPanelMode.detail)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                        child: Text(
+                          'Drag the event to move it · drag a circle to resize '
+                          '(snaps to $snapMinutes min) · hold at the edge to turn '
+                          'the page',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    Expanded(
+                      // Keep the task list alive while an event is open so its
+                      // scroll position, expansion and selection survive the
+                      // round trip back to Tasks.
+                      child: IndexedStack(
+                        index: mode == CalendarPanelMode.tasks ? 0 : 1,
+                        sizing: StackFit.expand,
+                        children: [
+                          tasksContent,
+                          _buildContent(context),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            Expanded(
-              // Keep the task list alive while an event is open so its
-              // scroll position, expansion and selection survive the
-              // round trip back to Tasks.
-              child: IndexedStack(
-                index: mode == CalendarPanelMode.tasks ? 0 : 1,
-                sizing: StackFit.expand,
-                children: [
-                  tasksContent,
-                  _buildContent(context),
-                ],
-              ),
             ),
-          ],
-        ),
+          ),
+          // Left-edge grab strip: drag to resize, double-click to
+          // reset. Translucent, so the pixels it overlaps keep
+          // receiving taps.
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            child: _PanelResizeHandle(
+              width: width,
+              onResize: (delta) => _resizeBy(context, width, delta),
+            ),
+          ),
+        ],
       ),
     );
+  }
+
+  /// Current panel width: the user's drag (via [CalendarPanelCubit])
+  /// or the default, clamped so the calendar always keeps
+  /// [_minCalendarWidth] beside the panel.
+  double _panelWidth(BuildContext context) {
+    var width = calendarPanelDefaultWidth;
+    try {
+      width = context.watch<CalendarPanelCubit>().state;
+    } catch (_) {}
+    final screen = MediaQuery.sizeOf(context).width;
+    final maxWidth = math.max(
+      calendarPanelMinWidth,
+      math.min(calendarPanelMaxWidth, screen - _minCalendarWidth),
+    );
+    return width.clamp(calendarPanelMinWidth, maxWidth).toDouble();
+  }
+
+  /// Drags left to widen. Without a [CalendarPanelCubit] (standalone
+  /// embeds) the handle stays inert at the default width.
+  void _resizeBy(BuildContext context, double current, double delta) {
+    try {
+      context.read<CalendarPanelCubit>().setWidth(current - delta);
+    } catch (_) {}
   }
 
   Widget _buildContent(BuildContext context) {
@@ -244,6 +300,66 @@ class CalendarSidePanel extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+
+/// The grab strip on the panel's left edge: a resize cursor and a colored
+/// line on hover, horizontal drags resize, double-click resets to the
+/// default width.
+class _PanelResizeHandle extends StatefulWidget {
+  const _PanelResizeHandle({required this.width, required this.onResize});
+
+  final double width;
+  final ValueChanged<double> onResize;
+
+  @override
+  State<_PanelResizeHandle> createState() => _PanelResizeHandleState();
+}
+
+class _PanelResizeHandleState extends State<_PanelResizeHandle> {
+  bool _hovered = false;
+  bool _dragging = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final active = _hovered || _dragging;
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeLeftRight,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        key: calendarPanelResizeHandleKey,
+        behavior: HitTestBehavior.translucent,
+        onHorizontalDragStart: (_) => setState(() => _dragging = true),
+        onHorizontalDragUpdate: (details) => widget.onResize(details.delta.dx),
+        onHorizontalDragEnd: (_) => setState(() => _dragging = false),
+        onHorizontalDragCancel: () => setState(() => _dragging = false),
+        onDoubleTap: () {
+          try {
+            context.read<CalendarPanelCubit>().resetWidth();
+          } catch (_) {}
+        },
+        child: Semantics(
+          label: 'Resize panel',
+          child: SizedBox(
+            width: _resizeHandleWidth,
+            height: double.infinity,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 120),
+                width: active ? 3 : 1,
+                height: double.infinity,
+                color:
+                    active ? theme.colorScheme.primary : Colors.transparent,
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

@@ -5,6 +5,7 @@ import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/view/node_tile.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_draft_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/calendar_panel_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
@@ -14,6 +15,7 @@ import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_page.dart';
+import 'package:a_fish_in_sea/planner/view/calendar_side_panel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -74,6 +76,7 @@ void main() {
     final draftCubit = CalendarDraftCubit();
     final navigationCubit = NavigationCubit();
     final tasksTabCubit = TasksTabCubit();
+    final panelCubit = CalendarPanelCubit();
     final viewOptionsCubit = TasksViewOptionsCubit();
     final feedCubit = FeedCubit(
       calendarCubit: calendarCubit,
@@ -95,6 +98,7 @@ void main() {
       await draftCubit.close();
       await navigationCubit.close();
       await tasksTabCubit.close();
+      await panelCubit.close();
       await viewOptionsCubit.close();
       await feedCubit.close();
     });
@@ -107,6 +111,7 @@ void main() {
           BlocProvider.value(value: calendarCubit),
           BlocProvider.value(value: draftCubit),
           BlocProvider.value(value: tasksTabCubit),
+          BlocProvider.value(value: panelCubit),
           BlocProvider.value(value: viewOptionsCubit),
           BlocProvider(create: (_) => CalendarVisibilityCubit()),
           BlocProvider.value(value: nodeCubit),
@@ -248,19 +253,41 @@ void main() {
     );
   });
 
-  testWidgets('tapping an unscheduled task points at the schedule control',
+  testWidgets('tapping an unscheduled task drops a ghost on its due date',
       (tester) async {
+    final now = DateTime.now();
+    final due = DateTime(now.year, now.month, now.day)
+        .add(const Duration(days: 2));
     await pumpCalendar(
       tester,
-      nodes: [openNode('n1', 'Read a book')],
+      nodes: [
+        Node(
+          id: 'n1',
+          title: 'Problem set 5',
+          createdAt: now,
+          schedule: ScheduleFacet(
+            due: DateTime(due.year, due.month, due.day, 23, 59),
+          ),
+        ),
+      ],
     );
     await tester.pump();
 
-    await tester.tap(panelTile('Read a book'));
-    await tester.pump();
+    await tester.tap(panelTile('Problem set 5'));
+    await tester.pumpAndSettle();
 
-    expect(find.text('Not on the calendar yet'), findsOneWidget);
-    expect(find.text('Event details'), findsNothing);
+    // Straight into the create flow with a ghost — no schedule sheet, no
+    // snackbar detour.
+    expect(find.text('New event'), findsOneWidget);
+    expect(find.textContaining('Ghost preview'), findsOneWidget);
+    expect(find.byIcon(Icons.edit_calendar), findsWidgets);
+    // The ghost (and the calendar) land on the due day.
+    final sfCalendar = tester.widget<SfCalendar>(find.byType(SfCalendar));
+    final display = sfCalendar.controller!.displayDate!;
+    expect(
+      DateTime(display.year, display.month, display.day),
+      DateTime(due.year, due.month, due.day),
+    );
   });
 
   testWidgets('the back arrow leaves an event detail for the task list',
@@ -294,6 +321,41 @@ void main() {
     expect(panelTile('Problem set 5'), findsOneWidget);
   });
 
+  testWidgets('deleting the open event keeps the panel on the task list',
+      (tester) async {
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month, now.day, 10);
+    final seeded = await pumpCalendar(
+      tester,
+      events: [
+        PlannerEvent(
+          id: 'e1',
+          subject: 'Lunch',
+          start: start,
+          end: start.add(const Duration(hours: 1)),
+        ),
+      ],
+    );
+    await tester.pump();
+
+    await tester.tap(find.text('Lunch', findRichText: true).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Edit'));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit event'), findsOneWidget);
+
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+
+    // The event is gone but the panel stays open on the task list.
+    expect(seeded.calendar.byId('e1'), isNull);
+    expect(find.text('Event deleted'), findsOneWidget);
+    expect(find.byType(CalendarSidePanel), findsOneWidget);
+    expect(find.text('Tasks'), findsOneWidget);
+    expect(find.text('Edit event'), findsNothing);
+    expect(find.text('Event details'), findsNothing);
+  });
+
   testWidgets('a draft seeded while the panel is open stays on the calendar',
       (tester) async {
     final seeded = await pumpCalendar(
@@ -318,5 +380,93 @@ void main() {
     expect(seeded.navigation.state, PlannerPage.home);
     expect(find.text('Event details'), findsNothing);
     expect(panelTile('Problem set 5'), findsOneWidget);
+  });
+
+  testWidgets('dragging the panel edge resizes it, with sane bounds',
+      (tester) async {
+    await pumpCalendar(tester, nodes: [openNode('n1', 'Water the plants')]);
+    await tester.pump();
+    final panel = find.byType(CalendarSidePanel);
+    expect(tester.getSize(panel).width, calendarPanelDefaultWidth);
+
+    // Drag the left edge left → wider, clamped at the hard maximum.
+    await tester.drag(
+      find.byKey(calendarPanelResizeHandleKey),
+      const Offset(-600, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getSize(panel).width, calendarPanelMaxWidth);
+
+    // Drag right → narrower, clamped at the minimum.
+    await tester.drag(
+      find.byKey(calendarPanelResizeHandleKey),
+      const Offset(550, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getSize(panel).width, calendarPanelMinWidth);
+  });
+
+  testWidgets('double-clicking the panel edge resets the width',
+      (tester) async {
+    await pumpCalendar(tester, nodes: [openNode('n1', 'Water the plants')]);
+    await tester.pump();
+    final panel = find.byType(CalendarSidePanel);
+
+    await tester.drag(
+      find.byKey(calendarPanelResizeHandleKey),
+      const Offset(-600, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getSize(panel).width, calendarPanelMaxWidth);
+
+    await tester.tap(find.byKey(calendarPanelResizeHandleKey));
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(find.byKey(calendarPanelResizeHandleKey));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(panel).width, calendarPanelDefaultWidth);
+  });
+
+  testWidgets('a dragged width survives closing and reopening the panel',
+      (tester) async {
+    await pumpCalendar(tester, nodes: [openNode('n1', 'Water the plants')]);
+    await tester.pump();
+
+    await tester.drag(
+      find.byKey(calendarPanelResizeHandleKey),
+      const Offset(-600, 0),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Hide side panel'));
+    await tester.pumpAndSettle();
+    expect(find.byType(CalendarSidePanel), findsNothing);
+
+    await tester.tap(find.byTooltip('Show tasks panel'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSize(find.byType(CalendarSidePanel)).width,
+      calendarPanelMaxWidth,
+    );
+  });
+
+  testWidgets('the panel never squeezes the calendar below 360px',
+      (tester) async {
+    // 900px window: the panel starts closed; its maximum is 900-360, so the
+    // calendar always keeps room beside it.
+    await pumpCalendar(
+      tester,
+      size: const Size(900, 800),
+      nodes: [openNode('n1', 'Water the plants')],
+    );
+    await tester.pump();
+    await tester.tap(find.byTooltip('Show tasks panel'));
+    await tester.pumpAndSettle();
+
+    await tester.drag(
+      find.byKey(calendarPanelResizeHandleKey),
+      const Offset(-450, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getSize(find.byType(CalendarSidePanel)).width, 540);
   });
 }

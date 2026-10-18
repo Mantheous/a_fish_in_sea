@@ -15,6 +15,7 @@ import 'package:a_fish_in_sea/navigation/view/home_page.dart';
 import 'package:a_fish_in_sea/nodes/view/nodes_page.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_draft_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/calendar_panel_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
@@ -100,6 +101,7 @@ class MyApp extends StatelessWidget {
         BlocProvider(create: (_) => CalendarVisibilityCubit()),
         BlocProvider(create: (_) => CalendarDraftCubit()),
         BlocProvider(create: (_) => TasksTabCubit()),
+        BlocProvider(create: (_) => CalendarPanelCubit()),
         BlocProvider(create: (_) => SchedulePrefsCubit()),
         BlocProvider(create: (_) => AssignmentRulesCubit()),
         BlocProvider(create: (_) => AssignmentEstimatesCubit(), lazy: false),
