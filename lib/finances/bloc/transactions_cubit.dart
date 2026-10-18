@@ -3,28 +3,85 @@ import 'package:a_fish_in_sea/finances/model/transaction.dart';
 
 /// Manages imported bank transactions from Plaid.
 ///
-/// Transactions are **immutable** once imported — the only mutable
-/// operation is assigning an expense to a transaction for reconciliation.
+/// Plaid-owned fields are refreshed on every import. User reconciliation
+/// fields remain local and are carried across Plaid settlement replacements.
 class TransactionsCubit extends HydratedCubit<List<Transaction>> {
   TransactionsCubit() : super([]);
 
   // ── Import from Plaid ───────────────────────────────────────────────
 
-  /// Bulk import transactions from Plaid, deduplicating by transaction ID.
+  /// Bulk import transactions from Plaid, updating existing IDs and
+  /// superseding pending IDs when Plaid posts their replacement transaction.
   void syncFromPlaid(List<Transaction> plaidTransactions) {
-    final existingIds = state.map((t) => t.id).toSet();
-    final newTransactions =
-        plaidTransactions.where((t) => !existingIds.contains(t.id)).toList();
+    final existingById = {
+      for (final transaction in state) transaction.id: transaction,
+    };
+    final replacedPendingIds = <String>{};
+    final predecessorByReplacementId = <String, Transaction>{};
 
-    if (newTransactions.isNotEmpty) {
-      emit([...state, ...newTransactions]);
+    for (final incoming in plaidTransactions) {
+      final pendingId = incoming.pendingTransactionId;
+      if (pendingId == null) continue;
+      final predecessor = existingById[pendingId];
+      if (predecessor == null ||
+          !predecessor.pending ||
+          predecessor.accountId != incoming.accountId) {
+        continue;
+      }
+      replacedPendingIds.add(pendingId);
+      predecessorByReplacementId[incoming.id] = predecessor;
     }
+
+    final mergedById = <String, Transaction>{
+      for (final transaction in state)
+        if (!replacedPendingIds.contains(transaction.id))
+          transaction.id: transaction,
+    };
+    var changed = replacedPendingIds.isNotEmpty;
+
+    for (final incoming in plaidTransactions) {
+      final current = mergedById[incoming.id];
+      final predecessor = predecessorByReplacementId[incoming.id];
+      final merged = _mergePlaidTransaction(
+        incoming,
+        current: current,
+        predecessor: predecessor,
+      );
+      if (current != merged) changed = true;
+      mergedById[incoming.id] = merged;
+    }
+
+    if (changed) emit(mergedById.values.toList());
+  }
+
+  Transaction _mergePlaidTransaction(
+    Transaction incoming, {
+    Transaction? current,
+    Transaction? predecessor,
+  }) {
+    if (current == null && predecessor == null) return incoming;
+    return Transaction(
+      id: incoming.id,
+      accountId: incoming.accountId,
+      amount: incoming.amount,
+      date: incoming.date,
+      name: incoming.name,
+      category: incoming.category,
+      pending: incoming.pending,
+      pendingTransactionId: incoming.pendingTransactionId,
+      assignedExpenseId: current != null
+          ? current.assignedExpenseId
+          : predecessor?.assignedExpenseId,
+      assignedNodeId:
+          current != null ? current.assignedNodeId : predecessor?.assignedNodeId,
+      tagIds: current != null ? current.tagIds : (predecessor?.tagIds ?? const []),
+    );
   }
 
   // ── Expense assignment ──────────────────────────────────────────────
 
   /// Assign a transaction to an expense for reconciliation.
-  /// This is the only mutation allowed on a transaction.
+  /// Plaid fields remain unchanged while reconciliation metadata is updated.
   void assignExpense(String transactionId, String expenseId) {
     emit(state.map((t) {
       if (t.id == transactionId) {
