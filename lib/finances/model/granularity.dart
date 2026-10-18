@@ -161,29 +161,37 @@ List<LedgerBucket> groupLedgerEntries({
   TimeScale? fixedScale,
 }) {
   final buckets = <LedgerBucket>[];
+  DisplayGranularity? currentGranularity;
+  DateTime? currentStart;
+  var entries = <LedgerEntry>[];
+
+  void finishBucket() {
+    if (currentGranularity == null) return;
+    buckets.add(
+      LedgerBucket(
+        granularity: currentGranularity,
+        bucketStart: currentStart!,
+        entries: entries,
+      ),
+    );
+  }
+
   for (final row in rows) {
     final granularity = fixedScale == null
         ? thresholds.resolveFor(row.date, today)
         : granularityForScale(fixedScale);
     final start = bucketStartFor(granularity, row.date);
-    if (buckets.isNotEmpty) {
-      final last = buckets.last;
-      if (last.granularity == granularity &&
-          last.bucketStart.isAtSameMomentAs(start)) {
-        buckets[buckets.length - 1] = LedgerBucket(
-          granularity: granularity,
-          bucketStart: last.bucketStart,
-          entries: [...last.entries, row],
-        );
-        continue;
-      }
+    if (currentGranularity != granularity || currentStart != start) {
+      finishBucket();
+      currentGranularity = granularity;
+      currentStart = start;
+      entries = <LedgerEntry>[];
     }
-    buckets.add(LedgerBucket(
-      granularity: granularity,
-      bucketStart: start,
-      entries: [row],
-    ));
+    // Append to this run's private buffer. Copying the growing list for
+    // every entry made a large daily/monthly bucket quadratic to group.
+    entries.add(row);
   }
+  finishBucket();
   return buckets;
 }
 
