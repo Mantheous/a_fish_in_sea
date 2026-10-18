@@ -13,7 +13,8 @@ import 'package:a_fish_in_sea/planner/model/task.dart';
 import '../model/node.dart';
 import '../model/node_relations.dart';
 import '../service/event_schedule.dart';
-import '../service/node_feed.dart';
+import '../service/node_feed_import.dart';
+import '../service/node_event_detach.dart';
 import '../service/node_progress.dart';
 import '../service/node_tree_ops.dart';
 
@@ -239,9 +240,9 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         ? (linked.schedule?.due ?? event.start)
         : event.start;
     return linked.copyWith(
-      title: event.subject,
-      notes: hasNotes ? event.notes!.trim() : null,
-      clearNotes: !hasNotes,
+      title: linked.calendarLink != null ? linked.title : event.subject,
+      notes: linked.calendarLink != null ? linked.notes : hasNotes ? event.notes!.trim() : null,
+      clearNotes: linked.calendarLink == null && !hasNotes,
       schedule: scheduleForEvent(event, due: due),
       assignees: event.assignees,
     );
@@ -350,15 +351,13 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   /// any listed event as ONE emit. Pass [silent] to skip the undo
   /// record, exactly like the single version.
   void removeNodesForEventIds(Set<String> eventIds, {bool silent = false}) {
-    if (eventIds.isEmpty) return;
-    final pending = <String, Node>{for (final n in state) n.id: n};
-    final remove = <String>{};
-    for (final eventId in eventIds) {
-      for (final node in _nodesForEventIn(pending, eventId)) {
-        remove.add(node.id);
-      }
+    final next = detachEventNodes(state, eventIds);
+    if (identical(next, state)) return;
+    if (silent) {
+      emitSilent(next);
+    } else {
+      emitChange(next);
     }
-    writeNodes(removeIds: remove, silent: silent);
   }
 
   // ── Queue getters (mirror the old TaskCubit home/queue semantics) ───
@@ -1690,9 +1689,9 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
           ? (linked.schedule?.due ?? event.start)
           : event.start;
       return linked.copyWith(
-        title: event.subject,
-        notes: hasNotes ? event.notes!.trim() : null,
-        clearNotes: !hasNotes,
+        title: linked.calendarLink != null ? linked.title : event.subject,
+        notes: linked.calendarLink != null ? linked.notes : hasNotes ? event.notes!.trim() : null,
+        clearNotes: linked.calendarLink == null && !hasNotes,
         schedule: scheduleForEvent(event, due: due),
         assignees: event.assignees,
       );
@@ -1860,9 +1859,8 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   /// points at a standalone task that must survive un-marking — the event
   /// editor's task-link sync protects it the same way.
   void removeNodesForEvent(String eventId) {
-    final ids = nodesForEventId(eventId).map((n) => n.id).toSet();
-    if (ids.isEmpty) return;
-    emitSilent(state.where((n) => !ids.contains(n.id)).toList());
+    final next = detachEventNodes(state, {eventId});
+    if (!identical(next, state)) emitSilent(next);
   }
 
   // ── Feed import ─────────────────────────────────────────────────────
@@ -1877,125 +1875,9 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     Set<String> taskOptOutIds = const {},
     List<AssignmentRule> assignmentRules = const [],
   }) {
-    final now = DateTime.now();
-    var base = state;
-    if (feed.kind == FeedKind.learningSuite) {
-      base = base
-          .where(
-            (n) =>
-                n.classId != feed.id ||
-                n.sourceEventId == null ||
-                n.isDone ||
-                looksLikeLearningSuiteAssignment(n.title, n.notes),
-          )
-          .toList();
-    }
-    final existing = base.map((n) => n.id).toSet();
-    final existingSource = base
-        .map((n) => n.sourceEventId)
-        .whereType<String>()
-        .toSet();
-    final byEventId = {for (final e in events) e.id: e};
-    // One-time healing for the pre-fix exclusive-end bug: LS all-day
-    // DTENDs are exclusive per RFC 5545 (DTSTART Oct 12 DTEND Oct 15 is
-    // due Oct 14), but imports used to stamp due = DTEND (Oct 15). Move
-    // open nodes still sitting exactly on the old base (or old base +
-    // their rule shift) to the inclusive base. Hand-edited dues sit
-    // anywhere else and are left alone.
-    var healed = 0;
-    final healedBase = <Node>[];
-    for (final n in base) {
-      final eventId = n.sourceEventId;
-      final s = n.schedule;
-      final event = eventId == null ? null : byEventId[eventId];
-      if (feed.kind != FeedKind.learningSuite ||
-          event == null ||
-          s?.due == null ||
-          !n.isOpen) {
-        healedBase.add(n);
-        continue;
-      }
-      final isWindow = event.allDay &&
-          event.end.difference(event.start) > const Duration(days: 1);
-      if (!isWindow) {
-        healedBase.add(n);
-        continue;
-      }
-      final shift = assignmentOffsetFor(
-        assignmentRules,
-        feedId: feed.id,
-        title: n.title,
-      );
-      final oldBaseDue = shift == 0
-          ? event.end
-          : event.end.add(Duration(days: shift));
-      if (s!.due != oldBaseDue) {
-        healedBase.add(n);
-        continue;
-      }
-      final newBaseDue = shift == 0
-          ? event.end.subtract(const Duration(days: 1))
-          : event.end
-              .subtract(const Duration(days: 1))
-              .add(Duration(days: shift));
-      healed++;
-      healedBase.add(n.copyWith(
-        schedule: s.copyWith(
-          due: newBaseDue,
-          start: event.start,
-          end: event.end,
-        ),
-      ));
-    }
-    base = healedBase;
-    final imported = <Node>[];
-    for (final event in events) {
-      if (taskOptOutIds.contains(event.id)) continue;
-      if (!isNodeCandidate(event, feed, now)) continue;
-      if (existingSource.contains(event.id)) continue;
-      if (existing.contains(event.id)) continue;
-      // Learning Suite open..due windows (DTSTART..DTEND) are due at the
-      // inclusive end of the window: without this every window node would
-      // be due (and instantly overdue) on its open date. All-day DTENDs
-      // are exclusive per RFC 5545, so the due date is end minus one day
-      // (DTSTART Oct 12 DTEND Oct 15 → due Oct 14); timed windows keep
-      // the exact end instant. The feed window stays in start/end as
-      // truth.
-      final isWindow = feed.kind == FeedKind.learningSuite &&
-          event.allDay &&
-          event.end.difference(event.start) > const Duration(days: 1);
-      final baseDue = isWindow
-          ? event.end.subtract(const Duration(days: 1))
-          : event.start;
-      // Assignment rules shift the planned deadline (e.g. video quizzes
-      // due 2 days early); the feed window stays in start/end as truth.
-      final shift = assignmentOffsetFor(
-        assignmentRules,
-        feedId: feed.id,
-        title: event.subject,
-      );
-      imported.add(Node(
-        id: event.id,
-        title: event.subject,
-        notes: event.notes,
-        createdAt: DateTime.now(),
-        status: event.done ? NodeStatus.done : NodeStatus.open,
-        completedAt: event.completedAt,
-        schedule: scheduleForEvent(
-          event,
-          due: shift == 0 ? baseDue : baseDue.add(Duration(days: shift)),
-        ),
-        sourceEventId: event.id,
-        feedId: feed.id,
-        classId: feed.id,
-        classLabel: event.classLabel,
-        assignees: event.assignees,
-      ));
-    }
-    final next = [...base, ...imported];
-    if (imported.isNotEmpty || healed > 0 || next.length != state.length) {
-      emitSilent(next);
-    }
+    final next = importFeedNodes(state, events, feed,
+        taskOptOutIds: taskOptOutIds, assignmentRules: assignmentRules);
+    if (!identical(next, state)) emitSilent(next);
   }
 
   /// Re-targets open homework dues for one repeating type as ONE
@@ -2056,11 +1938,12 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   /// Deletes every homework node imported from [feedId]. Silent: feed
   /// removal records the composite undo itself.
   void removeImportedNodesFor(String feedId) {
-    emitSilent(
-      state
-          .where((n) => !(n.classId == feedId && n.sourceEventId != null))
-          .toList(),
-    );
+    final eventIds = {
+      for (final n in state)
+        if (n.classId == feedId && n.sourceEventId != null) n.sourceEventId!,
+    };
+    final next = detachEventNodes(state, eventIds);
+    if (!identical(next, state)) emitSilent(next);
   }
 
   /// Nodes from [feedId] that remain visible under feed visibility rules.

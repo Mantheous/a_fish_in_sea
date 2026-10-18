@@ -8,6 +8,7 @@ import 'package:a_fish_in_sea/feedback/view/feedback_page.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/finances_hub.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
+import 'package:a_fish_in_sea/nodes/service/recurring_goal_coordinator.dart';
 import 'package:a_fish_in_sea/nodes/bloc/schedule_prefs_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/navigation/view/home_page.dart';
@@ -196,6 +197,7 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
   // Saved in initState: context.read in dispose() is unsafe once the
   // element is deactivated (crashed test teardown and hot restart).
   SyncEngine? _engine;
+  RecurringGoalCoordinator? _goalLinks;
 
   /// Feed ids seen on the last node/feed change, so a removed class can
   /// be dropped from the learned assignment data.
@@ -203,6 +205,8 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
   @override
   void initState() {
     super.initState();
+    _goalLinks = RecurringGoalCoordinator(context.read<NodeCubit>(),
+        context.read<CalendarCubit>(), context.read<TransactionsCubit>());
     _engine = context.read<SyncEngine>();
     _engine!.boot();
     _engine!.startAutoSync();
@@ -210,6 +214,7 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
 
   @override
   void dispose() {
+    _goalLinks?.dispose();
     _engine?.stopAutoSync();
     super.dispose();
   }
