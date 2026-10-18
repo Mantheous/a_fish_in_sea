@@ -44,6 +44,13 @@ void main() {
       );
     });
 
+    test('removeAfter without a clock never date-gates at runtime', () {
+      // Runtime fromJson calls without a clock: even a years-past deadline
+      // must still run the migration so stale devices never skip it.
+      expect(Migration.removeAfter('2000-01-01'), isTrue);
+      expect(Migration.removeAfter('2999-01-01'), isTrue);
+    });
+
     test('scanner flags expired markers in fixtures', () {
       final dir = Directory.systemTemp.createTempSync('migration_scan');
       try {
