@@ -60,13 +60,23 @@ class _HomeworkTaskListState extends State<HomeworkTaskList>
     final feedCubit = context.watch<FeedCubit>();
     final viewOptions = viewOptionsOf(context);
     final now = DateTime.now();
-    final tints = taskTintMap(nodeCubit.state, viewOptions, now);
+    // One calendar pass per build: the counts drive the schedule tint and,
+    // through their key set, the Planned/Unplanned filter — so a tinted
+    // clock always reads as planned.
+    final allNodes = nodeCubit.state;
+    final calendarState = context.watch<CalendarCubit>().state;
+    final upcomingCounts =
+        futureCalendarEntryCounts(allNodes, calendarState, now);
+    final plannedIds = upcomingCounts.keys.toSet();
+    final tints =
+        taskTintMap(allNodes, viewOptions, now, plannedNodeIds: plannedIds);
     var imported = applyTaskViewOptions(
       feedCubit.visibleNodes(
         nodeCubit.state.where((n) => n.isHomework).toList(),
       ),
       viewOptions,
       now,
+      plannedNodeIds: plannedIds,
     );
     if (imported.isEmpty) {
       if (viewOptions.isFiltering) {
@@ -116,10 +126,8 @@ class _HomeworkTaskListState extends State<HomeworkTaskList>
     // (`now` is hoisted at the top of build so highlight + filter share
     // one clock reading.)
     final feedById = {for (final f in feedCubit.state) f.id: f};
-    final allNodes = nodeCubit.state;
     final nodeById = {for (final n in allNodes) n.id: n};
     final indexes = buildNodeIndexes(allNodes);
-    final calendarState = context.watch<CalendarCubit>().state;
     final linkedEventIds = <String>{};
     final linkedTaskIds = <String>{};
     for (final e in calendarState) {
@@ -127,8 +135,6 @@ class _HomeworkTaskListState extends State<HomeworkTaskList>
       final t = e.taskId;
       if (t != null) linkedTaskIds.add(t);
     }
-    final upcomingCounts =
-        futureCalendarEntryCounts(allNodes, calendarState, now);
     final groupNodes = <String, List<Node>>{};
     final groupOpenCount = <String, int>{};
     final groupMeta =

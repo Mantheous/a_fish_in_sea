@@ -45,6 +45,11 @@ List<PlannerEvent> nodeCalendarBlocks(List<Node> nodes) {
 /// Number of future, timed calendar entries linked to each node, keyed by
 /// node id. Nodes with no upcoming entries are absent from the map.
 ///
+/// The map is the single source of the app's "planned" meaning: the
+/// schedule button tints exactly when a node's count is positive, and the
+/// Planned/Unplanned task filter keeps exactly the nodes present here, so
+/// the button and the filter can never disagree.
+///
 /// An entry counts for a node when the calendar displays it as that node's
 /// schedule and it starts after [now]:
 /// - a linked real event (through the node's `calendarEventId` /

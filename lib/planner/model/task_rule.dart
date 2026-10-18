@@ -57,11 +57,12 @@ class TaskRule extends Equatable {
 
   /// True when this enabled rule changes [node]: highlight rules need an
   /// open node, hide rules defer to the selector (done included when the
-  /// selector keeps completed items).
-  bool matches(Node node, DateTime now) {
+  /// selector keeps completed items). [plannedNodeIds] is forwarded to the
+  /// selector's planned narrows (see [TaskFilter.matches]).
+  bool matches(Node node, DateTime now, {Set<String>? plannedNodeIds}) {
     if (!enabled) return false;
     if (isHighlight && !node.isOpen) return false;
-    return selector.matches(node, now);
+    return selector.matches(node, now, plannedNodeIds: plannedNodeIds);
   }
 
   TaskRule copyWith({
@@ -171,31 +172,43 @@ class TaskRuleOutcome {
 }
 
 /// Runs [rules] over [node] in list order: hiding always wins, the first
-/// highlight match wins the tint, hidden rows never tint.
+/// highlight match wins the tint, hidden rows never tint. [plannedNodeIds]
+/// is forwarded to selector matching (see [TaskFilter.matches]).
 TaskRuleOutcome evaluateTaskRules(
   List<TaskRule> rules,
   Node node,
-  DateTime now,
-) {
+  DateTime now, {
+  Set<String>? plannedNodeIds,
+}) {
   var hidden = false;
   TaskRule? tint;
   for (final rule in rules) {
     if (!rule.enabled) continue;
     if (rule.isHide) {
-      if (rule.selector.matches(node, now)) hidden = true;
+      if (rule.selector.matches(node, now, plannedNodeIds: plannedNodeIds)) {
+        hidden = true;
+      }
     } else if (tint == null &&
         node.isOpen &&
-        rule.selector.matches(node, now)) {
+        rule.selector.matches(node, now, plannedNodeIds: plannedNodeIds)) {
       tint = rule;
     }
   }
   return TaskRuleOutcome(hidden: hidden, tint: hidden ? null : tint);
 }
 
-/// True when any enabled hide rule matches [node].
-bool taskHiddenByRules(List<TaskRule> rules, Node node, DateTime now) {
+/// True when any enabled hide rule matches [node]. [plannedNodeIds] is
+/// forwarded to selector matching (see [TaskFilter.matches]).
+bool taskHiddenByRules(
+  List<TaskRule> rules,
+  Node node,
+  DateTime now, {
+  Set<String>? plannedNodeIds,
+}) {
   for (final rule in rules) {
-    if (rule.isHide && rule.enabled && rule.selector.matches(node, now)) {
+    if (rule.isHide &&
+        rule.enabled &&
+        rule.selector.matches(node, now, plannedNodeIds: plannedNodeIds)) {
       return true;
     }
   }
