@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' show min;
 
@@ -21,6 +22,10 @@ class SyncException implements Exception {
 class SyncAuth {
   static String? Function()? tokenProvider;
   static String? current() => tokenProvider?.call();
+
+  /// Refresh hook for services built inside cubits (e.g. [PlaidService])
+  /// that cannot take a context-backed closure. Set once in main.dart.
+  static Future<String?> Function()? refreshProvider;
 }
 
 /// Scoped long-lived token for third-party apps / AI agents.
@@ -93,12 +98,21 @@ class SyncClient {
   final Future<String?> Function() refreshAccessToken;
   final http.Client _client;
 
+  /// Failsafe so a blackholed socket can never wedge [SyncEngine] or the
+  /// cached [AuthCubit] refresh future forever: every request below runs
+  /// through [_withTimeout]. Callers (engine/cubit) already reset their
+  /// guards in `finally`/`whenComplete`, so a timeout simply surfaces as
+  /// an error and the next sync/refresh retries.
+  final Duration timeout;
+
   SyncClient({
     required this.serverBase,
     required this.accessToken,
     required this.refreshAccessToken,
     http.Client? client,
-  }) : _client = client ?? http.Client();
+    Duration? timeout,
+  })  : _client = client ?? http.Client(),
+        timeout = timeout ?? const Duration(seconds: 30);
 
   String get _base =>
       resolveAppServerBase(serverBase()).replaceAll(RegExp(r'/+$'), '');
@@ -132,15 +146,15 @@ class SyncClient {
   /// POST with one automatic token refresh on 401. Returns decoded JSON.
   Future<dynamic> _postAuthed(String path, Map<String, dynamic> body) async {
     final uri = Uri.parse('$_base$path');
-    var r = await _client.post(uri,
-        headers: _headers(json: true), body: jsonEncode(body));
+    var r = await _withTimeout(_client.post(uri,
+        headers: _headers(json: true), body: jsonEncode(body)));
     if (r.statusCode == 401) {
       final fresh = await refreshAccessToken();
       if (fresh == null || fresh.isEmpty) {
         throw SyncException(401, 'Signed out');
       }
-      r = await _client.post(uri,
-          headers: _headers(json: true), body: jsonEncode(body));
+      r = await _withTimeout(_client.post(uri,
+          headers: _headers(json: true), body: jsonEncode(body)));
     }
     return _decode(r);
   }
@@ -150,15 +164,27 @@ class SyncClient {
     if (query != null && query.isNotEmpty) {
       uri = uri.replace(queryParameters: {...uri.queryParameters, ...query});
     }
-    var r = await _client.get(uri, headers: _headers());
+    var r = await _withTimeout(_client.get(uri, headers: _headers()));
     if (r.statusCode == 401) {
       final fresh = await refreshAccessToken();
       if (fresh == null || fresh.isEmpty) {
         throw SyncException(401, 'Signed out');
       }
-      r = await _client.get(uri, headers: _headers());
+      r = await _withTimeout(_client.get(uri, headers: _headers()));
     }
     return _decode(r);
+  }
+
+  /// Every transport call is bounded so a hung socket fails fast instead
+  /// of wedging the caller forever. Timeouts surface as [SyncException]
+  /// (status 0) so [SyncEngine] shows them as retryable errors and
+  /// [AuthCubit] keeps its stored tokens for the next attempt.
+  Future<http.Response> _withTimeout(Future<http.Response> request) async {
+    try {
+      return await request.timeout(timeout);
+    } on TimeoutException {
+      throw SyncException(0, 'Request timed out after ${timeout.inSeconds}s');
+    }
   }
 
   // ── Anki (via app server; works on web where direct AnkiConnect is
@@ -176,29 +202,29 @@ class SyncClient {
   // ── Auth (no bearer needed) ──────────────────────────────────────────
 
   Future<Map<String, dynamic>> register(String email, String password) async {
-    final r = await _client.post(
+    final r = await _withTimeout(_client.post(
       Uri.parse('$_base/api/v1/auth/register'),
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({'email': email, 'password': password}),
-    );
+    ));
     return Map<String, dynamic>.from(_decode(r) as Map);
   }
 
   Future<Map<String, dynamic>> login(String email, String password) async {
-    final r = await _client.post(
+    final r = await _withTimeout(_client.post(
       Uri.parse('$_base/api/v1/auth/login'),
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({'email': email, 'password': password}),
-    );
+    ));
     return Map<String, dynamic>.from(_decode(r) as Map);
   }
 
   Future<Map<String, dynamic>> refresh(String refreshToken) async {
-    final r = await _client.post(
+    final r = await _withTimeout(_client.post(
       Uri.parse('$_base/api/v1/auth/refresh'),
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({'refresh_token': refreshToken}),
-    );
+    ));
     return Map<String, dynamic>.from(_decode(r) as Map);
   }
 
@@ -297,7 +323,7 @@ class SyncClient {
   }
 
   Future<Map<String, dynamic>> health() async {
-    final r = await _client.get(Uri.parse('$_base/api/health'));
+    final r = await _withTimeout(_client.get(Uri.parse('$_base/api/health')));
     return Map<String, dynamic>.from(_decode(r) as Map);
   }
 
@@ -345,13 +371,13 @@ class SyncClient {
   /// DELETE with the shared 401→refresh handling. Returns decoded JSON.
   Future<dynamic> apiDelete(String path) async {
     var uri = Uri.parse('$_base$path');
-    var r = await _client.delete(uri, headers: _headers());
+    var r = await _withTimeout(_client.delete(uri, headers: _headers()));
     if (r.statusCode == 401) {
       final fresh = await refreshAccessToken();
       if (fresh == null || fresh.isEmpty) {
         throw SyncException(401, 'Signed out');
       }
-      r = await _client.delete(uri, headers: _headers());
+      r = await _withTimeout(_client.delete(uri, headers: _headers()));
     }
     return _decode(r);
   }

@@ -105,5 +105,81 @@ void main() {
         expect(e.statusCode, 401);
       }
     });
+
+    test('expired app session retries once with a fresh token', () async {
+      var calls = 0;
+      var refreshed = false;
+      String? token = 'stale';
+      final authHeaders = <String?>[];
+      final service = CanvasService(
+        baseUrl: () => '',
+        userId: () => 'u',
+        authToken: () => token,
+        refreshAccessToken: () async {
+          refreshed = true;
+          token = 'fresh';
+          return token;
+        },
+        client: MockClient((request) async {
+          calls++;
+          authHeaders.add(request.headers['Authorization']);
+          if (calls == 1) {
+            return http.Response(
+              jsonEncode({'detail': 'Invalid token'}),
+              401,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'submissions': [
+                {'assignment_id': 42, 'submitted': true},
+              ],
+            }),
+            200,
+          );
+        }),
+      );
+      final submissions = await service.fetchSubmissions();
+      expect(submissions, hasLength(1));
+      expect(submissions.first.assignmentId, 42);
+      expect(refreshed, isTrue);
+      expect(calls, 2);
+      expect(authHeaders[0], 'Bearer stale');
+      expect(authHeaders[1], 'Bearer fresh');
+    });
+
+    test('does not refresh for Canvas-side auth failures', () async {
+      var refreshed = false;
+      var calls = 0;
+      final service = CanvasService(
+        baseUrl: () => '',
+        userId: () => 'u',
+        authToken: () => 'stale',
+        refreshAccessToken: () async {
+          refreshed = true;
+          return 'fresh';
+        },
+        client: MockClient((request) async {
+          calls++;
+          return http.Response(
+            jsonEncode({
+              'detail': {
+                'error': 'Canvas account not connected',
+                'needsReconnect': true,
+              },
+            }),
+            401,
+          );
+        }),
+      );
+      try {
+        await service.fetchSubmissions();
+        fail('expected CanvasException');
+      } on CanvasException catch (e) {
+        expect(e.needsReconnect, isTrue);
+      }
+      expect(refreshed, isFalse);
+      expect(calls, 1);
+    });
   });
 }

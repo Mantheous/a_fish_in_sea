@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:a_fish_in_sea/sync/sync_client.dart';
@@ -31,6 +32,14 @@ Map<String, dynamic> _record(String id, String updatedAt) => {
       'rev': 1,
       'updated_at': updatedAt,
     };
+
+/// Never answers: simulates a blackholed socket that would previously wedge
+/// the caller forever.
+class _HangingClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) =>
+      Completer<http.StreamedResponse>().future;
+}
 
 void main() {
   test('pull follows has_more pages and advances the cursor', () async {
@@ -159,5 +168,25 @@ void main() {
     );
 
     await expectLater(client.pull(), throwsA(isA<SyncException>()));
+  });
+
+  test('hung request fails fast via timeout instead of hanging forever',
+      () async {
+    final client = SyncClient(
+      serverBase: () => 'http://localhost:8000',
+      accessToken: () => 'tok',
+      refreshAccessToken: () async => 'tok',
+      client: _HangingClient(),
+      timeout: const Duration(milliseconds: 100),
+    );
+
+    await expectLater(
+      client.health(),
+      throwsA(isA<SyncException>().having(
+        (e) => e.statusCode,
+        'statusCode',
+        0,
+      )),
+    );
   });
 }
