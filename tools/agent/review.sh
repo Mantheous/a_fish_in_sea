@@ -151,7 +151,9 @@ Walker: <for any user-visible change (lib/*/view, navigation, dialogs/sheets, bu
 Smallness: <ok | bloated — what should be cut?>
 Fix list: <if changes-requested: numbered, concrete, bounded items. If pass: none.>"
   REVIEW_FILE="$(mktemp)"
-  if ! opencode run --title "review-#$N" "$PROMPT" </dev/null >"$REVIEW_FILE" 2>"$REVIEW_FILE.err"; then
+  # NOTE: `opencode run` without --model keeps the configured default (a
+  # free-tier model). Pin --model explicitly so reviews stay on opencode-go.
+  if ! opencode run --model opencode-go/muse-spark-1.3-contributor#xhigh --title "review-#$N" "$PROMPT" </dev/null >"$REVIEW_FILE" 2>"$REVIEW_FILE.err"; then
     echo "[review] #$N reviewer run failed: $(tail -n 3 "$REVIEW_FILE.err")"
     rm -f "$REVIEW_FILE" "$REVIEW_FILE.err"
     continue

@@ -98,7 +98,10 @@ SCOPE:
 $SCOPE
 Save every screenshot under SHOT_DIR, write the report to REPORT, then stop."
 
-if ! opencode run --agent ux-walker --title "ux-walk-$STAMP" "$PROMPT" >"$OUT/run.log" 2>&1; then
+# NOTE: `opencode run --agent` does NOT apply any frontmatter model (a
+# primary-agent session keeps the configured default, which resolves to a
+# free-tier model). Pin --model explicitly so the walk stays on opencode-go.
+if ! opencode run --agent ux-walker --model opencode-go/gpt-6-luna#xhigh --title "ux-walk-$STAMP" "$PROMPT" >"$OUT/run.log" 2>&1; then
   echo "[ux-walk] walker run failed (see $OUT/run.log) — no report was written, so ux-walk labels stay on their issues and $WALK_MARKER is not refreshed; the request retries on the next trigger"
   tail -n 5 "$OUT/run.log" || true
 else

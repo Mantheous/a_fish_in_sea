@@ -187,7 +187,9 @@ Report at the end: PR_URL=<url or NONE> STATUS=<ready|failed>."
 if [ "$RESUME_IN_PLACE" = "1" ] && [ -f "$WT/.agent-build.log" ]; then
   mv "$WT/.agent-build.log" "$WT/.agent-build-prev.log"
 fi
-if opencode run --auto --title "builder-#$N" "$PROMPT" >"$WT/.agent-build.log" 2>&1; then
+# NOTE: `opencode run` without --model keeps the configured default (a
+# free-tier model). Pin --model explicitly so builders stay on opencode-go.
+if opencode run --auto --model opencode-go/muse-spark-1.3-contributor#xhigh --title "builder-#$N" "$PROMPT" >"$WT/.agent-build.log" 2>&1; then
   echo "[builder] #$N opencode run finished"
 else
   echo "[builder] #$N opencode run exited non-zero (see $WT/.agent-build.log)"

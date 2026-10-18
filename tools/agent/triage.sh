@@ -93,7 +93,9 @@ Persistence impact: <none | description + migration gating per AGENTS.md>
 UX check: <needed (touches user-visible UI — builder must add the ux-walk label + scope per AGENTS.md; the loop walks it post-deploy, never pre-merge) | not needed — <why>>
 Effort: <S|M|L>"
     PLAN_FILE="$(mktemp)"
-    if ! opencode run --title "triage-#$N" "$PROMPT" </dev/null >"$PLAN_FILE" 2>"$PLAN_FILE.err"; then
+    # NOTE: `opencode run` without --model keeps the configured default (a
+    # free-tier model). Pin --model explicitly so triage stays on opencode-go.
+    if ! opencode run --model opencode-go/muse-spark-1.3-contributor#xhigh --title "triage-#$N" "$PROMPT" </dev/null >"$PLAN_FILE" 2>"$PLAN_FILE.err"; then
       echo "[triage] #$N plan draft failed: $(tail -n 3 "$PLAN_FILE.err")"
       rm -f "$PLAN_FILE" "$PLAN_FILE.err"
       continue
@@ -207,7 +209,7 @@ Persistence impact: <none | description + migration gating per AGENTS.md>
 UX check: <needed (touches user-visible UI — builder must add the ux-walk label + scope per AGENTS.md; the loop walks it post-deploy, never pre-merge) | not needed — <why>>
 Effort: <S|M|L>"
   REV_FILE="$(mktemp)"
-  if ! opencode run --title "triage-rev-#$N" "$REVPROMPT" </dev/null >"$REV_FILE" 2>"$REV_FILE.err"; then
+  if ! opencode run --model opencode-go/muse-spark-1.3-contributor#xhigh --title "triage-rev-#$N" "$REVPROMPT" </dev/null >"$REV_FILE" 2>"$REV_FILE.err"; then
     echo "[triage] #$N revision failed: $(tail -n 3 "$REV_FILE.err")"
     rm -f "$REV_FILE" "$REV_FILE.err"
     continue
