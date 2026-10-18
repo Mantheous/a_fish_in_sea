@@ -38,6 +38,12 @@ enum EngineStatus { idle, syncing, error }
 ///   server must not remote-control that); only the points roam
 /// - Settings.icalProxyBase (retired override; the app uses the one fixed
 ///   [ServerConfig] server, so the stale key never roams)
+/// - Settings.ankiConnectHost (per-device like the proxy above: a desktop
+///   talks to its own localhost, a phone to a LAN address — roaming one
+///   value would break the other device, so each device keeps its own)
+/// - Plaid wasConnected (connectivity is derived on-device; only the link
+///   identity — userId/itemId — roams, so a disconnect reaches every device
+///   instead of flapping back)
 class SyncEngine {
   final SyncClient client;
   final AuthCubit auth;
