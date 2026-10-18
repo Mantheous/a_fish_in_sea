@@ -48,18 +48,33 @@ Future<SyncEngine> pumpGoldenPage(WidgetTester tester, Widget page) async {
   when(() => storage.clear()).thenAnswer((_) async {});
   HydratedBloc.storage = storage;
 
+  // mocktail needs concrete instances to build argument matchers for the
+  // stubbed http client below.
+  registerFallbackValue(Uri.parse('http://localhost:1'));
+  registerFallbackValue(const <String, String>{});
+
+  final mockClient = MockClient();
+  // Golden pages render offline: any page that calls the server on pump
+  // gets a harmless empty response instead of a null transport response.
+  when(() => mockClient.get(captureAny(), headers: captureAny(named: 'headers')))
+      .thenAnswer((invocation) async {
+    final url = invocation.positionalArguments.first as Uri;
+    final body = url.path.endsWith('/status') ? '{}' : '[]';
+    return http.Response(body, 200);
+  });
+  final syncClient = SyncClient(
+    serverBase: () => 'http://localhost:1',
+    accessToken: () => null,
+    refreshAccessToken: () async => null,
+    client: mockClient,
+  );
+
   tester.view.physicalSize = const Size(1280, 720);
   tester.view.devicePixelRatio = 1.0;
 
   final undo = UndoCubit();
   final navigation = NavigationCubit();
   final settings = SettingsCubit();
-  final syncClient = SyncClient(
-    serverBase: () => 'http://localhost:1',
-    accessToken: () => null,
-    refreshAccessToken: () async => null,
-    client: MockClient(),
-  );
   final auth = AuthCubit(client: () => syncClient);
   final meta = SyncMetaCubit();
   final nodes = NodeCubit();

@@ -104,13 +104,19 @@ class ImportService {
 
   static const _base = '/api/v1/imports';
 
+  /// The list endpoint answers `[]` when signed in; a captive portal or
+  /// proxy can return HTML instead, so treat anything that isn't a list as
+  /// empty — never throw.
   Future<List<ImportBatch>> pending() async {
     final body = await client.apiGet('$_base/pending');
-    return (body as List)
-        .whereType<Map>()
-        .map((e) => ImportBatch.fromJson(Map<String, dynamic>.from(e)))
-        .toList();
+    return _batches(body);
   }
+
+  static List<ImportBatch> _batches(dynamic body) =>
+      (body is List ? body : const <dynamic>[])
+          .whereType<Map>()
+          .map((e) => ImportBatch.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
 
   /// Approve the whole batch ([itemIds] null) or a subset. Returns the
   /// updated batch; resolved batches come back as approved/rejected.
@@ -119,7 +125,8 @@ class ImportService {
       '$_base/$id/approve',
       itemIds == null ? {} : {'item_ids': itemIds},
     );
-    return ImportBatch.fromJson(Map<String, dynamic>.from(body as Map));
+    return ImportBatch.fromJson(
+        Map<String, dynamic>.from((body ?? const <String, dynamic>{})));
   }
 
   /// Drop staged items without applying them. App data is never touched.
@@ -128,11 +135,13 @@ class ImportService {
       '$_base/$id/discard',
       {'item_ids': itemIds},
     );
-    return ImportBatch.fromJson(Map<String, dynamic>.from(body as Map));
+    return ImportBatch.fromJson(
+        Map<String, dynamic>.from((body ?? const <String, dynamic>{})));
   }
 
   Future<ImportBatch> reject(int id) async {
     final body = await client.apiPost('$_base/$id/reject', {});
-    return ImportBatch.fromJson(Map<String, dynamic>.from(body as Map));
+    return ImportBatch.fromJson(
+        Map<String, dynamic>.from((body ?? const <String, dynamic>{})));
   }
 }

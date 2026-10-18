@@ -1,3 +1,5 @@
+import 'demo_mode.dart';
+import '../feedback/feedback_service.dart';
 import '../finances/model/time_scale.dart';
 import '../finances/model/transaction.dart';
 import '../imports/import_service.dart';
@@ -620,6 +622,37 @@ class DemoData {
       items: items,
     );
   }
+
+  // ── Feedback (demo mode) ───────────────────────────────────────────
+
+  /// Read-only demo reports for the Feedback tab. The feedback endpoints
+  /// need a signed-in session, so the demo tab seeds these instead of
+  /// calling the server. Nothing here is persisted or submitted for real.
+  static List<FeedbackReport> demoReports(DateTime now) => [
+        FeedbackReport(
+          id: 4001,
+          kind: 'bug',
+          title: 'Mock bug: swiped task deletes instead of snoozing',
+          description: 'Demo report — read-only while demoing.',
+          device: 'web (mock)',
+          extra: 'Steps: open a task, swipe left, tap snooze.',
+          status: 'filed',
+          githubIssueNumber: 10,
+          githubIssueUrl:
+              'https://github.com/Mantheous/a_fish_in_sea/issues/10',
+          email: DemoMode.demoEmail,
+        ),
+        FeedbackReport(
+          id: 4002,
+          kind: 'feature',
+          title: 'Mock feature: dark mode toggle',
+          description: 'Demo feature request awaiting review.',
+          device: 'web (mock)',
+          extra: 'Add a system dark-mode switch to Settings.',
+          status: 'pending',
+          email: DemoMode.demoEmail,
+        ),
+      ];
 
   // ── Syllabus + import inbox ────────────────────────────────────────
 
