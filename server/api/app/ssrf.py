@@ -77,40 +77,55 @@ def assert_public_http_url(url: str) -> str:
     return url
 
 
+_HTTP_CLIENT: httpx.AsyncClient | None = None
+
+
+def _http_client() -> httpx.AsyncClient:
+    """Return a shared, pooled httpx client.
+
+    Opening a fresh client per request -- and once more per redirect hop --
+    churns file descriptors under load. One long-lived client reuses its
+    connection pool instead, which matters most for the abuse-prone fetch
+    paths (/fetch/refresh, /fetch/refresh-due, /api/ical).
+    """
+    global _HTTP_CLIENT
+    if _HTTP_CLIENT is None:
+        _HTTP_CLIENT = httpx.AsyncClient(timeout=30.0, follow_redirects=False)
+    return _HTTP_CLIENT
+
+
 async def fetch_public_bytes(url: str, timeout: float = 30.0) -> tuple[bytes, str]:
     """Fetch url with per-hop SSRF validation and streaming size enforcement."""
     current = url
     for _ in range(MAX_REDIRECTS + 1):
         await asyncio.to_thread(assert_public_http_url, current)
-        async with httpx.AsyncClient(
-            timeout=timeout, follow_redirects=False
-        ) as c:
-            async with c.stream("GET", current) as resp:
-                stream = resp.extensions.get("network_stream")
-                if stream is not None and hasattr(stream, "get_extra_info"):
-                    peer = stream.get_extra_info("peername")
-                    if isinstance(peer, tuple) and peer:
-                        try:
-                            peer_ip = ipaddress.ip_address(peer[0])
-                        except ValueError:
-                            peer_ip = None
-                        if peer_ip is not None and _is_internal_ip(peer_ip):
-                            raise ValueError(
-                                "Feed host resolves to an internal address"
-                            )
-                location = resp.headers.get("location")
-                if resp.status_code in (301, 302, 303, 307, 308) and location:
-                    current = urllib.parse.urljoin(current, location)
-                    continue
-                if resp.status_code >= 400:
-                    raise ValueError(f"Feed returned {resp.status_code}")
-                cl = resp.headers.get("content-length")
-                if cl and cl.isdigit() and int(cl) > MAX_BYTES:
+        c = _http_client()
+        async with c.stream("GET", current) as resp:
+            stream = resp.extensions.get("network_stream")
+            if stream is not None and hasattr(stream, "get_extra_info"):
+                peer = stream.get_extra_info("peername")
+                if isinstance(peer, tuple) and peer:
+                    try:
+                        peer_ip = ipaddress.ip_address(peer[0])
+                    except ValueError:
+                        peer_ip = None
+                    if peer_ip is not None and _is_internal_ip(peer_ip):
+                        raise ValueError(
+                            "Feed host resolves to an internal address"
+                        )
+            location = resp.headers.get("location")
+            if resp.status_code in (301, 302, 303, 307, 308) and location:
+                current = urllib.parse.urljoin(current, location)
+                continue
+            if resp.status_code >= 400:
+                raise ValueError(f"Feed returned {resp.status_code}")
+            cl = resp.headers.get("content-length")
+            if cl and cl.isdigit() and int(cl) > MAX_BYTES:
+                raise ValueError("Feed too large (>5MB)")
+            chunks = bytearray()
+            async for chunk in resp.aiter_bytes():
+                chunks.extend(chunk)
+                if len(chunks) > MAX_BYTES:
                     raise ValueError("Feed too large (>5MB)")
-                chunks = bytearray()
-                async for chunk in resp.aiter_bytes():
-                    chunks.extend(chunk)
-                    if len(chunks) > MAX_BYTES:
-                        raise ValueError("Feed too large (>5MB)")
-                return bytes(chunks), resp.headers.get("etag", "")
+            return bytes(chunks), resp.headers.get("etag", "")
     raise ValueError("Too many redirects")

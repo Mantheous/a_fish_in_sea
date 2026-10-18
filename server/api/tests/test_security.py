@@ -94,6 +94,29 @@ def test_fetch_refresh_stores_error_for_internal_host(client: TestClient):
     assert r.json()["status"] == "error"
 
 
+def test_fetch_public_bytes_reuses_pooled_http_client():
+    """fetch_public_bytes reuses one pooled httpx client instead of opening a
+    fresh client per request (and per redirect hop), which caps file-descriptor
+    churn under fetch abuse."""
+    import asyncio
+
+    import httpx
+
+    from app import ssrf
+
+    ssrf._HTTP_CLIENT = None
+    try:
+        first = ssrf._http_client()
+        second = ssrf._http_client()
+        assert isinstance(first, httpx.AsyncClient)
+        assert first is second  # same pooled instance, not one per request
+    finally:
+        client = ssrf._HTTP_CLIENT
+        ssrf._HTTP_CLIENT = None
+        if client is not None:
+            asyncio.run(client.aclose())
+
+
 def test_api_tokens_cannot_self_escalate_or_bypass_review(client: TestClient):
     h = _register(client, "sec-esc@example.com")
     # Mint a review-only token and a read-only events token.
