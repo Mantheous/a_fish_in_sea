@@ -33,6 +33,7 @@ import '../service/event_reminders.dart';
 import 'calendar_data_source.dart';
 import 'calendar_projection.dart';
 import 'calendar_filter_sheet.dart';
+import 'calendar_report_lane.dart';
 import 'calendar_side_panel.dart';
 import 'event_editor.dart';
 import 'feed_manager.dart';
@@ -136,6 +137,7 @@ class _CalendarPageState extends State<CalendarPage> {
     super.initState();
     _view = context.read<SettingsCubit>().state.defaultCalendarView;
     _controller.view = _view;
+    _controller.addPropertyChangedListener(_onCalendarControllerChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final pending = context.read<CalendarDraftCubit>().takePending();
@@ -168,9 +170,34 @@ class _CalendarPageState extends State<CalendarPage> {
   void dispose() {
     _liveTicker?.cancel();
     _suppressTimer?.cancel();
+    _controller.removePropertyChangedListener(_onCalendarControllerChanged);
     _dataSource?.dispose();
     _controller.dispose();
     super.dispose();
+  }
+
+  /// Navigation happens inside SfCalendar (header arrows, swipes): the
+  /// controller tells us the display date moved, and the report lanes must
+  /// follow it. Deferred to the frame's end — the controller can also be
+  /// updated from inside the calendar's own build.
+  void _onCalendarControllerChanged(String property) {
+    if (!_sideBySide || _view == CalendarView.month) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  /// The days the report lanes must cover: what the calendar shows right
+  /// now — the display date in the day view, its Sunday-start week in the
+  /// week view. Lanes only exist while the Plan + Report view is on and a
+  /// time-slot grid is visible (the month view keeps its agenda chips).
+  List<DateTime> _visibleDaysForLane() {
+    final display = _controller.displayDate ?? DateTime.now();
+    final day = DateTime(display.year, display.month, display.day);
+    if (_view == CalendarView.day) return [day];
+    // firstDayOfWeek is 7 (Sunday): back up to the week's first day.
+    final start = day.subtract(Duration(days: day.weekday % 7));
+    return [for (var i = 0; i < 7; i++) start.add(Duration(days: i))];
   }
 
   @override
@@ -407,8 +434,9 @@ class _CalendarPageState extends State<CalendarPage> {
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
               child: Text(
-                'Left: plan · Right: report (timer logs + accepted '
-                'auto-reports) · red = recording now · ▶ on a tile starts recording',
+                'Each day: reports in their own column on the left, plans '
+                'beside them · red = recording now · ▶ on a tile starts '
+                'recording',
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
                       color:
                           Theme.of(context).colorScheme.onSurfaceVariant,
@@ -435,6 +463,8 @@ class _CalendarPageState extends State<CalendarPage> {
               builder: (context, events) {
                 final sideBySide = _sideBySide;
                 final wide = _isWide;
+                final reportLanes =
+                    sideBySide && _view != CalendarView.month;
                 _projection.update(
                   events: events,
                   feeds: context.watch<FeedCubit>().state,
@@ -444,6 +474,10 @@ class _CalendarPageState extends State<CalendarPage> {
                       ? context.watch<ReportingCubit>().state
                       : const <String, List<ReportedEntry>>{},
                   showReports: sideBySide,
+                  showReportLanes: reportLanes,
+                  visibleDays: reportLanes ? _visibleDaysForLane() : const [],
+                  visibleStartHour: settings.dayStartHour,
+                  visibleEndHour: settings.dayEndHour,
                   now: DateTime.now(),
                   draft: wide && _panelMode == CalendarPanelMode.creating
                       ? _draftEvent : null,
@@ -456,6 +490,12 @@ class _CalendarPageState extends State<CalendarPage> {
                 final colorById = _projection.colorById;
                 final reportById = sideBySide
                     ? _projection.reportById : const <String, ReportBlock>{};
+                final reportBlocksByLaneId = reportLanes
+                    ? _projection.reportBlocksByLaneId
+                    : const <String, List<ReportBlock>>{};
+                final reportColorById = reportLanes
+                    ? _projection.reportColorById
+                    : const <String, Color>{};
                 if (_dataSource == null) {
                   _dataSource = PlannerCalendarDataSource(
                     shown,
@@ -483,8 +523,11 @@ class _CalendarPageState extends State<CalendarPage> {
                     feedColors,
                     context,
                     details,
-                    sideBySide: sideBySide,
                     reportById: reportById,
+                    reportBlocksByLaneId: reportBlocksByLaneId,
+                    reportColorById: reportColorById,
+                    laneStartHour: settings.dayStartHour,
+                    laneEndHour: settings.dayEndHour,
                     colorById: colorById,
                     remoteEditableFeedIds: _projection.remoteEditableFeedIds,
                     nodeById: _projection.nodeById,
@@ -561,8 +604,11 @@ class _CalendarPageState extends State<CalendarPage> {
     Map<String, Color> feedColors,
     BuildContext context,
     CalendarAppointmentDetails details, {
-    required bool sideBySide,
     required Map<String, ReportBlock> reportById,
+    Map<String, List<ReportBlock>>? reportBlocksByLaneId,
+    Map<String, Color>? reportColorById,
+    double laneStartHour = 0,
+    double laneEndHour = 24,
     Map<String, Color>? colorById,
     Set<String>? remoteEditableFeedIds,
     Map<String, Node>? nodeById,
@@ -587,8 +633,28 @@ class _CalendarPageState extends State<CalendarPage> {
         details.appointments.isNotEmpty ? details.appointments.first : null;
     final event = raw is PlannerEvent ? raw : null;
     if (event == null) return const SizedBox.shrink();
+    // Report lane: the day's left column. Its tile is the lane itself
+    // (background + time-positioned report chips), not an event tile.
+    final laneBlocks = reportBlocksByLaneId?[event.id];
+    if (laneBlocks != null) {
+      return ReportLaneView(
+        key: const Key('report-lane'),
+        blocks: laneBlocks,
+        day: reportLaneDayOf(event.id) ?? event.start,
+        startHour: laneStartHour,
+        endHour: laneEndHour,
+        colorFor: (block) =>
+            reportColorById?[block.displayId] ??
+            const Color(defaultPersonalEventColor),
+        onTap: (block) {
+          // The calendar's own tap handler would otherwise also fire and
+          // treat the lane placeholder as a tapped event.
+          _suppressNextTap();
+          _openReport(block.displayId);
+        },
+      );
+    }
     final report = reportById[event.id];
-    final laneSplit = sideBySide && _view != CalendarView.month;
     final isDraft = event.id == calendarDraftEventId;
     final baseColor =
         colorById?[event.id] ?? _eventColor(event, feedColors);
@@ -634,6 +700,7 @@ class _CalendarPageState extends State<CalendarPage> {
         ? event.end.difference(event.start).inSeconds / 60.0
         : 60.0;
     final Widget tile = Opacity(
+      key: ValueKey('tile:${event.id}'),
       opacity: isDraft ? 0.85 : 1,
       child: Container(
       decoration: BoxDecoration(
@@ -916,18 +983,7 @@ class _CalendarPageState extends State<CalendarPage> {
       ),
       ),
     );
-    if (!laneSplit) return tile;
-    const spacer = Expanded(child: SizedBox.shrink());
-    if (report != null) {
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [spacer, Expanded(child: tile)],
-      );
-    }
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [Expanded(child: tile), spacer],
-    );
+    return tile;
   }
 
   Widget _resizeHandle({
@@ -1000,6 +1056,7 @@ class _CalendarPageState extends State<CalendarPage> {
 
   bool _isMovable(PlannerEvent event) {
     if (isReportDisplayId(event.id)) return false;
+    if (isReportLaneId(event.id)) return false;
     if (isNodeBlockId(event.id)) return true;
     if (!event.isFromFeed) return event.recurrenceRule.isEmpty;
     if (!mounted) return false;
@@ -1010,6 +1067,7 @@ class _CalendarPageState extends State<CalendarPage> {
   /// per tile per frame.
   bool _isMovableFast(PlannerEvent event, Set<String> remoteEditableFeedIds) {
     if (isReportDisplayId(event.id)) return false;
+    if (isReportLaneId(event.id)) return false;
     if (isNodeBlockId(event.id)) return true;
     if (!event.isFromFeed) return event.recurrenceRule.isEmpty;
     final feedId = event.feedId;
@@ -1827,6 +1885,9 @@ class _CalendarPageState extends State<CalendarPage> {
           ? details.appointments!.first
           : null;
       if (raw is PlannerEvent && raw.id == calendarDraftEventId) return;
+      // Lane placeholder taps (the empty part of a report column) are not
+      // events; the chips handle their own taps.
+      if (raw is PlannerEvent && isReportLaneId(raw.id)) return;
       if (raw is PlannerEvent && isReportDisplayId(raw.id)) {
         _openReport(raw.id);
         return;
@@ -1926,7 +1987,8 @@ class _CalendarPageState extends State<CalendarPage> {
       final appointment = details.appointment;
       final droppingTime = details.droppingTime;
       if (appointment is PlannerEvent &&
-          isReportDisplayId(appointment.id)) {
+          (isReportDisplayId(appointment.id) ||
+              isReportLaneId(appointment.id))) {
         if (mounted) setState(() {});
         return;
       }

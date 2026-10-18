@@ -298,3 +298,61 @@ PlannerEvent reportBlockToDisplayEvent(
     colorValue: template?.colorValue,
   );
 }
+
+/// Id prefix of the invisible full-day appointment that claims the first
+/// lane of a day column in the Plan + Report view, so the report blocks get
+/// a column of their own instead of every planned tile being cut in half.
+const String reportLaneIdPrefix = 'reportlane:';
+
+bool isReportLaneId(String id) => id.startsWith(reportLaneIdPrefix);
+
+String reportLaneIdForDay(DateTime day) {
+  final month = day.month.toString().padLeft(2, '0');
+  final dayOfMonth = day.day.toString().padLeft(2, '0');
+  return '$reportLaneIdPrefix${day.year}-$month-$dayOfMonth';
+}
+
+/// The day a report-lane id stands for, or null when [id] is not a lane id.
+DateTime? reportLaneDayOf(String id) {
+  if (!isReportLaneId(id)) return null;
+  final parts = id.substring(reportLaneIdPrefix.length).split('-');
+  if (parts.length != 3) return null;
+  final year = int.tryParse(parts[0]);
+  final month = int.tryParse(parts[1]);
+  final day = int.tryParse(parts[2]);
+  if (year == null || month == null || day == null) return null;
+  final parsed = DateTime(year, month, day);
+  // DateTime normalizes overflow (2026-13-45 rolls into 2027); only accept
+  // a canonical date so a stray id can never invent a day.
+  if (parsed.year != year || parsed.month != month || parsed.day != day) {
+    return null;
+  }
+  return parsed;
+}
+
+/// A full-day placeholder appointment. It never renders as an event: the
+/// calendar page's appointment builder turns its tile into the report lane
+/// (background + time-positioned report chips). Being an appointment is the
+/// point — Syncfusion's layout engine then places every planned event of
+/// that day beside it instead of on top of the reports.
+PlannerEvent buildReportLaneEvent(DateTime day) => PlannerEvent(
+      id: reportLaneIdForDay(day),
+      subject: '',
+      start: DateTime(day.year, day.month, day.day),
+      end: DateTime(day.year, day.month, day.day, 23, 59, 59),
+    );
+
+/// Groups report blocks by the calendar day they start on, keyed by
+/// midnight of that day. A block that crosses midnight stays with the day
+/// it started on so it renders in one lane.
+Map<DateTime, List<ReportBlock>> groupReportBlocksByDay(
+  List<ReportBlock> blocks,
+) {
+  final grouped = <DateTime, List<ReportBlock>>{};
+  for (final block in blocks) {
+    final start = block.start;
+    final day = DateTime(start.year, start.month, start.day);
+    grouped.putIfAbsent(day, () => []).add(block);
+  }
+  return grouped;
+}
