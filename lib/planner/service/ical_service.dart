@@ -241,9 +241,24 @@ class IcalService {
     if (tzid != null && tzid.isNotEmpty) {
       try {
         final location = tz.getLocation(tzid);
-        final naive =
-            DateTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
-        return tz.TZDateTime.from(naive, location).toLocal();
+        // dt carries the feed's wall-clock fields (enough_icalendar parses
+        // TZID times as a naive local DateTime). Interpret those fields as
+        // wall time *in the feed's zone*, then convert to device-local.
+        // (Previously TZDateTime.from(naive, location) treated the naive
+        // local instant as the instant itself, making TZID a no-op.)
+        return tz
+            .TZDateTime(
+              location,
+              dt.year,
+              dt.month,
+              dt.day,
+              dt.hour,
+              dt.minute,
+              dt.second,
+              dt.millisecond,
+              dt.microsecond,
+            )
+            .toLocal();
       } catch (_) {
         return dt;
       }
