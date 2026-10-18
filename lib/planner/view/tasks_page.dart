@@ -747,7 +747,8 @@ class _HomeworkTabState extends State<_HomeworkTab>
     }
     final groupNodes = <String, List<Node>>{};
     final groupOpenCount = <String, int>{};
-    final groupMeta = <String, ({Color color, String name})>{};
+    final groupMeta =
+        <String, ({Color color, String name, bool removable})>{};
     for (final key in groupKeys) {
       final list = byClass[key]!..sort(_compare);
       groupNodes[key] = list;
@@ -758,7 +759,11 @@ class _HomeworkTabState extends State<_HomeworkTab>
       groupOpenCount[key] = openCount;
       final labeled = !list.every((node) => node.classLabel == null);
       if (labeled) {
-        groupMeta[key] = (color: courseColor(key), name: key);
+        groupMeta[key] = (
+          color: courseColor(key),
+          name: key,
+          removable: false,
+        );
       } else {
         final feed = feedById[key];
         groupMeta[key] = (
@@ -766,6 +771,10 @@ class _HomeworkTabState extends State<_HomeworkTab>
               ? Theme.of(context).colorScheme.primary
               : mutedCalendarColor(feed.color),
           name: feed?.name ?? 'Unknown class',
+          // A classId group with no feed row (re-added while sync was down,
+          // then the duplicate feed vanished) has no Settings entry, so this
+          // group is the only place its leftover assignments can be removed.
+          removable: feed == null && key.isNotEmpty,
         );
       }
     }
@@ -912,6 +921,17 @@ class _HomeworkTabState extends State<_HomeworkTab>
                   ),
                   title: Text(meta.name, overflow: TextOverflow.ellipsis),
                   subtitle: Text('${groupOpenCount[groupKey]} to do'),
+                  trailing: meta.removable
+                      ? IconButton(
+                          tooltip: 'Remove unknown class',
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: () => _confirmRemoveOrphanClass(
+                            context,
+                            groupKey,
+                            classNodes.length,
+                          ),
+                        )
+                      : null,
                   children: [
                     for (final node in classNodes)
                       _NodeTile(
@@ -942,6 +962,53 @@ class _HomeworkTabState extends State<_HomeworkTab>
         ),
       ],
     );
+  }
+
+  /// Removes an "Unknown class" group: its feed entry is gone, so the
+  /// assignments and calendar events imported from it can only be deleted
+  /// from here.
+  Future<void> _confirmRemoveOrphanClass(
+    BuildContext context,
+    String classId,
+    int count,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Remove unknown class?'),
+        content: Text(
+          'This class no longer has a feed entry, so its assignments can '
+          'only be removed here. Removing deletes '
+          '${count == 1 ? '1 assignment' : '$count assignments'} and their '
+          'calendar events.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    context.read<FeedCubit>().removeOrphanedClass(classId);
+    final undoCubit = context.read<UndoCubit>();
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            count == 1 ? 'Removed 1 assignment' : 'Removed $count assignments',
+          ),
+          duration: const Duration(seconds: 4),
+          persist: false,
+          action: SnackBarAction(label: 'Undo', onPressed: undoCubit.undo),
+        ),
+      );
   }
 
   static int _compare(Node a, Node b) {
