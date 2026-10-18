@@ -177,6 +177,14 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     return feed;
   }
 
+  /// Message shown when the Google grant is dead (expired/revoked refresh
+  /// token or rejected access token). The server marks these with
+  /// `needsReconnect`; surfacing the raw upstream body (e.g. "Token refresh
+  /// failed (400): ... Token has been expired or revoked") strands the user
+  /// with no action, so substitute directions to the fix.
+  static const String googleReconnectMessage =
+      'Google account needs reconnect — open Feeds to reconnect.';
+
   Future<String?> _pushAndResync(
     String feedId,
     Future<void> Function() push,
@@ -184,8 +192,9 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     try {
       await push();
     } on GoogleCalendarException catch (e) {
-      _updateFeedStatus(feedId, error: e.message);
-      return e.message;
+      final message = e.needsReconnect ? googleReconnectMessage : e.message;
+      _updateFeedStatus(feedId, error: message);
+      return message;
     } catch (e) {
       return e.toString();
     }
@@ -307,8 +316,9 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
         event: event,
       );
     } on GoogleCalendarException catch (e) {
-      _updateFeedStatus(feed.id, error: e.message);
-      return (error: e.message, created: null);
+      final message = e.needsReconnect ? googleReconnectMessage : e.message;
+      _updateFeedStatus(feed.id, error: message);
+      return (error: message, created: null);
     } catch (e) {
       return (error: e.toString(), created: null);
     }
@@ -366,7 +376,8 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
         eventId: seriesId,
       );
     } on GoogleCalendarException catch (e) {
-      _updateFeedStatus(feed.id, error: e.message);
+      _updateFeedStatus(
+          feed.id, error: e.needsReconnect ? googleReconnectMessage : e.message);
       return null;
     } catch (_) {
       return null;
@@ -594,7 +605,10 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
         clearError: true,
       );
     } catch (e) {
-      _updateFeedStatus(feed.id, error: e.toString());
+      final message = e is GoogleCalendarException && e.needsReconnect
+          ? googleReconnectMessage
+          : e.toString();
+      _updateFeedStatus(feed.id, error: message);
     }
   }
 
