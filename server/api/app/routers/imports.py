@@ -26,9 +26,10 @@ import datetime as dt
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import and_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import get_session
+from ..db import dialect_insert, get_session
 from ..deps import check_token_scope, get_current_user
 from ..models import ImportBatch, ImportItem, SyncItem, User
 from ..schemas import (
@@ -167,10 +168,59 @@ async def _upsert_sync_item(
     data: dict,
 ) -> SyncRecord:
     """Same envelope write as PUT /items: create-or-replace, rev bump,
-    un-delete. Approval paths must use this (never tombstones)."""
+    un-delete. Approval paths must use this (never tombstones).
+
+    Upserts via ON CONFLICT so two requests racing for the same
+    (user, collection, item_id) end with one success and one clean update
+    instead of a unique-constraint 500; IntegrityError is the fallback.
+    """
     now = _now()
     payload = dict(data)
     payload["id"] = item_id
+    stmt = (
+        dialect_insert(SyncItem.__table__)
+        .values(
+            user_id=user_id,
+            collection=collection,
+            item_id=item_id,
+            data=payload,
+            deleted=False,
+            rev=1,
+            updated_at=now,
+        )
+        .on_conflict_do_update(
+            index_elements=[
+                SyncItem.user_id,
+                SyncItem.collection,
+                SyncItem.item_id,
+            ],
+            set_=dict(
+                data=payload,
+                deleted=False,
+                rev=SyncItem.rev + 1,
+                updated_at=now,
+            ),
+        )
+    )
+    try:
+        await session.execute(stmt)
+    except IntegrityError:
+        await session.rollback()
+        row = (
+            await session.execute(
+                select(SyncItem).where(
+                    and_(
+                        SyncItem.user_id == user_id,
+                        SyncItem.collection == collection,
+                        SyncItem.item_id == item_id,
+                    )
+                )
+            )
+        ).scalar_one()
+        row.data = payload
+        row.deleted = False
+        row.rev += 1
+        row.updated_at = now
     row = (
         await session.execute(
             select(SyncItem).where(
@@ -181,23 +231,7 @@ async def _upsert_sync_item(
                 )
             )
         )
-    ).scalar_one_or_none()
-    if row is None:
-        row = SyncItem(
-            user_id=user_id,
-            collection=collection,
-            item_id=item_id,
-            data=payload,
-            rev=1,
-            updated_at=now,
-        )
-        session.add(row)
-    else:
-        row.data = payload
-        row.deleted = False
-        row.rev += 1
-        row.updated_at = now
-    await session.flush()
+    ).scalar_one()
     return SyncRecord(
         collection=row.collection,
         item_id=row.item_id,
