@@ -7,8 +7,10 @@ Multiple agents share this clone. Before touching any checkout, read
 before editing (`git worktree list` / `status`), never work in a tree
 with someone else's uncommitted changes, one worktree + branch per
 writer (ad-hoc sessions too), commit WIP often, and `git stash` is
-banned in shared clones (commit instead). Merges happen in a
-throwaway worktree on `main`, verified before push.
+banned in shared clones (commit instead). Merges land on `main` only
+through PRs (`gh pr merge --merge`) — direct pushes to `main` are
+blocked by branch protection. Verify a conflicted or risky PR in a
+throwaway worktree on `main` before merging it.
 
 ## File size: split on touch, don't bulk-refactor
 
@@ -146,10 +148,13 @@ needed after a rebuild. The funnel serves the main checkout's bundle,
 so building inside a worktree does NOT ship — get the change onto `main`
 first, then deploy from the main checkout:
 
-1. Commit your work on your branch and push it. Then land it on `main`
-   via a throwaway worktree per `tools/agent/CONVENTIONS.md` rule 4
-   (verify, then publish). Ad-hoc may merge to `main`; loop builders
-   must never.
+1. Commit your work on your branch and push it. Then open a PR against
+   `main` and merge it with `gh pr merge --merge` after verifying
+   per `tools/agent/CONVENTIONS.md` rule 4 (verify in a throwaway
+   worktree first if the PR is conflicted or risky). Branch protection
+   blocks every direct push to `main` — no exceptions, no
+   `git push origin HEAD:main`. Ad-hoc may merge its own PRs; loop
+   builders must never merge anything themselves.
 2. From the main checkout (`$HOME/Repos/a_fish_in_sea`), run
    `tools/agent/deploy.sh` — never a bare `flutter build web`. The script
    keeps the data-guardian gate, the DB backup, and the base-href checks
