@@ -74,3 +74,6 @@ DEBUG_PREFS.md
 
 # Server DB backups (real user data; produced by tools/agent/backup-db.sh)
 server/api/data/backups/
+
+# Golden-test failure dumps (regenerated on every failing run; never commit)
+test/goldens/failures/
