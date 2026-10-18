@@ -8,6 +8,7 @@ import '../../common/undo/undo_cubit.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_event_link.dart';
+import '../../nodes/service/node_event_sync.dart';
 import '../../nodes/view/goal_picker.dart';
 import '../../nodes/view/node_checkbox.dart';
 import '../../reporting/bloc/places_cubit.dart';
@@ -1971,7 +1972,12 @@ class EventEditorFormState extends State<EventEditorForm> {
       nodes.setScheduleBlock(seeded.id, synced.start, synced.end);
     }
     if (_done) {
-      NodeEventLink.toggleEventDone(calendar, nodes, syncedId);
+      NodeEventSync.setEventDone(
+        calendar,
+        nodes,
+        syncedId,
+        done: true,
+      );
     }
   }
 

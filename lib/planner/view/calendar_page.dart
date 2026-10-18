@@ -14,6 +14,7 @@ import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_calendar.dart';
 import '../../nodes/service/node_event_link.dart';
+import '../../nodes/service/node_event_sync.dart';
 import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_editor.dart';
 import '../../nodes/view/node_finish_sheet.dart';
@@ -29,6 +30,7 @@ import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../bloc/settings_cubit.dart';
 import '../service/calendar_report.dart';
+import '../service/event_reminders.dart';
 import 'calendar_data_source.dart';
 import 'calendar_filter_sheet.dart';
 import 'event_editor.dart';
@@ -1322,8 +1324,14 @@ class _CalendarPageState extends State<CalendarPage> {
       return;
     }
     final calendarCubit = context.read<CalendarCubit>();
+    final nodesCubit = context.read<NodeCubit>();
     final messenger = ScaffoldMessenger.of(context);
-    calendarCubit.updateEvent(updated);
+    NodeEventSync.rescheduleLinkedEvent(calendarCubit, nodesCubit, updated);
+    if (updated.reminderMinutesBefore == null) {
+      unawaited(EventReminderService.cancelReminder(updated.id));
+    } else {
+      unawaited(EventReminderService.scheduleReminder(updated));
+    }
     messenger.showSnackBar(
       SnackBar(
         content: Text(_movedText(updated)),
@@ -1339,7 +1347,12 @@ class _CalendarPageState extends State<CalendarPage> {
     final error = await context.read<FeedCubit>().pushEventUpdate(updated);
     if (!mounted) return;
     if (error != null) {
-      calendarCubit.updateEvent(previous);
+      NodeEventSync.rescheduleLinkedEvent(calendarCubit, nodesCubit, previous);
+      if (previous.reminderMinutesBefore == null) {
+        unawaited(EventReminderService.cancelReminder(previous.id));
+      } else {
+        unawaited(EventReminderService.scheduleReminder(previous));
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(error)),
       );

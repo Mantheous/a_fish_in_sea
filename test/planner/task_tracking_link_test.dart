@@ -1,8 +1,10 @@
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
+import 'package:a_fish_in_sea/nodes/service/node_event_sync.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
+import 'package:a_fish_in_sea/planner/service/calendar_report.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:mocktail/mocktail.dart';
@@ -95,6 +97,115 @@ void main() {
       );
       expect(nodes.byId('n1')?.isDone, isTrue,
           reason: 'done node must survive a re-sync of its event');
+    });
+
+    test('reapplying a saved done flag is idempotent', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      calendar.addEvent(evt('e1', taskId: 'n1', done: true));
+      nodes.addNode(taskNode('n1'));
+      final completedAt = DateTime(2026, 10, 13, 7, 25);
+      calendar.updateEvent(calendar.byId('e1')!.copyWith(
+        completedAt: completedAt,
+      ));
+
+      NodeEventSync.setEventDone(calendar, nodes, 'e1', done: true);
+
+      expect(calendar.byId('e1')?.done, isTrue);
+      expect(calendar.byId('e1')?.completedAt, completedAt);
+      expect(nodes.byId('n1')?.isDone, isTrue);
+    });
+  });
+
+  group('linked event/node persistence', () {
+    test('reschedule moves personal task due date with its event', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      final due = DateTime(2026, 10, 14);
+      final original = evt('e1', taskId: 'n1');
+      calendar.addEvent(original);
+      nodes.addNode(taskNode('n1', calendarEventId: 'e1').copyWith(
+        schedule: ScheduleFacet(
+          due: due,
+          start: original.start,
+          end: original.end,
+          isFixed: true,
+        ),
+      ));
+      final moved = original.copyWith(
+        start: DateTime(2026, 10, 15, 8),
+        end: DateTime(2026, 10, 15, 8, 45),
+      );
+
+      NodeEventSync.rescheduleLinkedEvent(calendar, nodes, moved);
+
+      final schedule = nodes.byId('n1')!.schedule!;
+      expect(calendar.byId('e1')?.start, moved.start);
+      expect(schedule.start, moved.start);
+      expect(schedule.end, moved.end);
+      expect(schedule.due, moved.start);
+      expect(schedule.isFixed, isTrue);
+    });
+
+    test('reschedule keeps imported assignment due date', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      final due = DateTime(2026, 10, 14);
+      final original = evt('e1', taskId: 'n1');
+      calendar.addEvent(original);
+      nodes.addNode(taskNode('n1', sourceEventId: 'e1').copyWith(
+        schedule: ScheduleFacet(
+          due: due,
+          start: original.start,
+          end: original.end,
+        ),
+      ));
+      final moved = original.copyWith(
+        start: DateTime(2026, 10, 15, 8),
+        end: DateTime(2026, 10, 15, 8, 45),
+      );
+
+      NodeEventSync.rescheduleLinkedEvent(calendar, nodes, moved);
+
+      final schedule = nodes.byId('n1')!.schedule!;
+      expect(schedule.start, moved.start);
+      expect(schedule.end, moved.end);
+      expect(schedule.due, due);
+    });
+
+    test('manual report edits and clears mirror to linked events', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      final event = evt('e1', taskId: 'n1');
+      calendar.addEvent(event.copyWith(
+        actualStart: DateTime(2026, 10, 13, 7),
+        actualEnd: DateTime(2026, 10, 13, 7, 30),
+      ));
+      nodes.addNode(taskNode('n1', calendarEventId: 'e1').copyWith(
+        actualStart: DateTime(2026, 10, 13, 7),
+        actualEnd: DateTime(2026, 10, 13, 7, 30),
+      ));
+
+      NodeEventSync.setNodeReported(
+        nodes,
+        calendar,
+        'n1',
+        DateTime(2026, 10, 13, 8),
+        DateTime(2026, 10, 13, 8, 30),
+      );
+      expect(calendar.byId('e1')?.actualStart, DateTime(2026, 10, 13, 8));
+
+      NodeEventSync.clearNodeReported(nodes, calendar, 'n1');
+      expect(nodes.byId('n1')?.hasReported, isFalse);
+      expect(calendar.byId('e1')?.hasReported, isFalse);
+      expect(
+        buildReportBlocks(
+          visibleEvents: [calendar.byId('e1')!],
+          nodes: nodes.state,
+          reportsByDay: const {},
+        ),
+        isEmpty,
+      );
     });
   });
 
