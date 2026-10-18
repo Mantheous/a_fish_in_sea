@@ -1,4 +1,5 @@
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
+import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
@@ -42,8 +43,7 @@ class _TransactionAssignmentDialogState
       _ensured = true;
       try {
         final nodeCubit = context.read<NodeCubit>();
-        final fromDate =
-            transaction.date.subtract(const Duration(days: 30));
+        final fromDate = transaction.date.subtract(const Duration(days: 30));
         final horizon = DateTime.now().add(const Duration(days: 365));
         for (final template in nodeCubit.state) {
           if (template.isTemplate && template.money != null) {
@@ -118,16 +118,25 @@ class _TransactionAssignmentDialogState
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(transaction.name,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.bold)),
-                            Text(TransactionAssignmentDialog._dateFmt.format(transaction.date),
-                                style: theme.textTheme.bodySmall),
+                            Text(
+                              transaction.name,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              TransactionAssignmentDialog._dateFmt.format(
+                                transaction.date,
+                              ),
+                              style: theme.textTheme.bodySmall,
+                            ),
                           ],
                         ),
                       ),
                       Text(
-                        TransactionAssignmentDialog._currFmt.format(transaction.amount),
+                        TransactionAssignmentDialog._currFmt.format(
+                          transaction.amount,
+                        ),
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 16,
@@ -154,8 +163,7 @@ class _TransactionAssignmentDialogState
                     ),
                   )
                 else ...[
-                  Text('Select a node:',
-                      style: theme.textTheme.bodySmall),
+                  Text('Select a node:', style: theme.textTheme.bodySmall),
                   const SizedBox(height: 8),
                   ConstrainedBox(
                     constraints: const BoxConstraints(maxHeight: 300),
@@ -165,43 +173,50 @@ class _TransactionAssignmentDialogState
                       itemBuilder: (context, index) {
                         final node = available[index];
                         final isSuggested = node.id == suggestedId;
-                        final target =
-                            node.money?.effectiveTarget ?? 0;
-                        final amountDiff =
-                            transaction.amount.abs() - target;
+                        final target = node.money?.effectiveTarget ?? 0;
+                        final amountDiff = transaction.amount.abs() - target;
 
                         return Card(
                           color: isSuggested
-                              ? theme.colorScheme.primaryContainer
-                                  .withValues(alpha: 0.3)
+                              ? theme.colorScheme.primaryContainer.withValues(
+                                  alpha: 0.3,
+                                )
                               : null,
                           child: ListTile(
                             dense: true,
                             leading: isSuggested
-                                ? Icon(Icons.auto_awesome,
+                                ? Icon(
+                                    Icons.auto_awesome,
                                     color: theme.colorScheme.primary,
-                                    size: 20)
+                                    size: 20,
+                                  )
                                 : null,
                             title: Row(
                               children: [
                                 Expanded(
-                                    child: Text(node.title,
-                                        overflow: TextOverflow.ellipsis)),
+                                  child: Text(
+                                    node.title,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
                                 if (isSuggested)
                                   Chip(
-                                    label: const Text('Suggested',
-                                        style: TextStyle(fontSize: 10)),
+                                    label: const Text(
+                                      'Suggested',
+                                      style: TextStyle(fontSize: 10),
+                                    ),
                                     visualDensity: VisualDensity.compact,
                                     side: BorderSide.none,
-                                    backgroundColor: theme
-                                        .colorScheme.primaryContainer,
+                                    backgroundColor:
+                                        theme.colorScheme.primaryContainer,
                                   ),
                               ],
                             ),
                             subtitle: Row(
                               children: [
                                 Text(
-                                    '${TransactionAssignmentDialog._currFmt.format(target)} · ${TransactionAssignmentDialog._dateFmt.format(nodeDate(node) ?? transaction.date)}'),
+                                  '${TransactionAssignmentDialog._currFmt.format(target)} · ${TransactionAssignmentDialog._dateFmt.format(nodeDate(node) ?? transaction.date)}',
+                                ),
                                 if (target > 0 && amountDiff.abs() > 0.01)
                                   Text(
                                     amountDiff > 0
@@ -227,6 +242,11 @@ class _TransactionAssignmentDialogState
             ),
           ),
           actions: [
+            if (transaction.assignedNodeId != null)
+              TextButton(
+                onPressed: () => _unassign(context),
+                child: const Text('Unassign'),
+              ),
             TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('Cancel'),
@@ -241,23 +261,61 @@ class _TransactionAssignmentDialogState
     final nodeCubit = context.read<NodeCubit>();
     final transactionsCubit = context.read<TransactionsCubit>();
 
-    // Link the node to this transaction (exact / subdivide / over-cap).
-    nodeCubit.linkTransaction(
-      nodeId: node.id,
-      transactionId: transaction.id,
-      transactionAmount: transaction.amount,
-    );
+    final previousNodeId = transaction.assignedNodeId;
+    if (previousNodeId == node.id &&
+        node.money?.linkedTransactionIds.contains(transaction.id) == true) {
+      Navigator.pop(context);
+      return;
+    }
 
-    // Mark the transaction as assigned to the node.
-    transactionsCubit.assignNode(transaction.id, node.id);
+    RevertableHydratedCubit.atomic([nodeCubit, transactionsCubit], () {
+      // Move the existing report before linking the destination so the
+      // amount is counted by exactly one node throughout reassignment.
+      if (previousNodeId != null && previousNodeId != node.id) {
+        nodeCubit.unlinkTransaction(
+          previousNodeId,
+          transaction.id,
+          transactionAmount: transaction.amount,
+        );
+      }
+
+      // Link the node to this transaction (exact / subdivide / over-cap).
+      nodeCubit.linkTransaction(
+        nodeId: node.id,
+        transactionId: transaction.id,
+        transactionAmount: transaction.amount,
+      );
+
+      // Mark the transaction as assigned to the node.
+      transactionsCubit.assignNode(transaction.id, node.id);
+    });
 
     Navigator.pop(context);
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content:
-            Text('Assigned "${transaction.name}" to "${node.title}"'),
+        content: Text('Assigned "${transaction.name}" to "${node.title}"'),
       ),
     );
+  }
+
+  void _unassign(BuildContext context) {
+    final nodeCubit = context.read<NodeCubit>();
+    final transactionsCubit = context.read<TransactionsCubit>();
+    final previousNodeId = transaction.assignedNodeId;
+    RevertableHydratedCubit.atomic([nodeCubit, transactionsCubit], () {
+      if (previousNodeId != null) {
+        nodeCubit.unlinkTransaction(
+          previousNodeId,
+          transaction.id,
+          transactionAmount: transaction.amount,
+        );
+      }
+      transactionsCubit.clearNodeAssignment(transaction.id);
+    });
+    Navigator.pop(context);
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Unassigned "${transaction.name}"')));
   }
 }

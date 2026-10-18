@@ -1,11 +1,11 @@
-import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
+import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
 
 /// Manages imported bank transactions from Plaid.
 ///
 /// Transactions are **immutable** once imported — the only mutable
 /// operation is assigning an expense to a transaction for reconciliation.
-class TransactionsCubit extends HydratedCubit<List<Transaction>> {
+class TransactionsCubit extends RevertableHydratedCubit<List<Transaction>> {
   TransactionsCubit() : super([]);
 
   // ── Import from Plaid ───────────────────────────────────────────────
@@ -13,8 +13,9 @@ class TransactionsCubit extends HydratedCubit<List<Transaction>> {
   /// Bulk import transactions from Plaid, deduplicating by transaction ID.
   void syncFromPlaid(List<Transaction> plaidTransactions) {
     final existingIds = state.map((t) => t.id).toSet();
-    final newTransactions =
-        plaidTransactions.where((t) => !existingIds.contains(t.id)).toList();
+    final newTransactions = plaidTransactions
+        .where((t) => !existingIds.contains(t.id))
+        .toList();
 
     if (newTransactions.isNotEmpty) {
       emit([...state, ...newTransactions]);
@@ -26,22 +27,26 @@ class TransactionsCubit extends HydratedCubit<List<Transaction>> {
   /// Assign a transaction to an expense for reconciliation.
   /// This is the only mutation allowed on a transaction.
   void assignExpense(String transactionId, String expenseId) {
-    emit(state.map((t) {
-      if (t.id == transactionId) {
-        return t.copyWith(assignedExpenseId: expenseId);
-      }
-      return t;
-    }).toList());
+    emitChange(
+      state.map((t) {
+        if (t.id == transactionId) {
+          return t.copyWith(assignedExpenseId: expenseId);
+        }
+        return t;
+      }).toList(),
+    );
   }
 
   /// Clear the expense assignment from a transaction.
   void clearAssignment(String transactionId) {
-    emit(state.map((t) {
-      if (t.id == transactionId) {
-        return t.copyWith(clearAssignment: true);
-      }
-      return t;
-    }).toList());
+    emitChange(
+      state.map((t) {
+        if (t.id == transactionId) {
+          return t.copyWith(clearAssignment: true);
+        }
+        return t;
+      }).toList(),
+    );
   }
 
   // ── Node assignment (unified goals/tasks) ───────────────────────────
@@ -51,23 +56,50 @@ class TransactionsCubit extends HydratedCubit<List<Transaction>> {
   // history survives untouched.
 
   /// Assign a transaction to a unified node for automatic reporting.
-  void assignNode(String transactionId, String nodeId) {
-    emit(state.map((t) {
+  void assignNode(
+    String transactionId,
+    String nodeId, {
+    bool recordUndo = true,
+  }) {
+    final next = state.map((t) {
       if (t.id == transactionId) {
         return t.copyWith(assignedNodeId: nodeId);
       }
       return t;
-    }).toList());
+    }).toList();
+    if (recordUndo) {
+      emitChange(next);
+    } else {
+      emit(next);
+    }
   }
 
   /// Clear the node assignment from a transaction.
   void clearNodeAssignment(String transactionId) {
-    emit(state.map((t) {
-      if (t.id == transactionId) {
+    emitChange(
+      state.map((t) {
+        if (t.id == transactionId) {
+          return t.copyWith(clearNodeAssignment: true);
+        }
+        return t;
+      }).toList(),
+    );
+  }
+
+  /// Clear node references after a node or cascade of nodes is deleted.
+  /// Returns how many transactions changed.
+  int clearNodeAssignmentsFor(Set<String> nodeIds) {
+    if (nodeIds.isEmpty) return 0;
+    var changed = 0;
+    final next = state.map((t) {
+      if (t.assignedNodeId != null && nodeIds.contains(t.assignedNodeId)) {
+        changed++;
         return t.copyWith(clearNodeAssignment: true);
       }
       return t;
-    }).toList());
+    }).toList();
+    if (changed > 0) emitChange(next);
+    return changed;
   }
 
   // ── Queries ─────────────────────────────────────────────────────────
@@ -93,7 +125,9 @@ class TransactionsCubit extends HydratedCubit<List<Transaction>> {
   /// Returns null if no match found.
   String? suggestExpenseForTransaction(String transactionName) {
     final matches = state.where(
-        (t) => t.isAssigned && t.name.toLowerCase() == transactionName.toLowerCase());
+      (t) =>
+          t.isAssigned && t.name.toLowerCase() == transactionName.toLowerCase(),
+    );
     if (matches.isNotEmpty) {
       return matches.first.assignedExpenseId;
     }
@@ -104,13 +138,16 @@ class TransactionsCubit extends HydratedCubit<List<Transaction>> {
   /// a same-named transaction reported to before. Points at a node id,
   /// never a category string or tag.
   String? suggestNodeForTransaction(String transactionName) {
-    final matches = state.where((t) =>
-        t.isAssignedToNode &&
-        t.name.toLowerCase() == transactionName.toLowerCase());
-    if (matches.isNotEmpty) {
-      return matches.first.assignedNodeId;
-    }
-    return null;
+    final matches =
+        state
+            .where(
+              (t) =>
+                  t.isAssignedToNode &&
+                  t.name.toLowerCase() == transactionName.toLowerCase(),
+            )
+            .toList()
+          ..sort((a, b) => b.date.compareTo(a.date));
+    return matches.isEmpty ? null : matches.first.assignedNodeId;
   }
 
   // ── Persistence ─────────────────────────────────────────────────────

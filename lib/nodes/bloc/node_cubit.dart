@@ -72,8 +72,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   List<Node> childrenOf(String parentId) =>
       state.where((n) => n.parentIds.contains(parentId)).toList();
 
-  List<Node> get roots =>
-      state.where((n) => n.parentIds.isEmpty).toList();
+  List<Node> get roots => state.where((n) => n.parentIds.isEmpty).toList();
 
   List<Node> instancesOf(String templateId) =>
       state.where((n) => n.instanceOfId == templateId).toList();
@@ -142,10 +141,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
 
   /// Nodes linked to any of [eventIds] within [byId] (mirrors [_byEventId]
   /// over an evolving batch map instead of the cubit state).
-  static List<Node> _nodesForEventIn(
-    Map<String, Node> byId,
-    String eventId,
-  ) =>
+  static List<Node> _nodesForEventIn(Map<String, Node> byId, String eventId) =>
       [
         for (final n in byId.values)
           if (n.calendarEventId == eventId || n.sourceEventId == eventId) n,
@@ -155,10 +151,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   /// seeded from a task ("Add to calendar") carry this link before — and
   /// sometimes without — the node's `calendarEventId` back-link, so
   /// completion mirrors must follow it too.
-  static List<Node> _taskIdNodesIn(
-    Map<String, Node> byId,
-    String? taskId,
-  ) {
+  static List<Node> _taskIdNodesIn(Map<String, Node> byId, String? taskId) {
     if (taskId == null || taskId.isEmpty) return const [];
     final node = byId[taskId];
     return node == null ? const [] : [node];
@@ -181,25 +174,27 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       final existing = _nodesForEventIn(pending, event.id);
       if (existing.isEmpty) {
         final now = DateTime.now();
-        put(Node(
-          id: event.id,
-          title: event.subject,
-          notes: event.notes,
-          createdAt: now,
-          status: event.done ? NodeStatus.done : NodeStatus.open,
-          completedAt: event.completedAt,
-          schedule: ScheduleFacet(
-            due: event.start,
-            start: event.start,
-            end: event.end,
-            allDay: event.allDay,
+        put(
+          Node(
+            id: event.id,
+            title: event.subject,
+            notes: event.notes,
+            createdAt: now,
+            status: event.done ? NodeStatus.done : NodeStatus.open,
+            completedAt: event.completedAt,
+            schedule: ScheduleFacet(
+              due: event.start,
+              start: event.start,
+              end: event.end,
+              allDay: event.allDay,
+            ),
+            sourceEventId: event.id,
+            feedId: event.feedId,
+            classId: event.feedId,
+            classLabel: event.classLabel,
+            assignees: event.assignees,
           ),
-          sourceEventId: event.id,
-          feedId: event.feedId,
-          classId: event.feedId,
-          classLabel: event.classLabel,
-          assignees: event.assignees,
-        ));
+        );
         continue;
       }
       final want = event.failed
@@ -209,12 +204,14 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         if (node.status != want ||
             node.completedAt != event.completedAt ||
             !_sameAssignees(node.assignees, event.assignees)) {
-          put(node.copyWith(
-            status: want,
-            completedAt: event.completedAt,
-            clearCompletedAt: !event.done,
-            assignees: event.assignees,
-          ));
+          put(
+            node.copyWith(
+              status: want,
+              completedAt: event.completedAt,
+              clearCompletedAt: !event.done,
+              assignees: event.assignees,
+            ),
+          );
         }
       }
     }
@@ -285,18 +282,20 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         continue;
       }
       final id = 'node:${event.id}';
-      put(Node(
-        id: id,
-        title: event.subject,
-        notes: event.notes,
-        createdAt: DateTime.now(),
-        status: event.done ? NodeStatus.done : NodeStatus.open,
-        completedAt: event.completedAt,
-        schedule: scheduleForEvent(event),
-        classLabel: event.classLabel,
-        calendarEventId: event.id,
-        assignees: event.assignees,
-      ));
+      put(
+        Node(
+          id: id,
+          title: event.subject,
+          notes: event.notes,
+          createdAt: DateTime.now(),
+          status: event.done ? NodeStatus.done : NodeStatus.open,
+          completedAt: event.completedAt,
+          schedule: scheduleForEvent(event),
+          classLabel: event.classLabel,
+          calendarEventId: event.id,
+          assignees: event.assignees,
+        ),
+      );
       ids[event.id] = id;
     }
     writeNodes(upserts: upserts);
@@ -323,8 +322,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       for (final node in _nodesForEventIn(pending, eventId)) {
         if (seen.add(node.id)) targets.add(pending[node.id] ?? node);
       }
-      for (final node
-          in _taskIdNodesIn(pending, taskIdsByEvent?[eventId])) {
+      for (final node in _taskIdNodesIn(pending, taskIdsByEvent?[eventId])) {
         if (seen.add(node.id)) targets.add(pending[node.id] ?? node);
       }
       for (final node in targets) {
@@ -382,12 +380,10 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   /// carry the dates. Unbounded goals are excluded too: they never
   /// complete, so they would sit in the list forever.
   List<Node> get openNodes {
-    final open = state
-        .where((n) => n.isOpen && !n.isTemplate && !n.isUnbounded)
-        .toList()
-      ..sort(_byDueThenCreated);
-    final done = state.where((n) => n.isDone).toList()
-      ..sort(_byCompletedDesc);
+    final open =
+        state.where((n) => n.isOpen && !n.isTemplate && !n.isUnbounded).toList()
+          ..sort(_byDueThenCreated);
+    final done = state.where((n) => n.isDone).toList()..sort(_byCompletedDesc);
     return [...open, ...done];
   }
 
@@ -407,8 +403,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       if (due == null) return false;
       final day = DateTime(due.year, due.month, due.day);
       return day.isBefore(tomorrow);
-    }).toList()
-      ..sort(_byDueThenCreated);
+    }).toList()..sort(_byDueThenCreated);
   }
 
   /// Open, non-template nodes with a due date strictly before the start
@@ -422,8 +417,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       final due = n.schedule?.due;
       if (due == null) return false;
       return due.isBefore(today);
-    }).toList()
-      ..sort(_byDueThenCreated);
+    }).toList()..sort(_byDueThenCreated);
   }
 
   /// Open, non-template nodes due on today's calendar day. Powers the
@@ -439,8 +433,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       final due = n.schedule?.due;
       if (due == null) return false;
       return !due.isBefore(today) && due.isBefore(tomorrow);
-    }).toList()
-      ..sort(_byDueThenCreated);
+    }).toList()..sort(_byDueThenCreated);
   }
 
   /// Open nodes due in the rest of the calendar week: start of today
@@ -464,8 +457,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       final due = n.schedule?.due;
       if (due == null) return false;
       return !due.isBefore(today) && due.isBefore(endExclusive);
-    }).toList()
-      ..sort(_byDueThenCreated);
+    }).toList()..sort(_byDueThenCreated);
   }
 
   // ── Validation (DAG) ────────────────────────────────────────────────
@@ -558,8 +550,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       final error = validateParents(updated, updated.parentIds);
       if (error != null) return error;
     }
-    emitChange(
-        state.map((n) => n.id == updated.id ? updated : n).toList());
+    emitChange(state.map((n) => n.id == updated.id ? updated : n).toList());
     return null;
   }
 
@@ -640,9 +631,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final closure = <String>{sourceId, ...subtreeIds(sourceId, state)};
     final at = now ?? DateTime.now();
     final stamp = idSuffix ?? '${at.microsecondsSinceEpoch}';
-    final remap = {
-      for (final oldId in closure) oldId: '${oldId}_copy_$stamp',
-    };
+    final remap = {for (final oldId in closure) oldId: '${oldId}_copy_$stamp'};
     for (final newId in remap.values) {
       if (byId(newId) != null) return 'A node with that id exists.';
     }
@@ -653,35 +642,41 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         for (final p in n.parentIds) remap[p] ?? p,
         if (n.id == sourceId && attachToParentId != null) attachToParentId,
       ];
-      copies.add(Node(
-        id: remap[n.id]!,
-        title: n.id == sourceId ? '${n.title} (copy)' : n.title,
-        notes: n.notes,
-        parentIds: parents,
-        status: NodeStatus.open,
-        createdAt: at,
-        isUnbounded: n.isUnbounded,
-        schedule: n.schedule,
-        money: n.money?.copyWith(
-            status: MoneyStatus.projected, clearActual: true),
-        effort: n.effort,
-        // A copy is a fresh goal: same deck and target, but the review
-        // count starts over (like money actuals, which are cleared too).
-        anki: n.anki?.copyWith(
-            clearReviewsActual: true, clearLastSyncedAt: true),
-        recurrence: n.recurrence,
-        rule: n.rule,
-        instanceOfId: n.instanceOfId == null
-            ? null
-            : (remap[n.instanceOfId] ?? n.instanceOfId),
-        overriddenFields: Set.of(n.overriddenFields),
-        sourceEventId: null,
-        calendarEventId: null,
-        feedId: n.feedId,
-        classId: n.classId,
-        classLabel: n.classLabel,
-        assignees: n.assignees,
-      ));
+      copies.add(
+        Node(
+          id: remap[n.id]!,
+          title: n.id == sourceId ? '${n.title} (copy)' : n.title,
+          notes: n.notes,
+          parentIds: parents,
+          status: NodeStatus.open,
+          createdAt: at,
+          isUnbounded: n.isUnbounded,
+          schedule: n.schedule,
+          money: n.money?.copyWith(
+            status: MoneyStatus.projected,
+            clearActual: true,
+          ),
+          effort: n.effort,
+          // A copy is a fresh goal: same deck and target, but the review
+          // count starts over (like money actuals, which are cleared too).
+          anki: n.anki?.copyWith(
+            clearReviewsActual: true,
+            clearLastSyncedAt: true,
+          ),
+          recurrence: n.recurrence,
+          rule: n.rule,
+          instanceOfId: n.instanceOfId == null
+              ? null
+              : (remap[n.instanceOfId] ?? n.instanceOfId),
+          overriddenFields: Set.of(n.overriddenFields),
+          sourceEventId: null,
+          calendarEventId: null,
+          feedId: n.feedId,
+          classId: n.classId,
+          classLabel: n.classLabel,
+          assignees: n.assignees,
+        ),
+      );
     }
     emitChange([...state, ...copies]);
     return null;
@@ -720,23 +715,25 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final kids = <Node>[];
     for (var i = 0; i < slices.length; i++) {
       final s = slices[i];
-      kids.add(Node(
-        id: '${parentId}_step${i + 1}_$stamp',
-        title: s.title,
-        parentIds: [parentId],
-        createdAt: at,
-        schedule: s.due == null ? null : ScheduleFacet(due: s.due),
-        money: s.targetAmount == null || parent.money == null
-            ? null
-            : MoneyFacet(
-                targetAmount: s.targetAmount!,
-                direction: parent.money!.direction,
-                status: MoneyStatus.projected,
-              ),
-        effort: s.targetMinutes == null
-            ? null
-            : EffortFacet(targetMinutes: s.targetMinutes!),
-      ));
+      kids.add(
+        Node(
+          id: '${parentId}_step${i + 1}_$stamp',
+          title: s.title,
+          parentIds: [parentId],
+          createdAt: at,
+          schedule: s.due == null ? null : ScheduleFacet(due: s.due),
+          money: s.targetAmount == null || parent.money == null
+              ? null
+              : MoneyFacet(
+                  targetAmount: s.targetAmount!,
+                  direction: parent.money!.direction,
+                  status: MoneyStatus.projected,
+                ),
+          effort: s.targetMinutes == null
+              ? null
+              : EffortFacet(targetMinutes: s.targetMinutes!),
+        ),
+      );
     }
     if (kids.any((k) => byId(k.id) != null)) {
       return (error: 'A node with that id exists.', ids: const []);
@@ -786,11 +783,14 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final next = <Node>[];
     for (final n in state) {
       if (doomed.contains(n.id)) continue;
-      final keptParents =
-          n.parentIds.where((p) => !doomed.contains(p)).toList();
-      next.add(keptParents.length == n.parentIds.length
-          ? n
-          : n.copyWith(parentIds: keptParents));
+      final keptParents = n.parentIds
+          .where((p) => !doomed.contains(p))
+          .toList();
+      next.add(
+        keptParents.length == n.parentIds.length
+            ? n
+            : n.copyWith(parentIds: keptParents),
+      );
     }
     emitChange(next);
   }
@@ -799,17 +799,22 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final node = byId(id);
     if (node == null) return;
     final at = now ?? DateTime.now();
-    updateNode(node.isDone
-        ? node.copyWith(status: NodeStatus.open, clearCompletedAt: true)
-        : node.copyWith(status: NodeStatus.done, completedAt: at));
+    updateNode(
+      node.isDone
+          ? node.copyWith(status: NodeStatus.open, clearCompletedAt: true)
+          : node.copyWith(status: NodeStatus.done, completedAt: at),
+    );
   }
+
   void setStatus(String id, NodeStatus status, {DateTime? now}) {
     final node = byId(id);
     if (node == null || node.status == status) return;
     final at = now ?? DateTime.now();
-    updateNode(status == NodeStatus.done
-        ? node.copyWith(status: status, completedAt: at)
-        : node.copyWith(status: status, clearCompletedAt: true));
+    updateNode(
+      status == NodeStatus.done
+          ? node.copyWith(status: status, completedAt: at)
+          : node.copyWith(status: status, clearCompletedAt: true),
+    );
   }
 
   /// Marks many nodes done/open as ONE undoable emit (one undo record,
@@ -831,9 +836,11 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         continue;
       }
       changed++;
-      next.add(done
-          ? n.copyWith(status: NodeStatus.done, completedAt: at)
-          : n.copyWith(status: NodeStatus.open, clearCompletedAt: true));
+      next.add(
+        done
+            ? n.copyWith(status: NodeStatus.done, completedAt: at)
+            : n.copyWith(status: NodeStatus.open, clearCompletedAt: true),
+      );
     }
     if (changed == 0) return 0;
     emitChange(next);
@@ -883,11 +890,14 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final next = <Node>[];
     for (final n in state) {
       if (doomed.contains(n.id)) continue;
-      final keptParents =
-          n.parentIds.where((p) => !doomed.contains(p)).toList();
-      next.add(keptParents.length == n.parentIds.length
-          ? n
-          : n.copyWith(parentIds: keptParents));
+      final keptParents = n.parentIds
+          .where((p) => !doomed.contains(p))
+          .toList();
+      next.add(
+        keptParents.length == n.parentIds.length
+            ? n
+            : n.copyWith(parentIds: keptParents),
+      );
     }
     emitChange(next);
     return before - next.length;
@@ -898,18 +908,21 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   void setScheduleBlock(String id, DateTime start, DateTime end) {
     final node = byId(id);
     if (node == null) return;
-    final normalizedEnd =
-        end.isAfter(start) ? end : start.add(const Duration(hours: 1));
+    final normalizedEnd = end.isAfter(start)
+        ? end
+        : start.add(const Duration(hours: 1));
     final current = node.schedule;
-    updateNode(node.copyWith(
-      schedule: ScheduleFacet(
-        due: current?.due,
-        start: start,
-        end: normalizedEnd,
-        allDay: current?.allDay ?? false,
-        isFixed: current?.isFixed ?? false,
+    updateNode(
+      node.copyWith(
+        schedule: ScheduleFacet(
+          due: current?.due,
+          start: start,
+          end: normalizedEnd,
+          allDay: current?.allDay ?? false,
+          isFixed: current?.isFixed ?? false,
+        ),
       ),
-    ));
+    );
   }
 
   void clearScheduleBlock(String id) {
@@ -918,10 +931,11 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     if (node == null || current == null || !current.hasCalendarBlock) {
       return;
     }
-    updateNode(node.copyWith(
-      schedule: current.copyWith(
-          clearStart: true, clearEnd: true),
-    ));
+    updateNode(
+      node.copyWith(
+        schedule: current.copyWith(clearStart: true, clearEnd: true),
+      ),
+    );
   }
 
   /// Points a node at its personal calendar event (node → event side of
@@ -976,10 +990,15 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         final s = active.timerStartedAt!;
         final e = at.isAfter(s) ? at : s.add(const Duration(seconds: 1));
         next = next
-            .map((n) => n.id == activeId
-                ? n.copyWith(
-                    actualStart: s, actualEnd: e, clearTimerStartedAt: true)
-                : n)
+            .map(
+              (n) => n.id == activeId
+                  ? n.copyWith(
+                      actualStart: s,
+                      actualEnd: e,
+                      clearTimerStartedAt: true,
+                    )
+                  : n,
+            )
             .toList();
       }
     }
@@ -995,8 +1014,9 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final at = now ?? DateTime.now();
     final s = node.timerStartedAt!;
     final e = at.isAfter(s) ? at : s.add(const Duration(seconds: 1));
-    updateNode(node.copyWith(
-        actualStart: s, actualEnd: e, clearTimerStartedAt: true));
+    updateNode(
+      node.copyWith(actualStart: s, actualEnd: e, clearTimerStartedAt: true),
+    );
   }
 
   void cancelTracking(String id) {
@@ -1013,8 +1033,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final node = byId(id);
     if (node == null || !node.isTracking) return;
     final at = now ?? DateTime.now();
-    updateNode(node.copyWith(
-        timerStartedAt: start.isAfter(at) ? at : start));
+    updateNode(node.copyWith(timerStartedAt: start.isAfter(at) ? at : start));
   }
 
   /// Sets the reported interval directly (manual entry + post-stop
@@ -1024,12 +1043,15 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   void setReported(String id, DateTime start, DateTime end) {
     final node = byId(id);
     if (node == null) return;
-    updateNode(node.copyWith(
-      actualStart: start,
-      actualEnd:
-          end.isAfter(start) ? end : start.add(const Duration(minutes: 1)),
-      clearTimerStartedAt: true,
-    ));
+    updateNode(
+      node.copyWith(
+        actualStart: start,
+        actualEnd: end.isAfter(start)
+            ? end
+            : start.add(const Duration(minutes: 1)),
+        clearTimerStartedAt: true,
+      ),
+    );
   }
 
   void clearReported(String id) {
@@ -1040,11 +1062,13 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         !node.isTracking) {
       return;
     }
-    updateNode(node.copyWith(
-      clearActualStart: true,
-      clearActualEnd: true,
-      clearTimerStartedAt: true,
-    ));
+    updateNode(
+      node.copyWith(
+        clearActualStart: true,
+        clearActualEnd: true,
+        clearTimerStartedAt: true,
+      ),
+    );
   }
 
   /// Marks a goal as part of the curated set shown on the time-tracking
@@ -1077,8 +1101,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   void moveTracking(String fromId, String toId) =>
       _moveRecordedTime(fromId, toId);
 
-  void moveTimer(String fromId, String toId) =>
-      _moveRecordedTime(fromId, toId);
+  void moveTimer(String fromId, String toId) => _moveRecordedTime(fromId, toId);
 
   void _moveRecordedTime(String fromId, String toId) {
     if (fromId == toId) return;
@@ -1086,27 +1109,30 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final to = byId(toId);
     if (from == null || to == null) return;
     final hasRunning = from.timerStartedAt != null;
-    final hasReported =
-        from.actualStart != null || from.actualEnd != null;
+    final hasReported = from.actualStart != null || from.actualEnd != null;
     if (!hasRunning && !hasReported) return;
     final next = <Node>[];
     for (final n in state) {
       if (n.id == toId) {
-        next.add(n.copyWith(
-          timerStartedAt: hasRunning
-              ? from.timerStartedAt
-              : n.timerStartedAt,
-          actualStart:
-              hasReported ? (from.actualStart ?? n.actualStart) : n.actualStart,
-          actualEnd:
-              hasReported ? (from.actualEnd ?? n.actualEnd) : n.actualEnd,
-        ));
+        next.add(
+          n.copyWith(
+            timerStartedAt: hasRunning ? from.timerStartedAt : n.timerStartedAt,
+            actualStart: hasReported
+                ? (from.actualStart ?? n.actualStart)
+                : n.actualStart,
+            actualEnd: hasReported
+                ? (from.actualEnd ?? n.actualEnd)
+                : n.actualEnd,
+          ),
+        );
       } else if (n.id == fromId) {
-        next.add(n.copyWith(
-          clearTimerStartedAt: hasRunning,
-          clearActualStart: hasReported && from.actualStart != null,
-          clearActualEnd: hasReported && from.actualEnd != null,
-        ));
+        next.add(
+          n.copyWith(
+            clearTimerStartedAt: hasRunning,
+            clearActualStart: hasReported && from.actualStart != null,
+            clearActualEnd: hasReported && from.actualEnd != null,
+          ),
+        );
       } else {
         next.add(n);
       }
@@ -1149,10 +1175,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       effort: node.effort,
       instanceOfId: node.instanceOfId,
     );
-    emitChange([
-      for (final n in state) n.id == id ? reduced : n,
-      leftover,
-    ]);
+    emitChange([for (final n in state) n.id == id ? reduced : n, leftover]);
   }
 
   void mergeNodes(String keepId, String absorbId) {
@@ -1164,8 +1187,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     if (keepMoney == null || absorbMoney == null) return;
     final merged = keep.copyWith(
       money: keepMoney.copyWith(
-        targetAmount:
-            keepMoney.effectiveTarget + absorbMoney.effectiveTarget,
+        targetAmount: keepMoney.effectiveTarget + absorbMoney.effectiveTarget,
         rolloverAmount: 0.0,
       ),
       overriddenFields: {...keep.overriddenFields, 'money.targetAmount'},
@@ -1187,20 +1209,21 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   }) {
     final node = byId(nodeId);
     if (node == null) return;
+    if (nodeLinkedTxnIds(node).contains(transactionId)) return;
     final money = node.money;
     if (money == null) {
       // Ad-hoc link: audit trail only; actuals resolve via txn amounts.
       if (!nodeLinkedTxnIds(node).contains(transactionId)) {
-        updateNode(node.copyWith(
+        updateNode(
+          node.copyWith(
             money: MoneyFacet(
-          targetAmount: 0,
-          actualAmount: transactionAmount.abs(),
-          status: MoneyStatus.paid,
-          linkedTransactionIds: [
-            ...nodeLinkedTxnIds(node),
-            transactionId
-          ],
-        )));
+              targetAmount: 0,
+              actualAmount: transactionAmount.abs(),
+              status: MoneyStatus.paid,
+              linkedTransactionIds: [...nodeLinkedTxnIds(node), transactionId],
+            ),
+          ),
+        );
       }
       return;
     }
@@ -1209,33 +1232,32 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     // Linking makes the node concrete: it now owns its money fields and
     // stops inheriting template changes for them.
     Set<String> owned(Node n) => {
-          ...n.overriddenFields,
-          'money.targetAmount',
-          'money.actualAmount',
-          'money.status',
-        };
+      ...n.overriddenFields,
+      'money.targetAmount',
+      'money.actualAmount',
+      'money.status',
+    };
     if (target <= 0 || (target - txnAbs).abs() < 0.01) {
-      updateNode(node.copyWith(
-        money: money.copyWith(
-          actualAmount: txnAbs,
-          status: MoneyStatus.paid,
-          linkedTransactionIds: [
-            ...money.linkedTransactionIds,
-            transactionId
-          ],
+      updateNode(
+        node.copyWith(
+          money: money.copyWith(
+            actualAmount: (money.actualAmount ?? 0) + txnAbs,
+            status: MoneyStatus.paid,
+            linkedTransactionIds: [
+              ...money.linkedTransactionIds,
+              transactionId,
+            ],
+          ),
+          overriddenFields: owned(node),
         ),
-        overriddenFields: owned(node),
-      ));
+      );
     } else if (txnAbs < target) {
       final reduced = node.copyWith(
         money: money.copyWith(
           targetAmount: txnAbs,
-          actualAmount: txnAbs,
+          actualAmount: (money.actualAmount ?? 0) + txnAbs,
           status: MoneyStatus.paid,
-          linkedTransactionIds: [
-            ...money.linkedTransactionIds,
-            transactionId
-          ],
+          linkedTransactionIds: [...money.linkedTransactionIds, transactionId],
         ),
         overriddenFields: owned(node),
       );
@@ -1262,31 +1284,49 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         leftover,
       ]);
     } else {
-      updateNode(node.copyWith(
-        money: money.copyWith(
-          actualAmount: txnAbs,
-          status: MoneyStatus.paid,
-          linkedTransactionIds: [
-            ...money.linkedTransactionIds,
-            transactionId
-          ],
+      updateNode(
+        node.copyWith(
+          money: money.copyWith(
+            actualAmount: (money.actualAmount ?? 0) + txnAbs,
+            status: MoneyStatus.paid,
+            linkedTransactionIds: [
+              ...money.linkedTransactionIds,
+              transactionId,
+            ],
+          ),
+          overriddenFields: owned(node),
         ),
-        overriddenFields: owned(node),
-      ));
+      );
     }
   }
 
-  void unlinkTransaction(String nodeId, String transactionId) {
+  void unlinkTransaction(
+    String nodeId,
+    String transactionId, {
+    double? transactionAmount,
+  }) {
     final node = byId(nodeId);
     final money = node?.money;
     if (node == null || money == null) return;
     if (!money.linkedTransactionIds.contains(transactionId)) return;
-    updateNode(node.copyWith(
+    final remaining = money.linkedTransactionIds
+        .where((t) => t != transactionId)
+        .toList();
+    final remainingActual = money.actualAmount == null
+        ? null
+        : (money.actualAmount! - (transactionAmount?.abs() ?? 0))
+              .clamp(0.0, double.infinity)
+              .toDouble();
+    updateNode(
+      node.copyWith(
         money: money.copyWith(
-      linkedTransactionIds: money.linkedTransactionIds
-          .where((t) => t != transactionId)
-          .toList(),
-    )));
+          linkedTransactionIds: remaining,
+          actualAmount: remaining.isEmpty ? null : remainingActual,
+          clearActual: remaining.isEmpty,
+          status: remaining.isEmpty ? MoneyStatus.projected : money.status,
+        ),
+      ),
+    );
   }
 
   // ── Recurrence: materialize template instances ──────────────────────
@@ -1310,15 +1350,14 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final template = byId(templateId);
     final recurrence = template?.recurrence;
     if (template == null || recurrence == null) return 0;
-    final anchor =
-        template.schedule?.due ?? template.schedule?.start ?? from;
+    final anchor = template.schedule?.due ?? template.schedule?.start ?? from;
     var cursor = _firstOnOrAfter(anchor, recurrence, from);
     final owned = existingIds != null;
     final known = existingIds ?? state.map((n) => n.id).toSet();
     final fresh = <Node>[];
     var guard = 0;
-    final end = recurrence.endDate != null &&
-            recurrence.endDate!.isBefore(horizon)
+    final end =
+        recurrence.endDate != null && recurrence.endDate!.isBefore(horizon)
         ? recurrence.endDate!
         : horizon;
     while (!cursor.isAfter(end)) {
@@ -1379,16 +1418,20 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       final dueTime = block.due;
       final due = dueTime == null
           ? day
-          : DateTime(day.year, day.month, day.day, dueTime.hour,
-              dueTime.minute);
+          : DateTime(
+              day.year,
+              day.month,
+              day.day,
+              dueTime.hour,
+              dueTime.minute,
+            );
       DateTime? start;
       DateTime? end;
       if (length != null) {
         final base = block.start;
         start = base == null
             ? day
-            : DateTime(day.year, day.month, day.day, base.hour,
-                base.minute);
+            : DateTime(day.year, day.month, day.day, base.hour, base.minute);
         end = start.add(length);
       }
       schedule = ScheduleFacet(
@@ -1428,7 +1471,9 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       // template's cached count belongs to its own period, not the new
       // instance's.
       anki: template.anki?.copyWith(
-          clearReviewsActual: true, clearLastSyncedAt: true),
+        clearReviewsActual: true,
+        clearLastSyncedAt: true,
+      ),
       instanceOfId: template.id,
       sourceEventId: template.sourceEventId,
       calendarEventId: template.calendarEventId,
@@ -1467,9 +1512,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       'date': 'schedule.due',
       'category': 'category',
     };
-    return {
-      for (final key in legacy) legacyToNode[key] ?? key,
-    };
+    return {for (final key in legacy) legacyToNode[key] ?? key};
   }
 
   String importGoal(Goal goal) {
@@ -1511,7 +1554,8 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
           : (goal.failed ? NodeStatus.failed : NodeStatus.open),
       completedAt: goal.completedAt,
       createdAt: now,
-      schedule: schedule ??
+      schedule:
+          schedule ??
           (goal.showInTasks ? ScheduleFacet(due: goal.deadline) : null),
       money: money,
       effort: effort,
@@ -1537,7 +1581,8 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
           ? NodeStatus.done
           : (task.failed ? NodeStatus.failed : NodeStatus.open),
       completedAt: task.completedAt,
-      schedule: (task.due == null &&
+      schedule:
+          (task.due == null &&
               task.plannedStart == null &&
               task.plannedEnd == null)
           ? null
@@ -1603,10 +1648,10 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       schedule: ScheduleFacet(due: expense.date),
       money: MoneyFacet(
         targetAmount: expense.amount.abs(),
-        actualAmount:
-            expense.isConcrete ? expense.amount.abs() : null,
-        direction:
-            expense.amount < 0 ? MoneyDirection.spend : MoneyDirection.income,
+        actualAmount: expense.isConcrete ? expense.amount.abs() : null,
+        direction: expense.amount < 0
+            ? MoneyDirection.spend
+            : MoneyDirection.income,
         status: switch (expense.status) {
           ExpenseStatus.projected => MoneyStatus.projected,
           ExpenseStatus.due => MoneyStatus.due,
@@ -1711,18 +1756,20 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       return byCalendar.id;
     }
     final id = 'node:${event.id}';
-    addNode(Node(
-      id: id,
-      title: event.subject,
-      notes: event.notes,
-      createdAt: DateTime.now(),
-      status: event.done ? NodeStatus.done : NodeStatus.open,
-      completedAt: event.completedAt,
-      schedule: scheduleForEvent(event),
-      classLabel: event.classLabel,
-      calendarEventId: event.id,
-      assignees: event.assignees,
-    ));
+    addNode(
+      Node(
+        id: id,
+        title: event.subject,
+        notes: event.notes,
+        createdAt: DateTime.now(),
+        status: event.done ? NodeStatus.done : NodeStatus.open,
+        completedAt: event.completedAt,
+        schedule: scheduleForEvent(event),
+        classLabel: event.classLabel,
+        calendarEventId: event.id,
+        assignees: event.assignees,
+      ),
+    );
     return id;
   }
 
@@ -1790,20 +1837,18 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
           continue;
         }
         changed = true;
-        next.add(node.copyWith(
-          status: NodeStatus.failed,
-          clearCompletedAt: true,
-        ));
+        next.add(
+          node.copyWith(status: NodeStatus.failed, clearCompletedAt: true),
+        );
       } else {
         if (node.status != NodeStatus.failed) {
           next.add(node);
           continue;
         }
         changed = true;
-        next.add(node.copyWith(
-          status: NodeStatus.open,
-          clearCompletedAt: true,
-        ));
+        next.add(
+          node.copyWith(status: NodeStatus.open, clearCompletedAt: true),
+        );
       }
     }
     if (changed) emitChange(next);
@@ -1835,20 +1880,22 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       }
       return;
     }
-    addNode(Node(
-      id: event.id,
-      title: event.subject,
-      notes: event.notes,
-      createdAt: DateTime.now(),
-      status: event.done ? NodeStatus.done : NodeStatus.open,
-      completedAt: event.completedAt,
-      schedule: scheduleForEvent(event),
-      sourceEventId: event.id,
-      feedId: event.feedId,
-      classId: event.feedId,
-      classLabel: event.classLabel,
-      assignees: event.assignees,
-    ));
+    addNode(
+      Node(
+        id: event.id,
+        title: event.subject,
+        notes: event.notes,
+        createdAt: DateTime.now(),
+        status: event.done ? NodeStatus.done : NodeStatus.open,
+        completedAt: event.completedAt,
+        schedule: scheduleForEvent(event),
+        sourceEventId: event.id,
+        feedId: event.feedId,
+        classId: event.feedId,
+        classLabel: event.classLabel,
+        assignees: event.assignees,
+      ),
+    );
   }
 
   /// Deletes every node backing [eventId] (personal link and/or homework
@@ -1915,7 +1962,8 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         healedBase.add(n);
         continue;
       }
-      final isWindow = event.allDay &&
+      final isWindow =
+          event.allDay &&
           event.end.difference(event.start) > const Duration(days: 1);
       if (!isWindow) {
         healedBase.add(n);
@@ -1936,16 +1984,18 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       final newBaseDue = shift == 0
           ? event.end.subtract(const Duration(days: 1))
           : event.end
-              .subtract(const Duration(days: 1))
-              .add(Duration(days: shift));
+                .subtract(const Duration(days: 1))
+                .add(Duration(days: shift));
       healed++;
-      healedBase.add(n.copyWith(
-        schedule: s.copyWith(
-          due: newBaseDue,
-          start: event.start,
-          end: event.end,
+      healedBase.add(
+        n.copyWith(
+          schedule: s.copyWith(
+            due: newBaseDue,
+            start: event.start,
+            end: event.end,
+          ),
         ),
-      ));
+      );
     }
     base = healedBase;
     final imported = <Node>[];
@@ -1961,7 +2011,8 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       // (DTSTART Oct 12 DTEND Oct 15 → due Oct 14); timed windows keep
       // the exact end instant. The feed window stays in start/end as
       // truth.
-      final isWindow = feed.kind == FeedKind.learningSuite &&
+      final isWindow =
+          feed.kind == FeedKind.learningSuite &&
           event.allDay &&
           event.end.difference(event.start) > const Duration(days: 1);
       final baseDue = isWindow
@@ -1974,23 +2025,25 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         feedId: feed.id,
         title: event.subject,
       );
-      imported.add(Node(
-        id: event.id,
-        title: event.subject,
-        notes: event.notes,
-        createdAt: DateTime.now(),
-        status: event.done ? NodeStatus.done : NodeStatus.open,
-        completedAt: event.completedAt,
-        schedule: scheduleForEvent(
-          event,
-          due: shift == 0 ? baseDue : baseDue.add(Duration(days: shift)),
+      imported.add(
+        Node(
+          id: event.id,
+          title: event.subject,
+          notes: event.notes,
+          createdAt: DateTime.now(),
+          status: event.done ? NodeStatus.done : NodeStatus.open,
+          completedAt: event.completedAt,
+          schedule: scheduleForEvent(
+            event,
+            due: shift == 0 ? baseDue : baseDue.add(Duration(days: shift)),
+          ),
+          sourceEventId: event.id,
+          feedId: feed.id,
+          classId: feed.id,
+          classLabel: event.classLabel,
+          assignees: event.assignees,
         ),
-        sourceEventId: event.id,
-        feedId: feed.id,
-        classId: feed.id,
-        classLabel: event.classLabel,
-        assignees: event.assignees,
-      ));
+      );
     }
     final next = [...base, ...imported];
     if (imported.isNotEmpty || healed > 0 || next.length != state.length) {
@@ -2031,8 +2084,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         end: s?.end,
         allDay: s?.allDay ?? false,
       );
-      final shift =
-          assignmentShiftOf(due: s?.due, base: base);
+      final shift = assignmentShiftOf(due: s?.due, base: base);
       if (base == null || shift == null || !from.contains(shift)) {
         next.add(n);
         continue;
@@ -2042,11 +2094,11 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         continue;
       }
       changed++;
-      next.add(n.copyWith(
-        schedule: s!.copyWith(
-          due: base.add(Duration(days: newOffsetDays)),
+      next.add(
+        n.copyWith(
+          schedule: s!.copyWith(due: base.add(Duration(days: newOffsetDays))),
         ),
-      ));
+      );
     }
     if (changed == 0) return 0;
     emitChange(next);
@@ -2079,9 +2131,11 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final money = node?.money;
     if (node == null || money == null || !money.isRecurring) return;
     final surplus = money.targetAmount - spentAmount;
-    updateNode(node.copyWith(
-      money: money.copyWith(rolloverAmount: money.rolloverAmount + surplus),
-    ));
+    updateNode(
+      node.copyWith(
+        money: money.copyWith(rolloverAmount: money.rolloverAmount + surplus),
+      ),
+    );
   }
 
   // ── Persistence (per-item tolerant) ─────────────────────────────────
@@ -2101,8 +2155,9 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   }
 
   @override
-  Map<String, dynamic> toJson(List<Node> state) =>
-      {'nodes': state.map((n) => n.toJson()).toList()};
+  Map<String, dynamic> toJson(List<Node> state) => {
+    'nodes': state.map((n) => n.toJson()).toList(),
+  };
 }
 
 List<String> nodeLinkedTxnIds(Node node) =>
@@ -2117,7 +2172,10 @@ bool _sameAssignees(List<dynamic> a, List<dynamic> b) {
 }
 
 DateTime _firstOnOrAfter(
-    DateTime anchor, NodeRecurrence recurrence, DateTime from) {
+  DateTime anchor,
+  NodeRecurrence recurrence,
+  DateTime from,
+) {
   if (!anchor.isBefore(from)) return _snap(anchor, recurrence);
   // Fast-forward monthly-ish recurrences without day-by-day iteration.
   var cursor = _snap(from, recurrence);
@@ -2132,8 +2190,7 @@ DateTime _firstOnOrAfter(
 DateTime _snap(DateTime date, NodeRecurrence recurrence) {
   switch (recurrence.frequency) {
     case TimeScale.monthly:
-      final day =
-          (recurrence.dayOfMonth ?? date.day).clamp(1, 28);
+      final day = (recurrence.dayOfMonth ?? date.day).clamp(1, 28);
       var candidate = DateTime(date.year, date.month, day);
       if (candidate.isBefore(DateTime(date.year, date.month, date.day))) {
         candidate = DateTime(date.year, date.month + 1, day);

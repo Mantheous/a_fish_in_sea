@@ -121,6 +121,56 @@ void main() {
       expect(cubit.unassignedTransactions.first.name, 'Unassigned');
     });
 
+    test('deleted node cleanup clears only matching node assignments', () {
+      final cubit = TransactionsCubit();
+      cubit.syncFromPlaid([
+        Transaction(
+          id: 'one',
+          accountId: 'acc_1',
+          amount: -10,
+          date: DateTime(2025, 10, 1),
+          name: 'One',
+          assignedNodeId: 'deleted',
+        ),
+        Transaction(
+          id: 'two',
+          accountId: 'acc_1',
+          amount: -20,
+          date: DateTime(2025, 10, 2),
+          name: 'Two',
+          assignedNodeId: 'kept',
+        ),
+      ]);
+
+      expect(cubit.clearNodeAssignmentsFor({'deleted'}), 1);
+      expect(cubit.state[0].assignedNodeId, isNull);
+      expect(cubit.state[1].assignedNodeId, 'kept');
+    });
+
+    test('node suggestions choose the most recent matching transaction', () {
+      final cubit = TransactionsCubit();
+      cubit.syncFromPlaid([
+        Transaction(
+          id: 'older',
+          accountId: 'acc_1',
+          amount: -10,
+          date: DateTime(2025, 10, 1),
+          name: 'Coffee',
+          assignedNodeId: 'old-node',
+        ),
+        Transaction(
+          id: 'newer',
+          accountId: 'acc_1',
+          amount: -10,
+          date: DateTime(2025, 10, 2),
+          name: 'Coffee',
+          assignedNodeId: 'new-node',
+        ),
+      ]);
+
+      expect(cubit.suggestNodeForTransaction('coffee'), 'new-node');
+    });
+
     test('toJson/fromJson roundtrip', () {
       final cubit = TransactionsCubit();
       final tx = Transaction(
