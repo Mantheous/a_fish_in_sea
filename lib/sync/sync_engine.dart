@@ -197,6 +197,7 @@ class SyncEngine {
     if (DemoMode.isActive) return;
     if (_running) return;
     if (!auth.state.isSignedIn) return;
+    final sessionGeneration = auth.sessionGeneration;
     final currentEmail = auth.state.email.trim().toLowerCase();
     final prevEmail = meta.state.lastEmail?.trim().toLowerCase();
     if (prevEmail != null &&
@@ -246,10 +247,10 @@ class SyncEngine {
     try {
       final pull =
           await client.pull(since: meta.state.cursor, collections: collections);
-      if (_epoch != myEpoch || !auth.state.isSignedIn) return;
+      if (!_isCurrentSession(myEpoch, sessionGeneration)) return;
       _applyPull(pull.changes);
-      await _pushDiffs(myEpoch);
-      if (_epoch != myEpoch || !auth.state.isSignedIn) return;
+      await _pushDiffs(myEpoch, sessionGeneration);
+      if (!_isCurrentSession(myEpoch, sessionGeneration)) return;
       if (pull.serverTime.isNotEmpty) {
         meta.save(
           cursor: pull.serverTime,
@@ -260,21 +261,30 @@ class SyncEngine {
       lastError = null;
       status.value = EngineStatus.idle;
     } on SyncException catch (e) {
-      if (_epoch == myEpoch) {
+      if (_isCurrentSession(myEpoch, sessionGeneration)) {
         lastError = e.message;
         status.value = EngineStatus.error;
       }
     } catch (e) {
-      if (_epoch == myEpoch) {
+      if (_isCurrentSession(myEpoch, sessionGeneration)) {
         lastError = e.toString();
         status.value = EngineStatus.error;
       }
     } finally {
       if (_epoch == myEpoch) {
         _running = false;
+        if (!auth.state.isSignedIn ||
+            auth.sessionGeneration != sessionGeneration) {
+          status.value = EngineStatus.idle;
+        }
       }
     }
   }
+
+  bool _isCurrentSession(int epoch, int sessionGeneration) =>
+      _epoch == epoch &&
+      auth.sessionGeneration == sessionGeneration &&
+      auth.state.isSignedIn;
 
   // ── Extract (cubit -> {itemId: data}) ────────────────────────────────
 
@@ -514,7 +524,7 @@ class SyncEngine {
     return false;
   }
 
-  Future<void> _pushDiffs(int myEpoch) async {
+  Future<void> _pushDiffs(int myEpoch, int sessionGeneration) async {
     // Group bookkeeping keys per collection so the guard can weigh a
     // collection's pending deletions against everything it tracks.
     final metaByCollection = <String, List<String>>{};
@@ -580,7 +590,7 @@ class SyncEngine {
       return;
     }
     final pushed = await client.push(changes);
-    if (_epoch != myEpoch || !auth.state.isSignedIn) return;
+    if (!_isCurrentSession(myEpoch, sessionGeneration)) return;
     final applied = pushed.applied;
     if (pushed.guarded.isNotEmpty) {
       debugPrint(
