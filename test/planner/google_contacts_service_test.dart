@@ -119,6 +119,89 @@ void main() {
       }
     });
 
+    test('expired app session 401 does not prompt a Google reconnect',
+        () async {
+      final service = serviceWith({
+        '/api/google/contacts': http.Response(
+          jsonEncode({'detail': 'Invalid token'}),
+          401,
+        ),
+      });
+      try {
+        await service.fetchContacts(forceRefresh: true);
+        fail('expected a GoogleContactsException');
+      } on GoogleContactsException catch (e) {
+        expect(e.statusCode, 401);
+        expect(e.message, 'Invalid token');
+        expect(e.needsReconnect, isFalse,
+            reason:
+                'an expired app JWT must not ask the user to reconnect Google');
+      }
+    });
+
+    test('Google-side 401 keeps needsReconnect', () async {
+      final service = serviceWith({
+        '/api/google/contacts': http.Response(
+          jsonEncode({
+            'detail': {
+              'error': 'Google account not connected',
+              'needsReconnect': true,
+            },
+          }),
+          401,
+        ),
+      });
+      try {
+        await service.fetchContacts(forceRefresh: true);
+        fail('expected a GoogleContactsException');
+      } on GoogleContactsException catch (e) {
+        expect(e.statusCode, 401);
+        expect(e.needsReconnect, isTrue);
+      }
+    });
+
+    test('expired app session retries once with a fresh token', () async {
+      GoogleContactsService.clearSharedCache();
+      var calls = 0;
+      var refreshed = false;
+      String? token = 'stale';
+      final authHeaders = <String?>[];
+      final service = GoogleContactsService(
+        baseUrl: () => '',
+        userId: () => 'u',
+        authToken: () => token,
+        refreshAccessToken: () async {
+          refreshed = true;
+          token = 'fresh';
+          return token;
+        },
+        client: MockClient((request) async {
+          calls++;
+          authHeaders.add(request.headers['Authorization']);
+          if (calls == 1) {
+            return http.Response(
+              jsonEncode({'detail': 'Invalid token'}),
+              401,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'contacts': [
+                {'id': 'people/1', 'displayName': 'Amy'},
+              ],
+            }),
+            200,
+          );
+        }),
+      );
+      final contacts = await service.fetchContacts(forceRefresh: true);
+      expect(contacts.map((c) => c.id), ['people/1']);
+      expect(refreshed, isTrue);
+      expect(calls, 2);
+      expect(authHeaders[0], 'Bearer stale');
+      expect(authHeaders[1], 'Bearer fresh');
+    });
+
     test('contact converts to a task assignee', () async {
       const contact = GoogleContact(
         id: 'people/1',

@@ -47,6 +47,7 @@ class _PeopleFieldState extends State<PeopleField> {
         baseUrl: () => settings.state.icalProxyBase,
         userId: () => plaid.state.userId,
         authToken: () => auth.state.accessToken,
+        refreshAccessToken: () => auth.refreshAccessToken(),
       );
     } catch (_) {
       _service = null;
