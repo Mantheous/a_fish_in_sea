@@ -23,6 +23,7 @@ import '../model/planner_event.dart';
 import '../model/recurrence.dart';
 import '../model/task_assignee.dart';
 import '../service/event_reminders.dart';
+import 'event_editor_actions.dart';
 import 'event_time_sections.dart';
 import 'people_field.dart';
 import 'reminder_prompt.dart' show ReminderField, maybePromptForEventReminder;
@@ -563,238 +564,221 @@ class EventEditorFormState extends State<EventEditorForm> {
     final existing = widget.existing;
     return SafeArea(
       top: false,
-      child: SingleChildScrollView(
-        controller: widget.scrollController,
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (widget.title != null) ...[
-              Text(widget.title!, style: theme.textTheme.titleMedium),
-              const SizedBox(height: 12),
-            ],
-            if (_isSeriesInstance)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Text(
-                  _loadingMaster
-                      ? 'Loading series details…'
-                      : 'Part of a repeating series — on save you can '
-                          'apply changes to just this occurrence or the '
-                          'entire series.',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            if (_masterFailed)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Text(
-                  'Couldn’t load the series — editing just this occurrence.',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.error,
-                  ),
-                ),
-              ),
-            _CalendarPicker(
-              existing: existing,
-              saveTargetFeedId: _saveTargetFeedId,
-              canChangeCalendar: (feeds) => existing == null
-                  ? true
-                  : _canChangeCalendar(existing, feeds),
-              onChanged: (value) =>
-                  setState(() => _saveTargetFeedId = value),
-            ),
-            TextField(
-              controller: _subject,
-              autofocus: widget.autofocusTitle,
-              decoration: const InputDecoration(
-                labelText: 'Title',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Row(
+      child: Stack(
+        children: [
+          SingleChildScrollView(
+            controller: widget.scrollController,
+            padding: const EdgeInsets.fromLTRB(16, 100, 16, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(
-                  flex: 5,
-                  child: _dateField(theme),
+                if (_isSeriesInstance)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      _loadingMaster
+                          ? 'Loading series details…'
+                          : 'Part of a repeating series — on save you can '
+                              'apply changes to just this occurrence or the '
+                              'entire series.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                if (_masterFailed)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      'Couldn’t load the series — editing just this occurrence.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.error,
+                      ),
+                    ),
+                  ),
+                _CalendarPicker(
+                  existing: existing,
+                  saveTargetFeedId: _saveTargetFeedId,
+                  canChangeCalendar: (feeds) => existing == null
+                      ? true
+                      : _canChangeCalendar(existing, feeds),
+                  onChanged: (value) =>
+                      setState(() => _saveTargetFeedId = value),
                 ),
-                const SizedBox(width: 8),
-                // Compact switch row instead of SwitchListTile: ListTile
-                // enforces its own min widths and overflows inside a tight
-                // Row on phones (~160px per side).
-                Expanded(
-                  flex: 4,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
+                TextField(
+                  controller: _subject,
+                  autofocus: widget.autofocusTitle,
+                  decoration: const InputDecoration(
+                    labelText: 'Title',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 5,
+                      child: _dateField(theme),
+                    ),
+                    const SizedBox(width: 8),
+                    // Compact switch row instead of SwitchListTile: ListTile
+                    // enforces its own min widths and overflows inside a tight
+                    // Row on phones (~160px per side).
+                    Expanded(
+                      flex: 4,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Flexible(
+                            child: Text(
+                              'All day',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          Switch(
+                            value: _allDay,
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                            onChanged: (value) {
+                              setState(() => _allDay = value);
+                              _emitDraft();
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                if (!_allDay)
+                  Row(
                     children: [
-                      const Flexible(
-                        child: Text(
-                          'All day',
-                          overflow: TextOverflow.ellipsis,
+                      Expanded(
+                        child: _timeField(
+                          label: 'Start',
+                          value: _startTime,
+                          onChanged: (value) {
+                            setState(() {
+                              _startTime = value;
+                              if (_toMinutes(_endTime) <= _toMinutes(_startTime)) {
+                                _endTime = TimeOfDay(
+                                  hour: (_startTime.hour + 1) % 24,
+                                  minute: _startTime.minute,
+                                );
+                              }
+                            });
+                            _emitDraft();
+                          },
                         ),
                       ),
-                      Switch(
-                        value: _allDay,
-                        materialTapTargetSize:
-                            MaterialTapTargetSize.shrinkWrap,
-                        onChanged: (value) {
-                          setState(() => _allDay = value);
-                          _emitDraft();
-                        },
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _timeField(
+                          label: 'End',
+                          value: _endTime,
+                          onChanged: (value) {
+                            setState(() => _endTime = value);
+                            _emitDraft();
+                          },
+                        ),
                       ),
                     ],
                   ),
+                const SizedBox(height: 12),
+                _DayConflictsSection(
+                  day: _date,
+                  allDay: _allDay,
+                  startTime: _startTime,
+                  endTime: _endTime,
+                  excludeId: widget.existing?.id,
                 ),
+                const SizedBox(height: 12),
+                _repeatSection(theme),
+                const SizedBox(height: 12),
+                ReminderField(
+                  value: _reminderMinutesBefore,
+                  onChanged: (value) {
+                    setState(() => _reminderMinutesBefore = value);
+                    _emitDraft();
+                  },
+                ),            const SizedBox(height: 12),
+                TextField(
+                  controller: _location,
+                  decoration: const InputDecoration(
+                    labelText: 'Location',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _PlaceField(
+                  value: _placeId,
+                  onChanged: (value) {
+                    setState(() => _placeId = value);
+                    _emitDraft();
+                  },
+                ),
+                const SizedBox(height: 12),
+                PeopleField(
+                  selected: _people,
+                  onChanged: (value) {
+                    setState(() => _people = value);
+                    _emitDraft();
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _notes,
+                  decoration: const InputDecoration(
+                    labelText: 'Notes',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLines: 2,
+                ),
+                const SizedBox(height: 4),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Task'),
+                  subtitle: const Text(
+                    'Tasks can be marked complete and show in the Tasks list',
+                  ),
+                  value: _isTask,
+                  onChanged: (value) {
+                    setState(() {
+                      _isTask = value;
+                      if (!value) _done = false;
+                    });
+                    _emitDraft();
+                  },
+                ),
+                if (_isTask)
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Completed'),
+                    value: _done,
+                    onChanged: (value) {
+                      setState(() => _done = value ?? false);
+                      _emitDraft();
+                    },
+                  ),
               ],
             ),
-            if (!_allDay)
-              Row(
-                children: [
-                  Expanded(
-                    child: _timeField(
-                      label: 'Start',
-                      value: _startTime,
-                      onChanged: (value) {
-                        setState(() {
-                          _startTime = value;
-                          if (_toMinutes(_endTime) <= _toMinutes(_startTime)) {
-                            _endTime = TimeOfDay(
-                              hour: (_startTime.hour + 1) % 24,
-                              minute: _startTime.minute,
-                            );
-                          }
-                        });
-                        _emitDraft();
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _timeField(
-                      label: 'End',
-                      value: _endTime,
-                      onChanged: (value) {
-                        setState(() => _endTime = value);
-                        _emitDraft();
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            const SizedBox(height: 12),
-            _DayConflictsSection(
-              day: _date,
-              allDay: _allDay,
-              startTime: _startTime,
-              endTime: _endTime,
-              excludeId: widget.existing?.id,
+          ),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: EventEditorActions(
+              title: widget.title,
+              hasExistingEvent: existing != null,
+              allowDelete: widget.allowDelete,
+              saving: _saving,
+              onDelete: () => _delete(context),
+              onCancel: widget.onCancelled,
+              onSave: () => _save(context),
+              saveLabel: existing == null ? 'Add' : 'Save',
             ),
-            const SizedBox(height: 12),
-            _repeatSection(theme),
-            const SizedBox(height: 12),
-            ReminderField(
-              value: _reminderMinutesBefore,
-              onChanged: (value) {
-                setState(() => _reminderMinutesBefore = value);
-                _emitDraft();
-              },
-            ),            const SizedBox(height: 12),
-            TextField(
-              controller: _location,
-              decoration: const InputDecoration(
-                labelText: 'Location',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            _PlaceField(
-              value: _placeId,
-              onChanged: (value) {
-                setState(() => _placeId = value);
-                _emitDraft();
-              },
-            ),
-            const SizedBox(height: 12),
-            PeopleField(
-              selected: _people,
-              onChanged: (value) {
-                setState(() => _people = value);
-                _emitDraft();
-              },
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _notes,
-              decoration: const InputDecoration(
-                labelText: 'Notes',
-                border: OutlineInputBorder(),
-              ),
-              maxLines: 2,
-            ),
-            const SizedBox(height: 4),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Task'),
-              subtitle: const Text(
-                'Tasks can be marked complete and show in the Tasks list',
-              ),
-              value: _isTask,
-              onChanged: (value) {
-                setState(() {
-                  _isTask = value;
-                  if (!value) _done = false;
-                });
-                _emitDraft();
-              },
-            ),
-            if (_isTask)
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Completed'),
-                value: _done,
-                onChanged: (value) {
-                  setState(() => _done = value ?? false);
-                  _emitDraft();
-                },
-              ),
-            const SizedBox(height: 8),
-            // Wrap instead of Row+Spacer: Delete + Cancel + Save never
-            // fit a 320px sheet in one tight Row without overflowing.
-            Wrap(
-              alignment: WrapAlignment.end,
-              spacing: 8,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                if (widget.existing != null && widget.allowDelete)
-                  TextButton(
-                    onPressed: _saving ? null : () => _delete(context),
-                    style: TextButton.styleFrom(
-                      foregroundColor: theme.colorScheme.error,
-                    ),
-                    child: const Text('Delete'),
-                  ),
-                TextButton(
-                  onPressed:
-                      _saving ? null : () => widget.onCancelled?.call(),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  onPressed: _saving ? null : () => _save(context),
-                  child: Text(
-                    _saving
-                        ? 'Saving…'
-                        : (widget.existing == null ? 'Add' : 'Save'),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -2069,6 +2053,9 @@ class EventEditorFormState extends State<EventEditorForm> {
       await EventReminderService.cancelReminder(existing.id);
       messenger.showSnackBar(
         SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+          persist: false,
           content: const Text('Event deleted'),
           action: SnackBarAction(
             label: 'Undo',
