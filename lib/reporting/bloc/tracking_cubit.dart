@@ -73,7 +73,10 @@ class TrackingCubit extends HydratedCubit<TrackingState> {
   }
 
   bool _isDuplicateOfLast(TrackedPoint last, TrackedPoint point) {
-    if (point.timestamp.difference(last.timestamp).abs().inMinutes >= 1) {
+    // Absolute gap: a backdated point (a scrubbed test point, or an older
+    // background fix merged after a newer foreground fix) must never be
+    // judged as a duplicate just because it sorts before the newest point.
+    if (point.timestamp.difference(last.timestamp).inMinutes.abs() >= 1) {
       return false;
     }
     if (last.id == point.id) return true;
@@ -95,10 +98,13 @@ class TrackingCubit extends HydratedCubit<TrackingState> {
       if (last != null && _isDuplicateOfLast(last, point)) continue;
       next.add(point);
     }
+    // Readers (map polyline, scrub position, day buckets) assume chronological
+    // order, so backdated inserts slot in instead of appending at the end.
+    // The cap below then keeps the newest points, not an arbitrary tail.
+    next.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     if (next.length > maxPoints) {
       next = next.sublist(next.length - maxPoints);
     }
-    next.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     final cutoff = DateTime.now().subtract(const Duration(days: retentionDays));
     next = next.where((p) => p.timestamp.isAfter(cutoff)).toList();
     return next;

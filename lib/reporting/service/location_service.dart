@@ -55,28 +55,52 @@ Future<void> appendPendingPoint(TrackedPoint point) async {
   } catch (_) {}
 }
 
-Future<void> restorePendingPoints(Iterable<TrackedPoint> points) async {
-  for (final point in points) {
-    await appendPendingPoint(point);
-  }
-}
-
 Future<List<TrackedPoint>> takePendingPoints() async {
   try {
     final file = await _pendingFile();
-    if (!await file.exists()) return const [];
-    final claimed = File(
-      '${file.path}.taking-${DateTime.now().microsecondsSinceEpoch}',
-    );
-    final batch = await file.rename(claimed.path);
-    final raw = await batch.readAsString();
-    final decoded = jsonDecode(raw);
-    if (decoded is! List) {
-      try {
-        await batch.delete();
-      } catch (_) {}
-      return const [];
+    // Recover batches orphaned by a crash between the rename below and the
+    // delete after it, so they are merged instead of lost.
+    final stale = await _drainStaleClaims(file.parent);
+    if (!await file.exists()) return stale;
+    // Claim the batch with an atomic rename: a background append racing this
+    // take lands in a fresh file instead of being deleted with the batch.
+    final claimed =
+        File('${file.path}.${DateTime.now().microsecondsSinceEpoch}.taking');
+    try {
+      await file.rename(claimed.path);
+    } catch (_) {
+      return stale;
     }
+    final decoded = await _readClaimedBatch(claimed);
+    return [...stale, ...decoded];
+  } catch (_) {
+    return const [];
+  }
+}
+
+/// Puts a claimed batch back into the pending file (e.g. the merging widget
+/// unmounted mid-take). Prepended so chronological order survives the next
+/// take; [mergePoints] sorts again on the way in.
+Future<void> requeuePendingPoints(List<TrackedPoint> points) async {
+  if (points.isEmpty) return;
+  try {
+    final file = await _pendingFile();
+    var existing = <dynamic>[];
+    if (await file.exists()) {
+      try {
+        final decoded = jsonDecode(await file.readAsString());
+        if (decoded is List) existing = decoded;
+      } catch (_) {}
+    }
+    final mine = points.map((p) => p.toJson()).toList();
+    await file.writeAsString(jsonEncode([...mine, ...existing]));
+  } catch (_) {}
+}
+
+Future<List<TrackedPoint>> _readClaimedBatch(File claimed) async {
+  try {
+    final decoded = jsonDecode(await claimed.readAsString());
+    if (decoded is! List) return const [];
     final out = <TrackedPoint>[];
     for (final e in decoded) {
       try {
@@ -85,13 +109,29 @@ Future<List<TrackedPoint>> takePendingPoints() async {
         }
       } catch (_) {}
     }
-    try {
-      await batch.delete();
-    } catch (_) {}
     return out;
   } catch (_) {
     return const [];
+  } finally {
+    try {
+      await claimed.delete();
+    } catch (_) {}
   }
+}
+
+Future<List<TrackedPoint>> _drainStaleClaims(Directory dir) async {
+  final out = <TrackedPoint>[];
+  try {
+    await for (final e in dir.list()) {
+      if (e is! File) continue;
+      final name = e.path.split(Platform.pathSeparator).last;
+      if (!name.startsWith('$_pendingFileName.') || !name.endsWith('.taking')) {
+        continue;
+      }
+      out.addAll(await _readClaimedBatch(e));
+    }
+  } catch (_) {}
+  return out;
 }
 
 Future<TrackedPoint?> samplePosition() async {
@@ -300,22 +340,6 @@ class LocationService {
     } catch (_) {
       return false;
     }
-  }
-
-  /// Starts one sampler: the background service when available, otherwise
-  /// the foreground timer used while the app is open.
-  static Future<bool> startSingleSampler({
-    required int intervalMinutes,
-    required Future<void> Function() onTick,
-  }) async {
-    final background = await startBackground(intervalMinutes);
-    if (!background) {
-      startForegroundSampling(
-        intervalMinutes: intervalMinutes,
-        onTick: onTick,
-      );
-    }
-    return background;
   }
 
   static Future<void> stopBackground() async {
