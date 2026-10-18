@@ -443,7 +443,13 @@ void main() {
 
     await tester.tap(find.text('Homework'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Add to calendar').first);
+    // Unified schedule: the tile opens the Day/Time sheet; Time mode
+    // offers the visual calendar pick that requests the draft.
+    await tester.tap(find.byTooltip('Scheduled — tap to change').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Time'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pick on calendar instead'));
     await tester.pump();
 
     expect(draftCubit.state, isNotNull);

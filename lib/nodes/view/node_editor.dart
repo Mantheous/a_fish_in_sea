@@ -10,8 +10,10 @@ import 'package:a_fish_in_sea/anki/anki_import.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
+import 'package:a_fish_in_sea/nodes/bloc/schedule_prefs_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
+import 'package:a_fish_in_sea/nodes/view/schedule_fields.dart';
 import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
@@ -68,6 +70,9 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
 
   DateTime? _due;
   bool _dateFixed = false;
+  ScheduleGranularity _scheduleMode = ScheduleGranularity.day;
+  DateTime? _blockStart;
+  DateTime? _blockEnd;
 
   bool _hasMoney = false;
   late final TextEditingController _amount;
@@ -111,6 +116,16 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _isUnbounded = e?.isUnbounded ?? false;
     _due = e?.schedule?.due;
     _dateFixed = e?.schedule?.isFixed ?? false;
+    ScheduleGranularity fallback = ScheduleGranularity.day;
+    try {
+      fallback = context.read<SchedulePrefsCubit>().state.lastUsed;
+    } catch (_) {}
+    _scheduleMode = SchedulePrefsCubit.initialFor(
+      schedule: e?.schedule,
+      fallback: fallback,
+    );
+    _blockStart = e?.schedule?.start;
+    _blockEnd = e?.schedule?.end;
     _hasMoney = e?.money != null || widget.enableMoney;
     _amount = TextEditingController(
         text: e?.money != null
@@ -218,42 +233,22 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
             if (!_isUnbounded) ...[
             const SizedBox(height: 16),
             _sectionTitle(context, 'Schedule'),
-            _DateRow(
-              label: _due == null
-                  ? 'No due date'
-                  : 'Due ${MaterialLocalizations.of(context).formatFullDate(_due!)}${_dateFixed ? ' · fixed' : ''}',
-              onPick: () async {
-                final picked = await showDatePicker(
-                  context: context,
-                  initialDate: _due ?? DateTime.now(),
-                  firstDate: DateTime(2000),
-                  lastDate: DateTime(2100),
-                );
-                if (picked != null) setState(() => _due = picked);
-              },
-              onClear:
-                  _due == null ? null : () => setState(() => _due = null),
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              title: const Text('Fixed date'),
-              subtitle: const Text('Commitment; estimates stay flexible'),
-              value: _dateFixed,
-              onChanged: (v) => setState(() => _dateFixed = v),
-            ),
-            // Calendar time now comes from assigned events, not the goal
-            // itself: the old block picker was removed. A stored block
-            // from before is dropped on save (the due date is kept).
-            if ((widget.existing?.schedule?.hasCalendarBlock ?? false))
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  'This goal has an old calendar block — saving removes '
-                  'it. Assign an event to put it on the calendar instead.',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
+            ScheduleFields(
+              draft: ScheduleDraft(
+                due: _due,
+                fixed: _dateFixed,
+                blockStart: _blockStart,
+                blockEnd: _blockEnd,
+                mode: _scheduleMode,
               ),
+              onChanged: (next) => setState(() {
+                _due = next.due;
+                _dateFixed = next.fixed;
+                _blockStart = next.blockStart;
+                _blockEnd = next.blockEnd;
+                _scheduleMode = next.mode;
+              }),
+            ),
             const SizedBox(height: 8),
             _sectionTitle(context, 'Money'),
             SwitchListTile(
@@ -686,7 +681,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     // save clears stored facets — one tap back to safety.
     if (_isUnbounded) {
       final dropping = <String>[];
-      if (_due != null) {
+      if (_due != null || _blockStart != null || _blockEnd != null) {
         dropping.add('schedule');
       }
       if (_hasMoney) dropping.add('money target');
@@ -716,14 +711,26 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         : cubit.byId(opening.id) ?? opening;
 
     ScheduleFacet? schedule;
-    // Goals carry a due date at most — calendar time comes from assigned
-    // events. Any stored block (start/end) from before is dropped here.
-    if (_due != null || _dateFixed) {
+    // Due date and calendar block coexist on one facet: day mode edits
+    // the due date, time mode edits the block. Clearing one never clears
+    // the other — only clearing both (and unchecking fixed) clears it.
+    final hasValidBlock = _blockStart != null &&
+        _blockEnd != null &&
+        _blockEnd!.isAfter(_blockStart!);
+    if (_due != null || _dateFixed || hasValidBlock) {
       schedule = ScheduleFacet(
         due: _due,
+        start: hasValidBlock ? _blockStart : null,
+        end: hasValidBlock ? _blockEnd : null,
+        allDay: hasValidBlock
+            ? false
+            : (existing?.schedule?.allDay ?? false),
         isFixed: _dateFixed,
       );
     }
+    try {
+      context.read<SchedulePrefsCubit>().setGranularity(_scheduleMode);
+    } catch (_) {}
 
     MoneyFacet? money;
     if (_hasMoney) {

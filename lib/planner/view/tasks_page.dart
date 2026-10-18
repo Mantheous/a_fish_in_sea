@@ -4,7 +4,6 @@ import 'package:intl/intl.dart';
 
 import '../../common/undo/undo_bar.dart';
 import '../../common/undo/undo_cubit.dart';
-import '../../navigation/bloc/navigation_cubit.dart';
 import '../../navigation/view/app_drawer.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
@@ -13,13 +12,12 @@ import '../../nodes/service/node_progress.dart';
 import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_editor.dart';
 import '../../nodes/view/node_finish_sheet.dart';
+import '../../nodes/view/schedule_sheet.dart';
 import '../../nodes/view/timer_edit_sheet.dart';
 import '../bloc/assignment_estimates_cubit.dart';
 import '../bloc/assignment_rules_cubit.dart';
 import '../bloc/calendar_cubit.dart';
-import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/feed_cubit.dart';
-import '../bloc/settings_cubit.dart';
 import '../bloc/tasks_tab_cubit.dart';
 import '../bloc/tasks_view_options_cubit.dart';
 import '../model/assignment_estimate.dart';
@@ -397,14 +395,6 @@ class _TabSaverState extends State<_TabSaver> {
 
 final _timeFormat = DateFormat('h:mm a');
 final _dueFormat = DateFormat('EEE, MMM d');
-
-int _snapMinutes(BuildContext context) {
-  try {
-    return context.read<SettingsCubit>().state.snapMinutes;
-  } catch (_) {
-    return 15;
-  }
-}
 
 /// Estimate for one assignment: the rule's explicit number, then the
 /// learned average for its classified type, then the node's own time
@@ -1253,17 +1243,24 @@ class _NodeTile extends StatelessWidget {
                   },
           ),
           IconButton(
-            tooltip: hasEvent
-                ? 'Event added — tap to add another'
-                : 'Add to calendar',
+            tooltip: (hasEvent ||
+                    live.schedule?.due != null ||
+                    (live.schedule?.hasCalendarBlock ?? false))
+                ? 'Scheduled — tap to change'
+                : 'Schedule',
             visualDensity: VisualDensity.compact,
             padding: const EdgeInsets.all(8),
             constraints: const BoxConstraints(),
             icon: Icon(
-              Icons.event_available,
-              color: hasEvent ? theme.colorScheme.primary : null,
+              Icons.schedule,
+              color: (hasEvent ||
+                      live.schedule?.due != null ||
+                      (live.schedule?.hasCalendarBlock ?? false))
+                  ? theme.colorScheme.primary
+                  : null,
             ),
-            onPressed: () => _addToCalendar(context, live),
+            onPressed: () =>
+                showScheduleSheet(context, nodeId: live.id),
           ),
           PopupMenuButton<String>(
             padding: EdgeInsets.zero,
@@ -1272,13 +1269,15 @@ class _NodeTile extends StatelessWidget {
                 showNodeEditor(context, existing: live);
               }
               if (value == 'delete') _delete(context, live);
-              if (value == 'calendar') _addToCalendar(context, live);
+              if (value == 'schedule') {
+                showScheduleSheet(context, nodeId: live.id);
+              }
             },
             itemBuilder: (context) => const [
               PopupMenuItem(value: 'edit', child: Text('Edit')),
               PopupMenuItem(
-                value: 'calendar',
-                child: Text('Add to calendar'),
+                value: 'schedule',
+                child: Text('Schedule…'),
               ),
               PopupMenuItem(value: 'delete', child: Text('Delete')),
             ],
@@ -1326,25 +1325,6 @@ class _NodeTile extends StatelessWidget {
       if (event.taskId != null && event.taskId == node.id) return true;
     }
     return false;
-  }
-
-  void _addToCalendar(BuildContext context, Node node) {
-    context.read<CalendarDraftCubit>().requestDraft(
-          draftSeedFromNode(
-            node,
-            estimate: _estimateFor(context, node),
-            snapMinutes: _snapMinutes(context),
-          ),
-        );
-    context.read<NavigationCubit>().setPage(PlannerPage.calendar);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Pick a time on the calendar — nothing is saved until you press Add.',
-        ),
-        duration: Duration(seconds: 2),
-      ),
-    );
   }
 
   void _delete(BuildContext context, Node node) {

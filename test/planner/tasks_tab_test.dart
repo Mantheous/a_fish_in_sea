@@ -187,8 +187,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(tasksTab.state, 1);
 
-    // Planning off the homework task navigates to the calendar …
-    await tester.tap(find.byTooltip('Add to calendar').first);
+    // Planning off the homework task opens the unified sheet, whose
+    // Time mode navigates to the calendar for visual placement …
+    await tester.tap(find.byTooltip('Scheduled — tap to change').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Time'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pick on calendar instead'));
     await tester.pump();
     expect(drafts.state, isNotNull);
     expect(navigation.state, PlannerPage.calendar);
