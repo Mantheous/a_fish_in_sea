@@ -18,6 +18,7 @@ GoogleContactsService serviceWith(Map<String, http.Response> routes) {
 }
 
 void main() {
+  setUp(GoogleContactsService.clearSharedCache);
   group('GoogleContact', () {
     test('fromJson requires an id or name', () {
       expect(
@@ -106,7 +107,9 @@ void main() {
     test('403 surfaces needsReconnect', () async {
       final service = serviceWith({
         '/api/google/contacts': http.Response(
-          jsonEncode({'error': 'insufficient scopes'}),
+          jsonEncode({'detail': {
+            'error': 'insufficient scopes', 'needsReconnect': true,
+          }}),
           403,
         ),
       });

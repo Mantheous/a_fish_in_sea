@@ -4,6 +4,7 @@ import 'dart:math' show min;
 import 'package:http/http.dart' as http;
 
 import '../planner/service/server_base.dart';
+import '../common/network/app_server_request.dart';
 
 /// Typed error for sync transport failures.
 class SyncException implements Exception {
@@ -20,6 +21,7 @@ class SyncException implements Exception {
 /// parameter and fall back to this.
 class SyncAuth {
   static String? Function()? tokenProvider;
+  static Future<String?> Function()? refreshTokenProvider;
   static String? current() => tokenProvider?.call();
 }
 
@@ -92,12 +94,14 @@ class SyncClient {
   final String? Function() accessToken;
   final Future<String?> Function() refreshAccessToken;
   final http.Client _client;
+  final Duration requestTimeout;
 
   SyncClient({
     required this.serverBase,
     required this.accessToken,
     required this.refreshAccessToken,
     http.Client? client,
+    this.requestTimeout = const Duration(seconds: 30),
   }) : _client = client ?? http.Client();
 
   String get _base =>
@@ -132,16 +136,12 @@ class SyncClient {
   /// POST with one automatic token refresh on 401. Returns decoded JSON.
   Future<dynamic> _postAuthed(String path, Map<String, dynamic> body) async {
     final uri = Uri.parse('$_base$path');
-    var r = await _client.post(uri,
-        headers: _headers(json: true), body: jsonEncode(body));
-    if (r.statusCode == 401) {
-      final fresh = await refreshAccessToken();
-      if (fresh == null || fresh.isEmpty) {
-        throw SyncException(401, 'Signed out');
-      }
-      r = await _client.post(uri,
-          headers: _headers(json: true), body: jsonEncode(body));
-    }
+    final r = await sendAppServerRequest(
+      () => _client.post(uri,
+          headers: _headers(json: true), body: jsonEncode(body)),
+      refreshAccessToken: refreshAccessToken,
+      timeout: requestTimeout,
+    );
     return _decode(r);
   }
 
@@ -150,14 +150,11 @@ class SyncClient {
     if (query != null && query.isNotEmpty) {
       uri = uri.replace(queryParameters: {...uri.queryParameters, ...query});
     }
-    var r = await _client.get(uri, headers: _headers());
-    if (r.statusCode == 401) {
-      final fresh = await refreshAccessToken();
-      if (fresh == null || fresh.isEmpty) {
-        throw SyncException(401, 'Signed out');
-      }
-      r = await _client.get(uri, headers: _headers());
-    }
+    final r = await sendAppServerRequest(
+      () => _client.get(uri, headers: _headers()),
+      refreshAccessToken: refreshAccessToken,
+      timeout: requestTimeout,
+    );
     return _decode(r);
   }
 
@@ -180,7 +177,7 @@ class SyncClient {
       Uri.parse('$_base/api/v1/auth/register'),
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({'email': email, 'password': password}),
-    );
+    ).timeout(requestTimeout);
     return Map<String, dynamic>.from(_decode(r) as Map);
   }
 
@@ -189,7 +186,7 @@ class SyncClient {
       Uri.parse('$_base/api/v1/auth/login'),
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({'email': email, 'password': password}),
-    );
+    ).timeout(requestTimeout);
     return Map<String, dynamic>.from(_decode(r) as Map);
   }
 
@@ -198,7 +195,7 @@ class SyncClient {
       Uri.parse('$_base/api/v1/auth/refresh'),
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({'refresh_token': refreshToken}),
-    );
+    ).timeout(requestTimeout);
     return Map<String, dynamic>.from(_decode(r) as Map);
   }
 
@@ -278,7 +275,9 @@ class SyncClient {
   }
 
   Future<Map<String, dynamic>> health() async {
-    final r = await _client.get(Uri.parse('$_base/api/health'));
+    final r = await _client
+        .get(Uri.parse('$_base/api/health'))
+        .timeout(requestTimeout);
     return Map<String, dynamic>.from(_decode(r) as Map);
   }
 
@@ -326,14 +325,11 @@ class SyncClient {
   /// DELETE with the shared 401→refresh handling. Returns decoded JSON.
   Future<dynamic> apiDelete(String path) async {
     var uri = Uri.parse('$_base$path');
-    var r = await _client.delete(uri, headers: _headers());
-    if (r.statusCode == 401) {
-      final fresh = await refreshAccessToken();
-      if (fresh == null || fresh.isEmpty) {
-        throw SyncException(401, 'Signed out');
-      }
-      r = await _client.delete(uri, headers: _headers());
-    }
+    final r = await sendAppServerRequest(
+      () => _client.delete(uri, headers: _headers()),
+      refreshAccessToken: refreshAccessToken,
+      timeout: requestTimeout,
+    );
     return _decode(r);
   }
 

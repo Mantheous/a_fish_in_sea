@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import '../../demo/demo_data.dart';
 import '../../demo/demo_mode.dart';
 import 'server_base.dart';
+import '../../common/network/app_server_request.dart';
 
 /// One Canvas assignment's submission state, as normalized by the server
 /// from the planner API (`plannable_id` matches the iCal UID suffix in
@@ -71,11 +72,15 @@ class CanvasService {
   final String Function() userId;
   final String? Function()? authToken;
   final http.Client _client;
+  final Future<String?> Function()? refreshAccessToken;
+  final Duration requestTimeout;
 
   CanvasService({
     required this.baseUrl,
     required this.userId,
     this.authToken,
+    this.refreshAccessToken,
+    this.requestTimeout = const Duration(seconds: 30),
     http.Client? client,
   }) : _client = client ?? http.Client();
 
@@ -101,7 +106,11 @@ class CanvasService {
 
   Future<http.Response> _send(Future<http.Response> Function() request) async {
     try {
-      return await request().timeout(const Duration(seconds: 30));
+      return await sendAppServerRequest(
+        request,
+        refreshAccessToken: refreshAccessToken,
+        timeout: requestTimeout,
+      );
     } on CanvasException {
       rethrow;
     } on TimeoutException {

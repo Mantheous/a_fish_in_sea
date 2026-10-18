@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:a_fish_in_sea/sync/sync_client.dart' show SyncAuth;
 import 'package:http/http.dart' as http;
+
+import '../../common/network/app_server_request.dart';
 
 import 'plaid_service_io.dart'
     if (dart.library.html) 'plaid_service_stub.dart' as platform_url;
@@ -12,11 +15,15 @@ class PlaidService {
   final String userId;
   final String? Function()? authToken;
   final http.Client _client;
+  final Future<String?> Function()? refreshAccessToken;
+  final Duration requestTimeout;
 
   PlaidService({
     String? baseUrl,
     required this.userId,
     this.authToken,
+    this.refreshAccessToken,
+    this.requestTimeout = const Duration(seconds: 30),
     http.Client? client,
   })  : baseUrl = baseUrl ?? _defaultBaseUrl(),
         _client = client ?? http.Client();
@@ -108,8 +115,9 @@ class PlaidService {
 
   Future<http.Response> _get(String path) async {
     try {
-      final response =
-          await _client.get(Uri.parse('$baseUrl$path'), headers: _headers);
+      final response = await _send(
+        () => _client.get(Uri.parse('$baseUrl$path'), headers: _headers),
+      );
       _checkResponse(response);
       return response;
     } catch (e) {
@@ -122,11 +130,11 @@ class PlaidService {
     Map<String, String>? body,
   }) async {
     try {
-      final response = await _client.post(
-        Uri.parse('$baseUrl$path'),
-        headers: _headers,
-        body: body,
-      );
+      final response = await _send(() => _client.post(
+            Uri.parse('$baseUrl$path'),
+            headers: _headers,
+            body: body,
+          ));
       _checkResponse(response);
       return response;
     } catch (e) {
@@ -134,8 +142,19 @@ class PlaidService {
     }
   }
 
+  Future<http.Response> _send(Future<http.Response> Function() request) =>
+      sendAppServerRequest(
+        request,
+        refreshAccessToken: refreshAccessToken ??
+            (authToken == null ? SyncAuth.refreshTokenProvider : null),
+        timeout: requestTimeout,
+      );
+
   PlaidServiceException _mapRequestError(Object e) {
     if (e is PlaidServiceException) return e;
+    if (e is TimeoutException) {
+      return const PlaidServiceException('Bank request timed out. Try again.', 0);
+    }
     if (platform_url.isConnectionError(e)) {
       return PlaidServiceException(
         'Cannot reach the Plaid server at $baseUrl. '

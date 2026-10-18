@@ -80,6 +80,7 @@ class MyApp extends StatelessWidget {
           );
           ref = AuthCubit(client: () => client);
           SyncAuth.tokenProvider = () => ref?.state.accessToken;
+          SyncAuth.refreshTokenProvider = () => ref!.refreshAccessToken();
           return ref;
         }),
         BlocProvider(create: (_) => SyncMetaCubit()),
@@ -134,6 +135,8 @@ class MyApp extends StatelessWidget {
               userId: () => context.read<PlaidCubit>().state.userId,
               authToken: () =>
                   context.read<AuthCubit>().state.accessToken,
+              refreshAccessToken: () =>
+                  context.read<AuthCubit>().refreshAccessToken(),
             ),
           ),
         ),

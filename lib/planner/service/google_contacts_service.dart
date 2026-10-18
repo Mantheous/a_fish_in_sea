@@ -8,6 +8,7 @@ import '../model/task_assignee.dart';
 import '../../demo/demo_data.dart';
 import '../../demo/demo_mode.dart';
 import 'server_base.dart';
+import '../../common/network/app_server_request.dart';
 
 class GoogleContact {
   final String id;
@@ -93,6 +94,8 @@ class GoogleContactsService {
   final String Function() userId;
   final String? Function()? authToken;
   final http.Client _client;
+  final Future<String?> Function()? refreshAccessToken;
+  final Duration requestTimeout;
   List<GoogleContact>? _cache;
 
   /// Shared across editor instances: every event/task editor builds its own
@@ -105,6 +108,8 @@ class GoogleContactsService {
     required this.baseUrl,
     required this.userId,
     this.authToken,
+    this.refreshAccessToken,
+    this.requestTimeout = const Duration(seconds: 30),
     http.Client? client,
   }) : _client = client ?? http.Client();
 
@@ -129,7 +134,11 @@ class GoogleContactsService {
 
   Future<http.Response> _send(Future<http.Response> Function() request) async {
     try {
-      return await request().timeout(const Duration(seconds: 30));
+      return await sendAppServerRequest(
+        request,
+        refreshAccessToken: refreshAccessToken,
+        timeout: requestTimeout,
+      );
     } on GoogleContactsException {
       rethrow;
     } on TimeoutException {
@@ -172,9 +181,6 @@ class GoogleContactsService {
           needsReconnect = true;
         }
       } catch (_) {}
-      if (response.statusCode == 401 || response.statusCode == 403) {
-        needsReconnect = true;
-      }
       throw GoogleContactsException(
         message,
         statusCode: response.statusCode,
