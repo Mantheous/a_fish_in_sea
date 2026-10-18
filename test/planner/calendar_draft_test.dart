@@ -85,6 +85,22 @@ void main() {
       expect(seed.start, DateTime(2026, 9, 5, 9));
       expect(seed.end, DateTime(2026, 9, 5, 10));
     });
+
+    test('late-night seeds never crash and stay placeable', () {
+      // Around 23:50 the "never seed in the past" start used to invert
+      // the end clamp (lower > upper throws).
+      for (final now in [DateTime(2026, 9, 5, 23, 50), DateTime(2026, 9, 5, 23, 55)]) {
+        final seed = draftSeedFromNode(
+          Node(
+              id: 'node:t1',
+              title: 'Read me',
+              createdAt: DateTime(2026)),
+          now: now,
+        );
+        expect(seed.start.day, 5);
+        expect(seed.end.isAfter(seed.start), isTrue);
+      }
+    });
   });
 
   group('CalendarDraftCubit', () {

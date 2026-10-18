@@ -94,6 +94,19 @@ void main() {
         'FREQ=DAILY;UNTIL=20261031T235900Z',
       );
     });
+
+    test('until without a date defaults instead of crashing', () {
+      // Tapping "Until" in the editor switches endKind before a date is
+      // picked, and Save can run before the picker returns.
+      const config = RepeatConfig(
+        kind: RepeatKind.daily,
+        endKind: RepeatEndKind.until,
+      );
+      expect(
+        config.ruleFor(DateTime(2026, 9, 4)),
+        'FREQ=DAILY;UNTIL=20261004T235900Z',
+      );
+    });
   });
 
   group('RepeatConfig.tryParse', () {

@@ -71,6 +71,16 @@ PlannerEvent draftSeedFromNode(
     start = _atMinuteOfDay(anchor, startMinute);
   }
 
+  // Late at night the "never seed in the past" start above can sit
+  // within one snap of midnight, which would invert the end clamp below
+  // (lower > upper throws). Pull the start back so at least one snap
+  // slot remains on the anchor day.
+  final cap = 24 * 60 - snap < 0 ? 0 : 24 * 60 - snap;
+  if (startMinute > cap) {
+    startMinute = startMinute.clamp(0, cap);
+    start = _atMinuteOfDay(anchor, startMinute);
+  }
+
   // Round the end up to the next snap boundary so snapping can never
   // shorten the estimate.
   var endMinute = startMinute + minutes;
