@@ -326,12 +326,20 @@ PlannerEvent reportBlockToDisplayEvent(
   );
 }
 
-/// Id prefix of the invisible full-day appointment that claims the first
-/// lane of a day column in the Plan + Report view, so the report blocks get
-/// a column of their own instead of every planned tile being cut in half.
+/// Id prefix of the invisible full-day appointment that claims a day column
+/// of the report column's own calendar in the Plan + Report view, so report
+/// blocks get a column of their own instead of planned tiles being cut in
+/// half.
 const String reportLaneIdPrefix = 'reportlane:';
 
+/// Id prefix of the invisible all-day copies that keep the report
+/// calendar's header exactly as tall as the plan calendar's.
+const String reportPlaceholderIdPrefix = 'reportplaceholder:';
+
 bool isReportLaneId(String id) => id.startsWith(reportLaneIdPrefix);
+
+bool isReportPlaceholderId(String id) =>
+    id.startsWith(reportPlaceholderIdPrefix);
 
 String reportLaneIdForDay(DateTime day) {
   final month = day.month.toString().padLeft(2, '0');
@@ -357,11 +365,11 @@ DateTime? reportLaneDayOf(String id) {
   return parsed;
 }
 
-/// A full-day placeholder appointment. It never renders as an event: the
-/// calendar page's appointment builder turns its tile into the report lane
-/// (background + time-positioned report chips). Being an appointment is the
-/// point — Syncfusion's layout engine then places every planned event of
-/// that day beside it instead of on top of the reports.
+/// A full-day placeholder appointment for the report calendar. It never
+/// renders as an event: the calendar page's rail builder turns its tile into
+/// the report column (background + time-positioned report chips). Being an
+/// appointment is the point — the report calendar lays its chips out on a
+/// real time grid that matches the plan calendar beside it.
 PlannerEvent buildReportLaneEvent(DateTime day) => PlannerEvent(
   id: reportLaneIdForDay(day),
   subject: '',

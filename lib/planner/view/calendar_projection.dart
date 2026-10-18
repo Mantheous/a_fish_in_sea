@@ -26,13 +26,27 @@ class CalendarProjection {
   DateTime? _reportTime;
   List<PlannerEvent> _reportEvents = const [];
   List<PlannerEvent> _reportLanes = const [];
+  List<PlannerEvent> _reportPlaceholders = const [];
   Map<String, ReportBlock> reportById = const {};
   Map<String, Color> reportColorById = const {};
+
+  /// The report column's own calendar (Plan + Report view, day/week): one
+  /// lane per visible day plus invisible all-day copies that keep its
+  /// header the same height as the plan calendar's.
+  List<PlannerEvent> reportRails = const [];
+
+  /// All-day copies of the visible all-day events, for the rail calendar's
+  /// header only. Their tiles render nothing.
+  List<PlannerEvent> get reportPlaceholders => _reportPlaceholders;
+
+  List<PlannerEvent>? _railsLanes;
+  List<PlannerEvent>? _railsPlaceholders;
 
   /// Report blocks per report-lane id: what the lane's tile renders as
   /// time-positioned chips.
   Map<String, List<ReportBlock>> reportBlocksByLaneId = const {};
   bool _laneMode = false;
+  bool _reportModeOn = false;
   List<DateTime>? _laneDays;
   double _laneStartHour = 0;
   double _laneEndHour = 24;
@@ -126,7 +140,8 @@ class CalendarProjection {
     _nodeSource = nodes;
 
     if (showReports &&
-        (!identical(_visible, _reportVisible) ||
+        (showReports != _reportModeOn ||
+            !identical(_visible, _reportVisible) ||
             !identical(nodes, _reportNodes) ||
             !identical(reports, _reportSource) ||
             laneMode != _laneMode ||
@@ -163,7 +178,22 @@ class CalendarProjection {
         startHour: visibleStartHour,
         endHour: visibleEndHour,
       );
+      // The rail calendar shows the same all-day events as the plan
+      // calendar so both headers keep the same height, but its copies
+      // render no tile of their own.
+      _reportPlaceholders = [
+        for (final event in _visible)
+          if (event.allDay)
+            PlannerEvent(
+              id: '$reportPlaceholderIdPrefix${event.id}',
+              subject: '',
+              start: event.start,
+              end: event.end,
+              allDay: true,
+            ),
+      ];
       _laneMode = laneMode;
+      _reportModeOn = showReports;
       _laneDays = List<DateTime>.of(visibleDays);
       _laneStartHour = visibleStartHour;
       _laneEndHour = visibleEndHour;
@@ -172,9 +202,20 @@ class CalendarProjection {
       _reportSource = reports;
       _reportTime = now;
     }
-    final reportEvents = !showReports
+    // In lane mode the report column is a calendar of its own, so report
+    // blocks and lanes stay out of `shown`; the month view keeps them as
+    // ordinary agenda chips.
+    final reportEvents = !showReports || _laneMode
         ? const <PlannerEvent>[]
-        : (_laneMode ? _reportLanes : _reportEvents);
+        : _reportEvents;
+    if (!identical(_railsLanes, _reportLanes) ||
+        !identical(_railsPlaceholders, _reportPlaceholders)) {
+      _railsLanes = _reportLanes;
+      _railsPlaceholders = _reportPlaceholders;
+      reportRails = _laneMode
+          ? <PlannerEvent>[..._reportLanes, ..._reportPlaceholders]
+          : const <PlannerEvent>[];
+    }
     if (identical(_shownVisible, _visible) &&
         identical(_shownNodes, _nodeBlocks) &&
         identical(_shownReports, reportEvents) &&

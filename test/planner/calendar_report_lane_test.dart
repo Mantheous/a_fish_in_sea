@@ -10,6 +10,7 @@ import 'package:a_fish_in_sea/reporting/model/reported_entry.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:syncfusion_flutter_calendar/calendar.dart';
 
 import '../goldens/golden_app.dart';
 
@@ -50,6 +51,13 @@ void main() {
       expect(reportLaneDayOf('reportlane:not-a-date'), isNull);
       expect(reportLaneDayOf('reportlane:2026-13-45'), isNull);
       expect(reportLaneDayOf('reportlane:2026-02-29'), isNull);
+    });
+
+    test('placeholder ids are recognised and never read as lanes', () {
+      final id = '${reportPlaceholderIdPrefix}personal-1';
+      expect(isReportPlaceholderId(id), isTrue);
+      expect(isReportLaneId(id), isFalse);
+      expect(reportLaneDayOf(id), isNull);
     });
   });
 
@@ -108,10 +116,17 @@ void main() {
     });
   });
 
-  group('CalendarProjection report lanes', () {
+  group('CalendarProjection report column', () {
     late CalendarProjection projection;
     final day = DateTime(2026, 10, 5);
     final event = _event('e1', DateTime(2026, 10, 5, 9));
+    final allDay = PlannerEvent(
+      id: 'allday-1',
+      subject: 'Conference',
+      start: DateTime(2026, 10, 5),
+      end: DateTime(2026, 10, 6),
+      allDay: true,
+    );
     final reports = <String, List<ReportedEntry>>{
       '2026-10-05': [
         _accepted(
@@ -128,9 +143,10 @@ void main() {
       List<DateTime> visibleDays = const [],
       double startHour = 6,
       double endHour = 24,
+      List<PlannerEvent>? events,
     }) {
       projection.update(
-        events: [event],
+        events: events ?? [event, allDay],
         feeds: const [],
         visibility: const CalendarVisibilityState(),
         nodes: const [],
@@ -146,11 +162,13 @@ void main() {
 
     setUp(() => projection = CalendarProjection());
 
-    test('lane mode replaces report appointments with one lane per day', () {
+    test('the report column replaces report appointments in `shown`', () {
       update(visibleDays: [day]);
-      expect(projection.shown.map((e) => e.id), [
-        'e1',
+      // Plans keep the grid to themselves: no report tiles, no lanes.
+      expect(projection.shown.map((e) => e.id), ['e1', 'allday-1']);
+      expect(projection.reportRails.map((e) => e.id), [
         reportLaneIdForDay(day),
+        '${reportPlaceholderIdPrefix}allday-1',
       ]);
       expect(
         projection.reportBlocksByLaneId[reportLaneIdForDay(day)],
@@ -168,13 +186,32 @@ void main() {
             DateTime(2026, 10, 5).add(Duration(days: i)),
         ],
       );
-      expect(projection.shown.where((e) => isReportLaneId(e.id)), hasLength(7));
+      expect(
+        projection.reportRails.where((e) => isReportLaneId(e.id)),
+        hasLength(7),
+      );
+    });
+
+    test('all-day copies keep the rail header as tall as the plan one', () {
+      update(visibleDays: [day]);
+      final placeholders = projection.reportRails.where(
+        (e) => isReportPlaceholderId(e.id),
+      );
+      expect(placeholders, hasLength(1));
+      expect(placeholders.single.allDay, isTrue);
+      expect(placeholders.single.start, allDay.start);
+      expect(placeholders.single.end, allDay.end);
     });
 
     test('month-style mode keeps report blocks as appointments', () {
       update(showReportLanes: false);
-      expect(projection.shown.map((e) => e.id), ['e1', 'report:r1']);
+      expect(projection.shown.map((e) => e.id), [
+        'e1',
+        'allday-1',
+        'report:r1',
+      ]);
       expect(projection.reportBlocksByLaneId, isEmpty);
+      expect(projection.reportRails, isEmpty);
     });
 
     test('blocks outside the visible grid hours are not placed in a lane', () {
@@ -201,14 +238,38 @@ void main() {
         visibleEndHour: 24,
         now: DateTime(2026, 10, 5, 12),
       );
-      expect(projection.shown.where((e) => isReportLaneId(e.id)), hasLength(1));
+      expect(
+        projection.reportRails.where((e) => isReportLaneId(e.id)),
+        hasLength(1),
+      );
       expect(projection.reportBlocksByLaneId[reportLaneIdForDay(day)], isEmpty);
       expect(projection.reportById, isNotEmpty);
     });
   });
 
   group('Plan + Report calendar layout', () {
-    testWidgets('each day gets its own report lane column', (tester) async {
+    /// The first vertical, scrollable grid inside [calendarFinder].
+    ScrollableState verticalScrollableIn(
+      WidgetTester tester,
+      Finder calendarFinder,
+    ) {
+      final candidates = find.descendant(
+        of: calendarFinder,
+        matching: find.byType(Scrollable),
+      );
+      for (var i = 0; i < candidates.evaluate().length; i++) {
+        final state = tester.state<ScrollableState>(candidates.at(i));
+        if (state.position.axis == Axis.vertical &&
+            state.position.maxScrollExtent > 0) {
+          return state;
+        }
+      }
+      fail('no vertical scrollable in the calendar');
+    }
+
+    testWidgets('reports get their own column beside the untouched plans', (
+      tester,
+    ) async {
       await pumpGoldenPage(tester, const CalendarPage());
       final context = tester.element(find.byType(CalendarPage));
       final calendar = context.read<CalendarCubit>();
@@ -232,83 +293,112 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
 
-      // Widget tests run as Android, where the calendar opens in the day
-      // view: one visible day, one report lane.
+      // Two calendars: the report column on the left, the plan grid right.
+      expect(find.byType(SfCalendar), findsNWidgets(2));
+      final railFinder = find.byType(ReportLaneView);
       expect(
-        find.byType(ReportLaneView),
+        railFinder,
         findsOneWidget,
         reason: 'the visible day should own a report lane',
       );
-      // The old behaviour halved every tile; the lane must not clip the
-      // report to half of a planned tile's slot.
+      // Report blocks are not tiles in the plan grid any more.
       expect(find.byKey(const ValueKey('tile:report:r1')), findsNothing);
       expect(find.text('Report r1'), findsOneWidget);
 
-      final laneRect = tester.getRect(find.byType(ReportLaneView));
+      final railRect = tester.getRect(railFinder);
       final tileRect = tester.getRect(find.byKey(const ValueKey('tile:e1')));
-      // Report lane on the left, planned event's column beside it with the
-      // same width — neither is squished to half of the other.
-      expect(laneRect.left, lessThan(tileRect.left));
-      expect(laneRect.right, lessThanOrEqualTo(tileRect.left + 1));
-      expect((laneRect.width - tileRect.width).abs(), lessThan(12));
-      expect(laneRect.height, greaterThan(tileRect.height * 4));
+      // Report column on the left; the plan pane beside it is several times
+      // wider, so planned tiles keep the width they have in Plans mode.
+      expect(railRect.left, lessThan(tileRect.left));
+      expect(railRect.right, lessThanOrEqualTo(tileRect.left + 1));
+      expect(tileRect.width, greaterThan(railRect.width * 2));
 
-      // The chip sits at the report's own time, level with the planned
-      // tile that starts at the same time: 9:05 on a 6 AM–midnight grid is
-      // a few pixels below the 9:00 planned tile, and 45 minutes tall.
+      // Both grids share one time axis: a chip at 9:05 lines up with the
+      // 9:00 planned tile in the other calendar.
       expect(find.text('9:05 AM – 9:50 AM · accepted'), findsOneWidget);
       final chipRect = tester.getRect(
-        find
-            .ancestor(
-              of: find.text('Report r1'),
-              matching: find.byType(Container),
-            )
-            .first,
+        find.byKey(const ValueKey('report-chip:report:r1')),
       );
-      expect(chipRect.top - tileRect.top, closeTo(6.7, 4));
-      expect(chipRect.height, closeTo(60, 4));
+      expect(chipRect.top - tileRect.top, closeTo(6.7, 6));
+      expect(chipRect.height, closeTo(60, 6));
 
-      // Week view: one lane per visible day, and a day with no reports of
-      // its own still keeps its lane on the left of that day's column.
-      final monday = DateTime(
-        now.year,
-        now.month,
-        now.day,
-      ).add(const Duration(days: 1));
-      final mondayStart = DateTime(monday.year, monday.month, monday.day, 10);
-      calendar.addEvent(_event('e2', mondayStart));
+      // Scrolling one grid scrolls the other, to the same offset.
+      final calendars = find.byType(SfCalendar);
+      final railScroll = verticalScrollableIn(tester, calendars.first);
+      final planScroll = verticalScrollableIn(tester, calendars.last);
+      planScroll.position.jumpTo(200);
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(railScroll.position.pixels, planScroll.position.pixels);
+      railScroll.position.jumpTo(120);
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(planScroll.position.pixels, railScroll.position.pixels);
+    });
+
+    testWidgets('week view keeps a report column per visible day', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final now = DateTime.now();
+      final start = DateTime(now.year, now.month, now.day, 9);
+      calendar.addEvent(_event('e1', start));
+      context.read<ReportingCubit>().upsertEntry(
+        DateTime(now.year, now.month, now.day),
+        _accepted(
+          id: 'r1',
+          eventId: 'e1',
+          start: start.add(const Duration(minutes: 5)),
+          end: start.add(const Duration(minutes: 50)),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
       await tester.tap(find.text('Week'));
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
-      final laneFinder = find.byType(ReportLaneView);
-      expect(
-        laneFinder,
-        findsNWidgets(7),
-        reason: 'each visible day should own a report lane',
-      );
-      final mondayRect = tester.getRect(find.byKey(const ValueKey('tile:e2')));
-      final laneRects = [
-        for (var i = 0; i < 7; i++) tester.getRect(laneFinder.at(i)),
-      ];
-      final leftLane = laneRects.where(
-        (rect) =>
-            rect.left < mondayRect.left &&
-            (rect.right - mondayRect.left).abs() < 2,
-      );
-      expect(
-        leftLane,
-        hasLength(1),
-        reason: "Monday's plan sits in the column right of its own lane",
-      );
-      expect((leftLane.single.width - mondayRect.width).abs(), lessThan(12));
-      expect(leftLane.single.top, lessThan(mondayRect.top));
 
-      // Month view keeps report blocks as agenda chips (no lanes there).
+      expect(find.byType(ReportLaneView), findsNWidgets(7));
+      // The chip and its planned event still share one time axis. In a week
+      // column the chip is too narrow for text, so it is found by key.
+      final tileRect = tester.getRect(find.byKey(const ValueKey('tile:e1')));
+      final chipRect = tester.getRect(
+        find.byKey(const ValueKey('report-chip:report:r1')),
+      );
+      expect(chipRect.top - tileRect.top, closeTo(6.7, 6));
+    });
+
+    testWidgets('month view stays a single calendar with report chips', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final now = DateTime.now();
+      final start = DateTime(now.year, now.month, now.day, 9);
+      calendar.addEvent(_event('e1', start));
+      context.read<ReportingCubit>().upsertEntry(
+        DateTime(now.year, now.month, now.day),
+        _accepted(
+          id: 'r1',
+          eventId: 'e1',
+          start: start.add(const Duration(minutes: 5)),
+          end: start.add(const Duration(minutes: 50)),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
       await tester.tap(find.text('Month'));
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
+
+      expect(find.byType(SfCalendar), findsOneWidget);
       expect(find.byType(ReportLaneView), findsNothing);
       expect(
         find.byKey(const ValueKey('tile:report:r1')),
