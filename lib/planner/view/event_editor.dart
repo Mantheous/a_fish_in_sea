@@ -1955,14 +1955,16 @@ class EventEditorFormState extends State<EventEditorForm> {
     if (seeded != null && synced != null) {
       nodes.setScheduleBlock(seeded.id, synced.start, synced.end);
     }
-    if (_done) {
-      NodeEventSync.setEventDone(
-        calendar,
-        nodes,
-        syncedId,
-        done: true,
-      );
-    }
+    // Re-assert completion both ways: the re-sync can restore a stale
+    // done flag either direction, so an un-check must re-open the backing
+    // task just as a check must complete it (idempotent when already in
+    // agreement — see the task_tracking_link_test "sticks" cases).
+    NodeEventSync.setEventDone(
+      calendar,
+      nodes,
+      syncedId,
+      done: _done,
+    );
   }
 
   void _syncTaskLinkPostPush(String syncedId) =>

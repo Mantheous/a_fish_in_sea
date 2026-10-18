@@ -115,6 +115,29 @@ void main() {
       expect(calendar.byId('e1')?.completedAt, completedAt);
       expect(nodes.byId('n1')?.isDone, isTrue);
     });
+
+    test('unchecking a saved task re-opens its node', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      final completedAt = DateTime(2026, 10, 13, 7, 25);
+      calendar.addEvent(
+          evt('e1', taskId: 'n1', done: true).copyWith(
+        completedAt: completedAt,
+      ));
+      nodes.addNode(taskNode('n1').copyWith(
+        status: NodeStatus.done,
+        completedAt: completedAt,
+      ));
+
+      // Editor saved with Completed off after a Google push + re-sync:
+      // the post-sync path must propagate the un-check, not just checks.
+      NodeEventSync.setEventDone(calendar, nodes, 'e1', done: false);
+
+      expect(calendar.byId('e1')?.done, isFalse);
+      expect(calendar.byId('e1')?.completedAt, isNull);
+      expect(nodes.byId('n1')?.isDone, isFalse);
+      expect(nodes.byId('n1')?.completedAt, isNull);
+    });
   });
 
   group('linked event/node persistence', () {
