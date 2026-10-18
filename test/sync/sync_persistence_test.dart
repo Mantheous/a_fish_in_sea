@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
 import 'package:a_fish_in_sea/sync/sync_client.dart';
 import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
@@ -24,6 +26,27 @@ class _RefreshStubClient extends SyncClient {
 
   @override
   Future<Map<String, dynamic>> refresh(String refreshToken) => _onRefresh();
+}
+
+class _SessionRaceClient extends SyncClient {
+  final Completer<Map<String, dynamic>> refreshResult = Completer();
+
+  _SessionRaceClient()
+      : super(
+          serverBase: () => '',
+          accessToken: () => null,
+          refreshAccessToken: () async => null,
+        );
+
+  @override
+  Future<Map<String, dynamic>> login(String email, String password) async => {
+        'access_token': 'access-$email',
+        'refresh_token': 'refresh-$email',
+      };
+
+  @override
+  Future<Map<String, dynamic>> refresh(String refreshToken) =>
+      refreshResult.future;
 }
 
 void main() {
@@ -120,6 +143,26 @@ void main() {
     expect(await cubit.refreshAccessToken(), isNull);
     expect(cubit.state.isSignedIn, isFalse);
     expect(cubit.state.refreshToken, isNull);
+  });
+
+  test('a refresh completing after account switch cannot restore old tokens',
+      () async {
+    final client = _SessionRaceClient();
+    final cubit = AuthCubit(client: () => client);
+    expect(await cubit.login('alice@example.com', 'password'), isTrue);
+
+    final oldRefresh = cubit.refreshAccessToken();
+    cubit.logout();
+    expect(await cubit.login('bob@example.com', 'password'), isTrue);
+
+    client.refreshResult.complete({
+      'access_token': 'stale-alice-access',
+      'refresh_token': 'stale-alice-refresh',
+    });
+    expect(await oldRefresh, isNull);
+    expect(cubit.state.email, 'bob@example.com');
+    expect(cubit.state.accessToken, 'access-bob@example.com');
+    expect(cubit.state.refreshToken, 'refresh-bob@example.com');
   });
 
   test('SyncMetaCubit tolerates corrupt entries', () {
