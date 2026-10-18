@@ -193,7 +193,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Time'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Pick on calendar instead'));
+    await tester.tap(find.text('Pick time on calendar'));
     await tester.pump();
     expect(drafts.state, isNotNull);
     expect(navigation.state, PlannerPage.calendar);
