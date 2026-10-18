@@ -101,10 +101,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     if (feed == null) return;
     final feedBefore = state;
     emit(state.where((f) => f.id != feedId).toList());
-    final calendarBefore = _calendarCubit.state;
-    _calendarCubit.removeFeedEvents(feedId);
-    final nodeBefore = _nodeCubit.state;
-    _nodeCubit.removeImportedNodesFor(feedId);
+    final cascade = _removeClassData(feedId);
     UndoCubit.instance?.record(
       ChangeRecord(entries: [
         StateSnapshot(
@@ -112,18 +109,49 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
           stateBefore: feedBefore,
           stateAfter: state,
         ),
-        StateSnapshot(
-          cubitId: _calendarCubit.changeId,
-          stateBefore: calendarBefore,
-          stateAfter: _calendarCubit.state,
-        ),
-        StateSnapshot(
-          cubitId: _nodeCubit.changeId,
-          stateBefore: nodeBefore,
-          stateAfter: _nodeCubit.state,
-        ),
+        ...cascade,
       ]),
     );
+  }
+
+  /// Removes the leftover data of a class whose feed entry is already gone.
+  ///
+  /// Re-adding a class while sync was down (or losing the feeds cubit's
+  /// stored copy) can leave imported homework and calendar events whose
+  /// classId points at a feed that no longer exists. Those show up under
+  /// "Unknown class" in Assignments by class, with no Settings row to remove
+  /// them from. This drops the class's imported homework + events as one
+  /// undoable step, leaving the feed list untouched.
+  void removeOrphanedClass(String classId) {
+    if (classId.isEmpty || byId(classId) != null) return;
+    final hasEvents = _calendarCubit.state.any((e) => e.feedId == classId);
+    final hasNodes = _nodeCubit.state
+        .any((n) => n.classId == classId && n.sourceEventId != null);
+    if (!hasEvents && !hasNodes) return;
+    final entries = _removeClassData(classId);
+    UndoCubit.instance?.record(ChangeRecord(entries: entries));
+  }
+
+  /// Cascade shared by [removeFeed] and [removeOrphanedClass]: drop
+  /// [classId]'s calendar events and imported homework. Returns the undo
+  /// snapshots for the cubits it touched.
+  List<StateSnapshot> _removeClassData(String classId) {
+    final calendarBefore = _calendarCubit.state;
+    _calendarCubit.removeFeedEvents(classId);
+    final nodeBefore = _nodeCubit.state;
+    _nodeCubit.removeImportedNodesFor(classId);
+    return [
+      StateSnapshot(
+        cubitId: _calendarCubit.changeId,
+        stateBefore: calendarBefore,
+        stateAfter: _calendarCubit.state,
+      ),
+      StateSnapshot(
+        cubitId: _nodeCubit.changeId,
+        stateBefore: nodeBefore,
+        stateAfter: _nodeCubit.state,
+      ),
+    ];
   }
 
   Feed? byId(String feedId) => _byIdMap[feedId];

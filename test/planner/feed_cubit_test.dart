@@ -163,6 +163,39 @@ void main() {
       expect(nodeCubit.state.single.title, 'Assignment A1');
     });
 
+    test('removeOrphanedClass clears leftovers of a vanished feed', () async {
+      feedCubit.addFeed(feed);
+      await feedCubit.syncAll();
+      // Simulate the duplicate feed row disappearing (a class re-added while
+      // sync was down, then the duplicate feed was dropped) while its
+      // imported homework and events stayed behind.
+      feedCubit.emit(const []);
+      expect(feedCubit.state, isEmpty);
+      expect(calendarCubit.state, isNotEmpty);
+      expect(nodeCubit.state, isNotEmpty);
+
+      feedCubit.removeOrphanedClass('f1');
+      expect(calendarCubit.state, isEmpty);
+      expect(nodeCubit.state, isEmpty);
+
+      final undoCubit = UndoCubit.instance!;
+      expect(undoCubit.canUndo, isTrue);
+      undoCubit.undo();
+      expect(calendarCubit.state.length, 1);
+      expect(nodeCubit.state.single.sourceEventId, 'hw:f1:a1');
+    });
+
+    test('removeOrphanedClass ignores a class whose feed still exists',
+        () async {
+      feedCubit.addFeed(feed);
+      await feedCubit.syncAll();
+
+      feedCubit.removeOrphanedClass('f1');
+      expect(calendarCubit.state.length, 1);
+      expect(nodeCubit.state.length, 1);
+      expect(feedCubit.state.single.id, 'f1');
+    });
+
     test('google feeds sync via the google service', () async {
       final now = DateTime.now();
       final googleFeed = const Feed(
