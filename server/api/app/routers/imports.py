@@ -281,8 +281,13 @@ def _match_wanted_pairs(
 ) -> set[tuple[str, str]]:
     """Resolve caller-supplied item identifiers to (collection, item_id) pairs.
 
-    Accepts either qualified 'collection:item_id' (e.g. 'nodes:x') or bare
-    'item_id' for backward compatibility.
+    Approve/discard are keyed by (collection, item_id): a qualified
+    'collection:item_id' matches exactly that row. A bare 'item_id' is
+    accepted only when it is unambiguous within the batch (exactly one
+    pending row carries it). A bare id shared across collections is
+    ambiguous and is rejected instead of silently acting on every
+    collection at once — that was the cross-collection approve/discard
+    collision.
     """
     known_pairs = {(r.collection, r.item_id) for r in pending}
     by_bare: dict[str, set[tuple[str, str]]] = {}
@@ -290,19 +295,33 @@ def _match_wanted_pairs(
         by_bare.setdefault(pair[1], set()).add(pair)
     matched: set[tuple[str, str]] = set()
     unknown: list[str] = []
+    ambiguous: list[str] = []
     for raw in raw_ids:
         if ":" in raw:
             prefix, rest = raw.split(":", 1)
             if prefix in IMPORTABLE and (prefix, rest) in known_pairs:
                 matched.add((prefix, rest))
-                continue
-        if raw in by_bare:
-            matched.update(by_bare[raw])
-        else:
+            else:
+                unknown.append(raw)
+            continue
+        candidates = by_bare.get(raw, set())
+        if not candidates:
             unknown.append(raw)
+        elif len(candidates) == 1:
+            matched.update(candidates)
+        else:
+            ambiguous.append(raw)
     if unknown:
         raise HTTPException(
             status_code=400, detail=f"Unknown items: {sorted(set(unknown))}"
+        )
+    if ambiguous:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Ambiguous item id(s) exist in multiple collections; "
+                f"qualify with collection:item_id: {sorted(set(ambiguous))}"
+            ),
         )
     return matched
 
