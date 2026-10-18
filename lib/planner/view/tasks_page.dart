@@ -7,6 +7,7 @@ import '../../common/undo/undo_cubit.dart';
 import '../../navigation/view/app_drawer.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
+import '../../nodes/service/node_calendar.dart';
 import '../../nodes/service/node_event_link.dart';
 import '../../nodes/service/node_progress.dart';
 import '../../nodes/view/node_checkbox.dart';
@@ -554,8 +555,9 @@ class _TodoTab extends StatelessWidget {
               : const _EmptyTodo();
         }
         // Precompute once per list build (not per tile): calendar link set,
-        // feed map, node indexes, and a single `now`. Tiles receive plain
-        // data and use `read` — no per-tile full-state watches.
+        // upcoming-entry counts, feed map, node indexes, and a single `now`.
+        // Tiles receive plain data and use `read` — no per-tile full-state
+        // watches.
         final calendarState = context.watch<CalendarCubit>().state;
         final linkedEventIds = <String>{};
         final linkedTaskIds = <String>{};
@@ -564,6 +566,8 @@ class _TodoTab extends StatelessWidget {
           final t = e.taskId;
           if (t != null) linkedTaskIds.add(t);
         }
+        final upcomingCounts =
+            futureCalendarEntryCounts(nodes, calendarState, now);
         final feedById = {for (final f in feedCubit.state) f.id: f};
         final nodeById = {for (final n in nodes) n.id: n};
         final indexes = buildNodeIndexes(nodes);
@@ -584,6 +588,7 @@ class _TodoTab extends StatelessWidget {
               indexByParent: indexes.byParent,
               linkedEventIds: linkedEventIds,
               linkedTaskIds: linkedTaskIds,
+              upcomingEventCounts: upcomingCounts,
               selected: selected.contains(node.id),
               selecting: selecting,
               onToggleSelection: () => onToggleSelection(node.id),
@@ -745,6 +750,8 @@ class _HomeworkTabState extends State<_HomeworkTab>
       final t = e.taskId;
       if (t != null) linkedTaskIds.add(t);
     }
+    final upcomingCounts =
+        futureCalendarEntryCounts(allNodes, calendarState, now);
     final groupNodes = <String, List<Node>>{};
     final groupOpenCount = <String, int>{};
     final groupMeta =
@@ -947,6 +954,7 @@ class _HomeworkTabState extends State<_HomeworkTab>
                         indexByParent: indexes.byParent,
                         linkedEventIds: linkedEventIds,
                         linkedTaskIds: linkedTaskIds,
+                        upcomingEventCounts: upcomingCounts,
                         selected: widget.selected.contains(node.id),
                         selecting: widget.selecting,
                         onToggleSelection: () =>
@@ -1052,6 +1060,12 @@ class _NodeTile extends StatelessWidget {
   final Map<String, List<Node>>? indexByParent;
   final Set<String>? linkedEventIds;
   final Set<String>? linkedTaskIds;
+
+  /// Upcoming (future, timed) calendar entries per node id, hoisted by the
+  /// parent list. Drives the schedule button's tint + count badge. Null in
+  /// standalone embeds: the tile then derives its own count from
+  /// [CalendarCubit] via [futureCalendarEntryCounts].
+  final Map<String, int>? upcomingEventCounts;
   // Multi-select state. While [selecting], the leading checkbox becomes
   // a selection box and taps toggle selection instead of opening the
   // editor; long-press is what enters selection mode.
@@ -1073,6 +1087,7 @@ class _NodeTile extends StatelessWidget {
     this.indexByParent,
     this.linkedEventIds,
     this.linkedTaskIds,
+    this.upcomingEventCounts,
     this.selected = false,
     this.selecting = false,
     this.onToggleSelection,
@@ -1116,6 +1131,12 @@ class _NodeTile extends StatelessWidget {
           linkedTaskIds: linkedTaskIds,
         ) ??
         _hasCalendarEvent(live, context.read<CalendarCubit>().state);
+    // Upcoming timed entries: future, non-all-day calendar blocks linked to
+    // this task. Drives the schedule button's tint and count badge; unlike
+    // [hasEvent] it ignores all-day deadlines and past occurrences.
+    final upcomingCount = upcomingEventCounts != null
+        ? (upcomingEventCounts![live.id] ?? 0)
+        : _countUpcomingEvents(context, live, effectiveNow);
     String? workLine;
     final plannedStart = live.schedule?.start;
     final plannedEnd = live.schedule?.end;
@@ -1314,26 +1335,25 @@ class _NodeTile extends StatelessWidget {
                     }
                   },
           ),
-          IconButton(
-            tooltip:
-                (hasEvent ||
-                    live.schedule?.due != null ||
-                    (live.schedule?.hasCalendarBlock ?? false))
-                ? 'Scheduled — tap to change'
-                : 'Schedule',
-            visualDensity: VisualDensity.compact,
-            padding: const EdgeInsets.all(8),
-            constraints: const BoxConstraints(),
-            icon: Icon(
-              Icons.schedule,
-              color:
+          Badge(
+            isLabelVisible: upcomingCount > 1,
+            label: Text('$upcomingCount'),
+            child: IconButton(
+              tooltip:
                   (hasEvent ||
                       live.schedule?.due != null ||
                       (live.schedule?.hasCalendarBlock ?? false))
-                  ? theme.colorScheme.primary
-                  : null,
+                  ? 'Scheduled — tap to change'
+                  : 'Schedule',
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.all(8),
+              constraints: const BoxConstraints(),
+              icon: Icon(
+                Icons.schedule,
+                color: upcomingCount > 0 ? theme.colorScheme.primary : null,
+              ),
+              onPressed: () => showScheduleSheet(context, nodeId: live.id),
             ),
-            onPressed: () => showScheduleSheet(context, nodeId: live.id),
           ),
           PopupMenuButton<String>(
             padding: EdgeInsets.zero,
@@ -1394,6 +1414,21 @@ class _NodeTile extends StatelessWidget {
       if (event.taskId != null && event.taskId == node.id) return true;
     }
     return false;
+  }
+
+  /// Per-tile fallback for embeds that didn't hoist [upcomingEventCounts]
+  /// (standalone widget tests): single node through the shared counter.
+  static int _countUpcomingEvents(
+    BuildContext context,
+    Node node,
+    DateTime now,
+  ) {
+    try {
+      final events = context.read<CalendarCubit>().state;
+      return futureCalendarEntryCounts([node], events, now)[node.id] ?? 0;
+    } catch (_) {
+      return 0;
+    }
   }
 
   void _delete(BuildContext context, Node node) {
