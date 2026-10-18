@@ -177,9 +177,55 @@ class _NodeBody extends StatelessWidget {
         if (goals.isEmpty) return const _EmptyNodes();
         final txns = context.watch<TransactionsCubit>().state;
         final txnAmounts = {for (final t in txns) t.id: t.amount};
+        // Money actuals keyed by node id: recorded actualAmount wins, plus
+        // assigned-transaction sums for nodes without one (audit gaps).
+        // Txn-id entries are kept too so linkedTransactionIds fallbacks
+        // in progress math keep resolving. Time actuals come from each
+        // node's own reported duration.
+        final assignedSums = <String, double>{};
+        for (final t in txns) {
+          final nid = t.assignedNodeId;
+          if (nid != null) {
+            assignedSums[nid] =
+                (assignedSums[nid] ?? 0) + t.amount.abs();
+          }
+        }
+        final moneyActualByNodeId = <String, double>{...txnAmounts};
+        for (final n in goals) {
+          final recorded = n.money?.actualAmount?.abs();
+          if (recorded != null) {
+            moneyActualByNodeId[n.id] = recorded;
+          } else {
+            var sum = 0.0;
+            for (final txnId in n.money?.linkedTransactionIds ??
+                const <String>[]) {
+              sum += (txnAmounts[txnId] ?? 0).abs();
+            }
+            // Assigned sums may duplicate linked ids (link + assign happen
+            // together), so only count assigned txns not already linked.
+            final linked =
+                n.money?.linkedTransactionIds.toSet() ?? const <String>{};
+            for (final t in txns) {
+              if (t.assignedNodeId == n.id && !linked.contains(t.id)) {
+                sum += t.amount.abs();
+              }
+            }
+            if (sum > 0) moneyActualByNodeId[n.id] = sum;
+          }
+        }
+        // Assigned-only nodes (no facet amount yet) still report.
+        for (final entry in assignedSums.entries) {
+          moneyActualByNodeId.putIfAbsent(entry.key, () => entry.value);
+        }
+        final timeActualByNodeId = <String, double>{
+          for (final n in goals)
+            if (n.reportedDuration != null)
+              n.id: n.reportedDuration!.inMinutes.toDouble(),
+        };
         final progress = progressForest(
           goals,
-          moneyActualByNodeId: txnAmounts,
+          moneyActualByNodeId: moneyActualByNodeId,
+          timeActualByNodeId: timeActualByNodeId,
         );
         final trimmed = query.trim();
         final visible = trimmed.isEmpty
