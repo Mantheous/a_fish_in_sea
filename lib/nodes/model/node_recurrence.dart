@@ -38,7 +38,7 @@ class NodeRecurrence extends Equatable {
       (e) => e.name == json['frequency'],
       orElse: () => TimeScale.daily,
     ),
-    customPeriodDays: (json['customPeriodDays'] as num?)?.toInt(),
+    customPeriodDays: (json['customPeriodDays'] as num?)?.toInt().clamp(1, 36500).toInt(),
     endDate: _tryDate(json['endDate']),
     dayOfMonth: (json['dayOfMonth'] as num?)?.toInt(),
     dayOfWeek: (json['dayOfWeek'] as num?)?.toInt(),
