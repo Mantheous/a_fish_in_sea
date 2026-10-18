@@ -134,6 +134,26 @@ class FakeSyncClient extends SyncClient {
   }
 }
 
+/// Simulates the real SyncClient's fail-closed behavior on an incomplete
+/// paged pull (empty page with has_more, or a page without next_cursor):
+/// it throws instead of returning a watermark, so the engine must not
+/// advance its stored cursor (refs #57).
+class _IncompletePullClient extends FakeSyncClient {
+  bool failPull = false;
+
+  @override
+  Future<({List<SyncRecord> changes, String serverTime})> pull({
+    String? since,
+    List<String>? collections,
+  }) async {
+    if (failPull) {
+      throw const SyncException(
+          500, 'Sync server omitted the cursor for an incomplete pull');
+    }
+    return super.pull(since: since, collections: collections);
+  }
+}
+
 class _Device {
   final FakeSyncClient server;
   late final AuthCubit auth;
@@ -743,6 +763,34 @@ void main() {
     await restartedEngine.syncNow();
     expect(shared.nodes.byId('t2')?.title, 'Offline only');
     expect(shared.nodes.byId('t1')?.title, 'Server edit');
+    expect(server.store['nodes']?.containsKey('t2'), isTrue);
+  });
+
+  test('an incomplete paged pull never advances the stored cursor', () async {
+    final server = _IncompletePullClient();
+    final d = _Device(server);
+    await d.signIn();
+
+    d.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
+    await d.engine.syncNow();
+    expect(d.engine.status.value, EngineStatus.idle);
+    final cursor = d.meta.state.cursor;
+    expect(cursor, isNotNull);
+
+    // The next pull fails partway (fail-closed like the real paged client):
+    // the stored cursor must stay put so the skipped rows arrive later.
+    d.nodes.addNode(Node(id: 't2', title: 'v2', createdAt: DateTime(2026)));
+    server.failPull = true;
+    await d.engine.syncNow();
+    expect(d.engine.status.value, EngineStatus.error);
+    expect(d.meta.state.cursor, cursor);
+
+    // Once the server answers fully, everything lands and the cursor moves on.
+    server.failPull = false;
+    await d.engine.syncNow();
+    expect(d.engine.status.value, EngineStatus.idle);
+    expect(d.meta.state.cursor, isNot(cursor));
+    expect(server.store['nodes']?.containsKey('t1'), isTrue);
     expect(server.store['nodes']?.containsKey('t2'), isTrue);
   });
 }
