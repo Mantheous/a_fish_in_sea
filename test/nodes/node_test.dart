@@ -480,6 +480,31 @@ void main() {
       expect(restored?.single.isTracking, isTrue);
       expect(restored?.single.timerStartedAt, t0);
     });
+
+    test('timer fields serialize with a timezone; old zone-less loads', () {
+      final t0 = DateTime(2026, 9, 12, 9);
+      final n = Node(
+        id: 'a',
+        title: 'a',
+        createdAt: DateTime(2026, 9, 1),
+        actualStart: t0,
+        actualEnd: t0.add(const Duration(minutes: 30)),
+        timerStartedAt: t0,
+      );
+      final json = n.toJson();
+      // UTC strings carry an offset so comparisons hold across timezones.
+      expect((json['timerStartedAt'] as String).endsWith('Z'), isTrue);
+      expect((json['actualStart'] as String).endsWith('Z'), isTrue);
+      expect((json['actualEnd'] as String).endsWith('Z'), isTrue);
+      expect(Node.fromJson(json), n);
+      // Payloads written before the offset still parse to the same instant.
+      final legacy = Map<String, dynamic>.from(json)
+        ..['timerStartedAt'] = t0.toIso8601String()
+        ..['actualStart'] = t0.toIso8601String();
+      final restored = Node.fromJson(legacy);
+      expect(restored.timerStartedAt, t0);
+      expect(restored.actualStart, t0);
+    });
   });
 
   group('legacy importers', () {

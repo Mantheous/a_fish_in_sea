@@ -379,15 +379,19 @@ class SyncEngine {
           continue;
         }
         if (m == null) {
-          final merged = Map<String, dynamic>.from(r.data);
-          _stripDeviceLocalFields(collection, merged);
+          final serverCopy = Map<String, dynamic>.from(r.data);
+          _stripDeviceLocalFields(collection, serverCopy);
+          final merged = Map<String, dynamic>.from(serverCopy);
           // Fresh bookkeeping (new device, reset meta): same rule as a
           // conflict — a locally running timer is live truth, not stale.
           _preserveRunningTimer(collection, current[r.itemId], merged);
           current[r.itemId] = merged;
           changed = true;
+          // Meta tracks what the server holds, not our merged copy: any
+          // local divergence (e.g. a preserved timer) differs from this
+          // hash and is pushed by [_pushDiffs] on the way out.
           upsertMeta[k] = ItemMeta(
-              hash: contentHash(merged), serverTime: seen);
+              hash: contentHash(serverCopy), serverTime: seen);
           continue;
         }
         if (m.serverTime == seen) {
@@ -397,19 +401,23 @@ class SyncEngine {
         // too -> conflict, server wins (documented policy). Both adopt
         // the merged copy; the running-timer carve-out inside
         // [_preserveRunningTimer] is the only way local state survives
-        // a pull. When the merge resolves to the local copy (e.g. it
-        // kept an earlier timer start), the meta is left alone so the
-        // push phase propagates the merged version back to the server.
+        // a pull. Meta always tracks the server copy: when the merge
+        // diverges from it (e.g. it kept a local timer start) the push
+        // phase sees the difference and propagates it back; when the
+        // merge matches the server copy the hashes agree and nothing
+        // pushes twice. The serverTime refreshes either way so a
+        // deterministic change on both sides does not re-push.
         final local = current[r.itemId];
-        final merged = Map<String, dynamic>.from(r.data);
-        _stripDeviceLocalFields(collection, merged);
+        final serverCopy = Map<String, dynamic>.from(r.data);
+        _stripDeviceLocalFields(collection, serverCopy);
+        final merged = Map<String, dynamic>.from(serverCopy);
         _preserveRunningTimer(collection, local, merged);
         if (local == null || contentHash(merged) != contentHash(local)) {
           current[r.itemId] = merged;
           changed = true;
-          upsertMeta[k] = ItemMeta(
-              hash: contentHash(merged), serverTime: seen);
         }
+        upsertMeta[k] = ItemMeta(
+            hash: contentHash(serverCopy), serverTime: seen);
       }
       if (changed) _apply(collection, current);
     }

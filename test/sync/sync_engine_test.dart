@@ -607,4 +607,69 @@ void main() {
     expect(shared.nodes.byId('t1')?.title, 'Server edit');
     expect(server.store['nodes']?.containsKey('t2'), isTrue);
   });
+
+  test('preserved running timer is pushed to the server on the same sync',
+      () async {
+    final server = FakeSyncClient();
+    final a = _Device(server);
+    final b = _Device(server);
+    await a.signIn();
+    await b.signIn();
+
+    a.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
+    await a.engine.syncNow();
+    await b.engine.syncNow(); // B baselines on v1
+
+    // A starts a timer but has not pushed yet.
+    final t0 = DateTime(2026, 9, 12, 9);
+    a.nodes.startTracking('t1', now: t0);
+
+    // B renames and syncs: the server copy advances without the timer.
+    b.nodes.updateNode(b.nodes.byId('t1')!.copyWith(title: 'B edit'));
+    await b.engine.syncNow();
+
+    // A's pull keeps the live timer AND the same sync pushes it back so
+    // the server (and B) learn the start instead of dropping it forever.
+    await a.engine.syncNow();
+    expect(a.nodes.byId('t1')?.isTracking, isTrue);
+
+    final stored = server.store['nodes']?['t1']?.data;
+    expect(stored, isNotNull);
+    expect(stored!['title'], 'B edit');
+    expect(stored['timerStartedAt'], isNotNull);
+    expect(DateTime.parse(stored['timerStartedAt'] as String).toLocal(), t0);
+
+    await b.engine.syncNow();
+    expect(b.nodes.byId('t1')?.isTracking, isTrue);
+    expect(b.nodes.byId('t1')?.timerStartedAt, t0);
+  });
+
+  test('identical change on both sides does not push twice', () async {
+    final server = FakeSyncClient();
+    final a = _Device(server);
+    final b = _Device(server);
+    await a.signIn();
+    await b.signIn();
+
+    a.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
+    await a.engine.syncNow();
+    await b.engine.syncNow(); // both baselined on v1
+
+    // Both sides deterministically reach the same content: B pushes it,
+    // A makes the same edit offline.
+    b.nodes.updateNode(b.nodes.byId('t1')!.copyWith(title: 'same'));
+    await b.engine.syncNow();
+    a.nodes.updateNode(a.nodes.byId('t1')!.copyWith(title: 'same'));
+
+    // The pull already matches local state: meta refreshes to the server
+    // hash, so the push phase has nothing to send.
+    final before = server.clock;
+    await a.engine.syncNow();
+    expect(a.nodes.byId('t1')?.title, 'same');
+    expect(server.clock, before);
+
+    // Steady state stays quiet: a second clean sync also pushes nothing.
+    await a.engine.syncNow();
+    expect(server.clock, before);
+  });
 }

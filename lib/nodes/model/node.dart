@@ -778,9 +778,9 @@ class Node extends Equatable {
       feedId: json['feedId'] as String?,
       classId: json['classId'] as String?,
       classLabel: json['classLabel'] as String?,
-      actualStart: _tryDate(json['actualStart']),
-      actualEnd: _tryDate(json['actualEnd']),
-      timerStartedAt: _tryDate(json['timerStartedAt']),
+      actualStart: _tryTimerDate(json['actualStart']),
+      actualEnd: _tryTimerDate(json['actualEnd']),
+      timerStartedAt: _tryTimerDate(json['timerStartedAt']),
       assignees: _assigneesFromJson(json['assignees']),
     );
   }
@@ -810,9 +810,9 @@ class Node extends Equatable {
         'feedId': feedId,
         'classId': classId,
         'classLabel': classLabel,
-        'actualStart': actualStart?.toIso8601String(),
-        'actualEnd': actualEnd?.toIso8601String(),
-        'timerStartedAt': timerStartedAt?.toIso8601String(),
+        'actualStart': actualStart?.toUtc().toIso8601String(),
+        'actualEnd': actualEnd?.toUtc().toIso8601String(),
+        'timerStartedAt': timerStartedAt?.toUtc().toIso8601String(),
         'assignees': assignees.map((a) => a.toJson()).toList(),
       };
 
@@ -852,6 +852,12 @@ DateTime? _tryDate(Object? raw) {
   if (raw is! String || raw.isEmpty) return null;
   return DateTime.tryParse(raw);
 }
+
+/// Timer instants serialize as UTC strings (so they compare across
+/// timezones) but live in state as local times: normalize back on read so
+/// a round-trip preserves equality and the UI keeps wall-clock values.
+/// Pre-offset payloads already parse as local; [toLocal] is a no-op there.
+DateTime? _tryTimerDate(Object? raw) => _tryDate(raw)?.toLocal();
 
 T? _facetOrNull<T>(T Function() parse) {
   try {

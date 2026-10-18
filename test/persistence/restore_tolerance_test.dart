@@ -496,6 +496,49 @@ void main() {
       expect(Node.fromJson(node.toJson()), node);
     });
 
+    test('timer fields tolerate pre-offset strings and UTC round-trips', () {
+      // Payloads written before timer fields carried an offset parse to
+      // the same instant; newly written payloads carry the offset.
+      final nodeJson = Node(
+        id: 'n1',
+        title: 'Run',
+        createdAt: _day,
+        timerStartedAt: _day,
+        actualStart: _day,
+        actualEnd: _day.add(const Duration(minutes: 30)),
+      ).toJson();
+      expect((nodeJson['timerStartedAt'] as String).endsWith('Z'), isTrue);
+      final legacyNode = Map<String, dynamic>.from(nodeJson)
+        ..['timerStartedAt'] = _day.toIso8601String()
+        ..['actualEnd'] = _day.add(const Duration(minutes: 30)).toIso8601String();
+      expect(Node.fromJson(legacyNode).timerStartedAt, _day);
+
+      final taskJson = Task(
+        id: 't1',
+        title: 'Read',
+        timerStartedAt: _day,
+        actualStart: _day,
+        actualEnd: _day.add(const Duration(minutes: 30)),
+      ).toJson();
+      expect((taskJson['timerStartedAt'] as String).endsWith('Z'), isTrue);
+      final legacyTask = Map<String, dynamic>.from(taskJson)
+        ..['timerStartedAt'] = _day.toIso8601String();
+      expect(Task.fromJson(legacyTask).timerStartedAt, _day);
+      expect(Task.fromJson(taskJson).timerStartedAt, _day);
+
+      final eventJson = PlannerEvent(
+        id: 'e1',
+        subject: 'Lecture',
+        start: _day,
+        end: _day.add(const Duration(hours: 1)),
+        timerStartedAt: _day,
+      ).toJson();
+      expect((eventJson['timerStartedAt'] as String).endsWith('Z'), isTrue);
+      final legacyEvent = Map<String, dynamic>.from(eventJson)
+        ..['timerStartedAt'] = _day.toIso8601String();
+      expect(PlannerEvent.fromJson(legacyEvent).timerStartedAt, _day);
+    });
+
     test('unknown enum values fall back instead of throwing', () {
       final rule = RecurringRule(
         id: 'r1',
