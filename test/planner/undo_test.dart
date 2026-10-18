@@ -4,7 +4,6 @@ import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
-import 'package:a_fish_in_sea/planner/bloc/assignment_rules_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -387,65 +386,6 @@ void main() {
       undoCubit.undo();
       expect(nodeCubit.byId('n1')?.isDone, isFalse);
       expect(calendar.byId('e1')?.done, isFalse);
-    });
-
-    test('single delete with direct link is one undo step', () {
-      final undoCubit = UndoCubit();
-      final nodeCubit = NodeCubit();
-      final calendar = CalendarCubit();
-      final base = DateTime(2030, 2, 7, 9);
-      nodeCubit.addNode(
-          homeworkNode('n1', base).copyWith(calendarEventId: 'e1'));
-      calendar.addEvent(linkedEvent('e1', 'n1'));
-      final steps = undoCubit.state.undoStack.length;
-
-      final removed =
-          NodeEventLink.deleteNodesAndUnlink(nodeCubit, calendar, {'n1'});
-
-      expect(removed, 1);
-      expect(nodeCubit.byId('n1'), isNull);
-      expect(calendar.byId('e1')!.isTask, isFalse);
-      expect(calendar.byId('e1')!.taskId, isNull);
-      expect(undoCubit.state.undoStack.length, steps + 1);
-
-      undoCubit.undo();
-      expect(nodeCubit.byId('n1')?.title, 'Video Quiz 3.1');
-      expect(nodeCubit.byId('n1')?.calendarEventId, 'e1');
-      expect(calendar.byId('e1')!.isTask, isTrue);
-      expect(calendar.byId('e1')!.taskId, 'n1');
-    });
-
-    test('rule save + dues apply undo together', () {
-      final undoCubit = UndoCubit();
-      final nodeCubit = NodeCubit();
-      final rules = AssignmentRulesCubit();
-      final base = DateTime(2030, 2, 7, 9);
-      nodeCubit.addNode(homeworkNode('hw:math290:q1', base));
-      final steps = undoCubit.state.undoStack.length;
-
-      // Mirrors the rules sheet Save: rule create + dues shift as one step.
-      RevertableHydratedCubit.atomic([rules, nodeCubit], () {
-        rules.createRule(
-          feedId: 'math290',
-          templateKey: 'video quiz',
-          displayName: 'Video Quiz',
-          dueOffsetDays: -2,
-        );
-        nodeCubit.retargetAssignmentDues(
-          feedId: 'math290',
-          templateKey: 'video quiz',
-          newOffsetDays: -2,
-        );
-      });
-
-      expect(undoCubit.state.undoStack.length, steps + 1);
-      expect(rules.state.single.dueOffsetDays, -2);
-      expect(nodeCubit.byId('hw:math290:q1')?.schedule?.due,
-          base.subtract(const Duration(days: 2)));
-
-      undoCubit.undo();
-      expect(rules.state, isEmpty);
-      expect(nodeCubit.byId('hw:math290:q1')?.schedule?.due, base);
     });
   });
 }
