@@ -226,10 +226,15 @@ class SyncClient {
   }) async {
     final all = <SyncRecord>[];
     var cursor = since;
+    String? pageCursor;
     String serverTime = '';
-    for (var page = 0; page < 25; page++) {
+    while (true) {
       final query = <String, String>{'limit': '1000'};
-      if (cursor != null && cursor.isNotEmpty) query['since'] = cursor;
+      if (pageCursor != null) {
+        query['cursor'] = pageCursor;
+      } else if (cursor != null && cursor.isNotEmpty) {
+        query['since'] = cursor;
+      }
       if (collections != null && collections.isNotEmpty) {
         query['collections'] = collections.join(',');
       }
@@ -240,8 +245,22 @@ class SyncClient {
           .toList();
       all.addAll(changes);
       serverTime = body['server_time'] as String? ?? '';
-      if (body['has_more'] != true || changes.isEmpty) break;
-      cursor = changes.last.updatedAt.toIso8601String();
+      if (body['has_more'] != true) break;
+      if (changes.isEmpty) {
+        // Do not return a watermark for an incomplete response; SyncEngine
+        // would otherwise persist it and permanently skip the remaining rows.
+        throw const SyncException(
+            500, 'Sync pull returned an empty page with has_more');
+      }
+      final nextCursor = body['next_cursor'] as String?;
+      if (nextCursor != null && nextCursor.isNotEmpty) {
+        pageCursor = nextCursor;
+      } else {
+        // Timestamp-only continuation can skip rows tied at the page
+        // boundary. Fail closed so SyncEngine does not save this watermark.
+        throw const SyncException(
+            500, 'Sync server omitted the cursor for an incomplete pull');
+      }
     }
     return (changes: all, serverTime: serverTime);
   }
