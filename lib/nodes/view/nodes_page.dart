@@ -16,10 +16,11 @@ import 'package:a_fish_in_sea/finances/service/node_transaction_cleanup.dart';
 import 'package:a_fish_in_sea/nodes/view/goal_picker.dart';
 import 'package:a_fish_in_sea/nodes/view/node_checkbox.dart';
 import 'package:a_fish_in_sea/nodes/view/node_editor.dart';
+import 'package:a_fish_in_sea/nodes/view/node_graph_view.dart';
 import 'package:a_fish_in_sea/nodes/view/node_finish_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 
-enum _NodeView { leaves, all, due, scheduled, money, habits }
+enum _NodeView { leaves, all, graph, due, scheduled, money, habits }
 
 final _nodesDateFormat = DateFormat('EEE, MMM d');
 
@@ -143,6 +144,7 @@ class _ViewRow extends StatelessWidget {
   static String _label(_NodeView v) => switch (v) {
     _NodeView.leaves => 'Leaves',
     _NodeView.all => 'All',
+    _NodeView.graph => 'Graph',
     _NodeView.due => 'Due',
     _NodeView.scheduled => 'Scheduled',
     _NodeView.money => 'Money',
@@ -233,6 +235,15 @@ class _NodeBody extends StatelessWidget {
               byParent: byParent,
               now: now,
               homeworkAhead: getHomeworkAhead(),
+            );
+          case _NodeView.graph:
+            return NodeGraphView(
+              nodes: goals,
+              progress: progress,
+              visibleIds: visible,
+              query: trimmed,
+              expandAll: expandAll,
+              expandToken: expandToken,
             );
           case _NodeView.due:
             final queue = matching(priorityQueue(goals, now));
@@ -859,11 +870,9 @@ class _NodeTile extends StatelessWidget {
                 if (calendar == null) {
                   cubit.deleteNode(live.id);
                 } else {
-                  NodeEventLink.deleteNodesAndUnlink(
-                    cubit,
-                    calendar,
-                    {live.id},
-                  );
+                  NodeEventLink.deleteNodesAndUnlink(cubit, calendar, {
+                    live.id,
+                  });
                 }
                 return null;
               },
@@ -880,10 +889,7 @@ class _NodeTile extends StatelessWidget {
               duration: const Duration(seconds: 4),
               // Action snackbars persist forever by default; this one must go.
               persist: false,
-              action: SnackBarAction(
-                label: 'Undo',
-                onPressed: undoCubit.undo,
-              ),
+              action: SnackBarAction(label: 'Undo', onPressed: undoCubit.undo),
             ),
           );
     }
@@ -934,10 +940,7 @@ class _NodeTile extends StatelessWidget {
           ),
           duration: const Duration(seconds: 4),
           persist: false,
-          action: SnackBarAction(
-            label: 'Undo',
-            onPressed: undoCubit.undo,
-          ),
+          action: SnackBarAction(label: 'Undo', onPressed: undoCubit.undo),
         ),
       );
   }
