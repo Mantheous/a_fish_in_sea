@@ -277,6 +277,21 @@ void main() {
       expect(wide.single.granularity, DisplayGranularity.daily);
     });
 
+    test('large runs retain every row and separate bucket buffers', () {
+      final first = List.generate(10000, (i) => row('$i', today));
+      final nextDay = row('next', today.add(const Duration(days: 1)));
+      final buckets = groupLedgerEntries(
+        rows: [...first, nextDay],
+        thresholds: t,
+        today: today,
+      );
+      expect(buckets, hasLength(2));
+      expect(buckets.first.entries, orderedEquals(first));
+      expect(buckets.last.entries, [nextDay]);
+      expect(identical(buckets.first.entries.first, first.first), isTrue);
+      expect(identical(buckets.first.entries.last, first.last), isTrue);
+    });
+
     test('LedgerBucket supports value equality', () {
       final b1 = LedgerBucket(
         granularity: DisplayGranularity.daily,
