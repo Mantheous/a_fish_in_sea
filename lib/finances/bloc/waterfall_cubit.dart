@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:equatable/equatable.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:a_fish_in_sea/finances/model/granularity.dart';
 import 'package:a_fish_in_sea/finances/model/ledger_entry.dart';
@@ -107,6 +108,8 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
   late final StreamSubscription _nodeSubscription;
   late final StreamSubscription _transactionsSubscription;
   late final StreamSubscription _plaidSubscription;
+  late List<Node> _moneyNodes;
+  DateTime? _rebuiltOn;
   Timer? _rebuildTimer;
   bool _rebuilding = false;
   bool _rebuildQueued = false;
@@ -122,13 +125,25 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
     // Listen for changes to rebuild (debounced: node instance generation
     // re-emits NodeCubit, which would otherwise cascade into O(templates)
     // nested rebuilds on the UI thread).
-    _nodeSubscription = nodeCubit.stream.listen((_) => scheduleRebuild());
+    _moneyNodes = nodeCubit.state.where((node) => node.money != null).toList();
+    _nodeSubscription = nodeCubit.stream.listen((nodes) {
+      final moneyNodes = nodes.where((node) => node.money != null).toList();
+      // Calendar/task edits emit the whole node collection. They must not
+      // regenerate money instances, sort transactions, and regroup the
+      // ledger while the reader is scheduling an unrelated event.
+      final now = DateTime.now();
+      final sameDay = _rebuiltOn?.year == now.year &&
+          _rebuiltOn?.month == now.month && _rebuiltOn?.day == now.day;
+      if (sameDay && listEquals(_moneyNodes, moneyNodes)) return;
+      _moneyNodes = moneyNodes;
+      scheduleRebuild();
+    });
     _transactionsSubscription =
         transactionsCubit.stream.listen((_) => scheduleRebuild());
     _plaidSubscription = plaidCubit.stream.listen((plaidState) {
-      if (plaidState.currentBalance != null) {
-        emit(state.copyWith(startingBalance: plaidState.currentBalance));
-      }
+      final balance = plaidState.currentBalance;
+      if (balance == null || balance == state.startingBalance) return;
+      emit(state.copyWith(startingBalance: balance));
       scheduleRebuild();
     });
 
@@ -202,6 +217,7 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
 
   void _rebuildNow() {
     final today = DateTime.now();
+    _rebuiltOn = today;
     final horizon = state.projectionHorizon;
     final allEntries = <LedgerEntry>[];
 
