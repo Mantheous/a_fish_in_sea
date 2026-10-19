@@ -1,12 +1,16 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:intl/intl.dart';
 
 import '../../common/undo/undo_bar.dart';
 import '../../navigation/view/app_drawer.dart';
+import '../../nodes/bloc/node_cubit.dart';
 import '../../planner/bloc/calendar_cubit.dart';
 import '../../planner/bloc/feed_cubit.dart';
+import '../../planner/service/weekly_time_report.dart';
 import '../bloc/places_cubit.dart';
+import '../bloc/reporting_cubit.dart';
 import '../bloc/tracking_cubit.dart';
 import '../reporting_logic.dart';
 import '../service/location_service.dart';
@@ -36,12 +40,136 @@ class _StatsBody extends StatefulWidget {
   State<_StatsBody> createState() => _StatsBodyState();
 }
 
+final _statsDayFormat = DateFormat('EEE');
+final _statsTimeFormat = DateFormat('h:mm a');
+
+/// Toggl-style week totals keyed by goal plus the week's timesheet list.
+/// Read-only: starting/stopping timers still happens from Home, Tasks,
+/// the calendar tiles, and Day review — this is where the logged time
+/// lands, grouped the way Toggl groups by project.
+class _TimeByGoalCard extends StatelessWidget {
+  final WeeklyTimeReport report;
+
+  const _TimeByGoalCard({required this.report});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Time by goal',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text(
+              'Week total ${formatWeeklyDuration(report.weekTotal)}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            if (report.byGoal.isEmpty)
+              const Text(
+                'No tracked time this week — start a timer from Home, '
+                'Tasks, or the calendar.',
+              ),
+            for (final goal in report.byGoal)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: goalColorFor(goal.goalId),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(goal.title)),
+                    Text(
+                      formatWeeklyDuration(goal.total),
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+            if (report.entries.isNotEmpty) ...[
+              const Divider(height: 24),
+              Text('Timesheet',
+                  style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 4),
+              for (final entry in report.entries)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 3),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 10,
+                        height: 10,
+                        margin: const EdgeInsets.only(top: 4),
+                        decoration: BoxDecoration(
+                          color: goalColorFor(entry.goalId),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(entry.title),
+                            Text(
+                              '${_statsDayFormat.format(entry.start)} '
+                              '${_statsTimeFormat.format(entry.start)} – '
+                              '${_statsTimeFormat.format(entry.end)} · '
+                              '${entry.goalTitle}'
+                              '${entry.live ? ' · recording' : ''}',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelSmall
+                                  ?.copyWith(
+                                    color: entry.live
+                                        ? Theme.of(context)
+                                            .colorScheme
+                                            .primary
+                                        : null,
+                                    fontWeight: entry.live
+                                        ? FontWeight.w600
+                                        : null,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(formatWeeklyDuration(entry.duration)),
+                    ],
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _StatsBodyState extends State<_StatsBody> {
   DateTime _day = DateTime.now();
 
   List<DateTime> get _weekDays {
     final monday = _day.subtract(Duration(days: _day.weekday - 1));
     return [for (var i = 0; i < 7; i++) monday.add(Duration(days: i))];
+  }
+
+  DateTime get _weekStart {
+    final monday = _day.subtract(Duration(days: _day.weekday - 1));
+    return DateTime(monday.year, monday.month, monday.day);
   }
 
   DayStats _statsFor(
@@ -72,6 +200,8 @@ class _StatsBodyState extends State<_StatsBody> {
     context.watch<TrackingCubit>();
     context.watch<CalendarCubit>();
     context.watch<FeedCubit>();
+    final nodeState = context.watch<NodeCubit>().state;
+    final reportState = context.watch<ReportingCubit>().state;
     final cache = <String, List<PlannedSlice>>{};
     final weekStats = [for (final d in _weekDays) _statsFor(context, d, cache)];
     final todayStats = weekStats[_day.weekday - 1];
@@ -80,6 +210,16 @@ class _StatsBodyState extends State<_StatsBody> {
         weekStats.fold<int>(0, (sum, s) => sum + s.attendedMin);
     final weekPlanned =
         weekStats.fold<int>(0, (sum, s) => sum + s.plannedMin);
+    // Toggl-style week totals by goal: every stopped/running timer and
+    // accepted manual entry in the week, credited to the root goal above
+    // its backing node (or "(no goal)"). Pure read of existing timer
+    // fields — no new state.
+    final timeReport = buildWeeklyTimeReport(
+      nodes: nodeState,
+      events: context.read<CalendarCubit>().state,
+      reportsByDay: reportState,
+      weekStart: _weekStart,
+    );
 
     return ListView(
       padding: const EdgeInsets.all(12),
@@ -207,6 +347,7 @@ class _StatsBodyState extends State<_StatsBody> {
             ),
           ),
         ),
+        _TimeByGoalCard(report: timeReport),
         if (!LocationService.supported)
           const Card(
             child: Padding(
