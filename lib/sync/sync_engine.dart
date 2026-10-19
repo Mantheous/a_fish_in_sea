@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
-import '../common/undo/undo_cubit.dart';
 import '../demo/demo_mode.dart';
 import '../finances/bloc/plaid_cubit.dart';
 import '../finances/bloc/transactions_cubit.dart';
@@ -384,7 +383,6 @@ class SyncEngine {
     }
     final upsertMeta = <String, ItemMeta>{};
     final removeMeta = <String>{};
-    var appliedRemoteChanges = false;
     for (final entry in byCollection.entries) {
       final collection = entry.key;
       if (!collections.contains(collection)) continue;
@@ -436,12 +434,11 @@ class SyncEngine {
       }
       if (changed) {
         _apply(collection, current);
-        appliedRemoteChanges = true;
       }
     }
-    // Undo records hold collection snapshots. After a remote change, replaying
-    // a snapshot could erase items that arrived with this pull.
-    if (appliedRemoteChanges) UndoCubit.instance?.resetHistory();
+    // Undo replay is item-scoped (only the ids the user's edit touched),
+    // so history safely survives a pull: pulled ids are never in any
+    // record's changed set, and the next push sends no tombstones for them.
     if (upsertMeta.isNotEmpty || removeMeta.isNotEmpty) {
       meta.save(upsert: upsertMeta, remove: removeMeta);
     }

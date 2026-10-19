@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/goals/model/goal.dart';
@@ -569,6 +570,29 @@ void main() {
         ReportedEntry.fromJson(entryJson).status,
         ReportStatus.partial,
       );
+    });
+
+    test('undo after a simulated pull round-trips both items (issue #55)', () {
+      final undo = UndoCubit();
+      final cubit = NodeCubit();
+      cubit.addNode(Node(id: 't1', title: 'original', createdAt: _day));
+      cubit.updateNode(cubit.byId('t1')!.copyWith(title: 'edited'));
+      // Background pull: merged state applied without an undo record.
+      final pulled = Node(id: 't2', title: 'from sync', createdAt: _day);
+      cubit.applyJson({
+        'nodes': [
+          ...((cubit.toJson(cubit.state)['nodes']) as List),
+          pulled.toJson(),
+        ],
+      });
+      undo.undo();
+      expect(cubit.byId('t1')?.title, 'original');
+      expect(cubit.byId('t2')?.title, 'from sync');
+      // The merged result persists and restores intact.
+      final restored = cubit.fromJson(cubit.toJson(cubit.state));
+      expect(restored?.map((n) => n.id), ['t1', 't2']);
+      expect(restored?.firstWhere((n) => n.id == 't1').title, 'original');
+      expect(restored?.firstWhere((n) => n.id == 't2').title, 'from sync');
     });
   });
 }

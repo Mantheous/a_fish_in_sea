@@ -388,4 +388,68 @@ void main() {
       expect(calendar.byId('e1')?.done, isFalse);
     });
   });
+
+  group('undo survives a background sync pull (issue #55)', () {
+    // A sync pull applies merged state via plain emits (never emitChange),
+    // so it records no undo entry of its own. Item-scoped replay must then
+    // revert only the ids the user's edit touched.
+    List<Map<String, dynamic>> liveNodes(NodeCubit cubit) =>
+        (cubit.toJson(cubit.state)['nodes'] as List)
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+
+    void simulatePull(NodeCubit cubit, Node pulled) {
+      cubit.applyJson({
+        'nodes': [...liveNodes(cubit), pulled.toJson()],
+      });
+    }
+
+    test('undoing an edit keeps items pulled after the edit', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      final base = DateTime(2026);
+      nodeCubit.addNode(Node(id: 't1', title: 'original', createdAt: base));
+      nodeCubit.updateNode(nodeCubit.byId('t1')!.copyWith(title: 'edited'));
+      simulatePull(
+          nodeCubit, Node(id: 't2', title: 'from sync', createdAt: base));
+
+      expect(undoCubit.canUndo, isTrue);
+      undoCubit.undo();
+      expect(nodeCubit.byId('t1')?.title, 'original');
+      expect(nodeCubit.byId('t2')?.title, 'from sync');
+      undoCubit.redo();
+      expect(nodeCubit.byId('t1')?.title, 'edited');
+      expect(nodeCubit.byId('t2')?.title, 'from sync');
+    });
+
+    test('undoing an add drops only the added item', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      final base = DateTime(2026);
+      nodeCubit.addNode(Node(id: 't1', title: 'mine', createdAt: base));
+      simulatePull(
+          nodeCubit, Node(id: 't2', title: 'from sync', createdAt: base));
+
+      undoCubit.undo();
+      expect(nodeCubit.byId('t1'), isNull);
+      expect(nodeCubit.byId('t2')?.title, 'from sync');
+      undoCubit.redo();
+      expect(nodeCubit.byId('t1')?.title, 'mine');
+      expect(nodeCubit.byId('t2')?.title, 'from sync');
+    });
+
+    test('undoing a delete restores only the deleted item', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      final base = DateTime(2026);
+      nodeCubit.addNode(Node(id: 't1', title: 'mine', createdAt: base));
+      nodeCubit.deleteNode('t1');
+      simulatePull(
+          nodeCubit, Node(id: 't2', title: 'from sync', createdAt: base));
+
+      undoCubit.undo();
+      expect(nodeCubit.byId('t1')?.title, 'mine');
+      expect(nodeCubit.byId('t2')?.title, 'from sync');
+    });
+  });
 }
