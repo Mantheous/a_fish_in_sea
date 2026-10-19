@@ -588,6 +588,26 @@ void main() {
       expect(saved.isTask, isTrue);
     });
 
+    test('resync preserves reminders and tags on task-marked events',
+        () async {
+      final fresh = googleEvent();
+      stubSync([fresh]);
+      await feedCubit.syncFeed(googleFeed.id);
+      calendarCubit.updateEvent(
+        calendarCubit.byId(fresh.id)!.copyWith(
+          isTask: true,
+          tagIds: const ['tag-focus'],
+          reminderMinutesBefore: 30,
+        ),
+      );
+      stubSync([fresh]);
+      await feedCubit.syncFeed(googleFeed.id);
+      final after = calendarCubit.byId(fresh.id)!;
+      expect(after.isTask, isTrue);
+      expect(after.tagIds, ['tag-focus']);
+      expect(after.reminderMinutesBefore, 30);
+    });
+
     test('google resync preserves local assignees', () async {
       const assignees = [TaskAssignee(id: 'people/1', displayName: 'Amy')];
       calendarCubit.addEvent(googleEvent().copyWith(assignees: assignees));
