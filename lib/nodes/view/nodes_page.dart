@@ -562,6 +562,8 @@ class _NodeTile extends StatelessWidget {
         onPressed: () => _onMenu(context, live, 'subgoal'),
       ),
       PopupMenuButton<String>(
+        tooltip: 'More actions',
+        icon: const Icon(Icons.more_vert),
         onSelected: (choice) => _onMenu(context, live, choice),
         itemBuilder: (context) => [
           const PopupMenuItem(value: 'subgoal', child: Text('Add subgoal')),
