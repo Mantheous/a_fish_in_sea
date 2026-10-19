@@ -1,6 +1,7 @@
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/fitness/fitness_models.dart';
 import 'package:a_fish_in_sea/goals/model/goal.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/budget.dart';
@@ -450,6 +451,41 @@ void main() {
         'nodes': [starred.toJson()],
       });
       expect(restoredStarred?.single.isFavorite, isTrue);
+    });
+
+    test('NodeCubit loads pre-fitness nodes as plain non-workouts', () {
+      final cubit = NodeCubit();
+      final preFitness = Node(
+        id: 'n4',
+        title: 'Sleep 8h',
+        createdAt: _day,
+        fitness: const FitnessFacet(
+          metric: FitnessMetric.sleepMinutes,
+          targetValue: 480,
+        ),
+        isWorkout: true,
+      ).toJson()
+        ..remove('fitness')
+        ..remove('isWorkout');
+      final restored = cubit.fromJson({
+        'nodes': [preFitness],
+      });
+      expect(restored?.single.fitness, isNull);
+      expect(restored?.single.isWorkout, isFalse);
+      final corrupt = Map<String, dynamic>.from(preFitness)
+        ..['fitness'] = {'metric': 'renamed-value', 'targetValue': 60};
+      final restoredCorrupt = cubit.fromJson({
+        'nodes': [corrupt],
+      });
+      expect(restoredCorrupt?.single.fitness?.metric,
+          FitnessMetric.activityMinutes);
+    });
+
+    test('Task loads pre-workout payloads as non-workouts', () {
+      const workout = Task(id: 't9', title: 'Run', isWorkout: true);
+      expect(Task.fromJson(workout.toJson()), workout);
+      final legacy = workout.toJson()..remove('isWorkout');
+      expect(Task.fromJson(legacy).isWorkout, isFalse);
     });
 
     test('applyJson with garbage does not throw', () {

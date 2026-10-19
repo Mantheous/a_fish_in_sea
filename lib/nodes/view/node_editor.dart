@@ -11,6 +11,7 @@ import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/service/node_transaction_cleanup.dart';
+import 'package:a_fish_in_sea/fitness/fitness_models.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_editor_schedule.dart';
@@ -97,6 +98,12 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   DateTime? _ankiSyncedAt;
   bool _ankiSyncing = false;
 
+  bool _isWorkout = false;
+
+  bool _hasFitness = false;
+  FitnessMetric _fitnessMetric = FitnessMetric.activityMinutes;
+  late final TextEditingController _fitnessTarget;
+
   bool _hasRecurrence = false;
   TimeScale _frequency = TimeScale.daily;
   DateTime? _recurEnd;
@@ -152,6 +159,14 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
           : '',
     );
     _ankiSyncedAt = e?.anki?.lastSyncedAt;
+    _isWorkout = e?.isWorkout ?? false;
+    _hasFitness = e?.fitness != null;
+    _fitnessMetric = e?.fitness?.metric ?? FitnessMetric.activityMinutes;
+    _fitnessTarget = TextEditingController(
+        text: e?.fitness != null
+            ? e!.fitness!.targetValue.toStringAsFixed(
+                e.fitness!.metric == FitnessMetric.activityCount ? 0 : 1)
+            : '');
     _hasRecurrence = e?.recurrence != null || widget.enableRecurrence;
     _frequency = e?.recurrence?.frequency ?? TimeScale.daily;
     _recurEnd = e?.recurrence?.endDate;
@@ -176,6 +191,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _targetReviews.dispose();
     _ankiCustomDays.dispose();
     _manualReviews.dispose();
+    _fitnessTarget.dispose();
     _horizon.dispose();
     _minBalance.dispose();
     super.dispose();
@@ -509,6 +525,58 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                   ),
               ],
               const SizedBox(height: 8),
+              _sectionTitle(context, 'Workout & fitness'),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: const Text('Workout'),
+                subtitle: const Text(
+                    'Auto-report duration from the fitness app'),
+                value: _isWorkout,
+                onChanged: (v) => setState(() => _isWorkout = v),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: const Text('Has fitness target'),
+                subtitle: const Text(
+                    'Sleep hours or activity time/count via Garmin'),
+                value: _hasFitness,
+                onChanged: (v) => setState(() => _hasFitness = v),
+              ),
+              if (_hasFitness) ...[
+                DropdownButtonFormField<FitnessMetric>(
+                  initialValue: _fitnessMetric,
+                  decoration:
+                      const InputDecoration(labelText: 'Measures'),
+                  items: const [
+                    DropdownMenuItem(
+                        value: FitnessMetric.sleepMinutes,
+                        child: Text('Sleep minutes')),
+                    DropdownMenuItem(
+                        value: FitnessMetric.activityMinutes,
+                        child: Text('Activity minutes')),
+                    DropdownMenuItem(
+                        value: FitnessMetric.activityCount,
+                        child: Text('Activity count')),
+                  ],
+                  onChanged: (v) => setState(
+                      () => _fitnessMetric = v ?? _fitnessMetric),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _fitnessTarget,
+                  keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true),
+                  decoration: InputDecoration(
+                    labelText: _fitnessMetric == FitnessMetric.activityCount
+                        ? 'Target count'
+                        : 'Target minutes',
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 8),
               _sectionTitle(context, 'Repeats'),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
@@ -741,6 +809,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       if (_hasMoney) dropping.add('money target');
       if (_hasEffort) dropping.add('time target');
       if (_hasAnki) dropping.add('memorization target');
+      if (_hasFitness) dropping.add('fitness target');
       if (_hasRecurrence) dropping.add('repeats');
       if (_ruleKind != NodeRuleKind.none) dropping.add('rule');
       if (dropping.isNotEmpty) {
@@ -816,6 +885,22 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       );
     }
 
+    FitnessFacet? fitness;
+    if (_hasFitness) {
+      final parsed = double.tryParse(_fitnessTarget.text.trim());
+      if (parsed == null || parsed <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Please enter a positive fitness target')),
+        );
+        return;
+      }
+      fitness = FitnessFacet(
+        metric: _fitnessMetric,
+        targetValue: parsed,
+      );
+    }
+
     NodeRecurrence? recurrence;
     if (_hasRecurrence) {
       recurrence = NodeRecurrence(frequency: _frequency, endDate: _recurEnd);
@@ -838,6 +923,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       money = null;
       effort = null;
       anki = null;
+      fitness = null;
       recurrence = null;
       rule = null;
     }
@@ -857,9 +943,11 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         money: money,
         effort: effort,
         anki: anki,
+        fitness: fitness,
         recurrence: recurrence,
         rule: rule,
         assignees: _people,
+        isWorkout: _isWorkout,
       );
       error = cubit.addNode(node);
       if (error == null) {
@@ -891,11 +979,14 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         clearEffort: effort == null,
         anki: anki,
         clearAnki: anki == null,
+        fitness: fitness,
+        clearFitness: fitness == null,
         recurrence: recurrence,
         clearRecurrence: recurrence == null,
         rule: rule,
         clearRule: rule == null,
         assignees: _people,
+        isWorkout: _isWorkout,
       );
       error = cubit.updateNode(updated);
       if (error == null) result = updated;
