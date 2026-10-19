@@ -402,10 +402,20 @@ class _CalendarPageState extends State<CalendarPage> {
     final event = raw is PlannerEvent ? raw : null;
     if (event == null) return const SizedBox.shrink();
     _rememberScrollPosition(context, rail: true);
-    // Invisible copies of the plan calendar's all-day events keep both
-    // calendars' all-day rows at the same height.
+    // Copies of the plan calendar's all-day events keep both calendars' rows
+    // aligned and paint the report half over spanning plan tiles.
     if (isReportPlaceholderId(event.id)) {
-      return const ExcludeSemantics(child: SizedBox.shrink());
+      return ExcludeSemantics(
+        child: DecoratedBox(
+          key: ValueKey('report-mask:${event.id}'),
+          decoration: BoxDecoration(
+            color: Theme.of(
+              context,
+            ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.16),
+          ),
+          child: const SizedBox.expand(),
+        ),
+      );
     }
     final blocks = _projection.reportBlocksByLaneId[event.id];
     if (blocks == null) return const SizedBox.shrink();

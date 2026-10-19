@@ -31,12 +31,12 @@ class CalendarProjection {
   Map<String, Color> reportColorById = const {};
 
   /// The report overlay's calendar (Plan + Report view, day/week): one lane
-  /// per visible day plus invisible all-day copies that keep the all-day row
-  /// aligned with the plan calendar.
+  /// per visible day plus all-day copies that align the all-day row and mask
+  /// the report half of spanning plan tiles.
   List<PlannerEvent> reportRails = const [];
 
   /// All-day copies of visible all-day events, to keep the report calendar's
-  /// all-day row aligned. Their tiles render nothing.
+  /// all-day row aligned and paint its trailing-half mask.
   List<PlannerEvent> get reportPlaceholders => _reportPlaceholders;
 
   List<PlannerEvent>? _railsLanes;
