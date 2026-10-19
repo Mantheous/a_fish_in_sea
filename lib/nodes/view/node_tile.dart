@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../common/undo/undo_cubit.dart';
 import '../../finances/bloc/transactions_cubit.dart';
 import '../../finances/service/node_transaction_cleanup.dart';
+import '../../navigation/bloc/navigation_cubit.dart';
 import '../../planner/bloc/calendar_cubit.dart';
 import '../../planner/bloc/feed_cubit.dart';
 import '../../planner/model/feed.dart';
@@ -357,10 +358,15 @@ class NodeTile extends StatelessWidget {
               if (value == 'schedule') {
                 showScheduleSheet(context, nodeId: live.id);
               }
+              if (value == 'show-in-goals') _showInGoals(context, live);
             },
             itemBuilder: (context) => const [
               PopupMenuItem(value: 'edit', child: Text('Edit')),
               PopupMenuItem(value: 'schedule', child: Text('Schedule…')),
+              PopupMenuItem(
+                value: 'show-in-goals',
+                child: Text('Show in goals'),
+              ),
               PopupMenuItem(value: 'delete', child: Text('Delete')),
             ],
           ),
@@ -421,6 +427,16 @@ class NodeTile extends StatelessWidget {
     } catch (_) {
       return 0;
     }
+  }
+
+  /// Jumps to the goal tree with this task revealed: the Nodes page opens
+  /// on the All tree view with the ancestor chain expanded and this task
+  /// highlighted. Tolerates a missing [NavigationCubit] so standalone
+  /// widget tests pumping the tile without the app shell keep working.
+  void _showInGoals(BuildContext context, Node node) {
+    try {
+      context.read<NavigationCubit>().showNodeInGoals(node.id);
+    } catch (_) {}
   }
 
   void _delete(BuildContext context, Node node) {
