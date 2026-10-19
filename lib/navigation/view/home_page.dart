@@ -65,6 +65,7 @@ class _HomePageState extends State<HomePage> {
     final weekNodes = feedCubit.visibleNodes(
       nodeCubit.dueThisWeekAt(today),
     );
+    final favoriteNodes = feedCubit.visibleNodes(nodeCubit.favorites);
     return Scaffold(
       appBar: AppBar(title: const Text('Home')),
       drawer: const AppDrawer(),
@@ -79,6 +80,20 @@ class _HomePageState extends State<HomePage> {
           const ImportInboxCard(),
           const _TimeTrackingCard(),
           const _TrackingCard(),
+          _SectionCard(
+            title: 'Favorite goals',
+            onMore: () =>
+                context.read<NavigationCubit>().setPage(PlannerPage.nodes),
+            child: favoriteNodes.isEmpty
+                ? const _EmptyLine(
+                    'No favorite goals — star a goal to pin it here')
+                : Column(
+                    children: [
+                      for (final node in favoriteNodes.take(5))
+                        _NodeLine(node: node, now: today),
+                    ],
+                  ),
+          ),
           _SectionCard(
             title: 'Due today',
             onMore: () =>

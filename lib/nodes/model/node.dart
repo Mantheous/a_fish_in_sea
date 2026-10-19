@@ -466,6 +466,11 @@ class Node extends Equatable {
   /// stay tracked and old payloads load untouched.
   final bool isTracked;
 
+  /// Whether the user starred this goal as important. Additive flag,
+  /// defaults to false, so old payloads load untouched. Starred goals
+  /// show in the Home favorites section and the Nodes Favorites filter.
+  final bool isFavorite;
+
   final ScheduleFacet? schedule;
   final MoneyFacet? money;
   final EffortFacet? effort;
@@ -506,6 +511,7 @@ class Node extends Equatable {
     required this.createdAt,
     this.isUnbounded = false,
     this.isTracked = true,
+    this.isFavorite = false,
     this.schedule,
     this.money,
     this.effort,
@@ -586,6 +592,7 @@ class Node extends Equatable {
     DateTime? createdAt,
     bool? isUnbounded,
     bool? isTracked,
+    bool? isFavorite,
     ScheduleFacet? schedule,
     bool clearSchedule = false,
     MoneyFacet? money,
@@ -632,6 +639,7 @@ class Node extends Equatable {
         createdAt: createdAt ?? this.createdAt,
         isUnbounded: isUnbounded ?? this.isUnbounded,
         isTracked: isTracked ?? this.isTracked,
+        isFavorite: isFavorite ?? this.isFavorite,
         schedule: clearSchedule ? null : (schedule ?? this.schedule),
         money: clearMoney ? null : (money ?? this.money),
         effort: clearEffort ? null : (effort ?? this.effort),
@@ -698,6 +706,7 @@ class Node extends Equatable {
       // coercion also survives wrong-typed values: a corrupt flag reads
       // as bounded instead of dropping the whole node.
       isUnbounded: json['isUnbounded'] == true,
+      isFavorite: json['isFavorite'] == true,
       isTracked: () {
         final raw = json['isTracked'] ?? json['tracked'];
         if (raw == null) return true;
@@ -755,6 +764,7 @@ class Node extends Equatable {
         'isUnbounded': isUnbounded,
         'isTracked': isTracked,
         'tracked': isTracked,
+        'isFavorite': isFavorite,
         'schedule': schedule?.toJson(),
         'money': money?.toJson(),
         'effort': effort?.toJson(),
@@ -786,6 +796,7 @@ class Node extends Equatable {
         createdAt,
         isUnbounded,
         isTracked,
+        isFavorite,
         schedule,
         money,
         effort,
