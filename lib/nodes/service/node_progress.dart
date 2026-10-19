@@ -1,14 +1,17 @@
 import '../model/node.dart';
+import '../../fitness/fitness_models.dart';
 
 /// Progress of a leaf node given its actuals. Clamped to [0, 1].
 /// Money leaves compare actual vs target, effort leaves minutes vs target,
+/// fitness leaves measured watch values vs target,
 /// anki leaves cached review counts vs target, plain leaves are binary on
-/// [Node.isDone]. Facet precedence is money, then effort, then anki: a
-/// node carrying two facets reports the first.
+/// [Node.isDone]. Facet precedence is money, then effort, then fitness,
+/// then anki: a node carrying two facets reports the first.
 double leafProgress(
   Node node, {
   double timeActualMinutes = 0,
   double moneyActual = 0,
+  double fitnessActual = 0,
 }) {
   if (node.money != null) {
     final target = node.money!.effectiveTarget;
@@ -20,12 +23,23 @@ double leafProgress(
     if (target <= 0) return node.isDone ? 1.0 : 0.0;
     return (timeActualMinutes / target).clamp(0.0, 1.0);
   }
+  if (node.fitness != null) {
+    return fitnessProgress(node.fitness!, fitnessActual);
+  }
   if (node.anki != null) {
     final target = node.anki!.targetReviews;
     if (target <= 0) return node.isDone ? 1.0 : 0.0;
     return ((node.anki!.reviewsActual ?? 0) / target).clamp(0.0, 1.0);
   }
   return node.isDone ? 1.0 : 0.0;
+}
+
+/// Progress of a fitness-backed goal given its measured [actual].
+/// [actual] is minutes for sleep/activity-minutes goals and a count for
+/// activity-count goals. Clamped to [0, 1].
+double fitnessProgress(FitnessFacet fitness, double actual) {
+  if (fitness.targetValue <= 0) return 0.0;
+  return (actual / fitness.targetValue).clamp(0.0, 1.0);
 }
 
 /// Average aggregation for checklist-style parents.
@@ -53,6 +67,7 @@ Map<String, double> progressForest(
   List<Node> nodes, {
   Map<String, double> timeActualByNodeId = const {},
   Map<String, double> moneyActualByNodeId = const {},
+  Map<String, double> fitnessActualByNodeId = const {},
 }) {
   final byId = {for (final n in nodes) n.id: n};
   final byParent = <String, List<Node>>{};
@@ -75,7 +90,8 @@ Map<String, double> progressForest(
     if (kids.isEmpty) {
       return _leafValue(node,
           timeActualByNodeId: timeActualByNodeId,
-          moneyActualByNodeId: moneyActualByNodeId);
+          moneyActualByNodeId: moneyActualByNodeId,
+          fitnessActualByNodeId: fitnessActualByNodeId);
     }
     if (kids.any((k) => k.instanceOfId == node.id)) {
       // Skipped and unbounded instances never rate: an unbounded goal
@@ -177,6 +193,7 @@ double _leafValue(
   Node node, {
   required Map<String, double> timeActualByNodeId,
   required Map<String, double> moneyActualByNodeId,
+  Map<String, double> fitnessActualByNodeId = const {},
 }) {
   if (node.money != null) {
     final target = node.money!.effectiveTarget;
@@ -194,6 +211,10 @@ double _leafValue(
     final target = node.anki!.targetReviews;
     if (target <= 0) return node.isDone ? 1.0 : 0.0;
     return ((node.anki!.reviewsActual ?? 0) / target).clamp(0.0, 1.0);
+  }
+  if (node.fitness != null) {
+    return fitnessProgress(
+        node.fitness!, fitnessActualByNodeId[node.id] ?? 0);
   }
   return node.isDone ? 1.0 : 0.0;
 }

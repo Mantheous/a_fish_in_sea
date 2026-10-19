@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import get_settings
 from .db import init_db
 from .oauth_store import validate_fernet_key
-from .routers import auth, anki, canvas, feedback, fetch, google, imports, items, plaid, proxy, syllabus, sync, tokens
+from .routers import auth, anki, canvas, feedback, fetch, fitness, google, imports, items, plaid, proxy, syllabus, sync, tokens
 
 log = logging.getLogger("a_fish_in_sea")
 
@@ -147,6 +147,8 @@ def create_app() -> FastAPI:
     app.include_router(plaid.router, prefix="/api")
     # Syllabus LLM extract (same open-proxy contract as Flask /api/ical).
     app.include_router(syllabus.router, prefix="/api")
+    # Garmin fitness proxy (first watch provider): /api/fitness/*.
+    app.include_router(fitness.router, prefix="/api")
 
     _mount_web(app)
     return app
