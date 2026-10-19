@@ -255,6 +255,58 @@ void main() {
     expect(find.textContaining('Ghost preview'), findsNothing);
   });
 
+  testWidgets('cancelling a new event restores the pre-open selection',
+      (tester) async {
+    final calendarCubit = CalendarCubit();
+    final nodeCubit = NodeCubit();
+    final settingsCubit = SettingsCubit();
+    final draftCubit = CalendarDraftCubit();
+    final feedCubit = buildFeedCubit(calendarCubit, nodeCubit);
+
+    await pumpCalendar(
+      tester,
+      calendarCubit: calendarCubit,
+      feedCubit: feedCubit,
+      settingsCubit: settingsCubit,
+      draftCubit: draftCubit,
+    );
+
+    // A slot the user had selected before opening the creator: Cancel
+    // must put the highlight back here instead of leaving it on the
+    // discarded draft's 9:00 slot.
+    final selectedBefore = DateTime(2026, 10, 12, 14);
+    tester
+        .widget<SfCalendar>(find.byType(SfCalendar).first)
+        .controller
+        ?.selectedDate = selectedBefore;
+    await tester.pump();
+
+    await tester.tap(find.byType(FloatingActionButton));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Ghost preview'), findsOneWidget);
+    expect(calendarCubit.state, isEmpty);
+
+    final cancelButton = find.widgetWithText(TextButton, 'Cancel');
+    await tester.ensureVisible(cancelButton);
+    await tester.pumpAndSettle();
+    await tester.tap(cancelButton);
+    await tester.pumpAndSettle();
+
+    // Nothing was saved, so nothing remains: no ghost tile, no draft
+    // icon, and the selection highlight is back where it was.
+    expect(calendarCubit.state, isEmpty);
+    expect(find.textContaining('Ghost preview'), findsNothing);
+    expect(find.byIcon(Icons.edit_calendar), findsNothing);
+    expect(
+      tester
+          .widget<SfCalendar>(find.byType(SfCalendar).first)
+          .controller
+          ?.selectedDate,
+      selectedBefore,
+    );
+  });
+
   testWidgets('ghost follows the visible dates when paging with arrows',
       (tester) async {
     final calendarCubit = CalendarCubit();
