@@ -175,6 +175,20 @@ class _CalendarPageState extends State<CalendarPage> {
   bool get _isWide => MediaQuery.of(context).size.width >= _wideBreakpoint;
   bool _appliedNarrowDefault = false;
 
+  /// Explicit Day/Week/Month switch: updates the visible calendar and keeps
+  /// the choice as this device's local default (device-local, never synced —
+  /// a phone stays on day while a desktop stays on week). The narrow-screen
+  /// day forcing in [didChangeDependencies] stays ephemeral on purpose.
+  void _setView(CalendarView view) {
+    setState(() => _view = view);
+    _controller.view = view;
+    try {
+      if (context.read<SettingsCubit>().state.defaultCalendarView != view) {
+        context.read<SettingsCubit>().setDefaultCalendarView(view);
+      }
+    } catch (_) {}
+  }
+
   @override
   void initState() {
     super.initState();
@@ -526,8 +540,7 @@ class _CalendarPageState extends State<CalendarPage> {
                           if (selection.isEmpty || selection.first == _view) {
                             _goToToday();
                           } else {
-                            setState(() => _view = selection.first);
-                            _controller.view = _view;
+                            _setView(selection.first);
                           }
                         },
                       ),
@@ -608,8 +621,7 @@ class _CalendarPageState extends State<CalendarPage> {
                                   selection.first == _view) {
                                 _goToToday();
                               } else {
-                                setState(() => _view = selection.first);
-                                _controller.view = _view;
+                                _setView(selection.first);
                               }
                             },
                           ),

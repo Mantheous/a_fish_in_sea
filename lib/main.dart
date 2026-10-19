@@ -191,8 +191,8 @@ class _DemoContent extends StatelessWidget {
   }
 }
 
-/// Boots the sync engine once (first pull if signed in) and runs the
-/// 5-minute background timer while the app lives.
+/// Boots the sync engine once (first pull if signed in) and keeps it live:
+/// the 5-minute background timer plus a debounced sync on local mutations.
 class _SyncBootstrap extends StatefulWidget {
   const _SyncBootstrap();
 
@@ -237,11 +237,13 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
     _engine = context.read<SyncEngine>();
     _engine!.boot();
     _engine!.startAutoSync();
+    _engine!.startAutoSyncOnChanges();
   }
 
   @override
   void dispose() {
     _goalLinks?.dispose();
+    _engine?.stopAutoSyncOnChanges();
     _engine?.stopAutoSync();
     super.dispose();
   }

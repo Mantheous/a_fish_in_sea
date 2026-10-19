@@ -40,6 +40,9 @@ enum EngineStatus { idle, syncing, error }
 /// - Settings.ankiConnectHost (per-device like the proxy above: a desktop
 ///   talks to its own localhost, a phone to a LAN address — roaming one
 ///   value would break the other device, so each device keeps its own)
+/// - Settings.defaultCalendarView (a phone wants day, a desktop wants week;
+///   roaming one value would reset the other device's visible window, so
+///   each device keeps its own — day hours still roam)
 /// - Plaid wasConnected (connectivity is derived on-device; only the link
 ///   identity — userId/itemId — roams, so a disconnect reaches every device
 ///   instead of flapping back)
@@ -74,6 +77,15 @@ class SyncEngine {
   Timer? _timer;
   bool _running = false;
   int _epoch = 0;
+
+  /// Change-triggered sync: debounced [syncNow] after a local mutation, so
+  /// edits (starting/completing a task or event) reach the server without
+  /// waiting for the 5-minute timer. Pull-applied records must not retrigger
+  /// it — [_applyingRemote] fences those emissions out.
+  final List<StreamSubscription<void>> _mutationSubs = [];
+  Timer? _mutationDebounce;
+  bool _applyingRemote = false;
+  Duration mutationDebounce = const Duration(seconds: 2);
 
   SyncEngine({
     required this.client,
@@ -121,6 +133,47 @@ class SyncEngine {
   void stopAutoSync() {
     _timer?.cancel();
     _timer = null;
+  }
+
+  /// Watches every synced domain cubit and schedules a debounced [syncNow]
+  /// on local mutations. Remote pulls never retrigger it ([_applyingRemote]),
+  /// so a pull settles instead of ping-ponging. Safe to call twice.
+  void startAutoSyncOnChanges({Duration? debounce}) {
+    if (debounce != null) mutationDebounce = debounce;
+    stopAutoSyncOnChanges();
+    void watch(Stream<dynamic> states) {
+      _mutationSubs.add(states.listen((_) => _onLocalMutation()));
+    }
+
+    watch(nodes.stream);
+    watch(events.stream);
+    watch(feeds.stream);
+    watch(transactions.stream);
+    watch(places.stream);
+    watch(reporting.stream);
+    watch(tracking.stream);
+    watch(settings.stream);
+    watch(waterfall.stream);
+    watch(plaid.stream);
+  }
+
+  void _onLocalMutation() {
+    if (_applyingRemote) return;
+    if (!auth.state.isSignedIn) return;
+    if (DemoMode.isActive) return;
+    _mutationDebounce?.cancel();
+    _mutationDebounce = Timer(mutationDebounce, () {
+      if (auth.state.isSignedIn) syncNow();
+    });
+  }
+
+  void stopAutoSyncOnChanges() {
+    for (final sub in _mutationSubs) {
+      unawaited(sub.cancel());
+    }
+    _mutationSubs.clear();
+    _mutationDebounce?.cancel();
+    _mutationDebounce = null;
   }
 
   /// Clears all local domain cubits and bank session state. Used on sign-out
@@ -369,6 +422,7 @@ class SyncEngine {
     if (collection == 'settings') {
       data.remove('icalProxyBase');
       data.remove('ankiConnectHost');
+      data.remove('defaultCalendarView');
     } else if (collection == 'plaid') {
       data.remove('wasConnected');
     }
@@ -377,6 +431,15 @@ class SyncEngine {
   // ── Apply pull ──────────────────────────────────────────────────────
 
   void _applyPull(List<SyncRecord> records) {
+    _applyingRemote = true;
+    try {
+      _applyPullRecords(records);
+    } finally {
+      _applyingRemote = false;
+    }
+  }
+
+  void _applyPullRecords(List<SyncRecord> records) {
     final byCollection = <String, List<SyncRecord>>{};
     for (final r in records) {
       (byCollection[r.collection] ??= []).add(r);
