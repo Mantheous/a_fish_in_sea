@@ -78,6 +78,11 @@ class _CalendarPageState extends State<CalendarPage> {
   /// panel's own schedule flow) keep the user on the calendar.
   bool _seedFromPageMount = false;
   PlannerEvent? _draftEvent;
+  // Selection held before opening the create flow, restored on cancel so
+  // the calendar's selected-slot highlight (drawn from selectedDate) does
+  // not linger on the draft's old slot.
+  DateTime? _preCreateSelectedDate;
+  bool _preCreateSelectionCaptured = false;
   String? _draftSeedSubject;
   String? _draftSeedNotes;
   String? _draftSeedLocation;
@@ -1712,12 +1717,26 @@ class _CalendarPageState extends State<CalendarPage> {
       );
       return;
     }
+    final wasCreating = _panelMode == CalendarPanelMode.creating;
+    final captured = _preCreateSelectionCaptured;
+    final preCreate = _preCreateSelectedDate;
     setState(() {
       _selectedEventId = event.id;
       _panelMode = CalendarPanelMode.detail;
       _panelOpen = true;
       _editPreview = null;
       _clearDraft();
+      // Abandoning a draft for another event ends the create flow without
+      // going through _finishCreating/_closeDrawer: undo the selection
+      // takeover so no highlight lingers on the discarded draft's slot,
+      // and drop the stash so a later close cannot restore a stale slot.
+      if (wasCreating && captured) {
+        _controller.selectedDate = preCreate;
+      }
+      if (wasCreating) {
+        _preCreateSelectedDate = null;
+        _preCreateSelectionCaptured = false;
+      }
     });
   }
 
@@ -1941,6 +1960,13 @@ class _CalendarPageState extends State<CalendarPage> {
     final draft = seed != null
         ? _asDraft(seed)
         : _initialDraft(initialDate: initialDate, initialTime: initialTime);
+    // Remember the slot the user had selected before this create flow
+    // took over the calendar selection, so a cancel can put it back.
+    if (!_preCreateSelectionCaptured &&
+        _panelMode != CalendarPanelMode.creating) {
+      _preCreateSelectedDate = _controller.selectedDate;
+      _preCreateSelectionCaptured = true;
+    }
     _focusOnDraft(draft.start);
     if (!_isWide) {
       _openSheetCreator(draft);
@@ -2033,6 +2059,9 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   void _closeDrawer() {
+    final wasCreating = _panelMode == CalendarPanelMode.creating;
+    final captured = _preCreateSelectionCaptured;
+    final preCreate = _preCreateSelectedDate;
     setState(() {
       _panelOpen = false;
       _panelMode = CalendarPanelMode.tasks;
@@ -2040,7 +2069,14 @@ class _CalendarPageState extends State<CalendarPage> {
       _editPreview = null;
       _seedFromPageMount = false;
       _clearDraft();
+      if (wasCreating && captured) {
+        _controller.selectedDate = preCreate;
+      }
     });
+    if (wasCreating) {
+      _preCreateSelectedDate = null;
+      _preCreateSelectionCaptured = false;
+    }
   }
 
   /// Opens the panel (task list) or closes it entirely. Reached from the
@@ -2111,13 +2147,22 @@ class _CalendarPageState extends State<CalendarPage> {
     final returnsToTasks =
         _seedFromPageMount && saved && taskId != null && taskId.isNotEmpty;
     _seedFromPageMount = false;
+    // On cancel (not saved), drop the create flow's takeover of the
+    // calendar selection so no teal highlight lingers on the draft slot.
+    final captured = _preCreateSelectionCaptured;
+    final preCreate = _preCreateSelectedDate;
     if (!mounted) return;
     setState(() {
       _panelMode = CalendarPanelMode.tasks;
       _selectedEventId = null;
       _editPreview = null;
       _clearDraft();
+      if (!saved && captured) {
+        _controller.selectedDate = preCreate;
+      }
     });
+    _preCreateSelectedDate = null;
+    _preCreateSelectionCaptured = false;
     if (returnsToTasks) {
       try {
         context.read<NavigationCubit>().setPage(PlannerPage.tasks);
