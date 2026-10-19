@@ -2281,6 +2281,12 @@ class _PlaceField extends StatelessWidget {
       return const SizedBox.shrink();
     }
     if (places.isEmpty) return const SizedBox.shrink();
+    // A stale placeId (place deleted after the event was saved) would crash
+    // DropdownButtonFormField because initialValue must match exactly one
+    // item. Surface it as an extra item so the edit form still mounts and
+    // Delete stays reachable; picking a new place replaces it.
+    final hasMatch =
+        value == null || places.any((place) => place.id == value);
     return DropdownButtonFormField<String?>(
       initialValue: value,
       isExpanded: true,
@@ -2290,6 +2296,11 @@ class _PlaceField extends StatelessWidget {
       ),
       items: [
         const DropdownMenuItem(value: null, child: Text('No place')),
+        if (!hasMatch)
+          DropdownMenuItem(
+            value: value,
+            child: const Text('Unknown place'),
+          ),
         for (final place in places)
           DropdownMenuItem(value: place.id, child: Text(place.name)),
       ],
