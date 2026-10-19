@@ -118,6 +118,19 @@ class NodeTile extends StatelessWidget {
           : mutedCalendarColor(feed.color);
       chipLabel = feed?.name ?? '';
     }
+    // Homework link-out needs the feed even when the class chip is hidden
+    // (Tasks > Homework passes showClass false) or when the chip uses
+    // classLabel instead of the feed.
+    if (resolvedFeed == null && live.isHomework && live.classId != null) {
+      final map = feedById;
+      if (map != null) {
+        resolvedFeed = map[live.classId];
+      } else {
+        try {
+          resolvedFeed = context.read<FeedCubit>().byId(live.classId!);
+        } catch (_) {}
+      }
+    }
     final hasChip = chipLabel.isNotEmpty;
     final theme = Theme.of(context);
     final hasEvent =

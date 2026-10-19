@@ -88,13 +88,42 @@ void main() {
     expect(find.text('Open in Learning Suite'), findsOneWidget);
   });
 
+  testWidgets('Learning Suite homework links out on Homework list',
+      (tester) async {
+    final node = Node(
+      id: 'ls-1',
+      title: 'Read chapter 4',
+      createdAt: DateTime(2026, 10, 1),
+      sourceEventId: 'ls-1',
+      feedId: 'ls-feed',
+      classId: 'ls-feed',
+    );
+    const feed = Feed(
+      id: 'ls-feed',
+      name: 'STAT 230',
+      url: 'https://learningsuite.byu.edu',
+      kind: FeedKind.learningSuite,
+    );
+    // Tasks > Homework passes showClass false — the link-out must still show.
+    await pumpTile(tester, node,
+        showClass: false, feedById: const {'ls-feed': feed});
+    expect(find.text('Open in Learning Suite'), findsOneWidget);
+  });
+
   testWidgets('plain task shows neither notes nor link-out', (tester) async {
     final node = Node(
       id: 't-1',
       title: 'Buy milk',
       createdAt: DateTime(2026, 10, 1),
     );
-    await pumpTile(tester, node);
+    const feed = Feed(
+      id: 'ls-feed',
+      name: 'STAT 230',
+      url: 'https://learningsuite.byu.edu',
+      kind: FeedKind.learningSuite,
+    );
+    await pumpTile(tester, node,
+        showClass: false, feedById: const {'ls-feed': feed});
     expect(find.text('Open in Learning Suite'), findsNothing);
   });
 }

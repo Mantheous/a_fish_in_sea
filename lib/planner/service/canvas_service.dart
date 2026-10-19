@@ -263,7 +263,8 @@ class CanvasService {
 
   /// Submission states across the server's sync window (wide enough to
   /// cover the overdue pile, not just this week).
-  Future<List<CanvasSubmission>> fetchSubmissions() async {    if (DemoMode.isActive) return DemoData.canvasSubmissions();
+  Future<List<CanvasSubmission>> fetchSubmissions() async {
+    if (DemoMode.isActive) return DemoData.canvasSubmissions();
     final data = _decode(await _send(() => _client.get(
         _uri('/api/canvas/submissions'),
         headers: _headers)));
