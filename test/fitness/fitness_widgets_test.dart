@@ -94,4 +94,68 @@ void main() {
     expect(find.text('Fitness watches'), findsOneWidget);
     expect(find.text('Garmin (first provider)'), findsOneWidget);
   });
+
+  testWidgets('blank fitness target blocks save instead of persisting 0',
+      (tester) async {
+    tester.view.physicalSize = const Size(800, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final nodes = NodeCubit();
+    final undo = UndoCubit();
+    final events = CalendarCubit();
+    addTearDown(() async {
+      await nodes.close();
+      await undo.close();
+      await events.close();
+    });
+
+    await tester.pumpWidget(
+      MultiBlocProvider(
+        providers: [
+          BlocProvider.value(value: nodes),
+          BlocProvider.value(value: undo),
+          BlocProvider.value(value: events),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showNodeEditor(context),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Title'), 'Morning run');
+    await tester.tap(find.text('Has fitness target'));
+    await tester.pumpAndSettle();
+
+    // Blank target: save must warn and keep the dialog open with no node.
+    await tester.tap(find.text('Add'));
+    await tester.pumpAndSettle();
+    expect(find.text('Please enter a positive fitness target'),
+        findsOneWidget);
+    expect(find.text('New node'), findsOneWidget);
+    expect(nodes.state, isEmpty);
+
+    // Valid target saves and closes.
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Target minutes'), '30');
+    await tester.tap(find.text('Add'));
+    await tester.pumpAndSettle();
+    expect(find.text('New node'), findsNothing);
+    expect(nodes.state, hasLength(1));
+    expect(nodes.state.single.fitness?.targetValue, 30.0);
+  });
 }

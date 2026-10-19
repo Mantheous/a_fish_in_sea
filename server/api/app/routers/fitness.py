@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
-from ..deps import get_current_user
+from ..deps import require_jwt_user
 from ..models import User
 from ..oauth_store import (
     clear_connection,
@@ -40,7 +40,7 @@ def _configured() -> bool:
 
 @router.get("/status")
 async def status(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     row = await get_connection(session, user.id, _PROVIDER)
@@ -55,7 +55,7 @@ async def status(
 @router.post("/connect")
 async def connect(
     body: dict,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     """Manual token entry until full Garmin OAuth is wired.
@@ -91,7 +91,7 @@ async def connect(
 
 @router.post("/disconnect")
 async def disconnect(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     await clear_connection(session, user.id, _PROVIDER)
@@ -101,7 +101,7 @@ async def disconnect(
 
 @router.get("/activities")
 async def activities(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     row = await get_connection(session, user.id, _PROVIDER)
@@ -113,7 +113,7 @@ async def activities(
 
 @router.get("/sleep")
 async def sleep(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     row = await get_connection(session, user.id, _PROVIDER)
