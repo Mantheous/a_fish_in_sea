@@ -208,6 +208,26 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
 
   /// Feed ids seen on the last node/feed change, so a removed class can
   /// be dropped from the learned assignment data.
+  bool _estimatesScheduled = false;
+
+  /// The learned effort index is derived data over the whole node list, so
+  /// rebuilding it synchronously on every checkbox tap puts O(N) work on
+  /// the tap's UI frame (phone hang on check-off). Coalesce rapid edits
+  /// into one post-frame rebuild: the tap paints first, estimates land a
+  /// frame later. Idempotent pure function, so coalescing loses nothing.
+  void _scheduleEstimatesRebuild() {
+    if (_estimatesScheduled) return;
+    _estimatesScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _estimatesScheduled = false;
+      if (!mounted) return;
+      try {
+        context
+            .read<AssignmentEstimatesCubit>()
+            .rebuildFrom(context.read<NodeCubit>().state);
+      } catch (_) {}
+    });
+  }
 
   @override
   void initState() {
@@ -237,7 +257,7 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
         BlocListener<NodeCubit, List<Node>>(
           listenWhen: (a, b) => !identical(a, b),
           listener: (context, nodes) {
-            context.read<AssignmentEstimatesCubit>().rebuildFrom(nodes);
+            _scheduleEstimatesRebuild();
           },
         ),
       ],

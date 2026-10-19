@@ -186,6 +186,45 @@ void main() {
       expect(calendar.byId('e1')?.done, isTrue);
     });
 
+    test('toggles snapshot state objects, never JSON envelopes (refs #51)',
+        () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      final calendar = CalendarCubit();
+      calendar.addEvent(taskEvent('e1'));
+      nodeCubit.addNode(backingNode('n1', 'e1'));
+      undoCubit.resetHistory();
+
+      NodeEventLink.toggleNodeDone(nodeCubit, calendar, 'n1');
+      var record = undoCubit.state.undoStack.last;
+      expect(record.entries, hasLength(2));
+      for (final entry in record.entries) {
+        // In-memory snapshots: no full-store JSON serialization per tap.
+        expect(entry.stateBefore, isNotNull);
+        expect(entry.stateAfter, isNotNull);
+        expect(entry.before, isNull);
+        expect(entry.after, isNull);
+      }
+
+      NodeEventLink.toggleEventDone(calendar, nodeCubit, 'e1');
+      record = undoCubit.state.undoStack.last;
+      expect(record.entries, hasLength(2));
+      for (final entry in record.entries) {
+        expect(entry.stateBefore, isNotNull);
+        expect(entry.stateAfter, isNotNull);
+        expect(entry.before, isNull);
+        expect(entry.after, isNull);
+      }
+
+      // Snapshots still round-trip through undo/redo.
+      undoCubit.undo();
+      expect(nodeCubit.byId('n1')?.isDone, isTrue);
+      expect(calendar.byId('e1')?.done, isTrue);
+      undoCubit.undo();
+      expect(nodeCubit.byId('n1')?.isDone, isFalse);
+      expect(calendar.byId('e1')?.done, isFalse);
+    });
+
     test('atomic skips unchanged cubits', () {
       final undoCubit = UndoCubit();
       final nodeCubit = NodeCubit();
