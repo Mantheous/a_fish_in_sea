@@ -90,10 +90,11 @@ class _FinishSheet extends StatelessWidget {
             node.actualStart != null &&
             node.actualEnd != null
         ? 'Recorded ${timeFormat.format(node.actualStart!)} – '
-            '${timeFormat.format(node.actualEnd!)} (${reported.inMinutes}m)'
+            '${timeFormat.format(node.actualEnd!)} '
+            '(${reported.inMinutes == 0 ? '${reported.inSeconds}s' : '${reported.inMinutes}m'})'
         : 'Recording saved.';
     return SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -105,6 +106,11 @@ class _FinishSheet extends StatelessWidget {
             Text(node.title, style: theme.textTheme.bodyLarge),
             const SizedBox(height: 4),
             Text(reportedLine, style: theme.textTheme.bodySmall),
+            const SizedBox(height: 4),
+            Text(
+              'These change the goal\'s status, not just this session.',
+              style: theme.textTheme.bodySmall,
+            ),
             const SizedBox(height: 16),
             FilledButton.icon(
               onPressed: () {
@@ -122,7 +128,7 @@ class _FinishSheet extends StatelessWidget {
                 Navigator.of(context).pop();
               },
               icon: const Icon(Icons.check, size: 18),
-              label: const Text('Mark complete'),
+              label: const Text('Mark goal complete'),
             ),
             const SizedBox(height: 8),
             OutlinedButton.icon(
@@ -138,7 +144,7 @@ class _FinishSheet extends StatelessWidget {
                 Navigator.of(context).pop();
               },
               icon: const Icon(Icons.cancel_outlined, size: 18),
-              label: const Text('Mark failed'),
+              label: const Text('Mark goal failed'),
               style: OutlinedButton.styleFrom(
                 foregroundColor: theme.colorScheme.error,
               ),
@@ -153,7 +159,7 @@ class _FinishSheet extends StatelessWidget {
               label: const Text('Schedule follow-up'),
             ),
             const SizedBox(height: 4),
-            TextButton(
+            OutlinedButton(
               onPressed: () => Navigator.of(context).pop(),
               child: const Text('Not now'),
             ),
