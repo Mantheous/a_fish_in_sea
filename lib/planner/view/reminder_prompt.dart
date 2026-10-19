@@ -60,8 +60,18 @@ class ReminderField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Non-preset offsets (e.g. 15 from the post-save prompt, or values from
+    // older builds) would crash DropdownButtonFormField because initialValue
+    // must match exactly one item. Surface them as an extra item so the edit
+    // form still mounts and Delete stays reachable.
+    final effectiveValue =
+        (value != null && value! <= 0) ? null : value;
+    final extraValue =
+        (effectiveValue != null && !eventReminderChoices.contains(effectiveValue))
+            ? effectiveValue
+            : null;
     return DropdownButtonFormField<int?>(
-      initialValue: value,
+      initialValue: effectiveValue,
       isExpanded: true,
       decoration: const InputDecoration(
         labelText: 'Reminder',
@@ -70,6 +80,11 @@ class ReminderField extends StatelessWidget {
       ),
       items: [
         const DropdownMenuItem(value: null, child: Text('No reminder')),
+        if (extraValue != null)
+          DropdownMenuItem(
+            value: extraValue,
+            child: Text(eventReminderLabel(extraValue)),
+          ),
         for (final minutes in eventReminderChoices)
           DropdownMenuItem(
             value: minutes,
