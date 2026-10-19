@@ -30,7 +30,11 @@ void main() {
     expect($('Sign in to sync').visible, true);
 
     final stamp = DateTime.now().millisecondsSinceEpoch;
+    // Tap the visible fields first (refs #17): typing must land in the
+    // tapped field, not nowhere.
+    await $(TextField).at(0).tap();
     await $(TextField).at(0).enterText('patrol-auth-$stamp@example.com');
+    await $(TextField).at(1).tap();
     await $(TextField).at(1).enterText('patrol-pass-1');
     await $('Create account').tap();
     await $.pumpAndSettle();
