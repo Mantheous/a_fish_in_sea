@@ -21,12 +21,16 @@ class AuthPage extends StatefulWidget {
 class _AuthPageState extends State<AuthPage> {
   final _email = TextEditingController();
   final _password = TextEditingController();
+  final _emailFocus = FocusNode();
+  final _passwordFocus = FocusNode();
   bool _busy = false;
 
   @override
   void dispose() {
     _email.dispose();
     _password.dispose();
+    _emailFocus.dispose();
+    _passwordFocus.dispose();
     super.dispose();
   }
 
@@ -61,29 +65,39 @@ class _AuthPageState extends State<AuthPage> {
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
-          child: ListView(
-            padding: const EdgeInsets.all(24),
-            shrinkWrap: true,
-            children: [
-              const Text(
-                'Sign in to sync your planner, finances and goals '
-                'across web, mobile, and AI agents.',
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _email,
-                keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(
-                  labelText: 'Email',
-                  border: OutlineInputBorder(),
+          child: AutofillGroup(
+            child: ListView(
+              padding: const EdgeInsets.all(24),
+              shrinkWrap: true,
+              children: [
+                const Text(
+                  'Sign in to sync your planner, finances and goals '
+                  'across web, mobile, and AI agents.',
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _password,
-                obscureText: true,
-                onSubmitted: (_) =>
-                    _submit(context.read<AuthCubit>().login),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _email,
+                  focusNode: _emailFocus,
+                  autofocus: true,
+                  keyboardType: TextInputType.emailAddress,
+                  textInputAction: TextInputAction.next,
+                  autofillHints: const [AutofillHints.email],
+                  autocorrect: false,
+                  onSubmitted: (_) => _passwordFocus.requestFocus(),
+                  decoration: const InputDecoration(
+                    labelText: 'Email',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _password,
+                  focusNode: _passwordFocus,
+                  obscureText: true,
+                  textInputAction: TextInputAction.done,
+                  autofillHints: const [AutofillHints.password],
+                  onSubmitted: (_) =>
+                      _submit(context.read<AuthCubit>().login),
                 decoration: const InputDecoration(
                   labelText: 'Password (8+ characters)',
                   border: OutlineInputBorder(),
@@ -156,7 +170,8 @@ class _AuthPageState extends State<AuthPage> {
                 icon: const Icon(Icons.science_outlined),
                 label: const Text('Try demo mode (no sign-in)'),
               ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
