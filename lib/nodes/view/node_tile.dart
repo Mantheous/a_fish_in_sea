@@ -1,5 +1,7 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../common/undo/undo_cubit.dart';
 import '../../finances/bloc/transactions_cubit.dart';
@@ -99,6 +101,7 @@ class NodeTile extends StatelessWidget {
     final effectiveNow = now ?? DateTime.now();
     final Color chipColor;
     final String chipLabel;
+    Feed? resolvedFeed;
     if (showClass && live.classLabel != null) {
       chipColor = courseColor(live.classLabel!);
       chipLabel = live.classLabel!;
@@ -110,10 +113,24 @@ class NodeTile extends StatelessWidget {
             ? map[live.classId]
             : context.read<FeedCubit>().byId(live.classId!);
       }
+      resolvedFeed = feed;
       chipColor = feed == null
           ? Theme.of(context).colorScheme.primary
           : mutedCalendarColor(feed.color);
       chipLabel = feed?.name ?? '';
+    }
+    // Homework link-out needs the feed even when the class chip is hidden
+    // (Tasks > Homework passes showClass false) or when the chip uses
+    // classLabel instead of the feed.
+    if (resolvedFeed == null && live.isHomework && live.classId != null) {
+      final map = feedById;
+      if (map != null) {
+        resolvedFeed = map[live.classId];
+      } else {
+        try {
+          resolvedFeed = context.read<FeedCubit>().byId(live.classId!);
+        } catch (_) {}
+      }
     }
     final hasChip = chipLabel.isNotEmpty;
     final theme = Theme.of(context);
@@ -296,6 +313,50 @@ class NodeTile extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(top: 2),
               child: AssigneeLine(assignees: live.assignees),
+            ),
+          // Homework details surfaced from the feed: iCal DESCRIPTION
+          // arrives via imports as notes (any LMS), clamped so long bodies
+          // don't overwhelm the row. Learning Suite ships only the feed
+          // link, so homework without notes gets a link-out instead.
+          if ((live.notes ?? '').trim().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                live.notes!.trim(),
+                style: theme.textTheme.bodySmall,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+            )
+          else if (live.isHomework &&
+              resolvedFeed?.kind == FeedKind.learningSuite)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: TextButton.icon(
+                style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                icon: const Icon(Icons.open_in_new, size: 16),
+                label: const Text('Open in Learning Suite'),
+                onPressed: () async {
+                  var uri = Uri.tryParse(resolvedFeed?.url ?? '');
+                  if (uri == null || uri.host.isEmpty) {
+                    uri = Uri.parse('https://learningsuite.byu.edu');
+                  }
+                  try {
+                    if (kIsWeb) {
+                      await launchUrl(uri, webOnlyWindowName: '_blank');
+                    } else {
+                      await launchUrl(
+                        uri,
+                        mode: LaunchMode.externalApplication,
+                      );
+                    }
+                  } catch (_) {}
+                },
+              ),
             ),
         ],
       ),

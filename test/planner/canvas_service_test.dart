@@ -49,6 +49,25 @@ void main() {
   });
 
   group('CanvasService transport', () {
+    test('fetchAssignment parses the detail envelope', () async {
+      final service = serviceWith({
+        '/api/canvas/assignment/99': http.Response(
+          jsonEncode({
+            'host': 'byu.instructure.com',
+            'assignment_id': 99,
+            'title': 'Essay 2',
+            'description': '<p>Write 800 words.</p>',
+            'html_url': 'https://byu.instructure.com/courses/7/assignments/99',
+          }),
+          200,
+        ),
+      });
+      final detail = await service.fetchAssignment(99, courseId: 7);
+      expect(detail['assignment_id'], 99);
+      expect(detail['description'], '<p>Write 800 words.</p>');
+      expect(detail['html_url'], contains('/assignments/99'));
+    });
+
     test('fetchSubmissions parses the server envelope', () async {
       final service = serviceWith({
         '/api/canvas/submissions': http.Response(
