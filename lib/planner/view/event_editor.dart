@@ -248,6 +248,18 @@ class EventEditorFormState extends State<EventEditorForm> {
   @override
   void initState() {
     super.initState();
+    // A previous delete's undo bar draws above this sheet: without this,
+    // a tap aimed at Delete during rapid successive deletes can land on
+    // the stale Undo and resurrect the earlier event (refs #14). Retiring
+    // it on mount (post-frame: ScaffoldMessenger.of registers a
+    // dependency, which initState may not do) also guarantees the bar
+    // never covers this editor's actions. At most one delete bar is ever
+    // live: _delete clears before showing, so a mis-tap can only ever
+    // undo the most recent delete.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).clearSnackBars();
+    });
     _subject = TextEditingController();
     _notes = TextEditingController();
     _location = TextEditingController();
@@ -2061,11 +2073,19 @@ class EventEditorFormState extends State<EventEditorForm> {
         NodeEventLink.deleteEventAndNodes(calendarCubit, nodes, existing);
       }
       await EventReminderService.cancelReminder(existing.id);
+      // Close the editor before showing the undo prompt: the bar draws
+      // above the sheet, so showing it first lets it cover the next
+      // editor's actions, and a stale bar's Undo can resurrect an event
+      // on a mis-tap (refs #14). Clearing first retires any earlier
+      // delete's bar before this one appears.
+      widget.onFinished?.call();
+      messenger.clearSnackBars();
       messenger.showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 3),
           persist: false,
+          dismissDirection: DismissDirection.horizontal,
           content: const Text('Event deleted'),
           action: SnackBarAction(
             label: 'Undo',
@@ -2073,7 +2093,6 @@ class EventEditorFormState extends State<EventEditorForm> {
           ),
         ),
       );
-      widget.onFinished?.call();
       return;
     }
     var series = false;
