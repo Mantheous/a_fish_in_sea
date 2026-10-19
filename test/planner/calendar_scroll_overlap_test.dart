@@ -22,13 +22,18 @@ class MockStorage extends Mock implements Storage {}
 
 class MockGoogleService extends Mock implements GoogleCalendarService {}
 
-// Regression coverage for issue #15: in Day/Week view, wheel-scrolling down
-// over a column with several overlapping 9:00-10:00 events painted one tall
-// blank teal block (roughly 6:00 -> 10:00) hiding every 9:00 tile. The block
-// is a Syncfusion layout artifact outside the builder's control, so this
-// test pins OUR side of the contract: after scrolling, every overlap tile
-// must keep its ~1-hour geometry (no tile may balloon to a multi-hour span)
-// and stay findable with its subject text.
+// Guard-only regression coverage for issue #15 (Refs #15, leaves it open):
+// in Day/Week view, wheel-scrolling down over a column with several
+// overlapping 9:00-10:00 events painted one tall blank teal block (roughly
+// 6:00 -> 10:00) hiding every 9:00 tile on the live web build.
+// Limit stated explicitly: synthetic PointerScrollEvents in a widget test
+// cannot reproduce that web-only paint artifact (it needs a real
+// wheel/trackpad on the live Tailnet build), so a passing run here does NOT
+// prove the web bug fixed — the ux-walk must re-check Day/Week wheel-scroll
+// with a real wheel. What this pins is OUR side of the contract: after
+// scrolling, every overlap tile must keep its ~1-hour geometry (no tile may
+// balloon to a multi-hour span), stay findable with its subject text, and no
+// tall textless block may occlude the 9:00 tiles.
 void main() {
   setUp(() {
     final storage = MockStorage();
@@ -92,6 +97,9 @@ void main() {
   Size tileSize(WidgetTester tester, String id) =>
       tester.getSize(find.byKey(ValueKey('tile:$id'), skipOffstage: false));
 
+  Rect tileRect(WidgetTester tester, String id) =>
+      tester.getRect(find.byKey(ValueKey('tile:$id'), skipOffstage: false));
+
   double hourHeight(WidgetTester tester) {
     final heights = [
       for (var i = 0; i < 8; i++) tileSize(tester, 'evt:overlap-$i').height,
@@ -100,11 +108,61 @@ void main() {
     return heights[heights.length ~/ 2];
   }
 
+  /// Fails if a tall textless block occludes the 9:00 tiles — the shape of
+  /// the reported artifact (full-width teal, ~4h, no subject text). Scans
+  /// solid-fill Containers (both our builder tiles and Syncfusion defaults
+  /// surface this way via getColor): any opaque box taller than 2x the hour
+  /// that overlaps a 9:00 tile but holds no Text is the bug, whether it is a
+  /// ballooned tile or a sibling overlay. Transparent layout boxes are
+  /// ignored (they overlap everything by construction).
+  void expectNoTextlessOverlay(WidgetTester tester, double hour) {
+    final tileRects = [
+      for (var i = 0; i < 8; i++) tileRect(tester, 'evt:overlap-$i'),
+    ];
+    final threshold = hour * 2;
+    for (final element in tester.elementList(find.byType(Container))) {
+      final widget = element.widget as Container;
+      final Color? color = widget.color ??
+          (widget.decoration is BoxDecoration
+              ? (widget.decoration as BoxDecoration).color
+              : null);
+      if (color == null || color.a != 1.0) continue;
+      if (color == Colors.white) continue;
+      late final Rect rect;
+      try {
+        rect = tester.getRect(
+          find.byElementPredicate((e) => identical(e, element)),
+        );
+      } catch (_) {
+        continue;
+      }
+      if (rect.height <= threshold) continue;
+      final overlaps =
+          tileRects.any((tile) => tile.overlaps(rect));
+      if (!overlaps) continue;
+      final hasText = find
+          .descendant(
+            of: find.byElementPredicate((e) => identical(e, element)),
+            matching: find.byType(Text),
+          )
+          .evaluate()
+          .isNotEmpty;
+      expect(
+        hasText,
+        isTrue,
+        reason: 'textless ${rect.height.toStringAsFixed(0)}px block '
+            '($color) occludes the 9:00 tiles (hour=$hour)',
+      );
+    }
+  }
+
   void expectSaneOverlapTiles(WidgetTester tester, double hour) {
     for (var i = 0; i < 8; i++) {
       final size = tileSize(tester, 'evt:overlap-$i');
       // A 1-hour tile must never balloon into a multi-hour block: the
       // reported artifact spanned ~4 hours, so anything past 2x is a fail.
+      // Uses the pre-scroll hour baseline so a uniform balloon of all 8
+      // tiles cannot hide behind its own median.
       expect(
         size.height,
         lessThan(hour * 2),
@@ -116,9 +174,24 @@ void main() {
     }
     expect(find.text('Dentist'), findsWidgets,
         reason: 'unrelated full-day tile must survive the scroll too');
+    // Ratio anchor against the 8-hour Dentist tile: if every overlap tile
+    // ballooned uniformly, the per-tile 2x check above would still pass
+    // against a ballooned median, but Dentist (unaffected) would then be
+    // only ~2x the median instead of ~8x.
+    final dentistHeight = tileSize(tester, 'evt:dentist').height;
+    expect(
+      dentistHeight,
+      greaterThan(hour * 4),
+      reason: 'Dentist 8h tile ($dentistHeight) must dwarf the 1h '
+          'median ($hour); otherwise the overlap tiles ballooned uniformly',
+    );
+    expectNoTextlessOverlay(tester, hour);
   }
 
-  Future<void> scrollGridDown(WidgetTester tester) async {
+  Future<void> scrollGridDown(
+    WidgetTester tester, {
+    required double hour,
+  }) async {
     final center = tester.getCenter(find.byKey(const Key('plan-calendar')));
     final before = tester.getTopLeft(
       find.byKey(const ValueKey('tile:evt:overlap-0'), skipOffstage: false),
@@ -129,6 +202,11 @@ void main() {
         scrollDelta: const Offset(0, 150),
       ));
       await tester.pump(const Duration(milliseconds: 100));
+      // Check every frame while the 9:00 tiles are still visible: the final
+      // resting state scrolls them offscreen (no onscreen overlay could
+      // overlap them there), so only per-frame checks can catch a block
+      // that appears mid-scroll.
+      expectSaneOverlapTiles(tester, hour);
     }
     final after = tester.getTopLeft(
       find.byKey(const ValueKey('tile:evt:overlap-0'), skipOffstage: false),
@@ -148,7 +226,7 @@ void main() {
       expect(hour, greaterThan(0));
       expectSaneOverlapTiles(tester, hour);
 
-      await scrollGridDown(tester);
+      await scrollGridDown(tester, hour: hour);
       expectSaneOverlapTiles(tester, hour);
     });
   }
