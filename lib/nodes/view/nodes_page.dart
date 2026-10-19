@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:a_fish_in_sea/common/undo/undo_bar.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
+import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
@@ -38,10 +39,90 @@ class _NodesPageState extends State<NodesPage> {
   bool _expandAll = false;
   int _expandToken = 0;
 
+  /// Pending "Show in goals" reveal from [NavigationCubit]: the target is
+  /// shown in the All tree with its ancestor chain expanded and itself
+  /// highlighted. Transient UI state only — never persisted.
+  String? _focusNodeId;
+  int _consumedRevision = -1;
+  Set<String> _expandedIds = const {};
+  final GlobalKey _focusKey = GlobalKey();
+  NavigationCubit? _nav;
+  VoidCallback? _focusListener;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    NavigationCubit? nav;
+    try {
+      nav = context.read<NavigationCubit>();
+    } catch (_) {
+      nav = null;
+    }
+    if (!identical(nav, _nav)) {
+      if (_nav != null && _focusListener != null) {
+        _nav!.focusRevision.removeListener(_focusListener!);
+      }
+      _nav = nav;
+      if (nav != null) {
+        _focusListener = _onFocusRevision;
+        nav.focusRevision.addListener(_onFocusRevision);
+      } else {
+        _focusListener = null;
+      }
+    }
+    _onFocusRevision();
+  }
+
   @override
   void dispose() {
+    if (_nav != null && _focusListener != null) {
+      _nav!.focusRevision.removeListener(_focusListener!);
+    }
     _search.dispose();
     super.dispose();
+  }
+
+  /// Applies a fresh [NavigationCubit] focus request: land on the All tree,
+  /// expand the target's ancestors, highlight the target, and scroll it
+  /// into view. Keyed off [NavigationCubit.focusRevision] (not the page)
+  /// so a request while already on Nodes still applies — [Cubit.emit]
+  /// suppresses duplicate page states.
+  void _onFocusRevision() {
+    final nav = _nav;
+    if (nav == null || !mounted) return;
+    if (nav.focusRevision.value == _consumedRevision) return;
+    _consumedRevision = nav.focusRevision.value;
+    final id = nav.focusedNodeId;
+    if (id == null) {
+      if (_focusNodeId == null) return;
+      setState(() {
+        _focusNodeId = null;
+        _expandedIds = const {};
+      });
+      return;
+    }
+    Set<String> ancestors = const {};
+    try {
+      ancestors = ancestorIds(id, context.read<NodeCubit>().state);
+    } catch (_) {}
+    setState(() {
+      _focusNodeId = id;
+      _expandedIds = ancestors;
+      _view = _NodeView.all;
+      _expandToken++;
+      _query = '';
+      _search.clear();
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ctx = _focusKey.currentContext;
+      if (ctx == null) return;
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 300),
+        alignment: 0.5,
+      );
+    });
   }
 
   @override
@@ -106,6 +187,9 @@ class _NodesPageState extends State<NodesPage> {
               query: _query,
               expandAll: _expandAll,
               expandToken: _expandToken,
+              focusNodeId: _focusNodeId,
+              expandedIds: _expandedIds,
+              focusKey: _focusKey,
             ),
           ),
         ],
@@ -158,11 +242,21 @@ class _NodeBody extends StatelessWidget {
   final bool expandAll;
   final int expandToken;
 
+  /// "Show in goals" reveal: target highlighted in the All tree with
+  /// [expandedIds] (its ancestor chain) force-expanded and [focusKey]
+  /// scrolled into view. Other views ignore the reveal.
+  final String? focusNodeId;
+  final Set<String> expandedIds;
+  final GlobalKey? focusKey;
+
   const _NodeBody({
     required this.view,
     this.query = '',
     this.expandAll = false,
     this.expandToken = 0,
+    this.focusNodeId,
+    this.expandedIds = const {},
+    this.focusKey,
   });
 
   @override
@@ -235,6 +329,9 @@ class _NodeBody extends StatelessWidget {
               byParent: byParent,
               now: now,
               homeworkAhead: getHomeworkAhead(),
+              focusNodeId: focusNodeId,
+              expandedIds: expandedIds,
+              focusKey: focusKey,
             );
           case _NodeView.graph:
             return NodeGraphView(
@@ -318,6 +415,9 @@ class _NodeTree extends StatelessWidget {
   final Set<String>? visible;
   final bool expandAll;
   final int expandToken;
+  final String? focusNodeId;
+  final Set<String> expandedIds;
+  final GlobalKey? focusKey;
 
   const _NodeTree({
     required this.nodes,
@@ -330,6 +430,9 @@ class _NodeTree extends StatelessWidget {
     this.visible,
     this.expandAll = false,
     this.expandToken = 0,
+    this.focusNodeId,
+    this.expandedIds = const {},
+    this.focusKey,
   });
 
   @override
@@ -368,6 +471,8 @@ class _NodeTree extends StatelessWidget {
             byParent: byParent,
             now: now,
             homeworkAhead: homeworkAhead,
+            focusNodeId: focusNodeId,
+            focusKey: focusKey,
           );
         },
       );
@@ -392,6 +497,9 @@ class _NodeTree extends StatelessWidget {
           byParent: byParent,
           now: now,
           homeworkAhead: homeworkAhead,
+          focusNodeId: focusNodeId,
+          expandedIds: expandedIds,
+          focusKey: focusKey,
         );
       },
     );
@@ -427,6 +535,14 @@ class _NodeTile extends StatelessWidget {
   final bool expandAll;
   final int expandToken;
 
+  /// Reveal target from "Show in goals": this tile is highlighted when its
+  /// id matches, and [expandedIds] (the target's ancestor chain)
+  /// force-expands parents. [focusKey] is attached to the target for the
+  /// post-frame scroll into view.
+  final String? focusNodeId;
+  final Set<String> expandedIds;
+  final GlobalKey? focusKey;
+
   const _NodeTile({
     required this.node,
     required this.nodes,
@@ -442,6 +558,9 @@ class _NodeTile extends StatelessWidget {
     this.visible,
     this.expandAll = false,
     this.expandToken = 0,
+    this.focusNodeId,
+    this.expandedIds = const {},
+    this.focusKey,
   });
 
   @override
@@ -456,6 +575,17 @@ class _NodeTile extends StatelessWidget {
     final value = progress[live.id] ?? 0;
     final theme = Theme.of(context);
     final subtitle = _subtitle(context, live, value, kids.length);
+    final focused = live.id == focusNodeId;
+    Widget wrapFocus(Widget child) {
+      if (!focused) return child;
+      // Material (not ColoredBox): ListTile paints its background and ink
+      // on the nearest Material, which a plain color wrapper would hide.
+      return Material(
+        key: focusKey,
+        color: theme.colorScheme.secondaryContainer,
+        child: child,
+      );
+    }
     final tile = ListTile(
       contentPadding: EdgeInsets.only(left: 16 + depth * 20, right: 8),
       leading: _leading(context, live),
@@ -479,48 +609,53 @@ class _NodeTile extends StatelessWidget {
       ),
       onTap: () => showNodeEditor(context, existing: live),
     );
-    if (kids.isEmpty) return tile;
-    return _ParentTile(
-      key: ValueKey('${live.id}:$expandToken:$expandAll'),
-      tilePadding: EdgeInsets.only(left: 16 + depth * 20, right: 8),
-      leading: _leading(context, live),
-      title: Text(
-        live.title,
-        style: TextStyle(
-          decoration: live.isDone || live.status == NodeStatus.failed
-              ? TextDecoration.lineThrough
-              : null,
-          color: live.status == NodeStatus.failed
-              ? theme.colorScheme.error
-              : live.isDone
-              ? theme.colorScheme.outline
-              : null,
-        ),
-      ),
-      subtitle: _subtitleWidget(context, subtitle, value, live.isUnbounded),
-      trailingActions: _trailingActions(context, live, theme),
-      initiallyExpanded: expandAll,
-      expandToken: expandToken,
-      onTap: () => showNodeEditor(context, existing: live),
-      children: [
-        for (final k in kids)
-          _NodeTile(
-            node: k,
-            nodes: nodes,
-            progress: progress,
-            txnAmounts: txnAmounts,
-            depth: depth + 1,
-            flat: false,
-            visited: {...visited, k.id},
-            visible: visible,
-            expandAll: expandAll,
-            expandToken: expandToken,
-            nodeById: nodeById,
-            byParent: byParent,
-            now: now,
-            homeworkAhead: homeworkAhead,
+    if (kids.isEmpty) return wrapFocus(tile);
+    return wrapFocus(
+      _ParentTile(
+        key: ValueKey('${live.id}:$expandToken:$expandAll'),
+        tilePadding: EdgeInsets.only(left: 16 + depth * 20, right: 8),
+        leading: _leading(context, live),
+        title: Text(
+          live.title,
+          style: TextStyle(
+            decoration: live.isDone || live.status == NodeStatus.failed
+                ? TextDecoration.lineThrough
+                : null,
+            color: live.status == NodeStatus.failed
+                ? theme.colorScheme.error
+                : live.isDone
+                ? theme.colorScheme.outline
+                : null,
           ),
-      ],
+        ),
+        subtitle: _subtitleWidget(context, subtitle, value, live.isUnbounded),
+        trailingActions: _trailingActions(context, live, theme),
+        initiallyExpanded: expandAll || expandedIds.contains(live.id),
+        expandToken: expandToken,
+        onTap: () => showNodeEditor(context, existing: live),
+        children: [
+          for (final k in kids)
+            _NodeTile(
+              node: k,
+              nodes: nodes,
+              progress: progress,
+              txnAmounts: txnAmounts,
+              depth: depth + 1,
+              flat: false,
+              visited: {...visited, k.id},
+              visible: visible,
+              expandAll: expandAll,
+              expandToken: expandToken,
+              nodeById: nodeById,
+              byParent: byParent,
+              now: now,
+              homeworkAhead: homeworkAhead,
+              focusNodeId: focusNodeId,
+              expandedIds: expandedIds,
+              focusKey: focusKey,
+            ),
+        ],
+      ),
     );
   }
 
