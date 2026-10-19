@@ -116,7 +116,7 @@ void main() {
     });
   });
 
-  group('CalendarProjection report column', () {
+  group('CalendarProjection report columns', () {
     late CalendarProjection projection;
     final day = DateTime(2026, 10, 5);
     final event = _event('e1', DateTime(2026, 10, 5, 9));
@@ -267,7 +267,7 @@ void main() {
       fail('no vertical scrollable in the calendar');
     }
 
-    testWidgets('reports get their own column beside the untouched plans', (
+    testWidgets('each day places its report to the right of its plan', (
       tester,
     ) async {
       await pumpGoldenPage(tester, const CalendarPage());
@@ -293,7 +293,8 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
 
-      // Two calendars: the report column on the left, the plan grid right.
+      // Two calendars share one grid: the plan track is left and the report
+      // track is directly beside it in the same day cell.
       expect(find.byType(SfCalendar), findsNWidgets(2));
       final railFinder = find.byType(ReportLaneView);
       expect(
@@ -307,11 +308,9 @@ void main() {
 
       final railRect = tester.getRect(railFinder);
       final tileRect = tester.getRect(find.byKey(const ValueKey('tile:e1')));
-      // Report column on the left; the plan pane beside it is several times
-      // wider, so planned tiles keep the width they have in Plans mode.
-      expect(railRect.left, lessThan(tileRect.left));
-      expect(railRect.right, lessThanOrEqualTo(tileRect.left + 1));
-      expect(tileRect.width, greaterThan(railRect.width * 2));
+      expect(tileRect.left, lessThan(railRect.left));
+      expect(tileRect.right, lessThanOrEqualTo(railRect.left + 1));
+      expect(tileRect.width, closeTo(railRect.width, 4));
 
       // Both grids share one time axis: a chip at 9:05 lines up with the
       // 9:00 planned tile in the other calendar.
@@ -319,6 +318,7 @@ void main() {
       final chipRect = tester.getRect(
         find.byKey(const ValueKey('report-chip:report:r1')),
       );
+      expect(tileRect.right, lessThanOrEqualTo(chipRect.left + 2));
       expect(chipRect.top - tileRect.top, closeTo(6.7, 6));
       expect(chipRect.height, closeTo(60, 6));
 
@@ -368,7 +368,68 @@ void main() {
       final chipRect = tester.getRect(
         find.byKey(const ValueKey('report-chip:report:r1')),
       );
+      expect(tileRect.right, lessThanOrEqualTo(chipRect.left + 2));
       expect(chipRect.top - tileRect.top, closeTo(6.7, 6));
+    });
+
+    testWidgets('overlapping plans stay in the plan half and remain tappable', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final now = DateTime.now();
+      final start = DateTime(now.year, now.month, now.day, 9);
+      calendar.addEvent(_event('e1', start));
+      calendar.addEvent(_event('e2', start));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final first = tester.getRect(find.byKey(const ValueKey('tile:e1')));
+      final second = tester.getRect(find.byKey(const ValueKey('tile:e2')));
+      final report = tester.getRect(find.byType(ReportLaneView).first);
+      expect(first.right, lessThanOrEqualTo(report.left + 1));
+      expect(second.right, lessThanOrEqualTo(report.left + 1));
+      expect(first.left, lessThan(second.left));
+      expect(first.right, lessThanOrEqualTo(second.left + 1));
+
+      await tester.tapAt(
+        tester.getCenter(find.byKey(const ValueKey('tile:e2'))),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('Event details'), findsOneWidget);
+      expect(find.text('Event e2'), findsWidgets);
+    });
+
+    testWidgets('an overlapping plan can still be dragged', (tester) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final now = DateTime.now();
+      final start = DateTime(now.year, now.month, now.day, 9);
+      calendar.addEvent(_event('e1', start));
+      calendar.addEvent(_event('e2', start));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final tile = find.byKey(const ValueKey('tile:e2'));
+      final center = tester.getCenter(tile);
+      final gesture = await tester.startGesture(center);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      await gesture.moveTo(center + const Offset(0, 120));
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(calendar.byId('e2')!.start.isAfter(start), isTrue);
     });
 
     testWidgets('month view stays a single calendar with report chips', (

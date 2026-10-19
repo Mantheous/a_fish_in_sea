@@ -30,13 +30,13 @@ class CalendarProjection {
   Map<String, ReportBlock> reportById = const {};
   Map<String, Color> reportColorById = const {};
 
-  /// The report column's own calendar (Plan + Report view, day/week): one
-  /// lane per visible day plus invisible all-day copies that keep its
-  /// header the same height as the plan calendar's.
+  /// The report overlay's calendar (Plan + Report view, day/week): one lane
+  /// per visible day plus invisible all-day copies that keep the all-day row
+  /// aligned with the plan calendar.
   List<PlannerEvent> reportRails = const [];
 
-  /// All-day copies of the visible all-day events, for the rail calendar's
-  /// header only. Their tiles render nothing.
+  /// All-day copies of visible all-day events, to keep the report calendar's
+  /// all-day row aligned. Their tiles render nothing.
   List<PlannerEvent> get reportPlaceholders => _reportPlaceholders;
 
   List<PlannerEvent>? _railsLanes;
@@ -178,9 +178,8 @@ class CalendarProjection {
         startHour: visibleStartHour,
         endHour: visibleEndHour,
       );
-      // The rail calendar shows the same all-day events as the plan
-      // calendar so both headers keep the same height, but its copies
-      // render no tile of their own.
+      // The report calendar keeps invisible copies of all-day events so its
+      // all-day row stays aligned with the plan calendar.
       _reportPlaceholders = [
         for (final event in _visible)
           if (event.allDay)
@@ -202,9 +201,8 @@ class CalendarProjection {
       _reportSource = reports;
       _reportTime = now;
     }
-    // In lane mode the report column is a calendar of its own, so report
-    // blocks and lanes stay out of `shown`; the month view keeps them as
-    // ordinary agenda chips.
+    // In lane mode the report calendar owns report blocks and lanes, so they
+    // stay out of `shown`; the month view keeps them as ordinary agenda chips.
     final reportEvents = !showReports || _laneMode
         ? const <PlannerEvent>[]
         : _reportEvents;
@@ -282,8 +280,7 @@ class CalendarProjection {
   }
 
   /// One report lane per visible day: a full-day placeholder appointment
-  /// whose tile the calendar page paints as the day's report column. The
-  /// planned events of that day render in the lanes beside it.
+  /// whose tile the calendar page paints in the report half of the day cell.
   ///
   /// Blocks outside the grid's hour range are dropped from the lane (they
   /// would paint nothing); the lane itself stays so every day in the report
