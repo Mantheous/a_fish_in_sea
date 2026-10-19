@@ -1020,6 +1020,82 @@ void main() {
       expect(sel.next.map((n) => n.id), ['later']);
       expect(sel.unscheduled.map((n) => n.id), ['plain']);
     });
+
+    test('only timed single-day blocks qualify as scheduled', () {
+      final now = DateTime(2026, 9, 12, 10);
+      final nodes = [
+        node(
+          'timed-now',
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 12, 9),
+            end: DateTime(2026, 9, 12, 11),
+          ),
+        ),
+        node(
+          'timed-before',
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 12, 7),
+            end: DateTime(2026, 9, 12, 8),
+          ),
+        ),
+        node(
+          'timed-next',
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 12, 12),
+            end: DateTime(2026, 9, 12, 13),
+          ),
+        ),
+        // All-day feed window spanning now: a due date, not work time.
+        node(
+          'allday-window',
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 12),
+            end: DateTime(2026, 9, 15),
+            allDay: true,
+          ),
+        ),
+        // Timed multi-day window spanning now: still not a session.
+        node(
+          'multiday-timed',
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 11, 9),
+            end: DateTime(2026, 9, 13, 17),
+          ),
+        ),
+        // Zero-duration points (start == end), past and future.
+        node(
+          'zero-past',
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 12, 8),
+            end: DateTime(2026, 9, 12, 8),
+          ),
+        ),
+        node(
+          'zero-future',
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 12, 17),
+            end: DateTime(2026, 9, 12, 17),
+          ),
+        ),
+      ];
+      final sel = selectNodeTracking(nodes, now);
+      expect(sel.current.map((n) => n.id), ['timed-now']);
+      expect(sel.previous.map((n) => n.id), ['timed-before']);
+      expect(sel.next.map((n) => n.id), ['timed-next']);
+      final scheduledIds = [
+        ...sel.current.map((n) => n.id),
+        ...sel.previous.map((n) => n.id),
+        ...sel.next.map((n) => n.id),
+      ];
+      for (final excluded in [
+        'allday-window',
+        'multiday-timed',
+        'zero-past',
+        'zero-future',
+      ]) {
+        expect(scheduledIds, isNot(contains(excluded)));
+      }
+    });
   });
 
   group('legacy migration', () {
