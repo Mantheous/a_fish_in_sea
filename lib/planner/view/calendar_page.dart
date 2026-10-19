@@ -409,9 +409,7 @@ class _CalendarPageState extends State<CalendarPage> {
         child: DecoratedBox(
           key: ValueKey('report-mask:${event.id}'),
           decoration: BoxDecoration(
-            color: Theme.of(
-              context,
-            ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.16),
+            color: Theme.of(context).colorScheme.surface,
           ),
           child: const SizedBox.expand(),
         ),
