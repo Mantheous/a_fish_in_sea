@@ -244,10 +244,26 @@ class CanvasService {
         headers: _headers));
   }
 
+  /// One assignment's details (description, link) via the server proxy.
+  /// The assignment id is the iCal UID suffix (`event-assignment-<id>`);
+  /// [courseId] is optional — without it the server walks the student's
+  /// courses. Returns the raw detail map (`description`, `html_url`, …).
+  Future<Map<String, dynamic>> fetchAssignment(
+    int assignmentId, {
+    int? courseId,
+  }) async {
+    final query = <String, String>{};
+    if (courseId != null) query['course_id'] = courseId.toString();
+    final data = _decode(await _send(() => _client.get(
+          _uri('/api/canvas/assignment/$assignmentId',
+              query.isEmpty ? null : query),
+          headers: _headers)));
+    return data;
+  }
+
   /// Submission states across the server's sync window (wide enough to
   /// cover the overdue pile, not just this week).
-  Future<List<CanvasSubmission>> fetchSubmissions() async {
-    if (DemoMode.isActive) return DemoData.canvasSubmissions();
+  Future<List<CanvasSubmission>> fetchSubmissions() async {    if (DemoMode.isActive) return DemoData.canvasSubmissions();
     final data = _decode(await _send(() => _client.get(
         _uri('/api/canvas/submissions'),
         headers: _headers)));
