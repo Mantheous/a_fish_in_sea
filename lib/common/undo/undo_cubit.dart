@@ -15,12 +15,16 @@ class UndoState extends Equatable {
 
 /// Session-scoped undo history.
 ///
-/// Deliberately a plain [Cubit], not a hydrated one: every record holds
-/// full before/after snapshots of the cubits it touches, so persisting the
+/// Deliberately a plain [Cubit], not a hydrated one: each record holds
+/// before/after snapshots of the cubits it touches, so persisting the
 /// stack re-serializes up to [maxDepth] full collections on *every* edit —
 /// each tap slower than the last (marking off a batch of homework tasks
 /// degraded until the tab crashed). Undo across an app restart is not a
 /// supported flow; the cubits' own user data stays hydrated as before.
+///
+/// Replay is item-scoped: [undo]/[redo] only revert the ids the user's
+/// edit touched, so ids a background sync pulled after the edit survive an
+/// undo and the next push sends no tombstones for them.
 class UndoCubit extends Cubit<UndoState> {
   static const int maxDepth = 100;
   static UndoCubit? _instance;
@@ -64,11 +68,7 @@ class UndoCubit extends Cubit<UndoState> {
     final record = state.undoStack.last;
     for (final entry in record.entries.reversed) {
       final cubit = RevertableRegistry.byId(entry.cubitId);
-      if (entry.stateBefore != null) {
-        cubit?.applyState(entry.stateBefore);
-      } else {
-        cubit?.applyJson(entry.before);
-      }
+      cubit?.applyUndo(entry);
     }
     emit(
       UndoState(
@@ -83,11 +83,7 @@ class UndoCubit extends Cubit<UndoState> {
     final record = state.redoStack.last;
     for (final entry in record.entries) {
       final cubit = RevertableRegistry.byId(entry.cubitId);
-      if (entry.stateAfter != null) {
-        cubit?.applyState(entry.stateAfter);
-      } else {
-        cubit?.applyJson(entry.after);
-      }
+      cubit?.applyRedo(entry);
     }
     emit(
       UndoState(

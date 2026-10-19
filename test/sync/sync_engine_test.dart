@@ -239,29 +239,41 @@ void main() {
     expect(a.nodes.byId('t1')?.title, 'B edit');
   });
 
-  test('remote pull invalidates snapshots that could erase pulled items',
+  test('undo after a pull keeps pulled items and pushes no tombstone',
       () async {
     final undo = UndoCubit();
     addTearDown(undo.close);
     final server = FakeSyncClient();
     final a = _Device(server);
-    final b = _Device(server);
     await a.signIn();
-    await b.signIn();
 
     a.nodes.addNode(Node(id: 't1', title: 'original', createdAt: DateTime(2026)));
     await a.engine.syncNow();
     a.nodes.updateNode(a.nodes.byId('t1')!.copyWith(title: 'edited'));
     expect(undo.canUndo, isTrue);
 
-    b.nodes.addNode(Node(id: 't2', title: 'from B', createdAt: DateTime(2026)));
-    await b.engine.syncNow();
+    // Another device creates t2 directly on the server (newer than a's
+    // cursor, so the next pull delivers it like a background sync would).
+    server.store.putIfAbsent('nodes', () => {})['t2'] = _Row(
+      Node(id: 't2', title: 'from B', createdAt: DateTime(2026)).toJson(),
+      false,
+      server._tick(),
+    );
     await a.engine.syncNow();
 
     expect(a.nodes.byId('t2')?.title, 'from B');
-    expect(undo.canUndo, isFalse);
+    // Item-scoped undo survives the pull: the edit reverts, the pulled
+    // item stays, and history is preserved.
+    expect(undo.canUndo, isTrue);
+    undo.undo();
+    expect(a.nodes.byId('t1')?.title, 'original');
+    expect(a.nodes.byId('t2')?.title, 'from B');
+
+    // The next push must not tombstone the pulled item.
     await a.engine.syncNow();
     expect(server.store['nodes']?['t2']?.deleted, isFalse);
+    expect(a.engine.protectedDeletions.value, isEmpty);
+    expect(a.nodes.byId('t2')?.title, 'from B');
   });
 
   test('delete on A propagates as tombstone to B', () async {
