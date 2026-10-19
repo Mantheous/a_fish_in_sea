@@ -420,6 +420,38 @@ void main() {
       expect(Node.fromJson(unbounded.toJson()), unbounded);
     });
 
+    test('NodeCubit loads pre-favorite nodes as not favorite', () {
+      final cubit = NodeCubit();
+      final preFavorite = Node(
+        id: 'n5',
+        title: 'Run',
+        createdAt: _day,
+      ).toJson()
+        ..remove('isFavorite');
+      final restored = cubit.fromJson({
+        'nodes': [preFavorite],
+      });
+      expect(restored?.single.isFavorite, isFalse);
+      final corrupt = Map<String, dynamic>.from(preFavorite)
+        ..['id'] = 'n6'
+        ..['isFavorite'] = 'yes';
+      final restoredCorrupt = cubit.fromJson({
+        'nodes': [corrupt],
+      });
+      expect(restoredCorrupt?.single.isFavorite, isFalse);
+      final starred = Node(
+        id: 'n7',
+        title: 'Starred',
+        createdAt: _day,
+        isFavorite: true,
+      );
+      expect(Node.fromJson(starred.toJson()), starred);
+      final restoredStarred = cubit.fromJson({
+        'nodes': [starred.toJson()],
+      });
+      expect(restoredStarred?.single.isFavorite, isTrue);
+    });
+
     test('applyJson with garbage does not throw', () {
       final cubit = NodeCubit();
       expect(() => cubit.applyJson({'nodes': 'not-a-list'}), returnsNormally);

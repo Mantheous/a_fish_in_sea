@@ -20,7 +20,7 @@ import 'package:a_fish_in_sea/nodes/view/node_graph_view.dart';
 import 'package:a_fish_in_sea/nodes/view/node_finish_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 
-enum _NodeView { leaves, all, graph, due, scheduled, money, habits }
+enum _NodeView { leaves, all, favorites, graph, due, scheduled, money, habits }
 
 final _nodesDateFormat = DateFormat('EEE, MMM d');
 
@@ -144,6 +144,7 @@ class _ViewRow extends StatelessWidget {
   static String _label(_NodeView v) => switch (v) {
     _NodeView.leaves => 'Leaves',
     _NodeView.all => 'All',
+    _NodeView.favorites => 'Favorites',
     _NodeView.graph => 'Graph',
     _NodeView.due => 'Due',
     _NodeView.scheduled => 'Scheduled',
@@ -236,6 +237,17 @@ class _NodeBody extends StatelessWidget {
               now: now,
               homeworkAhead: getHomeworkAhead(),
             );
+          case _NodeView.favorites:
+            final items = matching(goals.where((n) => n.isFavorite).toList());
+            if (items.isEmpty) {
+              return const Center(
+                child: Text(
+                  'No favorite goals yet.\nStar a goal to pin it here.',
+                  textAlign: TextAlign.center,
+                ),
+              );
+            }
+            return flatList(items);
           case _NodeView.graph:
             return NodeGraphView(
               nodes: goals,
@@ -536,6 +548,14 @@ class _NodeTile extends StatelessWidget {
     ThemeData theme,
   ) {
     return [
+      IconButton(
+        tooltip: live.isFavorite ? 'Unstar' : 'Star',
+        icon: Icon(
+          live.isFavorite ? Icons.star : Icons.star_border,
+          color: live.isFavorite ? theme.colorScheme.primary : null,
+        ),
+        onPressed: () => context.read<NodeCubit>().toggleFavorite(live.id),
+      ),
       if (!live.isUnbounded && live.isTracking)
         IconButton(
           tooltip: 'Stop recording',

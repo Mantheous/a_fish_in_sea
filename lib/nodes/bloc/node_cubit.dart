@@ -677,6 +677,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
           status: NodeStatus.open,
           createdAt: at,
           isUnbounded: n.isUnbounded,
+          isFavorite: n.isFavorite,
           schedule: n.schedule,
           money: n.money?.copyWith(
             status: MoneyStatus.projected,
@@ -1103,6 +1104,28 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final node = byId(id);
     if (node == null || node.isTracked == tracked) return;
     updateNode(node.copyWith(isTracked: tracked));
+  }
+
+  /// Stars a goal as important. Starred goals show in the Home favorites
+  /// section and under the Nodes Favorites filter. No-op when unchanged.
+  void setFavorite(String id, bool favorite) {
+    final node = byId(id);
+    if (node == null || node.isFavorite == favorite) return;
+    updateNode(node.copyWith(isFavorite: favorite));
+  }
+
+  void toggleFavorite(String id) {
+    final node = byId(id);
+    if (node == null) return;
+    setFavorite(id, !node.isFavorite);
+  }
+
+  /// Starred goals, queue-sorted. Powers the Home favorites section and
+  /// the Nodes page Favorites filter.
+  List<Node> get favorites {
+    final favs = state.where((n) => n.isFavorite).toList()
+      ..sort(_byDueThenCreated);
+    return favs;
   }
 
   /// Moves a recorded chunk (reported interval and/or running timer) from

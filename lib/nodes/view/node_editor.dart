@@ -70,6 +70,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   late List<String> _parents;
 
   bool _isUnbounded = false;
+  bool _isFavorite = false;
 
   DateTime? _due;
   bool _dateFixed = false;
@@ -114,6 +115,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _notes = TextEditingController(text: e?.notes ?? '');
     _parents = List.of(e?.parentIds ?? widget.initialParentIds);
     _isUnbounded = e?.isUnbounded ?? false;
+    _isFavorite = e?.isFavorite ?? false;
     _due = e?.schedule?.due;
     _dateFixed = e?.schedule?.isFixed ?? false;
     _hasMoney = e?.money != null || widget.enableMoney;
@@ -228,6 +230,16 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
               ),
               value: _isUnbounded,
               onChanged: (v) => setState(() => _isUnbounded = v),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text('Favorite goal'),
+              subtitle: const Text(
+                'Starred goals show on Home and under Favorites.',
+              ),
+              value: _isFavorite,
+              onChanged: (v) => setState(() => _isFavorite = v),
             ),
             if (!_isUnbounded) ...[
               const SizedBox(height: 16),
@@ -840,6 +852,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         parentIds: _parents,
         createdAt: DateTime.now(),
         isUnbounded: isUnbounded,
+        isFavorite: _isFavorite,
         schedule: schedule,
         money: money,
         effort: effort,
@@ -869,6 +882,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         clearNotes: notes == null,
         parentIds: _parents,
         isUnbounded: isUnbounded,
+        isFavorite: _isFavorite,
         schedule: schedule,
         clearSchedule: schedule == null,
         money: money,
