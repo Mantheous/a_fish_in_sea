@@ -713,12 +713,13 @@ class _NodeTrackLine extends StatelessWidget {
         live.actualEnd != null;
     final statusLine = failed
         ? 'Marked as failed'
-        : live.isTracking && elapsed != null
-            ? 'Recording ${formatStopwatch(elapsed)}'
+        : live.isTracking
+            ? 'Recording ${formatStopwatch(elapsed ?? Duration.zero)}'
             : isReportedShown
                 ? 'Reported ${_homeTimeFormat.format(live.actualStart!)} – '
-                    '${_homeTimeFormat.format(live.actualEnd!)} (${reported.inMinutes}m)'
-                : plannedLine;
+                    '${_homeTimeFormat.format(live.actualEnd!)} '
+                    '(${reported.inMinutes == 0 ? '${reported.inSeconds}s' : '${reported.inMinutes}m'})'
+                : null;
     // Toggl-style: the status line opens the correction sheet — a late
     // press is fixed by moving the start, a finished session by editing
     // the interval. Only when there is something to correct.
@@ -759,7 +760,7 @@ class _NodeTrackLine extends StatelessWidget {
                         children: [
                           Flexible(
                             child: Text(
-                              statusLine,
+                              statusLine!,
                               style: theme.textTheme.labelSmall?.copyWith(
                                 color: failed
                                     ? theme.colorScheme.error
@@ -781,7 +782,7 @@ class _NodeTrackLine extends StatelessWidget {
                         ],
                       ),
                     )
-                  else
+                  else if (statusLine != null)
                     Text(
                       statusLine,
                       style: theme.textTheme.labelSmall?.copyWith(
