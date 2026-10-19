@@ -108,5 +108,19 @@ void main() {
               {'defaultCalendarView': 'renamed-value'})?.defaultCalendarView,
           platformDefaultCalendarView);
     });
+
+    test('applySyncedJson keeps the device-local view, adopts roamed hours',
+        () {
+      final cubit = SettingsCubit();
+      cubit.setDefaultCalendarView(CalendarView.month);
+      cubit.applySyncedJson({
+        'defaultCalendarView': 'day',
+        'dayStartHour': 7,
+        'dayEndHour': 22,
+      });
+      expect(cubit.state.defaultCalendarView, CalendarView.month);
+      expect(cubit.state.dayStartHour, 7);
+      expect(cubit.state.dayEndHour, 22);
+    });
   });
 }

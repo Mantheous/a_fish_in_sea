@@ -408,7 +408,7 @@ void main() {
     expect(server.store['plaid']?['singleton']?.data['itemId'], isNull);
   });
 
-  test('calendar window settings and task completion sync across devices',
+  test('task completion and visible hours sync; calendar view stays per-device',
       () async {
     final server = FakeSyncClient();
     final phone = _Device(server);
@@ -416,6 +416,7 @@ void main() {
     await phone.signIn();
     await desktop.signIn();
 
+    final desktopView = desktop.settings.state.defaultCalendarView;
     phone.settings.setDefaultCalendarView(CalendarView.day);
     phone.settings.setDayHours(7, 22);
     phone.nodes.addNode(Node(
@@ -432,7 +433,15 @@ void main() {
 
     await desktop.engine.syncNow();
 
-    expect(desktop.settings.state.defaultCalendarView, CalendarView.day);
+    // The phone's day default never roams: each device keeps its own
+    // visible window (refs #50).
+    expect(desktop.settings.state.defaultCalendarView, desktopView);
+    expect(
+      server.store['settings']?['singleton']?.data
+          .containsKey('defaultCalendarView'),
+      isFalse,
+    );
+    // Visible hours and the completed task still sync across devices.
     expect(desktop.settings.state.dayStartHour, 7);
     expect(desktop.settings.state.dayEndHour, 22);
     expect(desktop.nodes.byId('weekly-plan-task')?.isDone, isTrue);
@@ -440,6 +449,30 @@ void main() {
       desktop.nodes.byId('weekly-plan-task')?.completedAt,
       DateTime.utc(2026, 10, 18, 14),
     );
+  });
+
+  test('a local mutation triggers an automatic sync without the timer',
+      () async {
+    final server = FakeSyncClient();
+    final a = _Device(server);
+    final b = _Device(server);
+    await a.signIn();
+    await b.signIn();
+    a.engine.startAutoSyncOnChanges(debounce: const Duration(milliseconds: 10));
+    addTearDown(a.engine.stopAutoSyncOnChanges);
+
+    a.nodes.addNode(
+        Node(id: 't1', title: 'Buy milk', createdAt: DateTime(2026)));
+
+    // No manual syncNow: the debounced watcher pushes the edit on its own.
+    await Future.delayed(const Duration(milliseconds: 500));
+    expect(server.store['nodes']?['t1']?.data['title'], 'Buy milk');
+    // The follow-up pull lands no new records, so nothing retriggers:
+    // exactly one push, no sync storm.
+    expect(server.pushCalls, 1);
+
+    await b.engine.syncNow();
+    expect(b.nodes.byId('t1')?.title, 'Buy milk');
   });
 
   test('a running timer survives a conflicting pull (server-wins except timers)',
