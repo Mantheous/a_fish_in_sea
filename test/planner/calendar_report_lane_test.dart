@@ -343,6 +343,16 @@ void main() {
       final now = DateTime.now();
       final start = DateTime(now.year, now.month, now.day, 9);
       calendar.addEvent(_event('e1', start));
+      final spanStart = DateTime(now.year, now.month, now.day - 1);
+      calendar.addEvent(
+        PlannerEvent(
+          id: 'allday-span',
+          subject: 'Conference',
+          start: spanStart,
+          end: spanStart.add(const Duration(days: 3)),
+          allDay: true,
+        ),
+      );
       context.read<ReportingCubit>().upsertEntry(
         DateTime(now.year, now.month, now.day),
         _accepted(

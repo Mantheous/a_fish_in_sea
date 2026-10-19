@@ -331,8 +331,8 @@ PlannerEvent reportBlockToDisplayEvent(
 /// the trailing half of each visible day.
 const String reportLaneIdPrefix = 'reportlane:';
 
-/// Id prefix of the invisible all-day copies that keep the report
-/// calendar's header exactly as tall as the plan calendar's.
+/// Id prefix of the all-day copies that keep the report track aligned with
+/// the plan calendar while masking the trailing half of spanning plan tiles.
 const String reportPlaceholderIdPrefix = 'reportplaceholder:';
 
 bool isReportLaneId(String id) => id.startsWith(reportLaneIdPrefix);
