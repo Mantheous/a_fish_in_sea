@@ -1,8 +1,10 @@
 import 'dart:async';
 
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
-import 'package:a_fish_in_sea/nodes/model/node.dart';import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
+import 'package:a_fish_in_sea/nodes/model/node.dart';import 'package:a_fish_in_sea/planner/bloc/assignment_estimates_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
+import 'package:a_fish_in_sea/planner/model/assignment_estimate.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
@@ -16,7 +18,6 @@ import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:mocktail/mocktail.dart';
 
 class MockStorage extends Mock implements Storage {}
-
 class MockClient extends Mock implements http.Client {}
 
 class MockGoogleService extends Mock implements GoogleCalendarService {}
@@ -80,6 +81,7 @@ void main() {
     late FeedCubit feedCubit;
     late CalendarCubit calendarCubit;
     late NodeCubit nodeCubit;
+    late AssignmentEstimatesCubit estimatesCubit;
     late MockClient client;
     late MockGoogleService googleService;
 
@@ -92,12 +94,14 @@ void main() {
           .thenAnswer((_) async => http.Response(ics, 200));
       calendarCubit = CalendarCubit();
       nodeCubit = NodeCubit();
+      estimatesCubit = AssignmentEstimatesCubit();
       feedCubit = FeedCubit(
         calendarCubit: calendarCubit,
         nodeCubit: nodeCubit,
         icalService: IcalService(client: client),
         googleService: googleService,
         proxyBase: () => 'http://localhost:8000',
+        estimatesCubit: estimatesCubit,
       );
     });
 
@@ -213,6 +217,38 @@ void main() {
       expect(calendarCubit.state.length, 1);
       expect(nodeCubit.state.length, 1);
       expect(feedCubit.state.single.id, 'f1');
+    });
+
+    test('removeFeed drops learned estimates and one undo restores them',
+        () async {
+      AssignmentTypeEffort effortFor(String feedId) => AssignmentTypeEffort(
+            feedId: feedId,
+            templateKey: 'quiz',
+            samples: 3,
+            totalMinutes: 90,
+            minutes: const [30],
+            startMinutes: const [1140],
+            minMinutes: 30,
+            maxMinutes: 30,
+            updatedAt: DateTime(2026, 1, 1),
+          );
+      estimatesCubit.emit([effortFor('f1'), effortFor('f2')]);
+      feedCubit.addFeed(feed);
+      await feedCubit.syncAll();
+
+      feedCubit.removeFeed('f1');
+      expect(
+        estimatesCubit.state.map((e) => e.feedId),
+        ['f2'],
+        reason: 'explicit class delete drops only that class',
+      );
+
+      UndoCubit.instance!.undo();
+      expect(
+        estimatesCubit.state.map((e) => e.feedId),
+        ['f1', 'f2'],
+        reason: 'undo brings the learned estimates back',
+      );
     });
 
     test('google feeds sync via the google service', () async {

@@ -133,6 +133,7 @@ class MyApp extends StatelessWidget {
                 return const <AssignmentRule>[];
               }
             },
+            estimatesCubit: context.read<AssignmentEstimatesCubit>(),
             canvasService: CanvasService(
               baseUrl: () =>
                   context.read<SettingsCubit>().state.icalProxyBase,
