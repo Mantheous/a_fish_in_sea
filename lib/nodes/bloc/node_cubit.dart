@@ -1649,7 +1649,6 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       actualEnd: task.actualEnd,
       timerStartedAt: task.timerStartedAt,
       assignees: task.assignees,
-      isWorkout: task.isWorkout,
     );
     emitChange([...state, node]);
     return node.id;

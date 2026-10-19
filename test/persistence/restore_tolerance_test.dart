@@ -481,13 +481,6 @@ void main() {
           FitnessMetric.activityMinutes);
     });
 
-    test('Task loads pre-workout payloads as non-workouts', () {
-      const workout = Task(id: 't9', title: 'Run', isWorkout: true);
-      expect(Task.fromJson(workout.toJson()), workout);
-      final legacy = workout.toJson()..remove('isWorkout');
-      expect(Task.fromJson(legacy).isWorkout, isFalse);
-    });
-
     test('applyJson with garbage does not throw', () {
       final cubit = NodeCubit();
       expect(() => cubit.applyJson({'nodes': 'not-a-list'}), returnsNormally);

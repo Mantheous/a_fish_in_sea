@@ -22,11 +22,6 @@ class Task extends Equatable {
   final List<TaskAssignee> assignees;
   final List<String> tagIds;
 
-  /// Manual flag: a workout task auto-reports its duration from the
-  /// fitness app. Additive, defaults to false so old payloads load as
-  /// non-workouts.
-  final bool isWorkout;
-
   const Task({
     required this.id,
     required this.title,
@@ -46,7 +41,6 @@ class Task extends Equatable {
     this.failed = false,
     this.assignees = const [],
     this.tagIds = const [],
-    this.isWorkout = false,
   });
 
   bool get isImported => sourceEventId != null;
@@ -111,7 +105,6 @@ class Task extends Equatable {
     bool? failed,
     List<TaskAssignee>? assignees,
     List<String>? tagIds,
-    bool? isWorkout,
   }) =>
       Task(
         id: id,
@@ -138,7 +131,6 @@ class Task extends Equatable {
         failed: failed ?? this.failed,
         assignees: assignees ?? this.assignees,
         tagIds: tagIds ?? this.tagIds,
-        isWorkout: isWorkout ?? this.isWorkout,
       );
 
   factory Task.fromJson(Map<String, dynamic> json) => Task(
@@ -172,7 +164,6 @@ class Task extends Equatable {
         failed: json['failed'] as bool? ?? false,
         assignees: _assigneesFromJson(json['assignees']),
         tagIds: _tagIdsFromJson(json['tagIds']),
-        isWorkout: json['isWorkout'] == true,
       );
 
   static List<String> _tagIdsFromJson(Object? raw) {
@@ -215,7 +206,6 @@ class Task extends Equatable {
         'failed': failed,
         'assignees': assignees.map((a) => a.toJson()).toList(),
         'tagIds': tagIds,
-        'isWorkout': isWorkout,
       };
 
   @override
@@ -238,6 +228,5 @@ class Task extends Equatable {
         failed,
         assignees,
         tagIds,
-        isWorkout,
       ];
 }

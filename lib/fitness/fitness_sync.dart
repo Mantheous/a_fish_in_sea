@@ -26,10 +26,9 @@ double fitnessActualForNode(
 }
 
 /// Auto-report for workout-marked tasks: the first watch activity on the
-/// task's due/calendar day (or the first activity at all when the task
-/// is undated) fills [actualStart]/[actualEnd]. Returns the updated
-/// node, or the original when there is nothing to fill (not a workout,
-/// already reported, or no activity matches).
+/// node's due/calendar day fills [actualStart]/[actualEnd]. Returns the
+/// updated node, or the original when there is nothing to fill (not a
+/// workout, already reported, or no activity on that day).
 Node applyWorkoutActivity(
   Node node,
   List<FitnessActivity> activities,
@@ -48,7 +47,7 @@ Node applyWorkoutActivity(
       break;
     }
   }
-  match ??= activities.first;
+  if (match == null) return node;
   if (!match.end.isAfter(match.start)) return node;
   return node.copyWith(actualStart: match.start, actualEnd: match.end);
 }

@@ -2,19 +2,11 @@ import 'package:a_fish_in_sea/fitness/fitness_models.dart';
 import 'package:a_fish_in_sea/fitness/fitness_sync.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
-import 'package:a_fish_in_sea/planner/model/task.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 final _day = DateTime(2026, 10, 5, 9);
 
 void main() {
-  test('Task workout flag round-trips, legacy defaults to false', () {
-    const workout = Task(id: 't1', title: 'Run', isWorkout: true);
-    expect(Task.fromJson(workout.toJson()), workout);
-    final legacy = workout.toJson()..remove('isWorkout');
-    expect(Task.fromJson(legacy).isWorkout, isFalse);
-  });
-
   test('Node fitness facet round-trips, legacy loads untracked', () {
     final node = Node(
       id: 'n1',
@@ -76,6 +68,30 @@ void main() {
       applyWorkoutActivity(reported, [activity]),
       reported,
     );
+  });
+
+  test('workout with no activity on its day stays unreported', () {
+    final task = Node(
+      id: 'n2b',
+      title: 'Morning run',
+      createdAt: _day,
+      schedule: ScheduleFacet(due: _day),
+      isWorkout: true,
+    );
+    // Activity is on a different day: the node must pass through
+    // unchanged instead of filling with the unrelated activity.
+    final otherDay = FitnessActivity(
+      id: 'a9',
+      type: 'run',
+      start: DateTime(2026, 10, 6, 7),
+      end: DateTime(2026, 10, 6, 7, 30),
+    );
+    final untouched = applyWorkoutActivity(task, [otherDay]);
+    expect(untouched.hasReported, isFalse);
+    expect(untouched.actualStart, isNull);
+    expect(untouched.actualEnd, isNull);
+    // Empty list also passes through.
+    expect(applyWorkoutActivity(task, const []).hasReported, isFalse);
   });
 
   test('mocked sleep sample drives a sleep goal progress', () {
