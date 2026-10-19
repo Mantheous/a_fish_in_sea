@@ -24,10 +24,8 @@ String reportChipTimeLabel(ReportBlock block) {
 /// The report column of one day in the Plan + Report view.
 ///
 /// Syncfusion lays this widget out as the tile of the day's invisible
-/// lane appointment: a full-height column at the day's left edge. Report
-/// blocks are painted inside it at their own time position, so the column
-/// reads as a second, dedicated timeline next to the planned events
-/// instead of every planned tile being cut in half.
+/// lane appointment in the report calendar. It paints the trailing half of
+/// that day, directly beside the plan calendar's leading half.
 class ReportLaneView extends StatelessWidget {
   const ReportLaneView({
     super.key,
@@ -37,6 +35,7 @@ class ReportLaneView extends StatelessWidget {
     required this.endHour,
     required this.colorFor,
     required this.onTap,
+    this.isRtl = false,
   });
 
   /// The day's report blocks, already ordered by start time.
@@ -51,6 +50,7 @@ class ReportLaneView extends StatelessWidget {
 
   final Color Function(ReportBlock block) colorFor;
   final ValueChanged<ReportBlock> onTap;
+  final bool isRtl;
 
   @override
   Widget build(BuildContext context) {
@@ -59,9 +59,18 @@ class ReportLaneView extends StatelessWidget {
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHighest.withValues(alpha: 0.16),
         border: Border(
-          right: BorderSide(
-            color: scheme.outlineVariant.withValues(alpha: 0.55),
-          ),
+          left: isRtl
+              ? BorderSide.none
+              : BorderSide(
+                  color: scheme.outlineVariant.withValues(alpha: 0.7),
+                  width: 1,
+                ),
+          right: isRtl
+              ? BorderSide(
+                  color: scheme.outlineVariant.withValues(alpha: 0.7),
+                  width: 1,
+                )
+              : BorderSide.none,
         ),
       ),
       child: LayoutBuilder(
@@ -70,7 +79,7 @@ class ReportLaneView extends StatelessWidget {
           final minutes = ((endHour - startHour) * 60)
               .clamp(1, 24 * 60)
               .toDouble();
-          if (!height.isFinite || height <= 0 || blocks.isEmpty) {
+          if (!height.isFinite || height <= 0) {
             return const SizedBox.shrink();
           }
           final pxPerMinute = height / minutes;
@@ -121,7 +130,9 @@ class ReportLaneView extends StatelessWidget {
               ),
             );
           }
-          return ClipRect(child: Stack(children: chips));
+          return SizedBox.expand(
+            child: ClipRect(child: Stack(children: chips)),
+          );
         },
       ),
     );
@@ -167,11 +178,10 @@ class _ReportChip extends StatelessWidget {
               builder: (context, constraints) {
                 final height = constraints.maxHeight;
                 final width = constraints.maxWidth;
-                // The report column can be a narrow strip (week view, or a
-                // small window): below roughly one icon plus a couple of
-                // letters the chip is just its colour bar, described by the
-                // tooltip/semantics for anyone who needs the words.
-                final compact = width.isFinite && width < 64;
+                // Week view gives each report track half of a day cell. Keep
+                // the title visible in that narrow column; only collapse to
+                // a color bar when it can't fit even a short label.
+                final compact = width.isFinite && width < 44;
                 final showText =
                     !compact && (height.isInfinite || height >= 20);
                 final showTime =

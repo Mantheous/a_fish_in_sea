@@ -32,6 +32,7 @@ import '../service/event_reminders.dart';
 import 'calendar_data_source.dart';
 import 'calendar_projection.dart';
 import 'calendar_filter_sheet.dart';
+import 'calendar_report_layout.dart';
 import 'calendar_report_lane.dart';
 import 'calendar_side_panel.dart';
 import 'calendar_tile_metrics.dart';
@@ -41,6 +42,8 @@ import 'task_tile_helpers.dart';
 import 'tasks_panel.dart';
 
 const double _wideBreakpoint = 720;
+const double _calendarTimeRulerWidth = 70;
+const double _calendarViewHeaderHeight = 60;
 
 /// Wide desktops land on the calendar with the task panel open; smaller
 /// (but still wide) windows stay calendar-first until the panel is opened.
@@ -100,8 +103,9 @@ class _CalendarPageState extends State<CalendarPage> {
   TimeSlotViewSettings? _railSlotSettingsCache;
   double? _slotStartHour;
   double? _slotEndHour;
-  // The plan grid and the report column are separate calendars; their time
-  // grids are kept on the same scroll offset (see [_onPlanScroll]).
+  // The report overlay is a separate calendar so it can keep its own report
+  // chips, but its day columns sit directly beside the matching plan columns.
+  // Both grids share the same time scroll offset (see [_onPlanScroll]).
   ScrollPosition? _planScroll;
   ScrollPosition? _railScroll;
   bool _syncingScroll = false;
@@ -124,7 +128,7 @@ class _CalendarPageState extends State<CalendarPage> {
         // identically. Include minutes so each 30-min line is distinct.
         timeFormat: 'h:mm a',
         // Wide enough for "12:30 PM" on one line (auto size wraps it).
-        timeRulerSize: 70,
+        timeRulerSize: _calendarTimeRulerWidth,
       );
       _slotStartHour = startHour;
       _slotEndHour = endHour;
@@ -132,8 +136,8 @@ class _CalendarPageState extends State<CalendarPage> {
     return _slotSettingsCache!;
   }
 
-  /// Slot settings for the report column: same grid math as the plan
-  /// calendar (so the times line up row for row), without a time ruler.
+  /// Slot settings for the report calendar: reserve the same time-ruler
+  /// width as the plan grid, but keep its labels blank.
   TimeSlotViewSettings _railSlotSettings(double startHour, double endHour) {
     if (_railSlotSettingsCache == null ||
         _slotStartHour != startHour ||
@@ -142,9 +146,9 @@ class _CalendarPageState extends State<CalendarPage> {
         timeInterval: const Duration(minutes: 30),
         startHour: startHour,
         endHour: endHour,
-        // No time ruler and no labels: the plan calendar right beside it
-        // already shows the hours.
-        timeRulerSize: 0,
+        // Keep the day columns aligned with the plan calendar; the plan grid
+        // already shows the hour labels.
+        timeRulerSize: _calendarTimeRulerWidth,
         timeFormat: '',
       );
     }
@@ -171,6 +175,13 @@ class _CalendarPageState extends State<CalendarPage> {
   double _handlePxPerMinute = 1;
   bool _ignoreNativeDragEnd = false;
   bool _isDragging = false;
+  PlannerEvent? _pairedDragOriginal;
+  Offset? _pairedDragOrigin;
+  DateTime? _pairedDragDropTime;
+  double _pairedDragCellWidth = 0;
+  double _pairedDragPixelsPerMinute = 0;
+  int _pairedDragDayCount = 0;
+  bool _pairedDragIsRtl = false;
 
   bool get _isWide => MediaQuery.of(context).size.width >= _wideBreakpoint;
   bool _appliedNarrowDefault = false;
@@ -332,15 +343,15 @@ class _CalendarPageState extends State<CalendarPage> {
     }
   }
 
-  /// The report column's own calendar: same visible dates and time grid as
-  /// the plan calendar, but its appointments are the report lanes, whose
-  /// tiles paint the day's report chips.
-  Widget _railCalendar(SettingsState settings, bool compactHeader) {
+  /// The report overlay's calendar: same visible dates and time grid as the
+  /// plan calendar, with its header removed because the plan supplies the
+  /// shared date headers.
+  Widget _railCalendar(SettingsState settings) {
     return SfCalendar(
       key: _railCalendarKey,
       controller: _railController,
       // Keep the hidden calendar on a cheap view: its month grid is never
-      // shown (the report column only exists in day/week).
+      // shown (the report overlay only exists in day/week).
       view: _view == CalendarView.month ? CalendarView.day : _view,
       dataSource: _railDataSource!,
       firstDayOfWeek: 7,
@@ -358,13 +369,14 @@ class _CalendarPageState extends State<CalendarPage> {
         settings.dayEndHour,
       ),
       todayHighlightColor: Theme.of(context).colorScheme.primary,
-      // A short title keeps the two headers the same height without
-      // repeating the plan calendar's "October 2026" verbatim.
-      headerDateFormat: compactHeader ? 'MMM y' : 'MMM',
-      headerHeight: compactHeader ? 32 : 40,
-      headerStyle: compactHeader
-          ? const CalendarHeaderStyle(textStyle: TextStyle(fontSize: 14))
-          : const CalendarHeaderStyle(),
+      // The plan calendar supplies shared headers and navigation.
+      headerHeight: 0,
+      // Day view reserves one view-header-height row for its all-day area by
+      // default, even though it doesn't paint a weekday header. Keep that
+      // height so the report time grid lines up with the plan grid.
+      viewHeaderHeight: _view == CalendarView.day
+          ? _calendarViewHeaderHeight
+          : 0,
       showNavigationArrow: false,
     );
   }
@@ -390,25 +402,33 @@ class _CalendarPageState extends State<CalendarPage> {
     final event = raw is PlannerEvent ? raw : null;
     if (event == null) return const SizedBox.shrink();
     _rememberScrollPosition(context, rail: true);
-    // Invisible copies of the plan calendar's all-day events only exist to
-    // keep both headers the same height.
+    // Invisible copies of the plan calendar's all-day events keep both
+    // calendars' all-day rows at the same height.
     if (isReportPlaceholderId(event.id)) {
       return const ExcludeSemantics(child: SizedBox.shrink());
     }
     final blocks = _projection.reportBlocksByLaneId[event.id];
     if (blocks == null) return const SizedBox.shrink();
-    return ReportLaneView(
-      blocks: blocks,
-      day: reportLaneDayOf(event.id) ?? event.start,
-      startHour: startHour,
-      endHour: endHour,
-      colorFor: (block) =>
-          _projection.reportColorById[block.displayId] ??
-          const Color(defaultPersonalEventColor),
-      onTap: (block) {
-        _suppressNextTap();
-        _openReport(block.displayId);
-      },
+    final isRtl = Directionality.of(context).name == 'rtl';
+    return Align(
+      alignment: isRtl ? Alignment.centerLeft : Alignment.centerRight,
+      child: SizedBox(
+        width: details.bounds.width / 2,
+        child: ReportLaneView(
+          blocks: blocks,
+          day: reportLaneDayOf(event.id) ?? event.start,
+          startHour: startHour,
+          endHour: endHour,
+          isRtl: isRtl,
+          colorFor: (block) =>
+              _projection.reportColorById[block.displayId] ??
+              const Color(defaultPersonalEventColor),
+          onTap: (block) {
+            _suppressNextTap();
+            _openReport(block.displayId);
+          },
+        ),
+      ),
     );
   }
 
@@ -417,7 +437,7 @@ class _CalendarPageState extends State<CalendarPage> {
   /// anything or create an event.
   void _onRailTap(CalendarTapDetails details) {}
 
-  /// The days the report column must cover: what the calendar shows right
+  /// The days the report overlay must cover: what the calendar shows right
   /// now — the display date in the day view, its Sunday-start week in the
   /// week view. Lanes only exist while the Plan + Report view is on and a
   /// time-slot grid is visible (the month view keeps its agenda chips).
@@ -428,14 +448,6 @@ class _CalendarPageState extends State<CalendarPage> {
     // firstDayOfWeek is 7 (Sunday): back up to the week's first day.
     final start = day.subtract(Duration(days: day.weekday % 7));
     return [for (var i = 0; i < 7; i++) start.add(Duration(days: i))];
-  }
-
-  /// Report column width for a calendar area of [available] pixels: wide
-  /// enough for a chip's icon and title, never more than a quarter of the
-  /// space the plans get.
-  double _railWidthFor(double available) {
-    if (!available.isFinite) return 240;
-    return (available * 0.22).clamp(84.0, 260.0);
   }
 
   @override
@@ -671,9 +683,8 @@ class _CalendarPageState extends State<CalendarPage> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
                 child: Text(
-                  'Each day: reports in their own column on the left, plans '
-                  'beside them · red = recording now · ▶ on a tile starts '
-                  'recording',
+                  'Each day: plan on the left, report right beside it · '
+                  'red = recording now · ▶ starts recording',
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
@@ -699,6 +710,9 @@ class _CalendarPageState extends State<CalendarPage> {
                   final sideBySide = _sideBySide;
                   final wide = _isWide;
                   final reportLanes = sideBySide && _view != CalendarView.month;
+                  final laneDays = reportLanes
+                      ? _visibleDaysForLane()
+                      : const <DateTime>[];
                   _projection.update(
                     events: events,
                     feeds: context.watch<FeedCubit>().state,
@@ -709,7 +723,7 @@ class _CalendarPageState extends State<CalendarPage> {
                         : const <String, List<ReportedEntry>>{},
                     showReports: sideBySide,
                     showReportLanes: reportLanes,
-                    visibleDays: reportLanes ? _visibleDaysForLane() : const [],
+                    visibleDays: laneDays,
                     visibleStartHour: settings.dayStartHour,
                     visibleEndHour: settings.dayEndHour,
                     now: DateTime.now(),
@@ -759,99 +773,158 @@ class _CalendarPageState extends State<CalendarPage> {
                     // land its scheduled relayout on a defunct state.
                     _railMounted = true;
                   }
-                  final calendar = SfCalendar(
-                    key: _planCalendarKey,
-                    controller: _controller,
-                    view: _view,
-                    dataSource: _dataSource!,
-                    firstDayOfWeek: 7,
-                    allowDragAndDrop: true,
-                    allowAppointmentResize: false,
-                    dragAndDropSettings: const DragAndDropSettings(
-                      allowNavigation: true,
-                      allowScroll: true,
-                      autoNavigateDelay: Duration(milliseconds: 500),
-                      showTimeIndicator: true,
-                    ),
-                    appointmentBuilder: (context, details) =>
-                        _appointmentBuilder(
-                          feedColors,
-                          context,
-                          details,
-                          reportById: reportById,
-                          colorById: colorById,
-                          remoteEditableFeedIds:
-                              _projection.remoteEditableFeedIds,
-                          nodeById: _projection.nodeById,
-                          nodeByEventId: _projection.nodeByEventId,
-                          trackingNodeIds: _projection.trackingNodeIds,
-                          trackingEventIds: _projection.trackingEventIds,
-                          assigneeLabelById: _projection.assigneeLabelById,
-                        ),
-                    onDragStart: _onDragStart,
-                    onDragEnd: _onDragEnd,
-                    onTap: _onTap,
-                    onViewChanged: _onViewChanged,
-                    monthViewSettings: const MonthViewSettings(
-                      showAgenda: true,
-                      appointmentDisplayMode:
-                          MonthAppointmentDisplayMode.appointment,
-                      agendaItemHeight: 44,
-                    ),
-                    timeSlotViewSettings: _slotSettings(
-                      settings.dayStartHour,
-                      settings.dayEndHour,
-                    ),
-                    todayHighlightColor: Theme.of(context).colorScheme.primary,
-                    headerDateFormat: compactHeader ? 'MMM y' : null,
-                    headerHeight: compactHeader ? 32 : 40,
-                    headerStyle: compactHeader
-                        ? const CalendarHeaderStyle(
-                            textStyle: TextStyle(fontSize: 14),
-                          )
-                        : const CalendarHeaderStyle(),
-                    showNavigationArrow: true,
-                  );
                   // Keep the calendar at a stable tree position. Opening a
                   // drawer or report hint must not dispose/recreate SfCalendar
                   // and regenerate every appointment (or leave its scheduled
                   // data-source callbacks pointing at a disposed state).
                   //
-                  // The report column is its own calendar in the same stack:
-                  // one narrow column per visible day beside the untouched
-                  // plan grid, so plans keep the layouts they have in Plans
-                  // mode instead of being cut in half. Both grids stay
+                  // The report calendar is clipped to the trailing half of
+                  // every day cell over the plan grid. Plan tiles are laid out
+                  // in the matching leading half; both calendars stay
                   // scrolled together (see _onPlanScroll/_onRailScroll).
                   final calendarView = LayoutBuilder(
                     builder: (context, constraints) {
-                      final railWidth = _railWidthFor(constraints.maxWidth);
+                      final isRtl = Directionality.of(context).name == 'rtl';
+                      final headerHeight = compactHeader ? 32.0 : 40.0;
+                      final viewHeaderHeight = _view == CalendarView.week
+                          ? _calendarViewHeaderHeight
+                          : 0.0;
+                      final slotSettings = _slotSettings(
+                        settings.dayStartHour,
+                        settings.dayEndHour,
+                      );
+                      final cellWidth = laneDays.isEmpty
+                          ? 0.0
+                          : (constraints.maxWidth - _calendarTimeRulerWidth) /
+                                laneDays.length;
+                      final pixelsPerMinute =
+                          slotSettings.timeIntervalHeight /
+                          slotSettings.timeInterval.inMinutes;
+                      final calendar = SfCalendar(
+                        key: _planCalendarKey,
+                        controller: _controller,
+                        view: _view,
+                        dataSource: _dataSource!,
+                        firstDayOfWeek: 7,
+                        allowDragAndDrop: true,
+                        allowAppointmentResize: false,
+                        dragAndDropSettings: const DragAndDropSettings(
+                          allowNavigation: true,
+                          allowScroll: true,
+                          autoNavigateDelay: Duration(milliseconds: 500),
+                          showTimeIndicator: true,
+                        ),
+                        appointmentBuilder: (context, details) {
+                          final tile = _appointmentBuilder(
+                            feedColors,
+                            context,
+                            details,
+                            reportById: reportById,
+                            colorById: colorById,
+                            remoteEditableFeedIds:
+                                _projection.remoteEditableFeedIds,
+                            nodeById: _projection.nodeById,
+                            nodeByEventId: _projection.nodeByEventId,
+                            trackingNodeIds: _projection.trackingNodeIds,
+                            trackingEventIds: _projection.trackingEventIds,
+                            assigneeLabelById: _projection.assigneeLabelById,
+                          );
+                          final raw = details.appointments.isNotEmpty
+                              ? details.appointments.first
+                              : null;
+                          final event = raw is PlannerEvent ? raw : null;
+                          if (!reportLanes ||
+                              details.isMoreAppointmentRegion ||
+                              event == null) {
+                            return tile;
+                          }
+                          return planAppointmentInTrack(
+                            child: tile,
+                            bounds: details.bounds,
+                            day: details.date,
+                            visibleDays: laneDays,
+                            calendarWidth: constraints.maxWidth,
+                            timeRulerWidth: _calendarTimeRulerWidth,
+                            isRtl: isRtl,
+                            eventId: event.id,
+                            onTap: () {
+                              if (_suppressTap ||
+                                  event.id == calendarDraftEventId) {
+                                return;
+                              }
+                              if (isReportDisplayId(event.id)) {
+                                _openReport(event.id);
+                              } else if (isNodeBlockId(event.id)) {
+                                _openNodeBlock(event.id);
+                              } else {
+                                _openDetail(event);
+                              }
+                            },
+                            onLongPressStart: (drag) => _onPairedPlanDragStart(
+                              event,
+                              drag.globalPosition,
+                              cellWidth: cellWidth,
+                              pixelsPerMinute: pixelsPerMinute,
+                              dayCount: laneDays.length,
+                              isRtl: isRtl,
+                            ),
+                            onLongPressMoveUpdate: (drag) =>
+                                _onPairedPlanDragMove(drag.globalPosition),
+                            onLongPressEnd: (_) => _onPairedPlanDragEnd(event),
+                            onLongPressCancel: _cancelPairedPlanDrag,
+                          );
+                        },
+                        onDragStart: _onDragStart,
+                        onDragEnd: _onDragEnd,
+                        onTap: _onTap,
+                        onViewChanged: _onViewChanged,
+                        monthViewSettings: const MonthViewSettings(
+                          showAgenda: true,
+                          appointmentDisplayMode:
+                              MonthAppointmentDisplayMode.appointment,
+                          agendaItemHeight: 44,
+                        ),
+                        timeSlotViewSettings: slotSettings,
+                        todayHighlightColor: Theme.of(
+                          context,
+                        ).colorScheme.primary,
+                        headerDateFormat: compactHeader ? 'MMM y' : null,
+                        headerHeight: headerHeight,
+                        viewHeaderHeight: _view == CalendarView.week
+                            ? _calendarViewHeaderHeight
+                            : -1,
+                        headerStyle: compactHeader
+                            ? const CalendarHeaderStyle(
+                                textStyle: TextStyle(fontSize: 14),
+                              )
+                            : const CalendarHeaderStyle(),
+                        showNavigationArrow: true,
+                      );
+                      final reportCalendar = _railMounted
+                          ? Visibility(
+                              visible: reportLanes,
+                              maintainState: true,
+                              child: NotificationListener<ScrollNotification>(
+                                onNotification: _onRailScroll,
+                                child: _railCalendar(settings),
+                              ),
+                            )
+                          : null;
                       return Stack(
                         children: [
-                          Positioned(
-                            left: reportLanes ? railWidth : 0,
-                            top: 0,
-                            right: 0,
-                            bottom: 0,
-                            child: NotificationListener<ScrollNotification>(
-                              onNotification: _onPlanScroll,
-                              child: calendar,
+                          Positioned.fill(
+                            child: CalendarReportLayout(
+                              plans: NotificationListener<ScrollNotification>(
+                                onNotification: _onPlanScroll,
+                                child: calendar,
+                              ),
+                              reports: reportCalendar,
+                              reportTopInset: headerHeight + viewHeaderHeight,
+                              dayCount: laneDays.length,
+                              timeRulerWidth: _calendarTimeRulerWidth,
+                              isRtl: isRtl,
                             ),
                           ),
-                          if (_railMounted)
-                            Positioned(
-                              left: 0,
-                              top: 0,
-                              bottom: 0,
-                              width: railWidth,
-                              child: Visibility(
-                                visible: reportLanes,
-                                maintainState: true,
-                                child: NotificationListener<ScrollNotification>(
-                                  onNotification: _onRailScroll,
-                                  child: _railCalendar(settings, compactHeader),
-                                ),
-                              ),
-                            ),
                           if (sideBySide && reportById.isEmpty)
                             Positioned(
                               left: 0,
@@ -2255,6 +2328,69 @@ class _CalendarPageState extends State<CalendarPage> {
     if (_handleOriginal != null) {
       _ignoreNativeDragEnd = true;
     }
+  }
+
+  void _onPairedPlanDragStart(
+    PlannerEvent event,
+    Offset globalPosition, {
+    required double cellWidth,
+    required double pixelsPerMinute,
+    required int dayCount,
+    required bool isRtl,
+  }) {
+    _pairedDragOriginal = event;
+    _pairedDragOrigin = globalPosition;
+    _pairedDragDropTime = event.start;
+    _pairedDragCellWidth = cellWidth;
+    _pairedDragPixelsPerMinute = pixelsPerMinute;
+    _pairedDragDayCount = dayCount;
+    _pairedDragIsRtl = isRtl;
+    _isDragging = true;
+    _suppressTap = true;
+  }
+
+  void _onPairedPlanDragMove(Offset globalPosition) {
+    final original = _pairedDragOriginal;
+    final origin = _pairedDragOrigin;
+    if (original == null || origin == null) return;
+    final days = _pairedDragDayCount > 1 && _pairedDragCellWidth > 0
+        ? ((globalPosition.dx - origin.dx) / _pairedDragCellWidth).round() *
+              (_pairedDragIsRtl ? -1 : 1)
+        : 0;
+    final minutes = original.allDay || _pairedDragPixelsPerMinute <= 0
+        ? 0
+        : ((globalPosition.dy - origin.dy) / _pairedDragPixelsPerMinute)
+              .round();
+    _pairedDragDropTime = original.start.add(
+      Duration(days: days, minutes: minutes),
+    );
+  }
+
+  Future<void> _onPairedPlanDragEnd(PlannerEvent event) async {
+    final original = _pairedDragOriginal ?? event;
+    final droppingTime = _pairedDragDropTime;
+    _pairedDragOriginal = null;
+    _pairedDragOrigin = null;
+    _pairedDragDropTime = null;
+    if (droppingTime == null || droppingTime == original.start) {
+      _isDragging = false;
+      if (mounted) setState(() {});
+      _resetSuppressSoon();
+      return;
+    }
+    await _onDragEnd(
+      AppointmentDragEndDetails(original, null, null, droppingTime),
+    );
+  }
+
+  void _cancelPairedPlanDrag() {
+    if (_pairedDragOriginal == null) return;
+    _pairedDragOriginal = null;
+    _pairedDragOrigin = null;
+    _pairedDragDropTime = null;
+    _isDragging = false;
+    if (mounted) setState(() {});
+    _resetSuppressSoon();
   }
 
   /// Keeps the creation ghost on screen while the user pages with the

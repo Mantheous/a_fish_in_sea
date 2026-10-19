@@ -327,9 +327,8 @@ PlannerEvent reportBlockToDisplayEvent(
 }
 
 /// Id prefix of the invisible full-day appointment that claims a day column
-/// of the report column's own calendar in the Plan + Report view, so report
-/// blocks get a column of their own instead of planned tiles being cut in
-/// half.
+/// in the Plan + Report report calendar. Its tile renders report blocks in
+/// the trailing half of each visible day.
 const String reportLaneIdPrefix = 'reportlane:';
 
 /// Id prefix of the invisible all-day copies that keep the report
