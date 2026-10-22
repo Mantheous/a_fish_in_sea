@@ -138,8 +138,10 @@ void main() {
     expect(find.text('Time by assignment type'), findsOneWidget);
     expect(find.text('Goals'), findsOneWidget);
 
-    // Recorded assignment time is 45 + 90 = 135 minutes.
-    expect(find.text('2h 15m'), findsOneWidget);
+    // Recorded assignment time is 45 + 90 = 135 minutes. The Time by
+    // goal card reports the same 135 minutes as its week total, so the
+    // bare duration appears twice (accounting card + goal card).
+    expect(find.text('2h 15m'), findsNWidgets(2));
     expect(find.text('recorded'), findsOneWidget);
 
     // Both classes appear with their minutes.

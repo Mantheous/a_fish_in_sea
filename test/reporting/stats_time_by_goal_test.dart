@@ -3,6 +3,7 @@ import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/reporting/view/stats_page.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -19,6 +20,14 @@ void main() {
 
   Future<void> pumpStats(WidgetTester tester) async {
     await pumpGoldenPage(tester, const StatsPage());
+    // The Time by goal card sits below several taller cards; pump on a
+    // tall surface (like stats_page_test) so it is built and findable
+    // without scrolling.
+    tester.view.physicalSize = const Size(900, 6000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pump(const Duration(milliseconds: 200));
   }
 
   testWidgets('stopped event timer shows under its goal with week total',
