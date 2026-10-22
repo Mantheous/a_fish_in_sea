@@ -303,6 +303,14 @@ void main() {
       expect(snapMinuteOfDay(19 * 60, 30), 19 * 60);
       expect(snapMinuteOfDay(10, 0), 10);
     });
+
+    test('snapMinuteOfDay clamps instead of wrapping past midnight', () {
+      // A start snapped past 24:00 must stay at end-of-day, not wrap to
+      // 00:00 (start of the day, in the past).
+      expect(snapMinuteOfDay(24 * 60, 15), 24 * 60);
+      expect(snapMinuteOfDay(24 * 60 - 1, 15), 24 * 60);
+      expect(snapMinuteOfDay(-15, 15), 0);
+    });
   });
 
   group('persistence', () {

@@ -20,19 +20,31 @@ TasksViewOptionsState viewOptionsOf(BuildContext context) {
 /// they always showed (including done homework); any other view keeps
 /// only matching nodes. Hide rules remove their matches on top, whatever
 /// the view — hiding always wins.
+///
+/// [plannedNodeIds] is the schedule-tint set (keys of
+/// `futureCalendarEntryCounts`), forwarded so Planned/Unplanned narrows
+/// in views and rules use the button's definition.
 List<Node> applyTaskViewOptions(
   List<Node> nodes,
   TasksViewOptionsState viewOptions,
-  DateTime now,
-) {
+  DateTime now, {
+  Set<String>? plannedNodeIds,
+}) {
   var result = nodes;
   final filter = viewOptions.activeFilter;
   if (!filter.isShowAll) {
-    result = result.where((n) => filter.matches(n, now)).toList();
+    result = result
+        .where((n) => filter.matches(n, now, plannedNodeIds: plannedNodeIds))
+        .toList();
   }
   if (viewOptions.hasHidingRule) {
     result = result
-        .where((n) => !taskHiddenByRules(viewOptions.rules, n, now))
+        .where((n) => !taskHiddenByRules(
+              viewOptions.rules,
+              n,
+              now,
+              plannedNodeIds: plannedNodeIds,
+            ))
         .toList();
   }
   return result;
@@ -49,16 +61,23 @@ class TaskTint {
 
 /// First-highlight-wins tints over [nodes] (the full store, like the
 /// legacy highlight — rows a view hides keep their tint while hidden).
-/// Hidden and done rows never tint.
+/// Hidden and done rows never tint. [plannedNodeIds] is forwarded so
+/// highlight selectors with Planned/Unplanned narrows match the button.
 Map<String, TaskTint> taskTintMap(
   Iterable<Node> nodes,
   TasksViewOptionsState viewOptions,
-  DateTime now,
-) {
+  DateTime now, {
+  Set<String>? plannedNodeIds,
+}) {
   if (!viewOptions.hasHighlightRule) return const {};
   final tints = <String, TaskTint>{};
   for (final node in nodes) {
-    final outcome = evaluateTaskRules(viewOptions.rules, node, now);
+    final outcome = evaluateTaskRules(
+      viewOptions.rules,
+      node,
+      now,
+      plannedNodeIds: plannedNodeIds,
+    );
     final tint = outcome.tint;
     if (tint == null) continue;
     tints[node.id] = TaskTint(

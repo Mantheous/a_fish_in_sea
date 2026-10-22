@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../demo/demo_mode.dart';
 import '../finances/bloc/plaid_cubit.dart';
 import '../finances/bloc/transactions_cubit.dart';
 import '../finances/bloc/waterfall_cubit.dart';
@@ -15,6 +16,7 @@ import '../reporting/bloc/tracking_cubit.dart';
 import 'auth_cubit.dart';
 import 'sync_client.dart';
 import 'sync_meta_cubit.dart';
+import 'sync_timer_merge.dart';
 
 enum EngineStatus { idle, syncing, error }
 
@@ -35,6 +37,15 @@ enum EngineStatus { idle, syncing, error }
 ///   server must not remote-control that); only the points roam
 /// - Settings.icalProxyBase (retired override; the app uses the one fixed
 ///   [ServerConfig] server, so the stale key never roams)
+/// - Settings.ankiConnectHost (per-device like the proxy above: a desktop
+///   talks to its own localhost, a phone to a LAN address — roaming one
+///   value would break the other device, so each device keeps its own)
+/// - Settings.defaultCalendarView (a phone wants day, a desktop wants week;
+///   roaming one value would reset the other device's visible window, so
+///   each device keeps its own — day hours still roam)
+/// - Plaid wasConnected (connectivity is derived on-device; only the link
+///   identity — userId/itemId — roams, so a disconnect reaches every device
+///   instead of flapping back)
 class SyncEngine {
   final SyncClient client;
   final AuthCubit auth;
@@ -66,6 +77,15 @@ class SyncEngine {
   Timer? _timer;
   bool _running = false;
   int _epoch = 0;
+
+  /// Change-triggered sync: debounced [syncNow] after a local mutation, so
+  /// edits (starting/completing a task or event) reach the server without
+  /// waiting for the 5-minute timer. Pull-applied records must not retrigger
+  /// it — [_applyingRemote] fences those emissions out.
+  final List<StreamSubscription<void>> _mutationSubs = [];
+  Timer? _mutationDebounce;
+  bool _applyingRemote = false;
+  Duration mutationDebounce = const Duration(seconds: 2);
 
   SyncEngine({
     required this.client,
@@ -113,6 +133,47 @@ class SyncEngine {
   void stopAutoSync() {
     _timer?.cancel();
     _timer = null;
+  }
+
+  /// Watches every synced domain cubit and schedules a debounced [syncNow]
+  /// on local mutations. Remote pulls never retrigger it ([_applyingRemote]),
+  /// so a pull settles instead of ping-ponging. Safe to call twice.
+  void startAutoSyncOnChanges({Duration? debounce}) {
+    if (debounce != null) mutationDebounce = debounce;
+    stopAutoSyncOnChanges();
+    void watch(Stream<dynamic> states) {
+      _mutationSubs.add(states.listen((_) => _onLocalMutation()));
+    }
+
+    watch(nodes.stream);
+    watch(events.stream);
+    watch(feeds.stream);
+    watch(transactions.stream);
+    watch(places.stream);
+    watch(reporting.stream);
+    watch(tracking.stream);
+    watch(settings.stream);
+    watch(waterfall.stream);
+    watch(plaid.stream);
+  }
+
+  void _onLocalMutation() {
+    if (_applyingRemote) return;
+    if (!auth.state.isSignedIn) return;
+    if (DemoMode.isActive) return;
+    _mutationDebounce?.cancel();
+    _mutationDebounce = Timer(mutationDebounce, () {
+      if (auth.state.isSignedIn) syncNow();
+    });
+  }
+
+  void stopAutoSyncOnChanges() {
+    for (final sub in _mutationSubs) {
+      unawaited(sub.cancel());
+    }
+    _mutationSubs.clear();
+    _mutationDebounce?.cancel();
+    _mutationDebounce = null;
   }
 
   /// Clears all local domain cubits and bank session state. Used on sign-out
@@ -191,8 +252,10 @@ class SyncEngine {
 
   /// Full pull-then-push. Reentrant calls collapse into the running one.
   Future<void> syncNow() async {
+    if (DemoMode.isActive) return;
     if (_running) return;
     if (!auth.state.isSignedIn) return;
+    final sessionGeneration = auth.sessionGeneration;
     final currentEmail = auth.state.email.trim().toLowerCase();
     final prevEmail = meta.state.lastEmail?.trim().toLowerCase();
     if (prevEmail != null &&
@@ -242,10 +305,10 @@ class SyncEngine {
     try {
       final pull =
           await client.pull(since: meta.state.cursor, collections: collections);
-      if (_epoch != myEpoch || !auth.state.isSignedIn) return;
+      if (!_isCurrentSession(myEpoch, sessionGeneration)) return;
       _applyPull(pull.changes);
-      await _pushDiffs(myEpoch);
-      if (_epoch != myEpoch || !auth.state.isSignedIn) return;
+      await _pushDiffs(myEpoch, sessionGeneration);
+      if (!_isCurrentSession(myEpoch, sessionGeneration)) return;
       if (pull.serverTime.isNotEmpty) {
         meta.save(
           cursor: pull.serverTime,
@@ -256,21 +319,30 @@ class SyncEngine {
       lastError = null;
       status.value = EngineStatus.idle;
     } on SyncException catch (e) {
-      if (_epoch == myEpoch) {
+      if (_isCurrentSession(myEpoch, sessionGeneration)) {
         lastError = e.message;
         status.value = EngineStatus.error;
       }
     } catch (e) {
-      if (_epoch == myEpoch) {
+      if (_isCurrentSession(myEpoch, sessionGeneration)) {
         lastError = e.toString();
         status.value = EngineStatus.error;
       }
     } finally {
       if (_epoch == myEpoch) {
         _running = false;
+        if (!auth.state.isSignedIn ||
+            auth.sessionGeneration != sessionGeneration) {
+          status.value = EngineStatus.idle;
+        }
       }
     }
   }
+
+  bool _isCurrentSession(int epoch, int sessionGeneration) =>
+      _epoch == epoch &&
+      auth.sessionGeneration == sessionGeneration &&
+      auth.state.isSignedIn;
 
   // ── Extract (cubit -> {itemId: data}) ────────────────────────────────
 
@@ -350,6 +422,7 @@ class SyncEngine {
     if (collection == 'settings') {
       data.remove('icalProxyBase');
       data.remove('ankiConnectHost');
+      data.remove('defaultCalendarView');
     } else if (collection == 'plaid') {
       data.remove('wasConnected');
     }
@@ -358,6 +431,15 @@ class SyncEngine {
   // ── Apply pull ──────────────────────────────────────────────────────
 
   void _applyPull(List<SyncRecord> records) {
+    _applyingRemote = true;
+    try {
+      _applyPullRecords(records);
+    } finally {
+      _applyingRemote = false;
+    }
+  }
+
+  void _applyPullRecords(List<SyncRecord> records) {
     final byCollection = <String, List<SyncRecord>>{};
     for (final r in records) {
       (byCollection[r.collection] ??= []).add(r);
@@ -372,26 +454,25 @@ class SyncEngine {
       for (final r in entry.value) {
         final k = SyncMetaCubit.key(collection, r.itemId);
         final m = meta.state.items[k];
-        final seen = _stamp(r.updatedAt);
+        final seen = syncRecordStamp(r.updatedAt);
         if (r.deleted) {
           if (current.remove(r.itemId) != null) changed = true;
           removeMeta.add(k);
           continue;
         }
         if (m == null) {
-          final serverCopy = Map<String, dynamic>.from(r.data);
-          _stripDeviceLocalFields(collection, serverCopy);
-          final merged = Map<String, dynamic>.from(serverCopy);
+          final merged = Map<String, dynamic>.from(r.data);
+          _stripDeviceLocalFields(collection, merged);
           // Fresh bookkeeping (new device, reset meta): same rule as a
           // conflict — a locally running timer is live truth, not stale.
-          _preserveRunningTimer(collection, current[r.itemId], merged);
+          preserveRunningTimer(collection, current[r.itemId], merged);
           current[r.itemId] = merged;
           changed = true;
           // Meta tracks what the server holds, not our merged copy: any
           // local divergence (e.g. a preserved timer) differs from this
           // hash and is pushed by [_pushDiffs] on the way out.
           upsertMeta[k] = ItemMeta(
-              hash: contentHash(serverCopy), serverTime: seen);
+              hash: contentHash(r.data), serverTime: seen);
           continue;
         }
         if (m.serverTime == seen) {
@@ -400,74 +481,32 @@ class SyncEngine {
         // Remote changed. No local change -> take server; local change
         // too -> conflict, server wins (documented policy). Both adopt
         // the merged copy; the running-timer carve-out inside
-        // [_preserveRunningTimer] is the only way local state survives
-        // a pull. Meta always tracks the server copy: when the merge
-        // diverges from it (e.g. it kept a local timer start) the push
-        // phase sees the difference and propagates it back; when the
-        // merge matches the server copy the hashes agree and nothing
-        // pushes twice. The serverTime refreshes either way so a
-        // deterministic change on both sides does not re-push.
+        // [preserveRunningTimer] is the only way local state survives
+        // a pull. When the merge resolves to the local copy (e.g. it
+        // kept an earlier timer start), the meta is left alone so the
+        // push phase propagates the merged version back to the server.
         final local = current[r.itemId];
-        final serverCopy = Map<String, dynamic>.from(r.data);
-        _stripDeviceLocalFields(collection, serverCopy);
-        final merged = Map<String, dynamic>.from(serverCopy);
-        _preserveRunningTimer(collection, local, merged);
+        final merged = Map<String, dynamic>.from(r.data);
+        _stripDeviceLocalFields(collection, merged);
+        preserveRunningTimer(collection, local, merged);
+        upsertMeta[k] = ItemMeta(
+          hash: contentHash(r.data),
+          serverTime: seen,
+        );
         if (local == null || contentHash(merged) != contentHash(local)) {
           current[r.itemId] = merged;
           changed = true;
         }
-        upsertMeta[k] = ItemMeta(
-            hash: contentHash(serverCopy), serverTime: seen);
       }
-      if (changed) _apply(collection, current);
+      if (changed) {
+        _apply(collection, current);
+      }
     }
+    // Undo replay is item-scoped (only the ids the user's edit touched),
+    // so history safely survives a pull: pulled ids are never in any
+    // record's changed set, and the next push sends no tombstones for them.
     if (upsertMeta.isNotEmpty || removeMeta.isNotEmpty) {
       meta.save(upsert: upsertMeta, remove: removeMeta);
-    }
-  }
-
-  static String _stamp(DateTime t) => t.toUtc().toIso8601String();
-
-  /// A running timer is wall-clock truth, not last-write-wins data: taking
-  /// a server copy verbatim would silently stop a timer the user started
-  /// (e.g. a boot sync pulling the pre-start version after a rebuild).
-  /// When the local copy is recording, its start survives the merge; when
-  /// both sides record, the earliest start wins (the true start). A remote
-  /// stop still lands its reported interval — only the live start is kept.
-  ///
-  /// One exception: the remote record stopped *after* the local run
-  /// started ([actualEnd] later than the local start). That stop targets
-  /// this run (e.g. stopped on another device), so it wins and the local
-  /// timer clears. Older remote actuals predate the run — a previous
-  /// session — and never stop it.
-  static void _preserveRunningTimer(String collection,
-      Map<String, dynamic>? local, Map<String, dynamic> merged) {
-    if (collection != 'nodes' && collection != 'events') return;
-    final localStart = local?['timerStartedAt'];
-    if (localStart is! String || localStart.isEmpty) return;
-    final localDt = DateTime.tryParse(localStart);
-    if (localDt == null) return;
-    final remoteStart = merged['timerStartedAt'];
-    final remoteDt =
-        remoteStart is String && remoteStart.isNotEmpty
-            ? DateTime.tryParse(remoteStart)
-            : null;
-    // Both running: the earliest start is the true one (ISO strings alone
-    // are not safe to compare across local/UTC forms, so compare parsed
-    // instants).
-    if (remoteDt != null) {
-      if (localDt.isBefore(remoteDt)) {
-        merged['timerStartedAt'] = localStart;
-      }
-      return;
-    }
-    final remoteEndRaw = merged['actualEnd'];
-    final remoteEnd =
-        remoteEndRaw is String && remoteEndRaw.isNotEmpty
-            ? DateTime.tryParse(remoteEndRaw)
-            : null;
-    if (remoteEnd == null || !remoteEnd.isAfter(localDt)) {
-      merged['timerStartedAt'] = localStart;
     }
   }
 
@@ -554,7 +593,7 @@ class SyncEngine {
     return false;
   }
 
-  Future<void> _pushDiffs(int myEpoch) async {
+  Future<void> _pushDiffs(int myEpoch, int sessionGeneration) async {
     // Group bookkeeping keys per collection so the guard can weigh a
     // collection's pending deletions against everything it tracks.
     final metaByCollection = <String, List<String>>{};
@@ -620,7 +659,7 @@ class SyncEngine {
       return;
     }
     final pushed = await client.push(changes);
-    if (_epoch != myEpoch || !auth.state.isSignedIn) return;
+    if (!_isCurrentSession(myEpoch, sessionGeneration)) return;
     final applied = pushed.applied;
     if (pushed.guarded.isNotEmpty) {
       debugPrint(
@@ -638,7 +677,8 @@ class SyncEngine {
         removeMeta.add(k);
       } else {
         upsertMeta[k] = ItemMeta(
-            hash: contentHash(r.data), serverTime: _stamp(r.updatedAt));
+            hash: contentHash(r.data),
+            serverTime: syncRecordStamp(r.updatedAt));
       }
     }
     meta.save(upsert: upsertMeta, remove: removeMeta);

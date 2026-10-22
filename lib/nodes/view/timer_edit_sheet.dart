@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/service/event_tracking.dart';
+import 'package:a_fish_in_sea/nodes/service/node_event_sync.dart';
 import '../bloc/node_cubit.dart';
 import 'goal_picker.dart';
 
@@ -66,7 +67,13 @@ Future<void> showEditNodeTimerSheet(
     },
     onSaveRange: (start, end) {
       try {
-        context.read<NodeCubit>().setReported(nodeId, start, end);
+        NodeEventSync.setNodeReported(
+          context.read<NodeCubit>(),
+          context.read<CalendarCubit>(),
+          nodeId,
+          start,
+          end,
+        );
       } catch (_) {}
     },
     onReassignGoal: (goalId) {

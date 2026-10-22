@@ -131,25 +131,13 @@ class _MonthCalendarState extends State<MonthCalendar> {
 
   /// Splits [month] into Monday-Sunday week rows, including the leading
   /// and trailing days of adjacent months needed to fill the grid.
-  List<List<DateTime>> _buildWeeks(DateTime month) {
-    final firstOfMonth = DateTime(month.year, month.month, 1);
-    final leadingDays = firstOfMonth.weekday - 1; // weekday: 1=Mon..7=Sun
-    final gridStart = firstOfMonth.subtract(Duration(days: leadingDays));
-
-    final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
-    final lastOfMonth = DateTime(month.year, month.month, daysInMonth);
-    final trailingDays = 7 - lastOfMonth.weekday;
-    final gridEnd = lastOfMonth.add(Duration(days: trailingDays));
-
-    final totalDays = gridEnd.difference(gridStart).inDays + 1;
-    final allDays = List.generate(totalDays, (i) => gridStart.add(Duration(days: i)));
-
-    final weeks = <List<DateTime>>[];
-    for (var i = 0; i < allDays.length; i += 7) {
-      weeks.add(allDays.sublist(i, i + 7));
-    }
-    return weeks;
-  }
+  ///
+  /// Uses calendar-day arithmetic (`DateTime(y, m, d + i)`) rather than
+  /// fixed 24-hour [Duration] steps so the grid stays correct across
+  /// daylight-saving transitions (23-hour spring-forward and 25-hour
+  /// fall-back days).
+  List<List<DateTime>> _buildWeeks(DateTime month) =>
+      buildMonthCalendarWeeks(month);
 
   Widget _buildWeekRow(
     BuildContext context,
@@ -455,4 +443,39 @@ class _MonthCalendarState extends State<MonthCalendar> {
 
   bool _isSameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
+}
+
+/// Splits [month] into Monday-Sunday week rows, including the leading
+/// and trailing days of adjacent months needed to fill the grid.
+///
+/// Uses calendar-day arithmetic (`DateTime(y, m, d + i)`) rather than
+/// fixed 24-hour [Duration] steps so the grid stays correct across
+/// daylight-saving transitions: a 23-hour spring-forward day makes a
+/// `Duration`-based grid one cell short (crash), and a 25-hour
+/// fall-back day shifts every later date back by one day.
+@visibleForTesting
+List<List<DateTime>> buildMonthCalendarWeeks(DateTime month) {
+  final firstOfMonth = DateTime(month.year, month.month, 1);
+  final leadingDays = firstOfMonth.weekday - 1; // weekday: 1=Mon..7=Sun
+  final gridStart = DateTime(
+    firstOfMonth.year,
+    firstOfMonth.month,
+    firstOfMonth.day - leadingDays,
+  );
+
+  final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
+  final lastOfMonth = DateTime(month.year, month.month, daysInMonth);
+  final trailingDays = 7 - lastOfMonth.weekday;
+
+  final totalDays = leadingDays + daysInMonth + trailingDays;
+  final allDays = List.generate(
+    totalDays,
+    (i) => DateTime(gridStart.year, gridStart.month, gridStart.day + i),
+  );
+
+  final weeks = <List<DateTime>>[];
+  for (var i = 0; i < allDays.length; i += 7) {
+    weeks.add(allDays.sublist(i, i + 7));
+  }
+  return weeks;
 }

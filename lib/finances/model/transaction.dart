@@ -31,9 +31,12 @@ class Transaction extends Equatable {
   /// Whether the transaction is still pending at the bank.
   final bool pending;
 
+  /// Plaid transaction ID of the pending transaction replaced by this one.
+  /// Nullable for transactions created before settlement linking was stored.
+  final String? pendingTransactionId;
+
   /// The ID of the [Expense] this transaction has been assigned to.
-  /// This is the *only* mutable field — set by the user during
-  /// reconciliation.
+  /// Set by the user during reconciliation.
   final String? assignedExpenseId;
 
   /// The ID of the unified node this transaction reports to. Additive
@@ -50,6 +53,7 @@ class Transaction extends Equatable {
     required this.name,
     this.category,
     this.pending = false,
+    this.pendingTransactionId,
     this.assignedExpenseId,
     this.assignedNodeId,
     this.tagIds = const [],
@@ -79,6 +83,7 @@ class Transaction extends Equatable {
       name: name,
       category: category,
       pending: pending,
+      pendingTransactionId: pendingTransactionId,
       assignedExpenseId:
           clearAssignment ? null : (assignedExpenseId ?? this.assignedExpenseId),
       assignedNodeId: clearNodeAssignment
@@ -105,11 +110,12 @@ class Transaction extends Equatable {
       name: json['name'] as String? ?? json['merchant_name'] as String? ?? 'Unknown',
       category: (json['category'] as List<dynamic>?)?.join(' > '),
       pending: json['pending'] as bool? ?? false,
+      pendingTransactionId: json['pending_transaction_id'] as String?,
     );
   }
 
   /// Create a [Transaction] from local persistence JSON.
-  /// Tolerant: pre-node payloads simply have no `assignedNodeId`.
+  /// Tolerant: older payloads may not contain newer optional fields.
   factory Transaction.fromJson(Map<String, dynamic> json) {
     return Transaction(
       id: json['id'] as String,
@@ -119,6 +125,7 @@ class Transaction extends Equatable {
       name: json['name'] as String,
       category: json['category'] as String?,
       pending: json['pending'] as bool? ?? false,
+      pendingTransactionId: json['pendingTransactionId'] as String?,
       assignedExpenseId: json['assignedExpenseId'] as String?,
       assignedNodeId: json['assignedNodeId'] as String?,
       tagIds: _tagIdsFromJson(json['tagIds']),
@@ -142,6 +149,7 @@ class Transaction extends Equatable {
         'name': name,
         'category': category,
         'pending': pending,
+        'pendingTransactionId': pendingTransactionId,
         'assignedExpenseId': assignedExpenseId,
         'assignedNodeId': assignedNodeId,
         'tagIds': tagIds,
@@ -156,6 +164,7 @@ class Transaction extends Equatable {
         name,
         category,
         pending,
+        pendingTransactionId,
         assignedExpenseId,
         assignedNodeId,
         tagIds,

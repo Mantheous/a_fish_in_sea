@@ -1,5 +1,7 @@
+import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/fitness/fitness_models.dart';
 import 'package:a_fish_in_sea/goals/model/goal.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/budget.dart';
@@ -244,10 +246,57 @@ void main() {
         amount: -5.0,
         date: _day,
         name: 'Coffee',
+        pendingTransactionId: 'pending_tx0',
       ).toJson();
       final restored =
           cubit.fromJson(_withCorrupt('transactions', good));
       expect(restored?.map((t) => t.id), ['tx1']);
+      expect(restored?.single.pendingTransactionId, 'pending_tx0');
+    });
+
+    test('transaction node links round-trip; pre-node payloads load', () {
+      // Assigned + unassigned (reset) transactions must survive a restore.
+      final assigned = Transaction(
+        id: 'tx1',
+        accountId: 'a1',
+        amount: -62.40,
+        date: _day,
+        name: 'Groceries',
+        assignedNodeId: 'node:food',
+      );
+      expect(Transaction.fromJson(assigned.toJson()), assigned);
+      // Payloads written before node assignment existed carry no key.
+      final preNode = assigned.toJson()..remove('assignedNodeId');
+      expect(Transaction.fromJson(preNode).assignedNodeId, isNull);
+      // A node paid by a transaction, and one reset after unlink, load too.
+      final paid = Node(
+        id: 'n1',
+        title: 'Food',
+        createdAt: _day,
+        money: const MoneyFacet(
+          targetAmount: 62.40,
+          actualAmount: 62.40,
+          status: MoneyStatus.paid,
+          period: TimeScale.monthly,
+          linkedTransactionIds: ['tx1'],
+        ),
+      );
+      expect(Node.fromJson(paid.toJson()), paid);
+      final reset = Node(
+        id: 'n2',
+        title: 'Old',
+        createdAt: _day,
+        money: const MoneyFacet(
+          targetAmount: 62.40,
+          status: MoneyStatus.projected,
+        ),
+      );
+      expect(Node.fromJson(reset.toJson()), reset);
+      final cubit = NodeCubit();
+      final restored = cubit.fromJson({
+        'nodes': [paid.toJson(), reset.toJson()],
+      });
+      expect(restored?.map((n) => n.id), ['n1', 'n2']);
     });
 
     test('PlacesCubit keeps valid places', () {
@@ -372,6 +421,66 @@ void main() {
       expect(Node.fromJson(unbounded.toJson()), unbounded);
     });
 
+    test('NodeCubit loads pre-favorite nodes as not favorite', () {
+      final cubit = NodeCubit();
+      final preFavorite = Node(
+        id: 'n5',
+        title: 'Run',
+        createdAt: _day,
+      ).toJson()
+        ..remove('isFavorite');
+      final restored = cubit.fromJson({
+        'nodes': [preFavorite],
+      });
+      expect(restored?.single.isFavorite, isFalse);
+      final corrupt = Map<String, dynamic>.from(preFavorite)
+        ..['id'] = 'n6'
+        ..['isFavorite'] = 'yes';
+      final restoredCorrupt = cubit.fromJson({
+        'nodes': [corrupt],
+      });
+      expect(restoredCorrupt?.single.isFavorite, isFalse);
+      final starred = Node(
+        id: 'n7',
+        title: 'Starred',
+        createdAt: _day,
+        isFavorite: true,
+      );
+      expect(Node.fromJson(starred.toJson()), starred);
+      final restoredStarred = cubit.fromJson({
+        'nodes': [starred.toJson()],
+      });
+      expect(restoredStarred?.single.isFavorite, isTrue);
+    });
+
+    test('NodeCubit loads pre-fitness nodes as plain non-workouts', () {
+      final cubit = NodeCubit();
+      final preFitness = Node(
+        id: 'n4',
+        title: 'Sleep 8h',
+        createdAt: _day,
+        fitness: const FitnessFacet(
+          metric: FitnessMetric.sleepMinutes,
+          targetValue: 480,
+        ),
+        isWorkout: true,
+      ).toJson()
+        ..remove('fitness')
+        ..remove('isWorkout');
+      final restored = cubit.fromJson({
+        'nodes': [preFitness],
+      });
+      expect(restored?.single.fitness, isNull);
+      expect(restored?.single.isWorkout, isFalse);
+      final corrupt = Map<String, dynamic>.from(preFitness)
+        ..['fitness'] = {'metric': 'renamed-value', 'targetValue': 60};
+      final restoredCorrupt = cubit.fromJson({
+        'nodes': [corrupt],
+      });
+      expect(restoredCorrupt?.single.fitness?.metric,
+          FitnessMetric.activityMinutes);
+    });
+
     test('applyJson with garbage does not throw', () {
       final cubit = NodeCubit();
       expect(() => cubit.applyJson({'nodes': 'not-a-list'}), returnsNormally);
@@ -412,7 +521,7 @@ void main() {
         failed: true,
         reminderMinutesBefore: 30,
       );
-      expect(PlannerEvent.fromJson(event.toJson()), event);
+      expect(PlannerEvent.fromJson(event.toJson()).toJson(), event.toJson());
       const feed = Feed(id: 'f1', name: 'Class', url: 'https://x.test/f.ics');
       expect(Feed.fromJson(feed.toJson()), feed);
       final visibility = CalendarVisibilityCubit();
@@ -453,6 +562,7 @@ void main() {
         amount: -5.0,
         date: _day,
         name: 'Coffee',
+        pendingTransactionId: 'pending_tx0',
       );
       expect(Transaction.fromJson(txn.toJson()), txn);
     });
@@ -564,6 +674,29 @@ void main() {
         ReportedEntry.fromJson(entryJson).status,
         ReportStatus.partial,
       );
+    });
+
+    test('undo after a simulated pull round-trips both items (issue #55)', () {
+      final undo = UndoCubit();
+      final cubit = NodeCubit();
+      cubit.addNode(Node(id: 't1', title: 'original', createdAt: _day));
+      cubit.updateNode(cubit.byId('t1')!.copyWith(title: 'edited'));
+      // Background pull: merged state applied without an undo record.
+      final pulled = Node(id: 't2', title: 'from sync', createdAt: _day);
+      cubit.applyJson({
+        'nodes': [
+          ...((cubit.toJson(cubit.state)['nodes']) as List),
+          pulled.toJson(),
+        ],
+      });
+      undo.undo();
+      expect(cubit.byId('t1')?.title, 'original');
+      expect(cubit.byId('t2')?.title, 'from sync');
+      // The merged result persists and restores intact.
+      final restored = cubit.fromJson(cubit.toJson(cubit.state));
+      expect(restored?.map((n) => n.id), ['t1', 't2']);
+      expect(restored?.firstWhere((n) => n.id == 't1').title, 'original');
+      expect(restored?.firstWhere((n) => n.id == 't2').title, 'from sync');
     });
   });
 }

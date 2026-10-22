@@ -1,8 +1,26 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:a_fish_in_sea/sync/sync_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+
+/// Serves raw bodies (garbage, empty, or valid JSON) with a fixed status.
+class _RawStubClient extends http.BaseClient {
+  final List<http.Request> requests = [];
+  final List<String> bodies;
+  _RawStubClient(this.bodies);
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    requests.add(request as http.Request);
+    return http.StreamedResponse(
+      Stream.value(utf8.encode(bodies.removeAt(0))),
+      200,
+      headers: {'content-type': 'application/json'},
+      request: request,
+    );
+  }
+}
 
 /// Serves canned pull pages in order and records every request.
 class _StubClient extends http.BaseClient {
@@ -32,6 +50,14 @@ Map<String, dynamic> _record(String id, String updatedAt) => {
       'updated_at': updatedAt,
     };
 
+/// Never answers: simulates a blackholed socket that would previously wedge
+/// the caller forever.
+class _HangingClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) =>
+      Completer<http.StreamedResponse>().future;
+}
+
 void main() {
   test('pull follows has_more pages and advances the cursor', () async {
     final stub = _StubClient([
@@ -42,6 +68,7 @@ void main() {
         ],
         'server_time': '2026-10-11T10:00:02Z',
         'has_more': true,
+        'next_cursor': 'opaque-page-2',
       },
       {
         'changes': [_record('e3', '2026-10-11T10:00:03Z')],
@@ -65,11 +92,9 @@ void main() {
       stub.requests.first.url.queryParameters['since'],
       '2026-10-11T09:00:00Z',
     );
-    // The second page continues from the last item of the first page, so a
-    // client that fell far behind never silently skips changes.
     expect(
-      stub.requests.last.url.queryParameters['since'],
-      '2026-10-11T10:00:01.000Z',
+      stub.requests.last.url.queryParameters['cursor'],
+      'opaque-page-2',
     );
   });
 
@@ -92,5 +117,114 @@ void main() {
     expect(result.changes, hasLength(1));
     expect(stub.requests, hasLength(1));
     expect(stub.requests.single.url.queryParameters.containsKey('since'), isFalse);
+  });
+
+  test('pull follows more than 25 keyset pages without advancing early', () async {
+    final pages = List.generate(27, (index) {
+      final hasMore = index < 26;
+      return {
+        'changes': [_record('e$index', '2026-10-11T10:00:00Z')],
+        'server_time': '2026-10-11T10:00:01Z',
+        'has_more': hasMore,
+        if (hasMore) 'next_cursor': 'cursor-${index + 1}',
+      };
+    });
+    final stub = _StubClient(pages);
+    final client = SyncClient(
+      serverBase: () => 'http://localhost:8000',
+      accessToken: () => 'tok',
+      refreshAccessToken: () async => 'tok',
+      client: stub,
+    );
+
+    final result = await client.pull(since: '2026-10-11T09:00:00Z');
+
+    expect(result.changes, hasLength(27));
+    expect(result.changes.map((change) => change.itemId).toSet(), hasLength(27));
+    expect(stub.requests, hasLength(27));
+    expect(
+      stub.requests.first.url.queryParameters['since'],
+      '2026-10-11T09:00:00Z',
+    );
+    expect(stub.requests[1].url.queryParameters['cursor'], 'cursor-1');
+    expect(stub.requests.last.url.queryParameters['cursor'], 'cursor-26');
+  });
+
+  test('pull rejects an empty incomplete page instead of returning a watermark',
+      () async {
+    final stub = _StubClient([
+      {
+        'changes': [],
+        'server_time': '2026-10-11T10:00:01Z',
+        'has_more': true,
+      },
+    ]);
+    final client = SyncClient(
+      serverBase: () => 'http://localhost:8000',
+      accessToken: () => 'tok',
+      refreshAccessToken: () async => 'tok',
+      client: stub,
+    );
+
+    await expectLater(client.pull(), throwsA(isA<SyncException>()));
+  });
+
+  test('pull rejects an incomplete page without a keyset cursor', () async {
+    final stub = _StubClient([
+      {
+        'changes': [_record('e1', '2026-10-11T10:00:00Z')],
+        'server_time': '2026-10-11T10:00:01Z',
+        'has_more': true,
+      },
+    ]);
+    final client = SyncClient(
+      serverBase: () => 'http://localhost:8000',
+      accessToken: () => 'tok',
+      refreshAccessToken: () async => 'tok',
+      client: stub,
+    );
+
+    await expectLater(client.pull(), throwsA(isA<SyncException>()));
+  });
+
+  test('hung request fails fast via timeout instead of hanging forever',
+      () async {
+    final client = SyncClient(
+      serverBase: () => 'http://localhost:8000',
+      accessToken: () => 'tok',
+      refreshAccessToken: () async => 'tok',
+      client: _HangingClient(),
+      timeout: const Duration(milliseconds: 100),
+    );
+
+    await expectLater(
+      client.health(),
+      throwsA(isA<SyncException>().having(
+        (e) => e.statusCode,
+        'statusCode',
+        0,
+      )),
+    );
+  });
+
+  test('apiGet returns null for empty or garbled JSON instead of {}', () async {
+    final stub = _RawStubClient([
+      '',                              // empty body
+      '<html>captive portal</html>',   // proxy HTML
+      'not json at all',               // garbage
+      '{"ok": true}',                  // valid JSON still decodes
+    ]);
+    final client = SyncClient(
+      serverBase: () => 'http://localhost:8000',
+      accessToken: () => 'tok',
+      refreshAccessToken: () async => 'tok',
+      client: stub,
+    );
+
+    expect(await client.apiGet('/api/one'), isNull);
+    expect(await client.apiGet('/api/two'), isNull);
+    expect(await client.apiGet('/api/three'), isNull);
+    expect(await client.apiGet('/api/four'), equals({'ok': true}));
+    expect(stub.requests, hasLength(4));
   });
 }

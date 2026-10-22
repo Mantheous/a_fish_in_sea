@@ -56,8 +56,7 @@ class NodeLegacyMigration {
   static Future<bool> hasLegacy() async {
     for (final box in _boxes) {
       final raw = await _readBox(box);
-      if (raw is Map &&
-          raw.values.any((v) => v is List && v.isNotEmpty)) {
+      if (raw is Map && raw.values.any((v) => v is List && v.isNotEmpty)) {
         return true;
       }
     }
@@ -79,9 +78,11 @@ class NodeLegacyMigration {
         goals.add(Goal.fromJson(json));
       } catch (_) {}
     }
-    goals.sort((a, b) => a.parentId == null
-        ? (b.parentId == null ? 0 : -1)
-        : (b.parentId == null ? 1 : 0));
+    goals.sort(
+      (a, b) => a.parentId == null
+          ? (b.parentId == null ? 0 : -1)
+          : (b.parentId == null ? 1 : 0),
+    );
     for (final goal in goals) {
       final before = nodes.state.length;
       final id = nodes.importGoal(goal);
@@ -121,9 +122,11 @@ class NodeLegacyMigration {
 
     final expenseBox = await _readBox('ExpenseCubit');
     final expenseJsons = _items(expenseBox, 'expenses');
-    expenseJsons.sort((a, b) =>
-        (a['parentExpenseId'] == null ? 0 : 1)
-            .compareTo((b['parentExpenseId'] == null ? 0 : 1)));
+    expenseJsons.sort(
+      (a, b) => (a['parentExpenseId'] == null ? 0 : 1).compareTo(
+        (b['parentExpenseId'] == null ? 0 : 1),
+      ),
+    );
     for (final json in expenseJsons) {
       try {
         final before = nodes.state.length;
@@ -149,7 +152,7 @@ class NodeLegacyMigration {
       if (expenseId == null || t.isAssignedToNode) continue;
       final nodeId = 'node:$expenseId';
       if (nodes.byId(nodeId) != null) {
-        transactions.assignNode(t.id, nodeId);
+        transactions.assignNode(t.id, nodeId, recordUndo: false);
         linked++;
       }
     }

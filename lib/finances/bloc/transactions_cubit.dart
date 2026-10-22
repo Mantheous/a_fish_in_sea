@@ -1,47 +1,108 @@
-import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
+import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
 
 /// Manages imported bank transactions from Plaid.
 ///
 /// Transactions are **immutable** once imported — the only mutable
 /// operation is assigning an expense to a transaction for reconciliation.
-class TransactionsCubit extends HydratedCubit<List<Transaction>> {
+class TransactionsCubit extends RevertableHydratedCubit<List<Transaction>> {
   TransactionsCubit() : super([]);
 
   // ── Import from Plaid ───────────────────────────────────────────────
 
-  /// Bulk import transactions from Plaid, deduplicating by transaction ID.
+  /// Bulk import transactions from Plaid, updating existing IDs and
+  /// superseding pending IDs when Plaid posts their replacement transaction.
   void syncFromPlaid(List<Transaction> plaidTransactions) {
-    final existingIds = state.map((t) => t.id).toSet();
-    final newTransactions =
-        plaidTransactions.where((t) => !existingIds.contains(t.id)).toList();
+    final existingById = {
+      for (final transaction in state) transaction.id: transaction,
+    };
+    final replacedPendingIds = <String>{};
+    final predecessorByReplacementId = <String, Transaction>{};
 
-    if (newTransactions.isNotEmpty) {
-      emit([...state, ...newTransactions]);
+    for (final incoming in plaidTransactions) {
+      final pendingId = incoming.pendingTransactionId;
+      if (pendingId == null) continue;
+      final predecessor = existingById[pendingId];
+      if (predecessor == null ||
+          !predecessor.pending ||
+          predecessor.accountId != incoming.accountId) {
+        continue;
+      }
+      replacedPendingIds.add(pendingId);
+      predecessorByReplacementId[incoming.id] = predecessor;
     }
+
+    final mergedById = <String, Transaction>{
+      for (final transaction in state)
+        if (!replacedPendingIds.contains(transaction.id))
+          transaction.id: transaction,
+    };
+    var changed = replacedPendingIds.isNotEmpty;
+
+    for (final incoming in plaidTransactions) {
+      final current = mergedById[incoming.id];
+      final predecessor = predecessorByReplacementId[incoming.id];
+      final merged = _mergePlaidTransaction(
+        incoming,
+        current: current,
+        predecessor: predecessor,
+      );
+      if (current != merged) changed = true;
+      mergedById[incoming.id] = merged;
+    }
+
+    if (changed) emit(mergedById.values.toList());
+  }
+
+  Transaction _mergePlaidTransaction(
+    Transaction incoming, {
+    Transaction? current,
+    Transaction? predecessor,
+  }) {
+    if (current == null && predecessor == null) return incoming;
+    return Transaction(
+      id: incoming.id,
+      accountId: incoming.accountId,
+      amount: incoming.amount,
+      date: incoming.date,
+      name: incoming.name,
+      category: incoming.category,
+      pending: incoming.pending,
+      pendingTransactionId: incoming.pendingTransactionId,
+      assignedExpenseId: current != null
+          ? current.assignedExpenseId
+          : predecessor?.assignedExpenseId,
+      assignedNodeId:
+          current != null ? current.assignedNodeId : predecessor?.assignedNodeId,
+      tagIds: current != null ? current.tagIds : (predecessor?.tagIds ?? const []),
+    );
   }
 
   // ── Expense assignment ──────────────────────────────────────────────
 
   /// Assign a transaction to an expense for reconciliation.
-  /// This is the only mutation allowed on a transaction.
+  /// Plaid fields remain unchanged while reconciliation metadata is updated.
   void assignExpense(String transactionId, String expenseId) {
-    emit(state.map((t) {
-      if (t.id == transactionId) {
-        return t.copyWith(assignedExpenseId: expenseId);
-      }
-      return t;
-    }).toList());
+    emitChange(
+      state.map((t) {
+        if (t.id == transactionId) {
+          return t.copyWith(assignedExpenseId: expenseId);
+        }
+        return t;
+      }).toList(),
+    );
   }
 
   /// Clear the expense assignment from a transaction.
   void clearAssignment(String transactionId) {
-    emit(state.map((t) {
-      if (t.id == transactionId) {
-        return t.copyWith(clearAssignment: true);
-      }
-      return t;
-    }).toList());
+    emitChange(
+      state.map((t) {
+        if (t.id == transactionId) {
+          return t.copyWith(clearAssignment: true);
+        }
+        return t;
+      }).toList(),
+    );
   }
 
   // ── Node assignment (unified goals/tasks) ───────────────────────────
@@ -51,23 +112,50 @@ class TransactionsCubit extends HydratedCubit<List<Transaction>> {
   // history survives untouched.
 
   /// Assign a transaction to a unified node for automatic reporting.
-  void assignNode(String transactionId, String nodeId) {
-    emit(state.map((t) {
+  void assignNode(
+    String transactionId,
+    String nodeId, {
+    bool recordUndo = true,
+  }) {
+    final next = state.map((t) {
       if (t.id == transactionId) {
         return t.copyWith(assignedNodeId: nodeId);
       }
       return t;
-    }).toList());
+    }).toList();
+    if (recordUndo) {
+      emitChange(next);
+    } else {
+      emit(next);
+    }
   }
 
   /// Clear the node assignment from a transaction.
   void clearNodeAssignment(String transactionId) {
-    emit(state.map((t) {
-      if (t.id == transactionId) {
+    emitChange(
+      state.map((t) {
+        if (t.id == transactionId) {
+          return t.copyWith(clearNodeAssignment: true);
+        }
+        return t;
+      }).toList(),
+    );
+  }
+
+  /// Clear node references after a node or cascade of nodes is deleted.
+  /// Returns how many transactions changed.
+  int clearNodeAssignmentsFor(Set<String> nodeIds) {
+    if (nodeIds.isEmpty) return 0;
+    var changed = 0;
+    final next = state.map((t) {
+      if (t.assignedNodeId != null && nodeIds.contains(t.assignedNodeId)) {
+        changed++;
         return t.copyWith(clearNodeAssignment: true);
       }
       return t;
-    }).toList());
+    }).toList();
+    if (changed > 0) emitChange(next);
+    return changed;
   }
 
   // ── Queries ─────────────────────────────────────────────────────────
@@ -93,7 +181,9 @@ class TransactionsCubit extends HydratedCubit<List<Transaction>> {
   /// Returns null if no match found.
   String? suggestExpenseForTransaction(String transactionName) {
     final matches = state.where(
-        (t) => t.isAssigned && t.name.toLowerCase() == transactionName.toLowerCase());
+      (t) =>
+          t.isAssigned && t.name.toLowerCase() == transactionName.toLowerCase(),
+    );
     if (matches.isNotEmpty) {
       return matches.first.assignedExpenseId;
     }
@@ -104,13 +194,16 @@ class TransactionsCubit extends HydratedCubit<List<Transaction>> {
   /// a same-named transaction reported to before. Points at a node id,
   /// never a category string or tag.
   String? suggestNodeForTransaction(String transactionName) {
-    final matches = state.where((t) =>
-        t.isAssignedToNode &&
-        t.name.toLowerCase() == transactionName.toLowerCase());
-    if (matches.isNotEmpty) {
-      return matches.first.assignedNodeId;
-    }
-    return null;
+    final matches =
+        state
+            .where(
+              (t) =>
+                  t.isAssignedToNode &&
+                  t.name.toLowerCase() == transactionName.toLowerCase(),
+            )
+            .toList()
+          ..sort((a, b) => b.date.compareTo(a.date));
+    return matches.isEmpty ? null : matches.first.assignedNodeId;
   }
 
   // ── Persistence ─────────────────────────────────────────────────────

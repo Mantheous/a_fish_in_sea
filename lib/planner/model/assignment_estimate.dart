@@ -492,7 +492,9 @@ AssignmentEstimate resolveAssignmentEstimate({
 int snapMinuteOfDay(int minute, int snap) {
   final step = snap <= 0 ? 1 : snap;
   final rounded = ((minute + step ~/ 2) ~/ step) * step;
-  return rounded % _minutesPerDay;
+  // Clamp, never wrap: a time snapped past midnight stays at end-of-day
+  // instead of becoming 00:00 (start of the day, in the past).
+  return rounded.clamp(0, _minutesPerDay);
 }
 
 /// "45m" / "1h 30m" / "2h".

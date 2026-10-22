@@ -86,7 +86,8 @@ class FeedbackService {
 
   Future<FeedbackStatus> status() async {
     final body = await client.apiGet('$_base/status');
-    return FeedbackStatus.fromJson(Map<String, dynamic>.from(body as Map));
+    return FeedbackStatus.fromJson(
+        Map<String, dynamic>.from((body ?? const <String, dynamic>{})));
   }
 
   Future<FeedbackReport> submit({
@@ -107,44 +108,53 @@ class FeedbackService {
       'app_platform': appPlatform,
       'app_version': appVersion,
     });
-    return FeedbackReport.fromJson(Map<String, dynamic>.from(body as Map));
+    return FeedbackReport.fromJson(
+        Map<String, dynamic>.from((body ?? const <String, dynamic>{})));
   }
 
+  /// The list endpoints answer `[]` when signed in; a captive portal or
+  /// proxy can return HTML instead, so treat anything that isn't a list as
+  /// empty — never throw.
   Future<List<FeedbackReport>> mine() async {
     final body = await client.apiGet('$_base/mine');
-    return (body as List)
-        .whereType<Map>()
-        .map((e) => FeedbackReport.fromJson(Map<String, dynamic>.from(e)))
-        .toList();
+    return _reports(body);
   }
 
   Future<List<FeedbackReport>> pending() async {
     final body = await client.apiGet('$_base/pending');
-    return (body as List)
-        .whereType<Map>()
-        .map((e) => FeedbackReport.fromJson(Map<String, dynamic>.from(e)))
-        .toList();
+    return _reports(body);
   }
+
+  static List<FeedbackReport> _reports(dynamic body) =>
+      (body is List ? body : const <dynamic>[])
+          .whereType<Map>()
+          .map((e) => FeedbackReport.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
 
   Future<FeedbackReport> approve(int id, {bool trustUser = false}) async {
     final body = await client.apiPost('$_base/$id/approve', {
       'trust_user': trustUser,
     });
-    return FeedbackReport.fromJson(Map<String, dynamic>.from(body as Map));
+    return FeedbackReport.fromJson(
+        Map<String, dynamic>.from((body ?? const <String, dynamic>{})));
   }
 
   Future<FeedbackReport> deny(int id, String reason) async {
     final body = await client.apiPost('$_base/$id/deny', {'reason': reason});
-    return FeedbackReport.fromJson(Map<String, dynamic>.from(body as Map));
+    return FeedbackReport.fromJson(
+        Map<String, dynamic>.from((body ?? const <String, dynamic>{})));
   }
 
   Future<List<TrustedReporter>> trusted() async {
     final body = await client.apiGet('$_base/trusted');
-    return (body as List)
-        .whereType<Map>()
-        .map((e) => TrustedReporter.fromJson(Map<String, dynamic>.from(e)))
-        .toList();
+    return _reporters(body);
   }
+
+  static List<TrustedReporter> _reporters(dynamic body) =>
+      (body is List ? body : const <dynamic>[])
+          .whereType<Map>()
+          .map((e) => TrustedReporter.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
 
   Future<void> trust(String email) async {
     await client.apiPost('$_base/trusted', {'email': email});

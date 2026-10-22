@@ -186,6 +186,45 @@ void main() {
       expect(calendar.byId('e1')?.done, isTrue);
     });
 
+    test('toggles snapshot state objects, never JSON envelopes (refs #51)',
+        () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      final calendar = CalendarCubit();
+      calendar.addEvent(taskEvent('e1'));
+      nodeCubit.addNode(backingNode('n1', 'e1'));
+      undoCubit.resetHistory();
+
+      NodeEventLink.toggleNodeDone(nodeCubit, calendar, 'n1');
+      var record = undoCubit.state.undoStack.last;
+      expect(record.entries, hasLength(2));
+      for (final entry in record.entries) {
+        // In-memory snapshots: no full-store JSON serialization per tap.
+        expect(entry.stateBefore, isNotNull);
+        expect(entry.stateAfter, isNotNull);
+        expect(entry.before, isNull);
+        expect(entry.after, isNull);
+      }
+
+      NodeEventLink.toggleEventDone(calendar, nodeCubit, 'e1');
+      record = undoCubit.state.undoStack.last;
+      expect(record.entries, hasLength(2));
+      for (final entry in record.entries) {
+        expect(entry.stateBefore, isNotNull);
+        expect(entry.stateAfter, isNotNull);
+        expect(entry.before, isNull);
+        expect(entry.after, isNull);
+      }
+
+      // Snapshots still round-trip through undo/redo.
+      undoCubit.undo();
+      expect(nodeCubit.byId('n1')?.isDone, isTrue);
+      expect(calendar.byId('e1')?.done, isTrue);
+      undoCubit.undo();
+      expect(nodeCubit.byId('n1')?.isDone, isFalse);
+      expect(calendar.byId('e1')?.done, isFalse);
+    });
+
     test('atomic skips unchanged cubits', () {
       final undoCubit = UndoCubit();
       final nodeCubit = NodeCubit();
@@ -205,6 +244,122 @@ void main() {
       );
     });
 
+    test('batch creates are one undo step', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+
+      RevertableHydratedCubit.atomic([nodeCubit], () {
+        for (var i = 0; i < 3; i++) {
+          nodeCubit.addNode(Node(
+            id: 'batch-$i',
+            title: 'Batch task $i',
+            createdAt: DateTime(2026),
+          ));
+        }
+      });
+
+      expect(nodeCubit.state, hasLength(3));
+      expect(undoCubit.state.undoStack, hasLength(1));
+      undoCubit.undo();
+      expect(nodeCubit.state, isEmpty);
+      undoCubit.redo();
+      expect(nodeCubit.state, hasLength(3));
+    });
+
+    test('atomic restores all stores and records nothing when a write fails', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      final calendar = CalendarCubit();
+
+      expect(
+        () => RevertableHydratedCubit.atomic([nodeCubit, calendar], () {
+          nodeCubit.addNode(Node(
+            id: 'partial',
+            title: 'Partial write',
+            createdAt: DateTime(2026),
+          ));
+          calendar.addEvent(PlannerEvent(
+            id: 'partial-event',
+            subject: 'Partial event',
+            start: DateTime(2026),
+            end: DateTime(2026, 1, 1, 1),
+          ));
+          throw StateError('later write failed');
+        }),
+        throwsStateError,
+      );
+
+      expect(nodeCubit.state, isEmpty);
+      expect(calendar.state, isEmpty);
+      expect(undoCubit.state.undoStack, isEmpty);
+    });
+
+    test('linked node delete is one undo step for node and reverse event link', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      final calendar = CalendarCubit();
+      nodeCubit.addNode(Node(
+        id: 'n1',
+        title: 'Task',
+        createdAt: DateTime(2026),
+      ));
+      calendar.addEvent(PlannerEvent(
+        id: 'e1',
+        subject: 'Task block',
+        start: DateTime(2026, 9, 12, 9),
+        end: DateTime(2026, 9, 12, 10),
+        isTask: true,
+        taskId: 'n1',
+      ));
+      final stepsBeforeDelete = undoCubit.state.undoStack.length;
+
+      final removed = NodeEventLink.deleteNodesAndUnlink(
+        nodeCubit,
+        calendar,
+        {'n1'},
+      );
+
+      expect(removed, 1);
+      expect(nodeCubit.byId('n1'), isNull);
+      expect(calendar.byId('e1')?.taskId, isNull);
+      expect(undoCubit.state.undoStack.length, stepsBeforeDelete + 1);
+      undoCubit.undo();
+      expect(nodeCubit.byId('n1'), isNotNull);
+      expect(calendar.byId('e1')?.taskId, 'n1');
+      expect(calendar.byId('e1')?.isTask, isTrue);
+    });
+
+    test('event delete and backing-node removal undo together', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      final calendar = CalendarCubit();
+      final event = PlannerEvent(
+        id: 'e1',
+        subject: 'Personal task',
+        start: DateTime(2026, 9, 12, 9),
+        end: DateTime(2026, 9, 12, 10),
+        isTask: true,
+        taskId: 'node:e1',
+      );
+      nodeCubit.addNode(Node(
+        id: 'node:e1',
+        title: 'Personal task',
+        createdAt: DateTime(2026),
+        calendarEventId: 'e1',
+      ));
+      calendar.addEvent(event);
+      final stepsBeforeDelete = undoCubit.state.undoStack.length;
+
+      NodeEventLink.deleteEventAndNodes(calendar, nodeCubit, event);
+
+      expect(calendar.byId('e1'), isNull);
+      expect(nodeCubit.byId('node:e1'), isNull);
+      expect(undoCubit.state.undoStack.length, stepsBeforeDelete + 1);
+      undoCubit.undo();
+      expect(calendar.byId('e1')?.taskId, 'node:e1');
+      expect(nodeCubit.byId('node:e1')?.calendarEventId, 'e1');
+    });
+
     test('clearing failed keeps done nodes done', () {
       UndoCubit();
       final nodeCubit = NodeCubit();
@@ -222,6 +377,118 @@ void main() {
 
       expect(nodeCubit.byId('failed')?.status, NodeStatus.open);
       expect(nodeCubit.byId('done')?.isDone, isTrue);
+    });
+  });
+
+  group('delete/import undo restores every side (issue #74)', () {
+    Node homeworkNode(String id, DateTime base) => Node(
+          id: id,
+          title: 'Video Quiz 3.1',
+          createdAt: base,
+          sourceEventId: 'feed:$id',
+          feedId: 'math290',
+          classId: 'math290',
+          schedule: ScheduleFacet(due: base, start: base, end: base),
+        );
+
+    PlannerEvent linkedEvent(String id, String taskId) => PlannerEvent(
+          id: id,
+          subject: 'Video Quiz 3.1',
+          start: DateTime(2026, 9, 12, 9),
+          end: DateTime(2026, 9, 12, 10),
+          isTask: true,
+          taskId: taskId,
+        );
+
+    test('bulk mark-done mirrors in one undo step', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      final calendar = CalendarCubit();
+      final base = DateTime(2030, 2, 7, 9);
+      nodeCubit.addNode(
+          homeworkNode('n1', base).copyWith(calendarEventId: 'e1'));
+      calendar.addEvent(linkedEvent('e1', 'n1'));
+      final steps = undoCubit.state.undoStack.length;
+
+      final changed = NodeEventLink.setNodesDone(
+        nodeCubit,
+        calendar,
+        {'n1'},
+        done: true,
+      );
+
+      expect(changed, 1);
+      expect(nodeCubit.byId('n1')?.isDone, isTrue);
+      expect(calendar.byId('e1')?.done, isTrue);
+      expect(undoCubit.state.undoStack.length, steps + 1);
+
+      undoCubit.undo();
+      expect(nodeCubit.byId('n1')?.isDone, isFalse);
+      expect(calendar.byId('e1')?.done, isFalse);
+    });
+  });
+
+  group('undo survives a background sync pull (issue #55)', () {
+    // A sync pull applies merged state via plain emits (never emitChange),
+    // so it records no undo entry of its own. Item-scoped replay must then
+    // revert only the ids the user's edit touched.
+    List<Map<String, dynamic>> liveNodes(NodeCubit cubit) =>
+        (cubit.toJson(cubit.state)['nodes'] as List)
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+
+    void simulatePull(NodeCubit cubit, Node pulled) {
+      cubit.applyJson({
+        'nodes': [...liveNodes(cubit), pulled.toJson()],
+      });
+    }
+
+    test('undoing an edit keeps items pulled after the edit', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      final base = DateTime(2026);
+      nodeCubit.addNode(Node(id: 't1', title: 'original', createdAt: base));
+      nodeCubit.updateNode(nodeCubit.byId('t1')!.copyWith(title: 'edited'));
+      simulatePull(
+          nodeCubit, Node(id: 't2', title: 'from sync', createdAt: base));
+
+      expect(undoCubit.canUndo, isTrue);
+      undoCubit.undo();
+      expect(nodeCubit.byId('t1')?.title, 'original');
+      expect(nodeCubit.byId('t2')?.title, 'from sync');
+      undoCubit.redo();
+      expect(nodeCubit.byId('t1')?.title, 'edited');
+      expect(nodeCubit.byId('t2')?.title, 'from sync');
+    });
+
+    test('undoing an add drops only the added item', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      final base = DateTime(2026);
+      nodeCubit.addNode(Node(id: 't1', title: 'mine', createdAt: base));
+      simulatePull(
+          nodeCubit, Node(id: 't2', title: 'from sync', createdAt: base));
+
+      undoCubit.undo();
+      expect(nodeCubit.byId('t1'), isNull);
+      expect(nodeCubit.byId('t2')?.title, 'from sync');
+      undoCubit.redo();
+      expect(nodeCubit.byId('t1')?.title, 'mine');
+      expect(nodeCubit.byId('t2')?.title, 'from sync');
+    });
+
+    test('undoing a delete restores only the deleted item', () {
+      final undoCubit = UndoCubit();
+      final nodeCubit = NodeCubit();
+      final base = DateTime(2026);
+      nodeCubit.addNode(Node(id: 't1', title: 'mine', createdAt: base));
+      nodeCubit.deleteNode('t1');
+      simulatePull(
+          nodeCubit, Node(id: 't2', title: 'from sync', createdAt: base));
+
+      undoCubit.undo();
+      expect(nodeCubit.byId('t1')?.title, 'mine');
+      expect(nodeCubit.byId('t2')?.title, 'from sync');
     });
   });
 }

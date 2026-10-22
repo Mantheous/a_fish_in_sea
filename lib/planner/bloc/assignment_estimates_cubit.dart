@@ -1,5 +1,4 @@
-import 'package:hydrated_bloc/hydrated_bloc.dart';
-
+import '../../common/undo/revertable_hydrated_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../model/assignment_estimate.dart';
 
@@ -15,7 +14,7 @@ import '../model/assignment_estimate.dart';
 /// Additive-only JSON: a payload missing every new key loads as an empty
 /// index (no estimate, falls back to an hour), and a corrupt entry is
 /// skipped so one bad row never wipes the rest.
-class AssignmentEstimatesCubit extends HydratedCubit<List<AssignmentTypeEffort>> {
+class AssignmentEstimatesCubit extends RevertableHydratedCubit<List<AssignmentTypeEffort>> {
   AssignmentEstimatesCubit() : super(const []);
 
   AssignmentTypeEffort? forType({

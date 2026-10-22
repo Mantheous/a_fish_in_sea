@@ -366,6 +366,73 @@ def test_approve_discard_keyed_by_collection_item_id(client: TestClient):
     assert client.get("/api/v1/imports/pending", headers=h).json() == []
 
 
+def test_single_item_decision_keeps_existing_on_rest(client: TestClient):
+    """Deciding one row must not wipe conflict warnings on the rest (#66).
+
+    The approve/discard/reject responses echo the same existing/
+    existing_deleted conflict context as the pending inbox, so remaining
+    rows keep their "updates existing" badges.
+    """
+    tokens = _register(client, "imp66@example.com")
+    h = _auth(tokens)
+    ah = _review_token(client, h, ["nodes:write"])
+
+    # Live row that the staged re-scrape collides with.
+    client.post(
+        "/api/v1/sync/push", headers=h, json={"changes": [_node("n-keep")]}
+    )
+    sub = client.post(
+        "/api/v1/imports",
+        headers=ah,
+        json={
+            "items": [_node("n-keep", title="HW 2"), _node("n-fresh")],
+            "source": "scraper",
+        },
+    )
+    assert sub.status_code == 201, sub.text
+    batch_id = sub.json()["batch_id"]
+
+    pend = client.get("/api/v1/imports/pending", headers=h).json()
+    by_id = {i["item_id"]: i for i in pend[0]["items"]}
+    assert by_id["n-keep"]["existing"] is not None
+    assert by_id["n-fresh"]["existing"] is None
+
+    # Approve only the fresh row: the colliding row keeps its warning.
+    ok = client.post(
+        f"/api/v1/imports/{batch_id}/approve",
+        headers=h,
+        json={"item_ids": ["n-fresh"]},
+    )
+    assert ok.status_code == 200, ok.text
+    by_id = {i["item_id"]: i for i in ok.json()["items"]}
+    assert by_id["n-fresh"]["status"] == "approved"
+    assert by_id["n-keep"]["status"] == "pending"
+    assert by_id["n-keep"]["existing"] is not None
+    assert by_id["n-keep"]["existing_deleted"] is False
+
+    # Discard the colliding row: the response still carries its warning.
+    d = client.post(
+        f"/api/v1/imports/{batch_id}/discard",
+        headers=h,
+        json={"item_ids": ["n-keep"]},
+    )
+    assert d.status_code == 200, d.text
+    by_id = {i["item_id"]: i for i in d.json()["items"]}
+    assert by_id["n-keep"]["status"] == "rejected"
+    assert by_id["n-keep"]["existing"] is not None
+
+    # The whole-batch reject carries warnings too.
+    sub2 = client.post(
+        "/api/v1/imports",
+        headers=ah,
+        json={"items": [_node("n-keep", title="HW 3")], "source": "scraper"},
+    )
+    assert sub2.status_code == 201, sub2.text
+    r = client.post(f"/api/v1/imports/{sub2.json()['batch_id']}/reject", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["items"][0]["existing"] is not None
+
+
 def test_put_item_singleton_force_corrects_id(client: TestClient):
     """PUT /items on a singleton never stores a data.id that disagrees with
     the row id (settings, waterfall and plaid are all singletons), so a

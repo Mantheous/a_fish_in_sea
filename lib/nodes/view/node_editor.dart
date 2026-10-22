@@ -9,8 +9,13 @@ import 'package:a_fish_in_sea/anki/anki_server.dart';
 import 'package:a_fish_in_sea/anki/anki_import.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
+import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
+import 'package:a_fish_in_sea/finances/service/node_transaction_cleanup.dart';
+import 'package:a_fish_in_sea/fitness/fitness_models.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/node_editor_schedule.dart';
+import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
 import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
@@ -49,11 +54,12 @@ class _NodeEditorDialog extends StatefulWidget {
   final bool enableRecurrence;
   final List<String> initialParentIds;
 
-  const _NodeEditorDialog(
-      {this.existing,
-      this.enableMoney = false,
-      this.enableRecurrence = false,
-      this.initialParentIds = const []});
+  const _NodeEditorDialog({
+    this.existing,
+    this.enableMoney = false,
+    this.enableRecurrence = false,
+    this.initialParentIds = const [],
+  });
 
   @override
   State<_NodeEditorDialog> createState() => _NodeEditorDialogState();
@@ -65,6 +71,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   late List<String> _parents;
 
   bool _isUnbounded = false;
+  bool _isFavorite = false;
 
   DateTime? _due;
   bool _dateFixed = false;
@@ -91,6 +98,12 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   DateTime? _ankiSyncedAt;
   bool _ankiSyncing = false;
 
+  bool _isWorkout = false;
+
+  bool _hasFitness = false;
+  FitnessMetric _fitnessMetric = FitnessMetric.activityMinutes;
+  late final TextEditingController _fitnessTarget;
+
   bool _hasRecurrence = false;
   TimeScale _frequency = TimeScale.daily;
   DateTime? _recurEnd;
@@ -109,44 +122,61 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _notes = TextEditingController(text: e?.notes ?? '');
     _parents = List.of(e?.parentIds ?? widget.initialParentIds);
     _isUnbounded = e?.isUnbounded ?? false;
+    _isFavorite = e?.isFavorite ?? false;
     _due = e?.schedule?.due;
     _dateFixed = e?.schedule?.isFixed ?? false;
     _hasMoney = e?.money != null || widget.enableMoney;
     _amount = TextEditingController(
-        text: e?.money != null
-            ? e!.money!.targetAmount.toStringAsFixed(2)
-            : '');
+      text: e?.money != null ? e!.money!.targetAmount.toStringAsFixed(2) : '',
+    );
     _direction = e?.money?.direction ?? MoneyDirection.spend;
-    _period = e?.money?.period;
+    _period =
+        e?.money?.period ??
+        (e == null && widget.enableMoney ? TimeScale.monthly : null);
     _customDaysCtrl = TextEditingController(
-        text: e?.money?.customPeriodDays?.toString() ?? '90');
+      text: e?.money?.customPeriodDays?.toString() ?? '90',
+    );
     _moneyRecurring = e?.money?.isRecurring ?? false;
     _autoRollover = e?.money?.autoRollover ?? false;
     _moneyFixed = e?.money?.isFixed ?? false;
     _hasEffort = e?.effort != null;
     _minutes = TextEditingController(
-        text: e?.effort != null ? e!.effort!.targetMinutes.toString() : '');
+      text: e?.effort != null ? e!.effort!.targetMinutes.toString() : '',
+    );
     _effortFixed = e?.effort?.isFixed ?? false;
     _hasAnki = e?.anki != null;
     _deck = TextEditingController(text: e?.anki?.deckName ?? '');
     _targetReviews = TextEditingController(
-        text: e?.anki != null ? e!.anki!.targetReviews.toString() : '');
+      text: e?.anki != null ? e!.anki!.targetReviews.toString() : '',
+    );
     _ankiPeriod = e?.anki?.period;
     _ankiCustomDays = TextEditingController(
-        text: e?.anki?.customPeriodDays?.toString() ?? '30');
+      text: e?.anki?.customPeriodDays?.toString() ?? '30',
+    );
     _manualReviews = TextEditingController(
-        text: e?.anki?.reviewsActual != null
-            ? e!.anki!.reviewsActual.toString()
-            : '');
+      text: e?.anki?.reviewsActual != null
+          ? e!.anki!.reviewsActual.toString()
+          : '',
+    );
     _ankiSyncedAt = e?.anki?.lastSyncedAt;
+    _isWorkout = e?.isWorkout ?? false;
+    _hasFitness = e?.fitness != null;
+    _fitnessMetric = e?.fitness?.metric ?? FitnessMetric.activityMinutes;
+    _fitnessTarget = TextEditingController(
+        text: e?.fitness != null
+            ? e!.fitness!.targetValue.toStringAsFixed(
+                e.fitness!.metric == FitnessMetric.activityCount ? 0 : 1)
+            : '');
     _hasRecurrence = e?.recurrence != null || widget.enableRecurrence;
     _frequency = e?.recurrence?.frequency ?? TimeScale.daily;
     _recurEnd = e?.recurrence?.endDate;
     _ruleKind = e?.rule?.kind ?? NodeRuleKind.none;
     _horizon = TextEditingController(
-        text: (e?.rule?.horizonDays ?? 3).toString());
+      text: (e?.rule?.horizonDays ?? 3).toString(),
+    );
     _minBalance = TextEditingController(
-        text: (e?.rule?.minBalance ?? 0).toStringAsFixed(2));
+      text: (e?.rule?.minBalance ?? 0).toStringAsFixed(2),
+    );
     _people = List.of(e?.assignees ?? const []);
   }
 
@@ -161,6 +191,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _targetReviews.dispose();
     _ankiCustomDays.dispose();
     _manualReviews.dispose();
+    _fitnessTarget.dispose();
     _horizon.dispose();
     _minBalance.dispose();
     super.dispose();
@@ -210,350 +241,437 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
               dense: true,
               title: const Text('Abstract / unbounded goal'),
               subtitle: const Text(
-                  'Ongoing direction — no due date, no progress bar. '
-                  'Track it through concrete subgoals.'),
+                'Ongoing direction — no due date, no progress bar. '
+                'Track it through concrete subgoals.',
+              ),
               value: _isUnbounded,
               onChanged: (v) => setState(() => _isUnbounded = v),
             ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text('Favorite goal'),
+              subtitle: const Text(
+                'Starred goals show on Home and under Favorites.',
+              ),
+              value: _isFavorite,
+              onChanged: (v) => setState(() => _isFavorite = v),
+            ),
             if (!_isUnbounded) ...[
-            const SizedBox(height: 16),
-            _sectionTitle(context, 'Schedule'),
-            _DateRow(
-              label: _due == null
-                  ? 'No due date'
-                  : 'Due ${MaterialLocalizations.of(context).formatFullDate(_due!)}${_dateFixed ? ' · fixed' : ''}',
-              onPick: () async {
-                final picked = await showDatePicker(
-                  context: context,
-                  initialDate: _due ?? DateTime.now(),
-                  firstDate: DateTime(2000),
-                  lastDate: DateTime(2100),
-                );
-                if (picked != null) setState(() => _due = picked);
-              },
-              onClear:
-                  _due == null ? null : () => setState(() => _due = null),
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              title: const Text('Fixed date'),
-              subtitle: const Text('Commitment; estimates stay flexible'),
-              value: _dateFixed,
-              onChanged: (v) => setState(() => _dateFixed = v),
-            ),
-            // Calendar time now comes from assigned events, not the goal
-            // itself: the old block picker was removed. A stored block
-            // from before is dropped on save (the due date is kept).
-            if ((widget.existing?.schedule?.hasCalendarBlock ?? false))
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  'This goal has an old calendar block — saving removes '
-                  'it. Assign an event to put it on the calendar instead.',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-            const SizedBox(height: 8),
-            _sectionTitle(context, 'Money'),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              title: const Text('Tracks money'),
-              value: _hasMoney,
-              onChanged: (v) => setState(() => _hasMoney = v),
-            ),
-            if (_hasMoney) ...[
-              TextField(
-                controller: _amount,
-                keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true),
-                decoration: const InputDecoration(
-                  labelText: 'Target amount',
-                  prefixText: '\$ ',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<MoneyDirection>(
-                initialValue: _direction,
-                decoration: const InputDecoration(labelText: 'Direction'),
-                items: const [
-                  DropdownMenuItem(
-                      value: MoneyDirection.spend,
-                      child: Text('Spend (cap)')),
-                  DropdownMenuItem(
-                      value: MoneyDirection.income,
-                      child: Text('Income')),
-                  DropdownMenuItem(
-                      value: MoneyDirection.save,
-                      child: Text('Save toward')),
-                ],
-                onChanged: (v) =>
-                    setState(() => _direction = v ?? _direction),
-              ),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<TimeScale?>(
-                initialValue: _period,
-                decoration:
-                    const InputDecoration(labelText: 'Period (optional)'),
-                items: [
-                  const DropdownMenuItem(
-                      value: null, child: Text('One-time')),
-                  for (final s in TimeScale.values)
-                    DropdownMenuItem(value: s, child: Text(s.displayName)),
-                ],
-                onChanged: (v) => setState(() => _period = v),
-              ),
-              if (_period == TimeScale.custom) ...[
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _customDaysCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                      labelText: 'Custom period (days)'),
-                ),
-              ],
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                title: const Text('Recurring'),
-                value: _moneyRecurring,
-                onChanged: (v) => setState(() => _moneyRecurring = v),
-              ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                title: const Text('Auto rollover'),
-                value: _autoRollover,
-                onChanged: _moneyRecurring
-                    ? (v) => setState(() => _autoRollover = v)
-                    : null,
-              ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                title: const Text('Fixed amount'),
-                value: _moneyFixed,
-                onChanged: (v) => setState(() => _moneyFixed = v),
-              ),
-              if (e?.money != null &&
-                  e!.money!.linkedTransactionIds.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    'Reported by ${e.money!.linkedTransactionIds.length} '
-                    'transaction(s) · ${e.money!.status.name}',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ),
-            ],
-            const SizedBox(height: 8),
-            _sectionTitle(context, 'Time target'),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              title: const Text('Has time target'),
-              value: _hasEffort,
-              onChanged: (v) => setState(() => _hasEffort = v),
-            ),
-            if (_hasEffort) ...[
-              TextField(
-                controller: _minutes,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Target minutes',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                title: const Text('Fixed estimate'),
-                value: _effortFixed,
-                onChanged: (v) =>
-                    setState(() => _effortFixed = v),
-              ),
-            ],
-            const SizedBox(height: 8),
-            _sectionTitle(context, 'Memorization (Anki)'),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              title: const Text('Has memorization target'),
-              subtitle: const Text(
-                  'Review N Anki cards per period — progress feeds from '
-                  'AnkiConnect or manual counts'),
-              value: _hasAnki,
-              onChanged: (v) => setState(() => _hasAnki = v),
-            ),
-            if (_hasAnki) ...[
-              TextField(
-                controller: _deck,
-                decoration: const InputDecoration(
-                  labelText: 'Deck (blank = all decks)',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _targetReviews,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Target reviews',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<TimeScale?>(
-                initialValue: _ankiPeriod,
-                decoration:
-                    const InputDecoration(labelText: 'Period (optional)'),
-                items: [
-                  const DropdownMenuItem(
-                      value: null, child: Text('One-time')),
-                  for (final s in TimeScale.values)
-                    DropdownMenuItem(value: s, child: Text(s.displayName)),
-                ],
-                onChanged: (v) => setState(() => _ankiPeriod = v),
-              ),
-              if (_ankiPeriod == TimeScale.custom) ...[
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _ankiCustomDays,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                      labelText: 'Custom period (days)'),
-                ),
-              ],
-              const SizedBox(height: 8),
-              TextField(
-                controller: _manualReviews,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Reviews so far (this period)',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 4),
-              if (_ankiSyncedAt != null)
-                Text(
-                  'Last counted '
-                  '${MaterialLocalizations.of(context).formatFullDate(_ankiSyncedAt!)}',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              Row(
-                children: [
-                  TextButton.icon(
-                    onPressed: _ankiSyncing
-                        ? null
-                        : () => _syncAnki(context),
-                    icon: _ankiSyncing
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2))
-                        : const Icon(Icons.sync, size: 16),
-                    label: const Text('Sync from Anki'),
-                  ),
-                  TextButton.icon(
-                    onPressed: () => _importAnki(context),
-                    icon: const Icon(Icons.upload_outlined, size: 16),
-                    label: const Text('Paste stats'),
-                  ),
-                ],
-              ),
-              if (kIsWeb)
-                Text(
-                  'Sync from Anki goes through the app server here — '
-                  'sign in first. Manual entry and pasted stats still '
-                  'work offline.',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-            ],
-            const SizedBox(height: 8),
-            _sectionTitle(context, 'Repeats'),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              title: const Text('Repeats'),
-              subtitle: const Text(
-                  'Habit/budget template — generates dated instances'),
-              value: _hasRecurrence,
-              onChanged: (v) => setState(() => _hasRecurrence = v),
-            ),
-            if (_hasRecurrence) ...[
-              DropdownButtonFormField<TimeScale>(
-                initialValue: _frequency,
-                decoration:
-                    const InputDecoration(labelText: 'Frequency'),
-                items: TimeScale.values
-                    .map((s) => DropdownMenuItem(
-                        value: s, child: Text(s.displayName)))
-                    .toList(),
-                onChanged: (v) =>
-                    setState(() => _frequency = v ?? _frequency),
-              ),
+              const SizedBox(height: 16),
+              _sectionTitle(context, 'Schedule'),
               _DateRow(
-                label: _recurEnd == null
-                    ? 'Repeats forever'
-                    : 'Ends ${MaterialLocalizations.of(context).formatFullDate(_recurEnd!)}',
+                label: _due == null
+                    ? 'No due date'
+                    : 'Due ${MaterialLocalizations.of(context).formatFullDate(_due!)}${_dateFixed ? ' · fixed' : ''}',
                 onPick: () async {
                   final picked = await showDatePicker(
                     context: context,
-                    initialDate: _recurEnd ??
-                        DateTime.now().add(const Duration(days: 365)),
+                    initialDate: _due ?? DateTime.now(),
                     firstDate: DateTime(2000),
                     lastDate: DateTime(2100),
                   );
-                  if (picked != null) {
-                    setState(() => _recurEnd = picked);
-                  }
+                  if (picked != null) setState(() => _due = picked);
                 },
-                onClear: _recurEnd == null
+                onClear: _due == null
                     ? null
-                    : () => setState(() => _recurEnd = null),
+                    : () => setState(() => _due = null),
               ),
-            ],
-            const SizedBox(height: 8),
-            _sectionTitle(context, 'Rule'),
-            DropdownButtonFormField<NodeRuleKind>(
-              initialValue: _ruleKind,
-              decoration: const InputDecoration(
-                  labelText: 'Derived goal (optional)'),
-              items: const [
-                DropdownMenuItem(
-                    value: NodeRuleKind.none, child: Text('None')),
-                DropdownMenuItem(
-                    value: NodeRuleKind.homeworkAhead,
-                    child: Text('Homework ahead')),
-                DropdownMenuItem(
-                    value: NodeRuleKind.minBalance,
-                    child: Text('Minimum balance')),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: const Text('Fixed date'),
+                subtitle: const Text('Commitment; estimates stay flexible'),
+                value: _dateFixed,
+                onChanged: (v) => setState(() => _dateFixed = v),
+              ),
+              // Times are calendar events picked visually on the calendar:
+              // save, then use Schedule → Time to place this there. A
+              // stored block is preserved on save.
+              if ((widget.existing?.schedule?.hasCalendarBlock ?? false))
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Has a calendar time — change it via Schedule → Time.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              const SizedBox(height: 8),
+              _sectionTitle(context, 'Money'),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: const Text('Tracks money'),
+                value: _hasMoney,
+                onChanged: (v) => setState(() => _hasMoney = v),
+              ),
+              if (_hasMoney) ...[
+                TextField(
+                  controller: _amount,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Target amount',
+                    prefixText: '\$ ',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<MoneyDirection>(
+                  initialValue: _direction,
+                  decoration: const InputDecoration(labelText: 'Direction'),
+                  items: const [
+                    DropdownMenuItem(
+                      value: MoneyDirection.spend,
+                      child: Text('Spend (cap)'),
+                    ),
+                    DropdownMenuItem(
+                      value: MoneyDirection.income,
+                      child: Text('Income'),
+                    ),
+                    DropdownMenuItem(
+                      value: MoneyDirection.save,
+                      child: Text('Save toward'),
+                    ),
+                  ],
+                  onChanged: (v) =>
+                      setState(() => _direction = v ?? _direction),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<TimeScale?>(
+                  initialValue: _period,
+                  decoration: const InputDecoration(
+                    labelText: 'Period (optional)',
+                  ),
+                  items: [
+                    const DropdownMenuItem(
+                      value: null,
+                      child: Text('One-time'),
+                    ),
+                    for (final s in TimeScale.values)
+                      DropdownMenuItem(value: s, child: Text(s.displayName)),
+                  ],
+                  onChanged: (v) => setState(() => _period = v),
+                ),
+                if (_period == TimeScale.custom) ...[
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _customDaysCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Custom period (days)',
+                    ),
+                  ),
+                ],
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: const Text('Recurring'),
+                  value: _moneyRecurring,
+                  onChanged: (v) => setState(() => _moneyRecurring = v),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: const Text('Auto rollover'),
+                  value: _autoRollover,
+                  onChanged: _moneyRecurring
+                      ? (v) => setState(() => _autoRollover = v)
+                      : null,
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: const Text('Fixed amount'),
+                  value: _moneyFixed,
+                  onChanged: (v) => setState(() => _moneyFixed = v),
+                ),
+                if (e?.money != null &&
+                    e!.money!.linkedTransactionIds.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      'Reported by ${e.money!.linkedTransactionIds.length} '
+                      'transaction(s) · ${e.money!.status.name}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
               ],
-              onChanged: (v) =>
-                  setState(() => _ruleKind = v ?? NodeRuleKind.none),
-            ),
-            if (_ruleKind == NodeRuleKind.homeworkAhead) ...[
               const SizedBox(height: 8),
-              TextField(
-                controller: _horizon,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                    labelText: 'Days ahead that must be done'),
+              _sectionTitle(context, 'Time target'),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: const Text('Has time target'),
+                value: _hasEffort,
+                onChanged: (v) => setState(() => _hasEffort = v),
               ),
-            ],
-            if (_ruleKind == NodeRuleKind.minBalance) ...[
+              if (_hasEffort) ...[
+                TextField(
+                  controller: _minutes,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Target minutes',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: const Text('Fixed estimate'),
+                  value: _effortFixed,
+                  onChanged: (v) => setState(() => _effortFixed = v),
+                ),
+              ],
               const SizedBox(height: 8),
-              TextField(
-                controller: _minBalance,
-                keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true),
-                decoration: const InputDecoration(
-                    labelText: 'Floor balance', prefixText: '\$ '),
+              _sectionTitle(context, 'Memorization (Anki)'),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: const Text('Has memorization target'),
+                subtitle: const Text(
+                  'Review N Anki cards per period — progress feeds from '
+                  'AnkiConnect or manual counts',
+                ),
+                value: _hasAnki,
+                onChanged: (v) => setState(() => _hasAnki = v),
               ),
-            ],
+              if (_hasAnki) ...[
+                TextField(
+                  controller: _deck,
+                  decoration: const InputDecoration(
+                    labelText: 'Deck (blank = all decks)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _targetReviews,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Target reviews',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<TimeScale?>(
+                  initialValue: _ankiPeriod,
+                  decoration: const InputDecoration(
+                    labelText: 'Period (optional)',
+                  ),
+                  items: [
+                    const DropdownMenuItem(
+                      value: null,
+                      child: Text('One-time'),
+                    ),
+                    for (final s in TimeScale.values)
+                      DropdownMenuItem(value: s, child: Text(s.displayName)),
+                  ],
+                  onChanged: (v) => setState(() => _ankiPeriod = v),
+                ),
+                if (_ankiPeriod == TimeScale.custom) ...[
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _ankiCustomDays,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Custom period (days)',
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _manualReviews,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Reviews so far (this period)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                if (_ankiSyncedAt != null)
+                  Text(
+                    'Last counted '
+                    '${MaterialLocalizations.of(context).formatFullDate(_ankiSyncedAt!)}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: _ankiSyncing ? null : () => _syncAnki(context),
+                      icon: _ankiSyncing
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.sync, size: 16),
+                      label: const Text('Sync from Anki'),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => _importAnki(context),
+                      icon: const Icon(Icons.upload_outlined, size: 16),
+                      label: const Text('Paste stats'),
+                    ),
+                  ],
+                ),
+                if (kIsWeb)
+                  Text(
+                    'Sync from Anki goes through the app server here — '
+                    'sign in first. Manual entry and pasted stats still '
+                    'work offline.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+              ],
+              const SizedBox(height: 8),
+              _sectionTitle(context, 'Workout & fitness'),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: const Text('Workout'),
+                subtitle: const Text(
+                    'Auto-report duration from the fitness app'),
+                value: _isWorkout,
+                onChanged: (v) => setState(() => _isWorkout = v),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: const Text('Has fitness target'),
+                subtitle: const Text(
+                    'Sleep hours or activity time/count via Garmin'),
+                value: _hasFitness,
+                onChanged: (v) => setState(() => _hasFitness = v),
+              ),
+              if (_hasFitness) ...[
+                DropdownButtonFormField<FitnessMetric>(
+                  initialValue: _fitnessMetric,
+                  decoration:
+                      const InputDecoration(labelText: 'Measures'),
+                  items: const [
+                    DropdownMenuItem(
+                        value: FitnessMetric.sleepMinutes,
+                        child: Text('Sleep minutes')),
+                    DropdownMenuItem(
+                        value: FitnessMetric.activityMinutes,
+                        child: Text('Activity minutes')),
+                    DropdownMenuItem(
+                        value: FitnessMetric.activityCount,
+                        child: Text('Activity count')),
+                  ],
+                  onChanged: (v) => setState(
+                      () => _fitnessMetric = v ?? _fitnessMetric),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _fitnessTarget,
+                  keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true),
+                  decoration: InputDecoration(
+                    labelText: _fitnessMetric == FitnessMetric.activityCount
+                        ? 'Target count'
+                        : 'Target minutes',
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 8),
+              _sectionTitle(context, 'Repeats'),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: const Text('Repeats'),
+                subtitle: const Text(
+                  'Habit/budget template — generates dated instances',
+                ),
+                value: _hasRecurrence,
+                onChanged: (v) => setState(() => _hasRecurrence = v),
+              ),
+              if (_hasRecurrence) ...[
+                DropdownButtonFormField<TimeScale>(
+                  initialValue: _frequency,
+                  decoration: const InputDecoration(labelText: 'Frequency'),
+                  items: TimeScale.values
+                      .map(
+                        (s) => DropdownMenuItem(
+                          value: s,
+                          child: Text(s.displayName),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) =>
+                      setState(() => _frequency = v ?? _frequency),
+                ),
+                _DateRow(
+                  label: _recurEnd == null
+                      ? 'Repeats forever'
+                      : 'Ends ${MaterialLocalizations.of(context).formatFullDate(_recurEnd!)}',
+                  onPick: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate:
+                          _recurEnd ??
+                          DateTime.now().add(const Duration(days: 365)),
+                      firstDate: DateTime(2000),
+                      lastDate: DateTime(2100),
+                    );
+                    if (picked != null) {
+                      setState(() => _recurEnd = picked);
+                    }
+                  },
+                  onClear: _recurEnd == null
+                      ? null
+                      : () => setState(() => _recurEnd = null),
+                ),
+              ],
+              const SizedBox(height: 8),
+              _sectionTitle(context, 'Rule'),
+              DropdownButtonFormField<NodeRuleKind>(
+                initialValue: _ruleKind,
+                decoration: const InputDecoration(
+                  labelText: 'Derived goal (optional)',
+                ),
+                items: const [
+                  DropdownMenuItem(
+                    value: NodeRuleKind.none,
+                    child: Text('None'),
+                  ),
+                  DropdownMenuItem(
+                    value: NodeRuleKind.homeworkAhead,
+                    child: Text('Homework ahead'),
+                  ),
+                  DropdownMenuItem(
+                    value: NodeRuleKind.minBalance,
+                    child: Text('Minimum balance'),
+                  ),
+                ],
+                onChanged: (v) =>
+                    setState(() => _ruleKind = v ?? NodeRuleKind.none),
+              ),
+              if (_ruleKind == NodeRuleKind.homeworkAhead) ...[
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _horizon,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Days ahead that must be done',
+                  ),
+                ),
+              ],
+              if (_ruleKind == NodeRuleKind.minBalance) ...[
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _minBalance,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Floor balance',
+                    prefixText: '\$ ',
+                  ),
+                ),
+              ],
             ], // end if (!_isUnbounded): dates, targets, repeats, rules
             if (_isUnbounded) ...[
               const SizedBox(height: 8),
@@ -567,67 +685,66 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                 (e.hasReported && e.reportedDuration != null ||
                     e.isTracking)) ...[
               const SizedBox(height: 8),
-              Builder(builder: (context) {
-                // Live copy: a timer correction made in the edit sheet
-                // (opened below) shows here without reopening the editor.
-                Node live = e;
-                try {
-                  live = context.watch<NodeCubit>().byId(e.id) ?? e;
-                } catch (_) {}
-                final trackingLine = live.isTracking &&
-                        live.timerStartedAt != null
-                    ? 'Recording since ${DateFormat('h:mm a').format(live.timerStartedAt!)}'
-                    : null;
-                final reportedLine = live.hasReported &&
-                        live.reportedDuration != null &&
-                        live.actualStart != null &&
-                        live.actualEnd != null
-                    ? 'Reported ${live.reportedDuration!.inMinutes}m '
-                        '(${DateFormat('h:mm a').format(live.actualStart!)} – '
-                        '${DateFormat('h:mm a').format(live.actualEnd!)})'
-                    : null;
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (trackingLine != null)
-                            Text(
-                              trackingLine,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.copyWith(fontWeight: FontWeight.w600),
-                            ),
-                          if (reportedLine != null) Text(
-                            reportedLine,
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ],
+              Builder(
+                builder: (context) {
+                  // Live copy: a timer correction made in the edit sheet
+                  // (opened below) shows here without reopening the editor.
+                  Node live = e;
+                  try {
+                    live = context.watch<NodeCubit>().byId(e.id) ?? e;
+                  } catch (_) {}
+                  final trackingLine =
+                      live.isTracking && live.timerStartedAt != null
+                      ? 'Recording since ${DateFormat('h:mm a').format(live.timerStartedAt!)}'
+                      : null;
+                  final reportedLine =
+                      live.hasReported &&
+                          live.reportedDuration != null &&
+                          live.actualStart != null &&
+                          live.actualEnd != null
+                      ? 'Reported ${live.reportedDuration!.inMinutes}m '
+                            '(${DateFormat('h:mm a').format(live.actualStart!)} – '
+                            '${DateFormat('h:mm a').format(live.actualEnd!)})'
+                      : null;
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (trackingLine != null)
+                              Text(
+                                trackingLine,
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                            if (reportedLine != null)
+                              Text(
+                                reportedLine,
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                          ],
+                        ),
                       ),
-                    ),
-                    TextButton(
-                      onPressed: () => showEditNodeTimerSheet(
-                        context,
-                        nodeId: e.id,
+                      TextButton(
+                        onPressed: () =>
+                            showEditNodeTimerSheet(context, nodeId: e.id),
+                        child: Text(
+                          trackingLine != null ? 'Edit start' : 'Adjust',
+                        ),
                       ),
-                      child: Text(trackingLine != null
-                          ? 'Edit start'
-                          : 'Adjust'),
-                    ),
-                  ],
-                );
-              }),
+                    ],
+                  );
+                },
+              ),
             ],
             if (e != null && e.status == NodeStatus.failed) ...[
               const SizedBox(height: 4),
               Text(
                 'Marked as failed — tap its box to unmark.',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: Theme.of(context).colorScheme.error),
               ),
             ],
           ],
@@ -656,20 +773,19 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   }
 
   Widget _sectionTitle(BuildContext context, String text) => Padding(
-        padding: const EdgeInsets.only(bottom: 4),
-        child: Text(text,
-            style: Theme.of(context)
-                .textTheme
-                .labelLarge
-                ?.copyWith(fontWeight: FontWeight.bold)),
-      );
+    padding: const EdgeInsets.only(bottom: 4),
+    child: Text(
+      text,
+      style: Theme.of(context).textTheme.labelLarge
+          ?.copyWith(fontWeight: FontWeight.bold),
+    ),
+  );
 
   void _save(BuildContext context) {
     final title = _title.text.trim();
     if (title.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a title')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Please enter a title')));
       return;
     }
     _saveConfirmed(context);
@@ -686,12 +802,14 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     // save clears stored facets — one tap back to safety.
     if (_isUnbounded) {
       final dropping = <String>[];
-      if (_due != null) {
+      if (_due != null ||
+          (widget.existing?.schedule?.hasCalendarBlock ?? false)) {
         dropping.add('schedule');
       }
       if (_hasMoney) dropping.add('money target');
       if (_hasEffort) dropping.add('time target');
       if (_hasAnki) dropping.add('memorization target');
+      if (_hasFitness) dropping.add('fitness target');
       if (_hasRecurrence) dropping.add('repeats');
       if (_ruleKind != NodeRuleKind.none) dropping.add('rule');
       if (dropping.isNotEmpty) {
@@ -703,27 +821,23 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     if (!context.mounted) return;
     final title = _title.text.trim();
     if (title.isEmpty) return; // guarded in [_save]; re-check after await.
-    final notes =
-        _notes.text.trim().isEmpty ? null : _notes.text.trim();
+    final notes = _notes.text.trim().isEmpty ? null : _notes.text.trim();
     final opening = widget.existing;
     // Re-read live: a timer correction (start edit / manual entry) or a
     // background link made while the editor was open must survive this
     // save — the snapshot from open time would otherwise clobber it.
     // Form-owned fields below still come from the controllers, so only
     // non-form state refreshes.
-    final existing = opening == null
-        ? null
-        : cubit.byId(opening.id) ?? opening;
+    final existing = opening == null ? null : cubit.byId(opening.id) ?? opening;
 
-    ScheduleFacet? schedule;
-    // Goals carry a due date at most — calendar time comes from assigned
-    // events. Any stored block (start/end) from before is dropped here.
-    if (_due != null || _dateFixed) {
-      schedule = ScheduleFacet(
-        due: _due,
-        isFixed: _dateFixed,
-      );
-    }
+    // Day-only here: the due date is edited inline and any existing
+    // calendar block is preserved. Times are calendar events picked
+    // visually via Schedule → Time, never typed here.
+    var schedule = scheduleAfterEditorSave(
+      previous: existing?.schedule,
+      due: _due,
+      isFixed: _dateFixed,
+    );
 
     MoneyFacet? money;
     if (_hasMoney) {
@@ -732,19 +846,16 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         targetAmount: target,
         actualAmount: existing?.money?.actualAmount,
         direction: _direction,
-        status:
-            existing?.money?.status ?? MoneyStatus.projected,
+        status: existing?.money?.status ?? MoneyStatus.projected,
         period: _period,
         customPeriodDays: _period == TimeScale.custom
             ? int.tryParse(_customDaysCtrl.text.trim())
             : null,
         isRecurring: _moneyRecurring,
         autoRollover: _autoRollover,
-        rolloverAmount:
-            existing?.money?.rolloverAmount ?? 0.0,
+        rolloverAmount: existing?.money?.rolloverAmount ?? 0.0,
         isFixed: _moneyFixed,
-        linkedTransactionIds:
-            existing?.money?.linkedTransactionIds ?? const [],
+        linkedTransactionIds: existing?.money?.linkedTransactionIds ?? const [],
       );
     }
 
@@ -774,12 +885,25 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       );
     }
 
+    FitnessFacet? fitness;
+    if (_hasFitness) {
+      final parsed = double.tryParse(_fitnessTarget.text.trim());
+      if (parsed == null || parsed <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Please enter a positive fitness target')),
+        );
+        return;
+      }
+      fitness = FitnessFacet(
+        metric: _fitnessMetric,
+        targetValue: parsed,
+      );
+    }
+
     NodeRecurrence? recurrence;
     if (_hasRecurrence) {
-      recurrence = NodeRecurrence(
-        frequency: _frequency,
-        endDate: _recurEnd,
-      );
+      recurrence = NodeRecurrence(frequency: _frequency, endDate: _recurEnd);
     }
 
     RuleFacet? rule;
@@ -799,6 +923,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       money = null;
       effort = null;
       anki = null;
+      fitness = null;
       recurrence = null;
       rule = null;
     }
@@ -813,13 +938,16 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         parentIds: _parents,
         createdAt: DateTime.now(),
         isUnbounded: isUnbounded,
+        isFavorite: _isFavorite,
         schedule: schedule,
         money: money,
         effort: effort,
         anki: anki,
+        fitness: fitness,
         recurrence: recurrence,
         rule: rule,
         assignees: _people,
+        isWorkout: _isWorkout,
       );
       error = cubit.addNode(node);
       if (error == null) {
@@ -842,6 +970,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         clearNotes: notes == null,
         parentIds: _parents,
         isUnbounded: isUnbounded,
+        isFavorite: _isFavorite,
         schedule: schedule,
         clearSchedule: schedule == null,
         money: money,
@@ -850,19 +979,21 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         clearEffort: effort == null,
         anki: anki,
         clearAnki: anki == null,
+        fitness: fitness,
+        clearFitness: fitness == null,
         recurrence: recurrence,
         clearRecurrence: recurrence == null,
         rule: rule,
         clearRule: rule == null,
         assignees: _people,
+        isWorkout: _isWorkout,
       );
       error = cubit.updateNode(updated);
       if (error == null) result = updated;
     }
     if (error != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error)),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error)));
       return;
     }
     Navigator.of(context).pop(result);
@@ -887,11 +1018,9 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
           deck: deck.isEmpty ? null : deck,
         );
       } else {
-        final client =
-            AnkiConnectClient(host: host, httpClient: http.Client());
+        final client = AnkiConnectClient(host: host, httpClient: http.Client());
         try {
-          count =
-              await client.reviewsToday(deck: deck.isEmpty ? null : deck);
+          count = await client.reviewsToday(deck: deck.isEmpty ? null : deck);
         } finally {
           client.close();
         }
@@ -902,7 +1031,11 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         _ankiSyncedAt = DateTime.now();
       });
       messenger.showSnackBar(
-        SnackBar(content: Text('Anki: $count card${count == 1 ? '' : 's'} reviewed today')),
+        SnackBar(
+          content: Text(
+            'Anki: $count card${count == 1 ? '' : 's'} reviewed today',
+          ),
+        ),
       );
     } on AnkiServerException catch (e) {
       if (!context.mounted) return;
@@ -928,7 +1061,8 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
           maxLines: 6,
           decoration: const InputDecoration(
             hintText: '42\nJapanese, 30',
-            helperText: 'One count per line: "42" or "Deck, 42". '
+            helperText:
+                'One count per line: "42" or "Deck, 42". '
                 'Lines starting with # are ignored.',
             border: OutlineInputBorder(),
           ),
@@ -943,9 +1077,8 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
               try {
                 Navigator.of(ctx).pop(parseAnkiReviewCounts(pasted.text));
               } on FormatException catch (e) {
-                ScaffoldMessenger.of(ctx).showSnackBar(
-                  SnackBar(content: Text(e.message)),
-                );
+                ScaffoldMessenger.of(ctx)
+                    .showSnackBar(SnackBar(content: Text(e.message)));
               }
             },
             child: const Text('Apply'),
@@ -959,8 +1092,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     setState(() {
       // A single named deck fills the deck field too (when blank); mixed
       // pastes apply the total and leave the deck alone.
-      final named =
-          result.byDeck.keys.where((k) => k != '*').toList();
+      final named = result.byDeck.keys.where((k) => k != '*').toList();
       if (named.length == 1 && _deck.text.trim().isEmpty) {
         _deck.text = named.single;
         _manualReviews.text = result.byDeck[named.single].toString();
@@ -977,7 +1109,9 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   /// Confirm gate before an unbounded save clears dates/targets. Returns
   /// true when the user accepts the removal.
   Future<bool> _confirmDropFacets(
-      BuildContext context, List<String> dropping) async {
+    BuildContext context,
+    List<String> dropping,
+  ) async {
     final drop = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1017,13 +1151,37 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     try {
       calendar = context.read<CalendarCubit>();
     } catch (_) {}
-    final eventId =
-        existing.calendarEventId ?? existing.sourceEventId;
-    nodes.deleteNode(existing.id);
-    if (eventId != null) {
-      try {
-        calendar?.clearTaskLink(eventId);
-      } catch (_) {}
+    TransactionsCubit? transactions;
+    try {
+      transactions = context.read<TransactionsCubit>();
+    } catch (_) {}
+    try {
+      if (transactions == null) {
+        if (calendar == null) {
+          nodes.deleteNode(existing.id);
+        } else {
+          NodeEventLink.deleteNodesAndUnlink(nodes, calendar, {existing.id});
+        }
+      } else {
+        deleteNodesAndClearAssignments(
+          nodes: nodes,
+          transactions: transactions,
+          delete: () {
+            if (calendar == null) {
+              nodes.deleteNode(existing.id);
+            } else {
+              NodeEventLink.deleteNodesAndUnlink(
+                nodes,
+                calendar,
+                {existing.id},
+              );
+            }
+            return null;
+          },
+        );
+      }
+    } catch (_) {
+      nodes.deleteNode(existing.id);
     }
     navigator.pop();
     // Replace any banner still up from an earlier delete: queued
@@ -1037,10 +1195,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
           content: const Text('Node deleted'),
           duration: const Duration(seconds: 4),
           persist: false,
-          action: SnackBarAction(
-            label: 'Undo',
-            onPressed: undo.undo,
-          ),
+          action: SnackBarAction(label: 'Undo', onPressed: undo.undo),
         ),
       );
   }
@@ -1064,19 +1219,20 @@ class _ParentsField extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Parents',
-            style: Theme.of(context).textTheme.labelLarge),
+        Text('Parents', style: Theme.of(context).textTheme.labelLarge),
         const SizedBox(height: 4),
         Wrap(
           spacing: 8,
           children: [
             for (final id in selected)
               Chip(
-                label: Text(names[id] ?? 'node',
-                    overflow: TextOverflow.ellipsis),
+                label: Text(
+                  names[id] ?? 'node',
+                  overflow: TextOverflow.ellipsis,
+                ),
                 deleteIcon: const Icon(Icons.close, size: 16),
-                onDeleted: () => onChanged(
-                    selected.where((p) => p != id).toList()),
+                onDeleted: () =>
+                    onChanged(selected.where((p) => p != id).toList()),
               ),
             ActionChip(
               avatar: const Icon(Icons.add, size: 16),
@@ -1089,18 +1245,15 @@ class _ParentsField extends StatelessWidget {
     );
   }
 
-  Future<void> _pick(
-      BuildContext context, List<Node> nodes) async {
+  Future<void> _pick(BuildContext context, List<Node> nodes) async {
     final excluded = <String>{if (excludeId != null) excludeId!};
     if (excludeId != null) {
       excluded.addAll(descendantIds(excludeId!, nodes));
     }
-    final candidates =
-        nodes.where((n) => !excluded.contains(n.id)).toList();
+    final candidates = nodes.where((n) => !excluded.contains(n.id)).toList();
     if (candidates.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No eligible parents')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('No eligible parents')));
       return;
     }
     final picked = await showDialog<String>(
@@ -1111,10 +1264,7 @@ class _ParentsField extends StatelessWidget {
           for (final n in candidates)
             SimpleDialogOption(
               onPressed: () => Navigator.of(ctx).pop(n.id),
-              child: Text(
-                n.title,
-                overflow: TextOverflow.ellipsis,
-              ),
+              child: Text(n.title, overflow: TextOverflow.ellipsis),
             ),
         ],
       ),
@@ -1130,11 +1280,7 @@ class _DateRow extends StatelessWidget {
   final VoidCallback onPick;
   final VoidCallback? onClear;
 
-  const _DateRow({
-    required this.label,
-    required this.onPick,
-    this.onClear,
-  });
+  const _DateRow({required this.label, required this.onPick, this.onClear});
 
   @override
   Widget build(BuildContext context) {

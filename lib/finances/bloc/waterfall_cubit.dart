@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:equatable/equatable.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:a_fish_in_sea/finances/model/granularity.dart';
 import 'package:a_fish_in_sea/finances/model/ledger_entry.dart';
@@ -107,6 +108,8 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
   late final StreamSubscription _nodeSubscription;
   late final StreamSubscription _transactionsSubscription;
   late final StreamSubscription _plaidSubscription;
+  late List<Node> _moneyNodes;
+  DateTime? _rebuiltOn;
   Timer? _rebuildTimer;
   bool _rebuilding = false;
   bool _rebuildQueued = false;
@@ -122,13 +125,25 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
     // Listen for changes to rebuild (debounced: node instance generation
     // re-emits NodeCubit, which would otherwise cascade into O(templates)
     // nested rebuilds on the UI thread).
-    _nodeSubscription = nodeCubit.stream.listen((_) => scheduleRebuild());
+    _moneyNodes = nodeCubit.state.where((node) => node.money != null).toList();
+    _nodeSubscription = nodeCubit.stream.listen((nodes) {
+      final moneyNodes = nodes.where((node) => node.money != null).toList();
+      // Calendar/task edits emit the whole node collection. They must not
+      // regenerate money instances, sort transactions, and regroup the
+      // ledger while the reader is scheduling an unrelated event.
+      final now = DateTime.now();
+      final sameDay = _rebuiltOn?.year == now.year &&
+          _rebuiltOn?.month == now.month && _rebuiltOn?.day == now.day;
+      if (sameDay && listEquals(_moneyNodes, moneyNodes)) return;
+      _moneyNodes = moneyNodes;
+      scheduleRebuild();
+    });
     _transactionsSubscription =
         transactionsCubit.stream.listen((_) => scheduleRebuild());
     _plaidSubscription = plaidCubit.stream.listen((plaidState) {
-      if (plaidState.currentBalance != null) {
-        emit(state.copyWith(startingBalance: plaidState.currentBalance));
-      }
+      final balance = plaidState.currentBalance;
+      if (balance == null || balance == state.startingBalance) return;
+      emit(state.copyWith(startingBalance: balance));
       scheduleRebuild();
     });
 
@@ -202,6 +217,7 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
 
   void _rebuildNow() {
     final today = DateTime.now();
+    _rebuiltOn = today;
     final horizon = state.projectionHorizon;
     final allEntries = <LedgerEntry>[];
 
@@ -291,40 +307,53 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
     final todayDate = DateTime(today.year, today.month, today.day);
     final rows = <LedgerEntry>[];
 
-    // Find the last confirmed entry index
-    int lastConfirmedIndex = -1;
-    for (int i = 0; i < allEntries.length; i++) {
-      if (allEntries[i].status == EntryStatus.confirmed) {
-        lastConfirmedIndex = i;
+    // Partition by settled status, not by position: an unconfirmed entry
+    // dated before the newest confirmed item (overdue expense, pending
+    // bank transaction) is still a forward projection, and a future node
+    // marked paid moves only itself into history.
+    final confirmed = <LedgerEntry>[];
+    final upcoming = <LedgerEntry>[];
+    for (final entry in allEntries) {
+      if (entry.status == EntryStatus.confirmed) {
+        confirmed.add(entry);
+      } else {
+        upcoming.add(entry);
       }
     }
 
-    // A. Confirmed entries: work backward from today's balance (startingBalance)
+    // A. Confirmed entries: work backward from today's balance
+    // (startingBalance). Both lists stay oldest-first from the sort above,
+    // so the newest confirmed item anchors at today's balance.
     double confirmedBalance = state.startingBalance;
-    for (int i = lastConfirmedIndex; i >= 0; i--) {
-      rows.add(allEntries[i].copyWith(
+    final confirmedNewestFirst = <LedgerEntry>[];
+    for (int i = confirmed.length - 1; i >= 0; i--) {
+      confirmedNewestFirst.add(confirmed[i].copyWith(
         runningBalance: confirmedBalance,
         timeUntilLabel:
-            _computeTimeUntilLabelForDay(allEntries[i].date, todayDate),
+            _computeTimeUntilLabelForDay(confirmed[i].date, todayDate),
       ));
-      confirmedBalance -= allEntries[i].amount;
+      confirmedBalance -= confirmed[i].amount;
     }
 
-    // B. Projected / pending / due entries: work forward from today's balance (startingBalance)
-    // Collected oldest-first, then appended newest-first to keep display order.
+    // B. Projected / pending / due entries: work forward from today's
+    // balance (startingBalance). Collected oldest-first, then appended
+    // newest-first to keep display order.
     double projectedBalance = state.startingBalance;
     final projected = <LedgerEntry>[];
-    for (int i = lastConfirmedIndex + 1; i < allEntries.length; i++) {
-      projectedBalance += allEntries[i].amount;
-      projected.add(allEntries[i].copyWith(
+    for (final entry in upcoming) {
+      projectedBalance += entry.amount;
+      projected.add(entry.copyWith(
         runningBalance: projectedBalance,
-        timeUntilLabel:
-            _computeTimeUntilLabelForDay(allEntries[i].date, todayDate),
+        timeUntilLabel: _computeTimeUntilLabelForDay(entry.date, todayDate),
       ));
     }
+
+    // Newest first: furthest projection at rows.first (the "Projected"
+    // header value), oldest history at rows.last.
     for (var i = projected.length - 1; i >= 0; i--) {
       rows.add(projected[i]);
     }
+    rows.addAll(confirmedNewestFirst);
 
     emit(state.copyWith(
       rows: rows,

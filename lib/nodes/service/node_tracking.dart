@@ -28,6 +28,22 @@ class NodeTrackingSelection extends Equatable {
   List<Object?> get props => [recording, current, previous, next, unscheduled];
 }
 
+/// Whether a schedule block is a real timed work interval that belongs on
+/// the time-tracking card: not an all-day marker, not a zero-length point,
+/// and bounded within a single calendar day. Multi-day feed windows carry
+/// a due date, not work time — offering them as "Happening now" (issue #49)
+/// invites tracking time against a date range instead of a session.
+bool isTrackableScheduleBlock(ScheduleFacet s) {
+  final start = s.start;
+  final end = s.end;
+  if (start == null || end == null) return false;
+  if (s.allDay) return false;
+  if (!end.isAfter(start)) return false;
+  return start.year == end.year &&
+      start.month == end.month &&
+      start.day == end.day;
+}
+
 /// Picks which nodes to offer on the time-tracking card: the recording
 /// node plus scheduled neighbours and a few unscheduled ones. Mirrors the
 /// retired task-tracking selection over node schedule blocks.
@@ -50,8 +66,8 @@ NodeTrackingSelection selectNodeTracking(
   final scheduled = open
       .where((n) =>
           n.hasCalendarBlock &&
-          n.schedule!.start != null &&
-          n.schedule!.end != null &&
+          n.schedule != null &&
+          isTrackableScheduleBlock(n.schedule!) &&
           n.id != recordingId)
       .toList();
   final current = scheduled

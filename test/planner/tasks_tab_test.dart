@@ -7,6 +7,9 @@ import 'package:a_fish_in_sea/planner/bloc/calendar_draft_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/tasks_tab_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/tasks_view_options_cubit.dart';
+import 'package:a_fish_in_sea/planner/model/planner_event.dart';
+import 'package:a_fish_in_sea/planner/model/task_filter.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
 import 'package:a_fish_in_sea/planner/view/tasks_page.dart';
@@ -52,7 +55,10 @@ void main() {
     required SettingsCubit settings,
     required NavigationCubit navigation,
     required CalendarDraftCubit drafts,
+    TasksViewOptionsCubit? viewOptions,
   }) async {
+    final options = viewOptions ?? TasksViewOptionsCubit();
+    if (viewOptions == null) addTearDown(options.close);
     await tester.pumpWidget(
       MultiBlocProvider(
         providers: [
@@ -64,6 +70,7 @@ void main() {
           BlocProvider.value(value: nodes),
           BlocProvider.value(value: feeds),
           BlocProvider.value(value: tasksTab),
+          BlocProvider.value(value: options),
         ],
         child: const MaterialApp(home: TasksPage()),
       ),
@@ -187,8 +194,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(tasksTab.state, 1);
 
-    // Planning off the homework task navigates to the calendar …
-    await tester.tap(find.byTooltip('Add to calendar').first);
+    // Planning off the homework task opens the unified sheet, whose
+    // Time mode navigates to the calendar for visual placement …
+    await tester.tap(find.byTooltip('Scheduled — tap to change').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Time'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pick time on calendar'));
     await tester.pump();
     expect(drafts.state, isNotNull);
     expect(navigation.state, PlannerPage.calendar);
@@ -209,6 +221,262 @@ void main() {
       drafts: drafts,
     );
     expect(find.text('Assignments by class'), findsOneWidget);
+  });
+
+  testWidgets(
+      'schedule button tints + counts future timed events, skips '
+      'all-day and past ones', (tester) async {
+    final tasksTab = TasksTabCubit();
+    final nodes = NodeCubit();
+    final calendar = CalendarCubit();
+    final settings = SettingsCubit();
+    final navigation = NavigationCubit();
+    final drafts = CalendarDraftCubit();
+    final feeds = FeedCubit(
+      calendarCubit: calendar,
+      nodeCubit: nodes,
+      icalService: IcalService(),
+      googleService: MockGoogleService(),
+      proxyBase: () => '',
+    );
+    addTearDown(() async {
+      await tasksTab.close();
+      await nodes.close();
+      await calendar.close();
+      await settings.close();
+      await navigation.close();
+      await drafts.close();
+      await feeds.close();
+    });
+
+    final now = DateTime.now();
+    nodes.addNode(Node(id: 'n1', title: 'Essay', createdAt: now));
+    calendar
+      ..addEvent(PlannerEvent(
+        id: 'e1',
+        subject: 'Essay block',
+        taskId: 'n1',
+        isTask: true,
+        start: now.add(const Duration(days: 1)),
+        end: now.add(const Duration(days: 1, hours: 1)),
+      ))
+      ..addEvent(PlannerEvent(
+        id: 'e2',
+        subject: 'Essay block 2',
+        taskId: 'n1',
+        isTask: true,
+        start: now.add(const Duration(days: 2)),
+        end: now.add(const Duration(days: 2, hours: 1)),
+      ))
+      // Ignored: all-day events mark happenings, not planned time.
+      ..addEvent(PlannerEvent(
+        id: 'e3',
+        subject: 'Due',
+        taskId: 'n1',
+        isTask: true,
+        allDay: true,
+        start: now.add(const Duration(days: 3)),
+        end: now.add(const Duration(days: 4)),
+      ))
+      // Ignored: the occurrence is in the past.
+      ..addEvent(PlannerEvent(
+        id: 'e4',
+        subject: 'Yesterday',
+        taskId: 'n1',
+        isTask: true,
+        start: now.subtract(const Duration(days: 1)),
+        end: now.subtract(const Duration(days: 1)).add(
+          const Duration(hours: 1),
+        ),
+      ));
+
+    await pumpTasks(
+      tester,
+      tasksTab: tasksTab,
+      nodes: nodes,
+      calendar: calendar,
+      feeds: feeds,
+      settings: settings,
+      navigation: navigation,
+      drafts: drafts,
+    );
+
+    expect(find.text('2'), findsOneWidget);
+    final icon = tester.widget<Icon>(find.byIcon(Icons.schedule));
+    final context = tester.element(find.byType(TasksPage));
+    expect(icon.color, Theme.of(context).colorScheme.primary);
+  });
+
+  testWidgets('schedule button has no badge for a single future event',
+      (tester) async {
+    final tasksTab = TasksTabCubit();
+    final nodes = NodeCubit();
+    final calendar = CalendarCubit();
+    final settings = SettingsCubit();
+    final navigation = NavigationCubit();
+    final drafts = CalendarDraftCubit();
+    final feeds = FeedCubit(
+      calendarCubit: calendar,
+      nodeCubit: nodes,
+      icalService: IcalService(),
+      googleService: MockGoogleService(),
+      proxyBase: () => '',
+    );
+    addTearDown(() async {
+      await tasksTab.close();
+      await nodes.close();
+      await calendar.close();
+      await settings.close();
+      await navigation.close();
+      await drafts.close();
+      await feeds.close();
+    });
+
+    final now = DateTime.now();
+    nodes.addNode(Node(id: 'n1', title: 'Reading', createdAt: now));
+    calendar.addEvent(PlannerEvent(
+      id: 'e1',
+      subject: 'Reading block',
+      taskId: 'n1',
+      isTask: true,
+      start: now.add(const Duration(hours: 3)),
+      end: now.add(const Duration(hours: 4)),
+    ));
+
+    await pumpTasks(
+      tester,
+      tasksTab: tasksTab,
+      nodes: nodes,
+      calendar: calendar,
+      feeds: feeds,
+      settings: settings,
+      navigation: navigation,
+      drafts: drafts,
+    );
+
+    final icon = tester.widget<Icon>(find.byIcon(Icons.schedule));
+    final context = tester.element(find.byType(TasksPage));
+    expect(icon.color, Theme.of(context).colorScheme.primary);
+    expect(find.text('1'), findsNothing);
+  });
+
+  testWidgets('schedule button stays untinted without future timed events',
+      (tester) async {
+    final tasksTab = TasksTabCubit();
+    final nodes = NodeCubit();
+    final calendar = CalendarCubit();
+    final settings = SettingsCubit();
+    final navigation = NavigationCubit();
+    final drafts = CalendarDraftCubit();
+    final feeds = FeedCubit(
+      calendarCubit: calendar,
+      nodeCubit: nodes,
+      icalService: IcalService(),
+      googleService: MockGoogleService(),
+      proxyBase: () => '',
+    );
+    addTearDown(() async {
+      await tasksTab.close();
+      await nodes.close();
+      await calendar.close();
+      await settings.close();
+      await navigation.close();
+      await drafts.close();
+      await feeds.close();
+    });
+
+    final now = DateTime.now();
+    nodes.addNode(Node(id: 'n1', title: 'Reading', createdAt: now));
+    calendar.addEvent(PlannerEvent(
+      id: 'e1',
+      subject: 'Due',
+      taskId: 'n1',
+      isTask: true,
+      allDay: true,
+      start: now.add(const Duration(days: 1)),
+      end: now.add(const Duration(days: 2)),
+    ));
+
+    await pumpTasks(
+      tester,
+      tasksTab: tasksTab,
+      nodes: nodes,
+      calendar: calendar,
+      feeds: feeds,
+      settings: settings,
+      navigation: navigation,
+      drafts: drafts,
+    );
+
+    final icon = tester.widget<Icon>(find.byIcon(Icons.schedule));
+    expect(icon.color, isNull);
+    expect(find.text('1'), findsNothing);
+    expect(find.text('2'), findsNothing);
+  });
+
+  testWidgets(
+      'Unplanned view hides a task whose only plan is a linked event '
+      '(the tint definition)', (tester) async {
+    final tasksTab = TasksTabCubit();
+    final nodes = NodeCubit();
+    final calendar = CalendarCubit();
+    final settings = SettingsCubit();
+    final navigation = NavigationCubit();
+    final drafts = CalendarDraftCubit();
+    final feeds = FeedCubit(
+      calendarCubit: calendar,
+      nodeCubit: nodes,
+      icalService: IcalService(),
+      googleService: MockGoogleService(),
+      proxyBase: () => '',
+    );
+    addTearDown(() async {
+      await tasksTab.close();
+      await nodes.close();
+      await calendar.close();
+      await settings.close();
+      await navigation.close();
+      await drafts.close();
+      await feeds.close();
+    });
+
+    final now = DateTime.now();
+    // Essay has no own schedule block: its only plan is a real linked
+    // event, which tints the clock. Reading has no plan at all.
+    nodes.addNode(Node(id: 'planned', title: 'Essay', createdAt: now));
+    nodes.addNode(Node(id: 'free', title: 'Reading', createdAt: now));
+    calendar.addEvent(PlannerEvent(
+      id: 'e1',
+      subject: 'Essay block',
+      taskId: 'planned',
+      isTask: true,
+      start: now.add(const Duration(days: 1)),
+      end: now.add(const Duration(days: 1, hours: 1)),
+    ));
+    final viewOptions = TasksViewOptionsCubit()
+      ..addFilter(const TaskFilter(
+        id: 'unplanned',
+        name: 'Unplanned',
+        date: TaskFilterDate.all,
+        showCompleted: true,
+        planned: TaskFilterPlanned.unplannedOnly,
+      ));
+    addTearDown(viewOptions.close);
+
+    await pumpTasks(
+      tester,
+      tasksTab: tasksTab,
+      nodes: nodes,
+      calendar: calendar,
+      feeds: feeds,
+      settings: settings,
+      navigation: navigation,
+      drafts: drafts,
+      viewOptions: viewOptions,
+    );
+
+    expect(find.text('Reading'), findsOneWidget);
+    expect(find.text('Essay'), findsNothing);
   });
 
   testWidgets('works without a TasksTabCubit provider (standalone tests)',

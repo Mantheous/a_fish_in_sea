@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../common/undo/revertable_hydrated_cubit.dart';
 import '../../common/undo/undo_cubit.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
@@ -227,6 +228,7 @@ AssignmentTypeEffort? _learnedEffortForGroup(
 }
 
 void _showUndoneSnack(BuildContext context, String message) {
+  final undoCubit = context.read<UndoCubit>();
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
     ..showSnackBar(
@@ -236,11 +238,7 @@ void _showUndoneSnack(BuildContext context, String message) {
         persist: false,
         action: SnackBarAction(
           label: 'Undo',
-          onPressed: () {
-            try {
-              context.read<UndoCubit>().undo();
-            } catch (_) {}
-          },
+          onPressed: undoCubit.undo,
         ),
       ),
     );
@@ -297,15 +295,18 @@ class _RuleRow extends StatelessWidget {
               onChanged: (v) {
                 if (v == rule.dueOffsetDays) return;
                 final old = rule.dueOffsetDays;
-                cubit.upsertRule(rule.copyWith(dueOffsetDays: v));
-                // Keep already-shifted items on the new offset instead of
-                // stranding them on the old one.
-                final moved = nodeCubit.retargetAssignmentDues(
-                  feedId: rule.feedId,
-                  templateKey: rule.templateKey,
-                  newOffsetDays: v,
-                  fromOffsets: [old],
-                );
+                var moved = 0;
+                RevertableHydratedCubit.atomic([cubit, nodeCubit], () {
+                  cubit.upsertRule(rule.copyWith(dueOffsetDays: v));
+                  // Keep already-shifted items on the new offset instead of
+                  // stranding them on the old one.
+                  moved = nodeCubit.retargetAssignmentDues(
+                    feedId: rule.feedId,
+                    templateKey: rule.templateKey,
+                    newOffsetDays: v,
+                    fromOffsets: [old],
+                  );
+                });
                 if (moved > 0 && context.mounted) {
                   _showUndoneSnack(
                       context, 'Moved $moved existing to ${describeDueOffset(v)}');
@@ -390,13 +391,16 @@ class _RuleRow extends StatelessWidget {
     );
     if (moveBack == null) return;
     if (moveBack) {
-      final moved = nodeCubit.retargetAssignmentDues(
-        feedId: rule.feedId,
-        templateKey: rule.templateKey,
-        newOffsetDays: 0,
-        fromOffsets: [rule.dueOffsetDays],
-      );
-      cubit.deleteRule(rule.id);
+      var moved = 0;
+      RevertableHydratedCubit.atomic([cubit, nodeCubit], () {
+        moved = nodeCubit.retargetAssignmentDues(
+          feedId: rule.feedId,
+          templateKey: rule.templateKey,
+          newOffsetDays: 0,
+          fromOffsets: [rule.dueOffsetDays],
+        );
+        cubit.deleteRule(rule.id);
+      });
       if (context.mounted && moved > 0) {
         _showUndoneSnack(context, 'Moved $moved back to feed dates');
       }
@@ -486,24 +490,28 @@ class _GroupRowState extends State<_GroupRow> {
                             final rulesCubit =
                                 context.read<AssignmentRulesCubit>();
                             final nodeCubit = context.read<NodeCubit>();
-                            final rule = rulesCubit.createRule(
-                              feedId: group.feedId,
-                              templateKey: group.templateKey,
-                              displayName: group.displayName,
-                              dueOffsetDays: _draft,
-                              classLabel: group.classLabel,
-                            );
-                            if (_draftMinutes != null) {
-                              rulesCubit.upsertRule(rule.copyWith(
-                                estimateMinutes: _draftMinutes,
-                              ));
-                            }
-                            final moved =
-                                nodeCubit.retargetAssignmentDues(
-                              feedId: rule.feedId,
-                              templateKey: rule.templateKey,
-                              newOffsetDays: rule.dueOffsetDays,
-                            );
+                            late AssignmentRule rule;
+                            var moved = 0;
+                            RevertableHydratedCubit.atomic(
+                                [rulesCubit, nodeCubit], () {
+                              rule = rulesCubit.createRule(
+                                feedId: group.feedId,
+                                templateKey: group.templateKey,
+                                displayName: group.displayName,
+                                dueOffsetDays: _draft,
+                                classLabel: group.classLabel,
+                              );
+                              if (_draftMinutes != null) {
+                                rulesCubit.upsertRule(rule.copyWith(
+                                  estimateMinutes: _draftMinutes,
+                                ));
+                              }
+                              moved = nodeCubit.retargetAssignmentDues(
+                                feedId: rule.feedId,
+                                templateKey: rule.templateKey,
+                                newOffsetDays: rule.dueOffsetDays,
+                              );
+                            });
                             if (context.mounted) {
                               setState(() => _adding = false);
                               _showUndoneSnack(

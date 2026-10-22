@@ -64,6 +64,87 @@ void main() {
       cubit.mergePoints([point]);
       expect(cubit.state.points, hasLength(1));
     });
+
+    test('keeps backdated points and sorts the stored timeline', () {
+      final cubit = TrackingCubit();
+      final now = DateTime.now();
+      cubit.addPoint(TrackedPoint(
+        id: 'later', timestamp: now, lat: 40, lng: -111,
+      ));
+      cubit.addPoint(TrackedPoint(
+        id: 'earlier',
+        timestamp: now.subtract(const Duration(minutes: 5)),
+        lat: 40.01,
+        lng: -111.01,
+      ));
+      expect(cubit.state.points.map((p) => p.id), ['earlier', 'later']);
+    });
+
+    test('backdated point within 15m is kept and sorted', () {
+      final cubit = TrackingCubit();
+      final now = DateTime.now();
+      cubit.addPoint(TrackedPoint(
+        id: 'late',
+        timestamp: now,
+        lat: 40,
+        lng: -111,
+      ));
+      cubit.addPoint(TrackedPoint(
+        id: 'early',
+        timestamp: now.subtract(const Duration(minutes: 5)),
+        lat: 40.0001, // ~11 m north: same place, earlier scrub time.
+        lng: -111,
+      ));
+      expect(cubit.state.points.map((p) => p.id), ['early', 'late']);
+    });
+
+    test('near-identical fix within the same minute is still a duplicate',
+        () {
+      final cubit = TrackingCubit();
+      final now = DateTime.now();
+      cubit.addPoint(TrackedPoint(
+        id: 'a',
+        timestamp: now,
+        lat: 40,
+        lng: -111,
+      ));
+      cubit.addPoint(TrackedPoint(
+        id: 'b',
+        timestamp: now.add(const Duration(seconds: 20)),
+        lat: 40.00002, // ~2 m away.
+        lng: -111,
+      ));
+      expect(cubit.state.points.map((p) => p.id), ['a']);
+    });
+
+    test('mergePoints keeps a backdated background batch in order', () {
+      final cubit = TrackingCubit();
+      final now = DateTime.now();
+      cubit.addPoint(TrackedPoint(
+        id: 'new',
+        timestamp: now,
+        lat: 41,
+        lng: -112,
+      ));
+      cubit.mergePoints([
+        TrackedPoint(
+          id: 'old2',
+          timestamp: now.subtract(const Duration(minutes: 10)),
+          lat: 40.001,
+          lng: -111,
+        ),
+        TrackedPoint(
+          id: 'old1',
+          timestamp: now.subtract(const Duration(minutes: 20)),
+          lat: 40,
+          lng: -111,
+        ),
+      ]);
+      expect(
+        cubit.state.points.map((p) => p.id),
+        ['old1', 'old2', 'new'],
+      );
+    });
   });
 
   group('PlacesCubit', () {

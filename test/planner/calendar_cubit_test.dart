@@ -67,6 +67,24 @@ void main() {
       expect(cubit.state.map((e) => e.id), ['mine']);
     });
 
+    test('replaceFeedEvents with an unchanged feed does not emit', () async {
+      final cubit = CalendarCubit();
+      cubit.addEvent(event('f1e1', DateTime(2026, 9, 5, 9), feedId: 'f1'));
+      final emits = <List<PlannerEvent>>[];
+      final sub = cubit.stream.listen(emits.add);
+
+      // Same feed contents from a resync that found nothing new.
+      cubit.replaceFeedEvents('f1', [cubit.state.single]);
+      expect(emits, isEmpty);
+
+      cubit.replaceFeedEvents('f1', [
+        cubit.state.single.copyWith(subject: 'Renamed remotely'),
+      ]);
+      await Future<void>.delayed(Duration.zero);
+      expect(emits, hasLength(1));
+      await sub.cancel();
+    });
+
     test('eventsOnDay finds single and recurring events', () {
       final cubit = CalendarCubit();
       cubit.addEvent(event('single', DateTime(2026, 9, 4, 9)));

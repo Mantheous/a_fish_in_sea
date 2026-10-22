@@ -1,7 +1,7 @@
 ---
 description: Audits pending changes for anything that could break or lose the user's existing app data across schema changes
 mode: all
-model: opencode-go/claude-haiku-5-5
+model: opencode-go/deepseek-v4.1-flash#high
 steps: 60
 permissions:
   - action: subagent

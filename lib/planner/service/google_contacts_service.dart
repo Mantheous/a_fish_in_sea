@@ -92,7 +92,18 @@ class GoogleContactsService {
   final String Function() baseUrl;
   final String Function() userId;
   final String? Function()? authToken;
+
+  /// Refreshes the app session (JWT) and returns the new access token.
+  /// Wired to [AuthCubit.refreshAccessToken] where the service is built.
+  /// Without it an access token that expires mid-session (15 min) turns
+  /// every contacts call into a 401 "Invalid token" until something else
+  /// happens to refresh the token.
+  final Future<String?> Function()? refreshAccessToken;
   final http.Client _client;
+
+  /// Bounds every request so a blackholed socket fails fast instead of
+  /// hanging the caller forever.
+  final Duration timeout;
   List<GoogleContact>? _cache;
 
   /// Shared across editor instances: every event/task editor builds its own
@@ -105,8 +116,11 @@ class GoogleContactsService {
     required this.baseUrl,
     required this.userId,
     this.authToken,
+    this.refreshAccessToken,
     http.Client? client,
-  }) : _client = client ?? http.Client();
+    Duration? timeout,
+  })  : _client = client ?? http.Client(),
+        timeout = timeout ?? const Duration(seconds: 30);
 
   /// JWT bearer when signed in (FastAPI); legacy user-id header otherwise.
   Map<String, String> get _headers {
@@ -127,9 +141,38 @@ class GoogleContactsService {
     });
   }
 
+  /// Runs [request] with a timeout and converts transport failures into
+  /// a [GoogleContactsException]. On a 401 that looks like an expired app
+  /// session (the server's string `detail`, e.g. "Invalid token" — not the
+  /// map-shaped Google-error payload that carries `needsReconnect`),
+  /// refreshes the session once and retries with the new bearer, mirroring
+  /// [SyncClient]. Callers pass a closure so [_headers] is re-read and the
+  /// retry carries the fresh token.
   Future<http.Response> _send(Future<http.Response> Function() request) async {
+    final first = await _attempt(request);
+    if (first.statusCode != 401 || refreshAccessToken == null) return first;
+    if (!_isAppSessionExpiry(first)) return first;
+    final fresh = await refreshAccessToken!();
+    if (fresh == null || fresh.isEmpty) return first;
+    return _attempt(request);
+  }
+
+  /// True when a 401 looks like our own JWT expired, not a Google-side
+  /// auth failure. Google failures arrive as
+  /// `{"detail": {"error": ..., "needsReconnect": ...}}` (map detail) and
+  /// refreshing the app session can't fix those.
+  bool _isAppSessionExpiry(http.Response response) {
     try {
-      return await request().timeout(const Duration(seconds: 30));
+      final body = jsonDecode(response.body);
+      if (body is Map) return body['detail'] is! Map;
+    } catch (_) {}
+    return true;
+  }
+
+  Future<http.Response> _attempt(
+      Future<http.Response> Function() request) async {
+    try {
+      return await request().timeout(timeout);
     } on GoogleContactsException {
       rethrow;
     } on TimeoutException {
@@ -172,8 +215,22 @@ class GoogleContactsService {
           needsReconnect = true;
         }
       } catch (_) {}
-      if (response.statusCode == 401 || response.statusCode == 403) {
+      if (response.statusCode == 403) {
+        // App-session JWT failures never answer 403 (they are 401 with a
+        // string detail, already retried via refresh above), so a 403 is
+        // always provider-side: scopes revoked or consent withdrawn.
         needsReconnect = true;
+      } else if (response.statusCode == 401) {
+        // Only provider-side (map-detail) 401s mean the Google grant
+        // broke. A string-detail 401 is the expired app JWT — it was
+        // already retried via refresh and must not prompt a false
+        // "reconnect Google" when the refresh yields nothing.
+        var appJwt = false;
+        try {
+          final body = jsonDecode(response.body);
+          if (body is Map) appJwt = body['detail'] is String;
+        } catch (_) {}
+        if (!appJwt) needsReconnect = true;
       }
       throw GoogleContactsException(
         message,

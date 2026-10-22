@@ -2,6 +2,10 @@ import 'package:a_fish_in_sea/finances/model/budget.dart';
 import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:a_fish_in_sea/finances/model/recurring_rule.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
+import 'package:a_fish_in_sea/finances/model/transaction.dart';
+import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
+import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
+import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/goals/model/goal.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
@@ -32,24 +36,23 @@ Node node(
   String? sourceEventId,
   DateTime? actualStart,
   DateTime? actualEnd,
-}) =>
-    Node(
-      id: id,
-      title: id,
-      parentIds: parents,
-      status: status,
-      createdAt: DateTime(2026, 9, 1),
-      schedule: schedule,
-      money: money,
-      effort: effort,
-      recurrence: recurrence,
-      rule: rule,
-      instanceOfId: instanceOfId,
-      classId: classId,
-      sourceEventId: sourceEventId,
-      actualStart: actualStart,
-      actualEnd: actualEnd,
-    );
+}) => Node(
+  id: id,
+  title: id,
+  parentIds: parents,
+  status: status,
+  createdAt: DateTime(2026, 9, 1),
+  schedule: schedule,
+  money: money,
+  effort: effort,
+  recurrence: recurrence,
+  rule: rule,
+  instanceOfId: instanceOfId,
+  classId: classId,
+  sourceEventId: sourceEventId,
+  actualStart: actualStart,
+  actualEnd: actualEnd,
+);
 
 void main() {
   setUp(() {
@@ -75,8 +78,7 @@ void main() {
       final cubit = NodeCubit();
       expect(cubit.addNode(node('a')), isNull);
       expect(cubit.addNode(node('b', parents: ['a'])), isNull);
-      expect(
-          cubit.addNode(node('self', parents: ['self'])), isNotNull);
+      expect(cubit.addNode(node('self', parents: ['self'])), isNotNull);
       expect(cubit.addNode(node('ghost', parents: ['nope'])), isNotNull);
       expect(cubit.addNode(node('dup', parents: ['a', 'a'])), isNotNull);
       // a <- b exists; reparenting a under b would cycle.
@@ -95,9 +97,9 @@ void main() {
       cubit.deleteNode('a');
       expect(cubit.byId('a'), isNull);
       expect(cubit.byId('only-a'), isNull);
-      expect(
-          cubit.byId('shared')?.parentIds, ['b'],
-          reason: 'shared child survives under its other parent');
+      expect(cubit.byId('shared')?.parentIds, [
+        'b',
+      ], reason: 'shared child survives under its other parent');
     });
   });
 
@@ -113,28 +115,36 @@ void main() {
     test('scheduled node appears on calendar + queue; money on ledger', () {
       final cubit = NodeCubit();
       final day = DateTime(2026, 9, 12, 9);
-      cubit.addNode(node('hw',
+      cubit.addNode(
+        node(
+          'hw',
           schedule: ScheduleFacet(
             due: day,
             start: day,
             end: day.add(const Duration(hours: 1)),
           ),
-          money: const MoneyFacet(targetAmount: 20)));
+          money: const MoneyFacet(targetAmount: 20),
+        ),
+      );
       expect(calendarNodes(cubit.state).map((n) => n.id), ['hw']);
       expect(
-          priorityQueue(cubit.state, DateTime(2026, 9, 10)).map((n) => n.id),
-          ['hw']);
+        priorityQueue(cubit.state, DateTime(2026, 9, 10)).map((n) => n.id),
+        ['hw'],
+      );
       expect(ledgerNodes(cubit.state).map((n) => n.id), ['hw']);
     });
 
     test('queue sorts overdue first, then earliest due', () {
       final cubit = NodeCubit();
-      cubit.addNode(node('later',
-          schedule: ScheduleFacet(due: DateTime(2026, 9, 20))));
-      cubit.addNode(node('over',
-          schedule: ScheduleFacet(due: DateTime(2026, 9, 1))));
-      cubit.addNode(node('soon',
-          schedule: ScheduleFacet(due: DateTime(2026, 9, 13))));
+      cubit.addNode(
+        node('later', schedule: ScheduleFacet(due: DateTime(2026, 9, 20))),
+      );
+      cubit.addNode(
+        node('over', schedule: ScheduleFacet(due: DateTime(2026, 9, 1))),
+      );
+      cubit.addNode(
+        node('soon', schedule: ScheduleFacet(due: DateTime(2026, 9, 13))),
+      );
       final queue = priorityQueue(cubit.state, DateTime(2026, 9, 12));
       expect(queue.map((n) => n.id), ['over', 'soon', 'later']);
     });
@@ -143,10 +153,13 @@ void main() {
   group('example: run every day', () {
     test('template generates daily instances, edits preserved', () {
       final cubit = NodeCubit();
-      cubit.addNode(node('run',
+      cubit.addNode(
+        node(
+          'run',
           effort: const EffortFacet(targetMinutes: 30),
-          recurrence:
-              const NodeRecurrence(frequency: TimeScale.daily)));
+          recurrence: const NodeRecurrence(frequency: TimeScale.daily),
+        ),
+      );
       final made = cubit.generateInstances(
         templateId: 'run',
         from: DateTime(2026, 9, 12),
@@ -156,12 +169,13 @@ void main() {
       expect(cubit.instancesOf('run').length, 3);
       // Re-running is a no-op (user edits preserved).
       expect(
-          cubit.generateInstances(
-            templateId: 'run',
-            from: DateTime(2026, 9, 12),
-            horizon: DateTime(2026, 9, 14, 23, 59),
-          ),
-          0);
+        cubit.generateInstances(
+          templateId: 'run',
+          from: DateTime(2026, 9, 12),
+          horizon: DateTime(2026, 9, 14, 23, 59),
+        ),
+        0,
+      );
       final first = cubit.byId('run@2026-09-12')!;
       expect(first.parentIds, ['run']);
       expect(first.instanceOfId, 'run');
@@ -176,67 +190,210 @@ void main() {
   group('example: spend less than X on food', () {
     test('subtree sums toward the cap; linking reports it', () {
       final cubit = NodeCubit();
-      cubit.addNode(node('food',
+      cubit.addNode(
+        node(
+          'food',
           money: const MoneyFacet(
-              targetAmount: 400, direction: MoneyDirection.spend)));
-      cubit.addNode(node('groceries',
+            targetAmount: 400,
+            direction: MoneyDirection.spend,
+          ),
+        ),
+      );
+      cubit.addNode(
+        node(
+          'groceries',
           parents: ['food'],
           schedule: ScheduleFacet(due: DateTime(2026, 9, 12)),
           money: const MoneyFacet(
-              targetAmount: 62.40, direction: MoneyDirection.spend)));
+            targetAmount: 62.40,
+            direction: MoneyDirection.spend,
+          ),
+        ),
+      );
       cubit.linkTransaction(
-          nodeId: 'groceries',
-          transactionId: 'plaid-1',
-          transactionAmount: -62.40);
+        nodeId: 'groceries',
+        transactionId: 'plaid-1',
+        transactionAmount: -62.40,
+      );
       final groceries = cubit.byId('groceries')!;
       expect(groceries.money?.status, MoneyStatus.paid);
-      expect(
-          moneyActualForNode(cubit.byId('food')!, cubit.state), 62.40);
-      final progress = progressForest(cubit.state,
-          moneyActualByNodeId: {
-            'groceries': 62.40,
-          });
+      expect(moneyActualForNode(cubit.byId('food')!, cubit.state), 62.40);
+      final progress = progressForest(
+        cubit.state,
+        moneyActualByNodeId: {'groceries': 62.40},
+      );
       expect(progress['food'], closeTo(62.40 / 400, 0.001));
     });
 
     test('smaller transaction subdivides with a remainder', () {
       final cubit = NodeCubit();
-      cubit.addNode(node('gas',
+      cubit.addNode(
+        node(
+          'gas',
           schedule: ScheduleFacet(due: DateTime(2026, 9, 12)),
           money: const MoneyFacet(
-              targetAmount: 50, direction: MoneyDirection.spend)));
+            targetAmount: 50,
+            direction: MoneyDirection.spend,
+          ),
+        ),
+      );
       cubit.linkTransaction(
-          nodeId: 'gas', transactionId: 'plaid-2', transactionAmount: -45);
+        nodeId: 'gas',
+        transactionId: 'plaid-2',
+        transactionAmount: -45,
+      );
       expect(cubit.byId('gas')?.money?.actualAmount, 45);
       expect(cubit.byId('gas')?.money?.status, MoneyStatus.paid);
-      final remainder =
-          cubit.state.where((n) => n.title.contains('remainder'));
+      final remainder = cubit.state.where((n) => n.title.contains('remainder'));
       expect(remainder.length, 1);
       expect(remainder.single.money?.targetAmount, closeTo(5, 0.001));
     });
 
     test('larger transaction logs actual without touching the target', () {
       final cubit = NodeCubit();
-      cubit.addNode(node('dining',
+      cubit.addNode(
+        node(
+          'dining',
           money: const MoneyFacet(
-              targetAmount: 50, direction: MoneyDirection.spend)));
+            targetAmount: 50,
+            direction: MoneyDirection.spend,
+          ),
+        ),
+      );
       cubit.linkTransaction(
-          nodeId: 'dining', transactionId: 'plaid-3', transactionAmount: -70);
+        nodeId: 'dining',
+        transactionId: 'plaid-3',
+        transactionAmount: -70,
+      );
       final dining = cubit.byId('dining')!;
       expect(dining.money?.actualAmount, 70);
       expect(dining.money?.targetAmount, 50);
       expect(leafProgress(dining, moneyActual: 70), 1.0);
     });
 
+    test(
+      'moving assignment removes the amount from old node before adding it',
+      () {
+        final nodes = NodeCubit();
+        final transactions = TransactionsCubit();
+        nodes.addNode(node('old', money: const MoneyFacet(targetAmount: 40)));
+        nodes.addNode(node('new', money: const MoneyFacet(targetAmount: 40)));
+        transactions.syncFromPlaid([
+          Transaction(
+            id: 'move-me',
+            accountId: 'account',
+            amount: -40,
+            date: DateTime(2026, 9, 18),
+            name: 'Groceries',
+            assignedNodeId: 'old',
+          ),
+        ]);
+        nodes.linkTransaction(
+          nodeId: 'old',
+          transactionId: 'move-me',
+          transactionAmount: -40,
+        );
+
+        nodes.unlinkTransaction('old', 'move-me', transactionAmount: -40);
+        nodes.linkTransaction(
+          nodeId: 'new',
+          transactionId: 'move-me',
+          transactionAmount: -40,
+        );
+        transactions.assignNode('move-me', 'new');
+
+        expect(nodes.byId('old')?.money?.actualAmount, isNull);
+        expect(nodes.byId('old')?.money?.status, MoneyStatus.projected);
+        expect(nodes.byId('old')?.money?.linkedTransactionIds, isEmpty);
+        expect(nodes.byId('new')?.money?.actualAmount, 40);
+        expect(nodes.byId('new')?.money?.linkedTransactionIds, ['move-me']);
+        expect(transactions.state.single.assignedNodeId, 'new');
+      },
+    );
+
+    test(
+      'unlinking one of multiple transactions keeps the remaining actual',
+      () {
+        final cubit = NodeCubit();
+        cubit.addNode(
+          node('budget', money: const MoneyFacet(targetAmount: 100)),
+        );
+        cubit.linkTransaction(
+          nodeId: 'budget',
+          transactionId: 'one',
+          transactionAmount: -20,
+        );
+        cubit.linkTransaction(
+          nodeId: 'budget',
+          transactionId: 'two',
+          transactionAmount: -30,
+        );
+        cubit.unlinkTransaction('budget', 'one', transactionAmount: -20);
+
+        expect(cubit.byId('budget')?.money?.actualAmount, 30);
+        expect(cubit.byId('budget')?.money?.status, MoneyStatus.paid);
+        expect(cubit.byId('budget')?.money?.linkedTransactionIds, ['two']);
+      },
+    );
+
+    test('unassign clears the transaction and is one undoable change', () {
+      final undo = UndoCubit();
+      final nodes = NodeCubit();
+      final transactions = TransactionsCubit();
+      nodes.addNode(
+        node(
+          'budget',
+          money: const MoneyFacet(
+            targetAmount: 100,
+            actualAmount: 25,
+            status: MoneyStatus.paid,
+            linkedTransactionIds: ['tx'],
+          ),
+        ),
+      );
+      transactions.syncFromPlaid([
+        Transaction(
+          id: 'tx',
+          accountId: 'acc',
+          amount: -25,
+          date: DateTime(2026, 9, 1),
+          name: 'Store',
+          assignedNodeId: 'budget',
+        ),
+      ]);
+      undo.resetHistory();
+
+      RevertableHydratedCubit.atomic([nodes, transactions], () {
+        nodes.unlinkTransaction('budget', 'tx', transactionAmount: -25);
+        transactions.clearNodeAssignment('tx');
+      });
+
+      expect(nodes.byId('budget')?.money?.actualAmount, isNull);
+      expect(transactions.state.single.assignedNodeId, isNull);
+      expect(undo.state.undoStack, hasLength(1));
+      undo.undo();
+      expect(nodes.byId('budget')?.money?.actualAmount, 25);
+      expect(nodes.byId('budget')?.money?.linkedTransactionIds, ['tx']);
+      expect(transactions.state.single.assignedNodeId, 'budget');
+      undo.close();
+    });
+
     test('subdivide + merge round-trip', () {
       final cubit = NodeCubit();
-      cubit.addNode(node('x',
+      cubit.addNode(
+        node(
+          'x',
           money: const MoneyFacet(
-              targetAmount: 100, direction: MoneyDirection.spend)));
+            targetAmount: 100,
+            direction: MoneyDirection.spend,
+          ),
+        ),
+      );
       cubit.subdivideNode('x', 60);
       expect(cubit.byId('x')?.money?.targetAmount, 60);
-      final remId =
-          cubit.state.firstWhere((n) => n.title.contains('remainder')).id;
+      final remId = cubit.state
+          .firstWhere((n) => n.title.contains('remainder'))
+          .id;
       cubit.mergeNodes('x', remId);
       expect(cubit.byId('x')?.money?.targetAmount, 100);
       expect(cubit.byId(remId), isNull);
@@ -245,21 +402,30 @@ void main() {
 
   group('example: three days ahead on homework', () {
     List<Node> homeworkSet() => [
-          node('hw1',
-              classId: 'stat230',
-              status: NodeStatus.done,
-              schedule: ScheduleFacet(due: DateTime(2026, 9, 13))),
-          node('hw2',
-              classId: 'stat230',
-              schedule: ScheduleFacet(due: DateTime(2026, 9, 14))),
-          node('later',
-              classId: 'stat230',
-              schedule: ScheduleFacet(due: DateTime(2026, 9, 30))),
-        ];
+      node(
+        'hw1',
+        classId: 'stat230',
+        status: NodeStatus.done,
+        schedule: ScheduleFacet(due: DateTime(2026, 9, 13)),
+      ),
+      node(
+        'hw2',
+        classId: 'stat230',
+        schedule: ScheduleFacet(due: DateTime(2026, 9, 14)),
+      ),
+      node(
+        'later',
+        classId: 'stat230',
+        schedule: ScheduleFacet(due: DateTime(2026, 9, 30)),
+      ),
+    ];
 
     test('unsatisfied while anything due soon is open', () {
       final result = evaluateHomeworkAhead(
-          all: homeworkSet(), now: DateTime(2026, 9, 12), horizonDays: 3);
+        all: homeworkSet(),
+        now: DateTime(2026, 9, 12),
+        horizonDays: 3,
+      );
       expect(result.dueSoon.map((n) => n.id), ['hw1', 'hw2']);
       expect(result.satisfied, isFalse);
       expect(result.doneCount, 1);
@@ -267,42 +433,60 @@ void main() {
 
     test('satisfied once the window is done; far tasks ignored', () {
       final all = homeworkSet()
-          .map((n) => n.id == 'hw2'
-              ? n.copyWith(status: NodeStatus.done)
-              : n)
+          .map((n) => n.id == 'hw2' ? n.copyWith(status: NodeStatus.done) : n)
           .toList();
       final result = evaluateHomeworkAhead(
-          all: all, now: DateTime(2026, 9, 12), horizonDays: 3);
+        all: all,
+        now: DateTime(2026, 9, 12),
+        horizonDays: 3,
+      );
       expect(result.satisfied, isTrue);
     });
 
     test('rule node carries the horizon definition', () {
       final cubit = NodeCubit();
-      cubit.addNode(node('ahead',
+      cubit.addNode(
+        node(
+          'ahead',
           rule: const RuleFacet(
-              kind: NodeRuleKind.homeworkAhead, horizonDays: 3)));
+            kind: NodeRuleKind.homeworkAhead,
+            horizonDays: 3,
+          ),
+        ),
+      );
       expect(cubit.byId('ahead')?.rule?.horizonDays, 3);
       expect(
-          Node.fromJson(cubit.byId('ahead')!.toJson()).rule?.kind,
-          NodeRuleKind.homeworkAhead);
+        Node.fromJson(cubit.byId('ahead')!.toJson()).rule?.kind,
+        NodeRuleKind.homeworkAhead,
+      );
     });
   });
 
   group('example: buy a house + never go negative', () {
     test('income projections fund the goal; actuals replace estimates', () {
       final cubit = NodeCubit();
-      cubit.addNode(node('house',
+      cubit.addNode(
+        node(
+          'house',
           schedule: ScheduleFacet(due: DateTime(2036, 6, 1)),
           money: const MoneyFacet(
-              targetAmount: 40000, direction: MoneyDirection.save)));
-      cubit.addNode(node('pay',
+            targetAmount: 40000,
+            direction: MoneyDirection.save,
+          ),
+        ),
+      );
+      cubit.addNode(
+        node(
+          'pay',
           parents: ['house'],
           money: const MoneyFacet(
-              targetAmount: 2100,
-              direction: MoneyDirection.income,
-              isRecurring: true),
-          recurrence: const NodeRecurrence(
-              frequency: TimeScale.biweekly)));
+            targetAmount: 2100,
+            direction: MoneyDirection.income,
+            isRecurring: true,
+          ),
+          recurrence: const NodeRecurrence(frequency: TimeScale.biweekly),
+        ),
+      );
       final made = cubit.generateInstances(
         templateId: 'pay',
         from: DateTime(2026, 9, 18),
@@ -313,9 +497,10 @@ void main() {
       expect(first.money?.status, MoneyStatus.projected);
       // Payday arrives: hypothetical becomes real, template untouched.
       cubit.linkTransaction(
-          nodeId: first.id,
-          transactionId: 'plaid-pay-1',
-          transactionAmount: 2132.10);
+        nodeId: first.id,
+        transactionId: 'plaid-pay-1',
+        transactionAmount: 2132.10,
+      );
       expect(cubit.byId(first.id)?.money?.actualAmount, 2132.10);
       expect(cubit.byId(first.id)?.money?.status, MoneyStatus.paid);
       expect(cubit.byId('pay')?.money?.targetAmount, 2100);
@@ -323,44 +508,62 @@ void main() {
 
     test('solvency finds the first negative spot', () {
       final nodes = [
-        node('rent',
-            schedule: ScheduleFacet(
-                due: DateTime(2026, 10, 1), isFixed: true),
-            money: const MoneyFacet(
-                targetAmount: 900,
-                direction: MoneyDirection.spend,
-                isFixed: true)),
-        node('pay',
-            schedule: ScheduleFacet(due: DateTime(2026, 10, 2)),
-            money: const MoneyFacet(
-                targetAmount: 800, direction: MoneyDirection.income)),
+        node(
+          'rent',
+          schedule: ScheduleFacet(due: DateTime(2026, 10, 1), isFixed: true),
+          money: const MoneyFacet(
+            targetAmount: 900,
+            direction: MoneyDirection.spend,
+            isFixed: true,
+          ),
+        ),
+        node(
+          'pay',
+          schedule: ScheduleFacet(due: DateTime(2026, 10, 2)),
+          money: const MoneyFacet(
+            targetAmount: 800,
+            direction: MoneyDirection.income,
+          ),
+        ),
       ];
       final broke = simulateSolvency(
-          all: nodes,
-          startingBalance: 500,
-          from: DateTime(2026, 9, 12));
+        all: nodes,
+        startingBalance: 500,
+        from: DateTime(2026, 9, 12),
+      );
       expect(broke.staysNonNegative, isFalse);
       expect(broke.firstNegativeDate, DateTime(2026, 10, 1));
       final fine = simulateSolvency(
-          all: nodes,
-          startingBalance: 5000,
-          from: DateTime(2026, 9, 12));
+        all: nodes,
+        startingBalance: 5000,
+        from: DateTime(2026, 9, 12),
+      );
       expect(fine.staysNonNegative, isTrue);
     });
 
     test('fixed contract segment + estimate tail coexist', () {
       final cubit = NodeCubit();
-      cubit.addNode(node('housing-fixed',
-          schedule: ScheduleFacet(
-              due: DateTime(2026, 9, 1), isFixed: true),
+      cubit.addNode(
+        node(
+          'housing-fixed',
+          schedule: ScheduleFacet(due: DateTime(2026, 9, 1), isFixed: true),
           money: const MoneyFacet(
-              targetAmount: 900,
-              direction: MoneyDirection.spend,
-              isFixed: true)));
-      cubit.addNode(node('housing-est',
+            targetAmount: 900,
+            direction: MoneyDirection.spend,
+            isFixed: true,
+          ),
+        ),
+      );
+      cubit.addNode(
+        node(
+          'housing-est',
           schedule: ScheduleFacet(due: DateTime(2026, 10, 1)),
           money: const MoneyFacet(
-              targetAmount: 950, direction: MoneyDirection.spend)));
+            targetAmount: 950,
+            direction: MoneyDirection.spend,
+          ),
+        ),
+      );
       expect(cubit.byId('housing-fixed')?.money?.isFixed, isTrue);
       expect(cubit.byId('housing-est')?.money?.isFixed, isFalse);
       expect(cubit.byId('housing-est')?.schedule?.isFixed, isFalse);
@@ -372,20 +575,28 @@ void main() {
       final day = DateTime(2026, 9, 12, 9);
       final all = [
         node('hw-template'),
-        node('i1',
-            instanceOfId: 'hw-template',
-            parents: ['hw-template'],
-            schedule: ScheduleFacet(
-                start: day, end: day.add(const Duration(minutes: 60))),
-            actualStart: day,
-            actualEnd: day.add(const Duration(minutes: 70))),
-        node('i2',
-            instanceOfId: 'hw-template',
-            parents: ['hw-template'],
-            schedule: ScheduleFacet(
-                start: day, end: day.add(const Duration(minutes: 60))),
-            actualStart: day,
-            actualEnd: day.add(const Duration(minutes: 120))),
+        node(
+          'i1',
+          instanceOfId: 'hw-template',
+          parents: ['hw-template'],
+          schedule: ScheduleFacet(
+            start: day,
+            end: day.add(const Duration(minutes: 60)),
+          ),
+          actualStart: day,
+          actualEnd: day.add(const Duration(minutes: 70)),
+        ),
+        node(
+          'i2',
+          instanceOfId: 'hw-template',
+          parents: ['hw-template'],
+          schedule: ScheduleFacet(
+            start: day,
+            end: day.add(const Duration(minutes: 60)),
+          ),
+          actualStart: day,
+          actualEnd: day.add(const Duration(minutes: 120)),
+        ),
       ];
       final stats = estimateStatsForTemplate('hw-template', all);
       expect(stats.count, 2);
@@ -405,8 +616,7 @@ void main() {
       expect(cubit.byId('a')?.isTracking, isFalse);
       expect(cubit.byId('a')?.hasReported, isTrue);
       expect(cubit.byId('b')?.isTracking, isTrue);
-      cubit.stopTracking('b',
-          now: t0.add(const Duration(minutes: 35)));
+      cubit.stopTracking('b', now: t0.add(const Duration(minutes: 35)));
       expect(cubit.byId('b')?.reportedDuration, const Duration(minutes: 30));
     });
 
@@ -416,8 +626,11 @@ void main() {
       final t0 = DateTime(2026, 9, 12, 9);
       cubit.startTracking('a', now: t0);
       final corrected = DateTime(2026, 9, 12, 8, 30);
-      cubit.setTimerStart('a', corrected,
-          now: t0.add(const Duration(minutes: 10)));
+      cubit.setTimerStart(
+        'a',
+        corrected,
+        now: t0.add(const Duration(minutes: 10)),
+      );
       final live = cubit.byId('a')!;
       expect(live.isTracking, isTrue);
       expect(live.timerStartedAt, corrected);
@@ -430,10 +643,14 @@ void main() {
       final t0 = DateTime(2026, 9, 12, 9);
       cubit.startTracking('a', now: t0);
       cubit.setTimerStart(
-          'a', t0.add(const Duration(hours: 2)),
-          now: t0.add(const Duration(minutes: 10)));
-      expect(cubit.byId('a')?.timerStartedAt,
-          t0.add(const Duration(minutes: 10)));
+        'a',
+        t0.add(const Duration(hours: 2)),
+        now: t0.add(const Duration(minutes: 10)),
+      );
+      expect(
+        cubit.byId('a')?.timerStartedAt,
+        t0.add(const Duration(minutes: 10)),
+      );
       expect(cubit.byId('a')?.isTracking, isTrue);
       // Idle node: no timer appears out of an edit.
       cubit.setTimerStart('b', t0, now: t0);
@@ -442,8 +659,7 @@ void main() {
       cubit.setTimerStart('missing', t0, now: t0);
     });
 
-    test('setReported writes the interval and takes over a running timer',
-        () {
+    test('setReported writes the interval and takes over a running timer', () {
       final cubit = NodeCubit();
       cubit.addNode(node('a'));
       cubit.addNode(node('b'));
@@ -455,9 +671,11 @@ void main() {
       expect(live.reportedDuration, const Duration(hours: 1));
       // Manual entry without ever starting the timer.
       cubit.setReported(
-          'b', DateTime(2026, 9, 11, 19), DateTime(2026, 9, 11, 20, 30));
-      expect(cubit.byId('b')?.reportedDuration,
-          const Duration(minutes: 90));
+        'b',
+        DateTime(2026, 9, 11, 19),
+        DateTime(2026, 9, 11, 20, 30),
+      );
+      expect(cubit.byId('b')?.reportedDuration, const Duration(minutes: 90));
     });
 
     test('setReported floors a non-positive range to one minute', () {
@@ -465,8 +683,7 @@ void main() {
       cubit.addNode(node('a'));
       final t0 = DateTime(2026, 9, 12, 9);
       cubit.setReported('a', t0, t0.subtract(const Duration(minutes: 5)));
-      expect(cubit.byId('a')?.reportedDuration,
-          const Duration(minutes: 1));
+      expect(cubit.byId('a')?.reportedDuration, const Duration(minutes: 1));
     });
 
     test('running timer survives a storage round trip (rebuild)', () {
@@ -510,54 +727,63 @@ void main() {
   group('legacy importers', () {
     test('goal / task / budget / expense / rule import without loss', () {
       final cubit = NodeCubit();
-      final goalId = cubit.importGoal(Goal(
-        id: 'g1',
-        title: 'Food month',
-        type: GoalType.financial,
-        startDate: DateTime(2026, 9, 1),
-        deadline: DateTime(2026, 9, 30),
-        targetAmount: 400,
-        period: TimeScale.monthly,
-        showInTasks: true,
-      ));
+      final goalId = cubit.importGoal(
+        Goal(
+          id: 'g1',
+          title: 'Food month',
+          type: GoalType.financial,
+          startDate: DateTime(2026, 9, 1),
+          deadline: DateTime(2026, 9, 30),
+          targetAmount: 400,
+          period: TimeScale.monthly,
+          showInTasks: true,
+        ),
+      );
       expect(cubit.byId(goalId)?.money?.targetAmount, 400);
       expect(cubit.byId(goalId)?.hasDue, isTrue);
 
-      final taskId = cubit.importTask(Task(
-        id: 't1',
-        title: 'Essay',
-        due: DateTime(2026, 9, 15),
-        sourceEventId: 'evt-1',
-        classId: 'eng',
-      ));
+      final taskId = cubit.importTask(
+        Task(
+          id: 't1',
+          title: 'Essay',
+          due: DateTime(2026, 9, 15),
+          sourceEventId: 'evt-1',
+          classId: 'eng',
+        ),
+      );
       expect(cubit.byId(taskId)?.isHomework, isTrue);
 
-      final budgetId = cubit.importBudget(Budget(
-        id: 'b1',
-        name: 'Food',
-        category: 'food',
-        goalAmount: 400,
-        period: TimeScale.monthly,
-        startDate: DateTime(2026, 9, 1),
-      ));
+      final budgetId = cubit.importBudget(
+        Budget(
+          id: 'b1',
+          name: 'Food',
+          category: 'food',
+          goalAmount: 400,
+          period: TimeScale.monthly,
+          startDate: DateTime(2026, 9, 1),
+        ),
+      );
       expect(cubit.byId(budgetId)?.isTemplate, isTrue);
 
-      final expenseId = cubit.importExpense(Expense(
-        id: 'x1',
-        name: 'Groceries',
-        amount: -62.40,
-        date: DateTime(2026, 9, 12),
-      ));
-      expect(
-          cubit.byId(expenseId)?.money?.targetAmount, closeTo(62.4, 0.001));
+      final expenseId = cubit.importExpense(
+        Expense(
+          id: 'x1',
+          name: 'Groceries',
+          amount: -62.40,
+          date: DateTime(2026, 9, 12),
+        ),
+      );
+      expect(cubit.byId(expenseId)?.money?.targetAmount, closeTo(62.4, 0.001));
 
-      final ruleId = cubit.importRecurringRule(RecurringRule(
-        id: 'r1',
-        name: 'Paycheck',
-        amount: 2100,
-        frequency: TimeScale.biweekly,
-        startDate: DateTime(2026, 9, 18),
-      ));
+      final ruleId = cubit.importRecurringRule(
+        RecurringRule(
+          id: 'r1',
+          name: 'Paycheck',
+          amount: 2100,
+          frequency: TimeScale.biweekly,
+          startDate: DateTime(2026, 9, 18),
+        ),
+      );
       expect(cubit.byId(ruleId)?.money?.direction, MoneyDirection.income);
     });
   });
@@ -573,23 +799,24 @@ void main() {
         completedAt: DateTime(2026, 9, 12),
         createdAt: DateTime(2026, 9, 1),
         schedule: ScheduleFacet(
-            due: DateTime(2026, 9, 30),
-            start: DateTime(2026, 9, 12, 9),
-            end: DateTime(2026, 9, 12, 10),
-            isFixed: true),
+          due: DateTime(2026, 9, 30),
+          start: DateTime(2026, 9, 12, 9),
+          end: DateTime(2026, 9, 12, 10),
+          isFixed: true,
+        ),
         money: const MoneyFacet(
-            targetAmount: 400,
-            direction: MoneyDirection.spend,
-            status: MoneyStatus.projected,
-            period: TimeScale.monthly,
-            isRecurring: true,
-            autoRollover: true,
-            rolloverAmount: 10,
-            isFixed: false,
-            linkedTransactionIds: ['tx1']),
+          targetAmount: 400,
+          direction: MoneyDirection.spend,
+          status: MoneyStatus.projected,
+          period: TimeScale.monthly,
+          isRecurring: true,
+          autoRollover: true,
+          rolloverAmount: 10,
+          isFixed: false,
+          linkedTransactionIds: ['tx1'],
+        ),
         effort: const EffortFacet(targetMinutes: 60),
-        recurrence:
-            const NodeRecurrence(frequency: TimeScale.daily),
+        recurrence: const NodeRecurrence(frequency: TimeScale.daily),
         rule: const RuleFacet(kind: NodeRuleKind.homeworkAhead),
         instanceOfId: 'tmpl',
         overriddenFields: const {'money.targetAmount'},
@@ -598,10 +825,11 @@ void main() {
     });
 
     test('unknown enums fall back; corrupt entries skipped', () {
-      final full = node('a',
-          schedule: ScheduleFacet(due: DateTime(2026, 9, 30)),
-          money:
-              const MoneyFacet(targetAmount: 10));
+      final full = node(
+        'a',
+        schedule: ScheduleFacet(due: DateTime(2026, 9, 30)),
+        money: const MoneyFacet(targetAmount: 10),
+      );
       final bad = full.toJson()
         ..['status'] = 'renamed'
         ..['money'] = {'direction': 'renamed', 'targetAmount': 10};
@@ -610,7 +838,12 @@ void main() {
 
       final cubit = NodeCubit();
       final restored = cubit.fromJson({
-        'nodes': [full.toJson(), {'id': 42}, 'nope', {'title': 'no-id'}],
+        'nodes': [
+          full.toJson(),
+          {'id': 42},
+          'nope',
+          {'title': 'no-id'},
+        ],
       });
       expect(restored?.map((n) => n.id), ['a']);
     });
@@ -623,7 +856,7 @@ void main() {
         'createdAt': DateTime(2026, 1, 1).toIso8601String(),
       };
       final restored = cubit.fromJson({
-        'nodes': [legacy]
+        'nodes': [legacy],
       });
       expect(restored?.single.schedule, isNull);
       expect(restored?.single.money, isNull);
@@ -675,28 +908,58 @@ void main() {
 
     test('learning suite commentary is not an assignment', () {
       expect(
-          looksLikeLearningSuiteAssignment('England', 'England discussion notes'),
-          isFalse);
-      expect(looksLikeLearningSuiteAssignment('Homework 5', 'Solve 1-10'), isTrue);
+        looksLikeLearningSuiteAssignment('England', 'England discussion notes'),
+        isFalse,
+      );
+      expect(
+        looksLikeLearningSuiteAssignment('Homework 5', 'Solve 1-10'),
+        isTrue,
+      );
       expect(looksLikeLearningSuiteAssignment('Quiz 1', null), isTrue);
+    });
+
+    test('feed-event nodes keep the event all-day flag', () {
+      final cubit = NodeCubit();
+      final allDay = PlannerEvent(
+        id: 'evt:allday-1',
+        subject: 'All-day workshop',
+        start: DateTime(2030, 3, 2),
+        end: DateTime(2030, 3, 4),
+        allDay: true,
+        feedId: 'canvas',
+        sourceUid: 'allday-1',
+      );
+      cubit.ensureNodesForFeedEvents([allDay]);
+      expect(cubit.byId('evt:allday-1')?.schedule?.allDay, isTrue);
+
+      final cubit2 = NodeCubit();
+      cubit2.ensureNodeForFeedEvent(allDay);
+      expect(cubit2.byId('evt:allday-1')?.schedule?.allDay, isTrue);
+      expect(cubit2.byId('evt:allday-1')?.schedule?.start,
+          DateTime(2030, 3, 2));
+      expect(
+          cubit2.byId('evt:allday-1')?.schedule?.end, DateTime(2030, 3, 4));
     });
   });
 
   group('event links', () {
     PlannerEvent event(String id) => PlannerEvent(
-          id: id,
-          subject: 'Event $id',
-          start: DateTime(2026, 9, 12, 9),
-          end: DateTime(2026, 9, 12, 10),
-        );
+      id: id,
+      subject: 'Event $id',
+      start: DateTime(2026, 9, 12, 9),
+      end: DateTime(2026, 9, 12, 10),
+    );
 
     test('personal link round-trips and mirrors completion', () {
       final cubit = NodeCubit();
       final id = cubit.upsertLinkedNodeForEvent(event('evt:1'));
       expect(cubit.byId(id)?.calendarEventId, 'evt:1');
       expect(cubit.byId(id)?.schedule?.due, DateTime(2026, 9, 12, 9));
-      cubit.setDoneForEvent('evt:1',
-          done: true, completedAt: DateTime(2026, 9, 12, 11));
+      cubit.setDoneForEvent(
+        'evt:1',
+        done: true,
+        completedAt: DateTime(2026, 9, 12, 11),
+      );
       expect(cubit.byId(id)?.isDone, isTrue);
       cubit.setFailedForEvent('evt:1', true);
       expect(cubit.byId(id)?.status, NodeStatus.failed);
@@ -706,14 +969,16 @@ void main() {
 
     test('feed shadow uses the event id', () {
       final cubit = NodeCubit();
-      cubit.ensureNodeForFeedEvent(PlannerEvent(
-        id: 'evt:2',
-        subject: 'Physics HW',
-        start: DateTime(2026, 9, 12, 9),
-        end: DateTime(2026, 9, 12, 10),
-        feedId: 'f1',
-        classLabel: 'Physics',
-      ));
+      cubit.ensureNodeForFeedEvent(
+        PlannerEvent(
+          id: 'evt:2',
+          subject: 'Physics HW',
+          start: DateTime(2026, 9, 12, 9),
+          end: DateTime(2026, 9, 12, 10),
+          feedId: 'f1',
+          classLabel: 'Physics',
+        ),
+      );
       final shadow = cubit.byId('evt:2');
       expect(shadow?.sourceEventId, 'evt:2');
       expect(shadow?.classLabel, 'Physics');
@@ -721,27 +986,31 @@ void main() {
 
     test('scheduling an imported assignment keeps its due date', () {
       final cubit = NodeCubit();
-      cubit.addNode(Node(
-        id: 'hw:f1:evt',
-        title: 'AI Plan',
-        createdAt: DateTime(2026, 9, 12, 8),
-        schedule: ScheduleFacet(
-          due: DateTime(2026, 9, 16, 15),
-          start: DateTime(2026, 9, 16, 15),
-          end: DateTime(2026, 9, 16, 15),
+      cubit.addNode(
+        Node(
+          id: 'hw:f1:evt',
+          title: 'AI Plan',
+          createdAt: DateTime(2026, 9, 12, 8),
+          schedule: ScheduleFacet(
+            due: DateTime(2026, 9, 16, 15),
+            start: DateTime(2026, 9, 16, 15),
+            end: DateTime(2026, 9, 16, 15),
+          ),
+          sourceEventId: 'hw:f1:evt',
+          feedId: 'f1',
+          classId: 'f1',
+          classLabel: 'C S 291',
         ),
-        sourceEventId: 'hw:f1:evt',
-        feedId: 'f1',
-        classId: 'f1',
-        classLabel: 'C S 291',
-      ));
-      final id = cubit.upsertLinkedNodeForEvent(PlannerEvent(
-        id: 'evt:1',
-        subject: 'AI Plan',
-        start: DateTime(2026, 9, 14, 9),
-        end: DateTime(2026, 9, 14, 10),
-        taskId: 'hw:f1:evt',
-      ));
+      );
+      final id = cubit.upsertLinkedNodeForEvent(
+        PlannerEvent(
+          id: 'evt:1',
+          subject: 'AI Plan',
+          start: DateTime(2026, 9, 14, 9),
+          end: DateTime(2026, 9, 14, 10),
+          taskId: 'hw:f1:evt',
+        ),
+      );
       final node = cubit.byId(id)!;
       // The block is when the user plans to work; the due date came from
       // the class feed and must survive being scheduled.
@@ -755,23 +1024,102 @@ void main() {
     test('recording + neighbours split as before', () {
       final now = DateTime(2026, 9, 12, 10);
       final nodes = [
-        node('rec',
-            schedule: ScheduleFacet(
-              start: DateTime(2026, 9, 12, 9),
-              end: DateTime(2026, 9, 12, 11),
-            )),
-        node('later',
-            schedule: ScheduleFacet(
-              start: DateTime(2026, 9, 12, 12),
-              end: DateTime(2026, 9, 12, 13),
-            )),
-        node('plain',
-            schedule: ScheduleFacet(due: DateTime(2026, 9, 13))),
+        node(
+          'rec',
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 12, 9),
+            end: DateTime(2026, 9, 12, 11),
+          ),
+        ),
+        node(
+          'later',
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 12, 12),
+            end: DateTime(2026, 9, 12, 13),
+          ),
+        ),
+        node('plain', schedule: ScheduleFacet(due: DateTime(2026, 9, 13))),
       ];
       final sel = selectNodeTracking(nodes, now);
       expect(sel.current.map((n) => n.id), ['rec']);
       expect(sel.next.map((n) => n.id), ['later']);
       expect(sel.unscheduled.map((n) => n.id), ['plain']);
+    });
+
+    test('only timed single-day blocks qualify as scheduled', () {
+      final now = DateTime(2026, 9, 12, 10);
+      final nodes = [
+        node(
+          'timed-now',
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 12, 9),
+            end: DateTime(2026, 9, 12, 11),
+          ),
+        ),
+        node(
+          'timed-before',
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 12, 7),
+            end: DateTime(2026, 9, 12, 8),
+          ),
+        ),
+        node(
+          'timed-next',
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 12, 12),
+            end: DateTime(2026, 9, 12, 13),
+          ),
+        ),
+        // All-day feed window spanning now: a due date, not work time.
+        node(
+          'allday-window',
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 12),
+            end: DateTime(2026, 9, 15),
+            allDay: true,
+          ),
+        ),
+        // Timed multi-day window spanning now: still not a session.
+        node(
+          'multiday-timed',
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 11, 9),
+            end: DateTime(2026, 9, 13, 17),
+          ),
+        ),
+        // Zero-duration points (start == end), past and future.
+        node(
+          'zero-past',
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 12, 8),
+            end: DateTime(2026, 9, 12, 8),
+          ),
+        ),
+        node(
+          'zero-future',
+          schedule: ScheduleFacet(
+            start: DateTime(2026, 9, 12, 17),
+            end: DateTime(2026, 9, 12, 17),
+          ),
+        ),
+      ];
+      final sel = selectNodeTracking(nodes, now);
+      expect(sel.current.map((n) => n.id), ['timed-now']);
+      expect(sel.previous.map((n) => n.id), ['timed-before']);
+      expect(sel.next.map((n) => n.id), ['timed-next']);
+      final scheduledIds = [
+        ...sel.current.map((n) => n.id),
+        ...sel.previous.map((n) => n.id),
+        ...sel.next.map((n) => n.id),
+      ];
+      for (final excluded in [
+        'allday-window',
+        'multiday-timed',
+        'zero-past',
+        'zero-future',
+      ]) {
+        expect(scheduledIds, isNot(contains(excluded)));
+      }
     });
   });
 
@@ -828,19 +1176,20 @@ void main() {
       expect(cubit.byId('node:r1')?.money?.direction, MoneyDirection.income);
       // Idempotent reruns.
       expect(
-          NodeLegacyMigration.importPayloads(
-            cubit,
-            goals: [
-              Goal(
-                id: 'g1',
-                title: 'Goal',
-                type: GoalType.checklist,
-                startDate: DateTime(2026, 1, 1),
-                deadline: DateTime(2026, 12, 31),
-              ).toJson(),
-            ],
-          ),
-          0);
+        NodeLegacyMigration.importPayloads(
+          cubit,
+          goals: [
+            Goal(
+              id: 'g1',
+              title: 'Goal',
+              type: GoalType.checklist,
+              startDate: DateTime(2026, 1, 1),
+              deadline: DateTime(2026, 12, 31),
+            ).toJson(),
+          ],
+        ),
+        0,
+      );
     });
   });
 }
