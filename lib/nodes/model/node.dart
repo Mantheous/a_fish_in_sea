@@ -1,7 +1,14 @@
 import 'package:equatable/equatable.dart';
 
+import 'node_calendar_link.dart';
+import 'node_recurrence.dart';
+
+export 'node_calendar_link.dart';
+export 'node_recurrence.dart';
+
 import 'package:a_fish_in_sea/common/time/planned_actual.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
+import 'package:a_fish_in_sea/fitness/fitness_models.dart';
 import 'package:a_fish_in_sea/planner/model/task_assignee.dart';
 
 /// Lifecycle of a node. Replaces the `done`/`failed` bool pairs on
@@ -363,64 +370,6 @@ class AnkiFacet extends Equatable {
       ];
 }
 
-/// Recurrence for habit/budget templates. Only set on templates;
-/// instances carry concrete dates + `instanceOfId`.
-class NodeRecurrence extends Equatable {
-  final TimeScale frequency;
-  final int? customPeriodDays;
-  final DateTime? endDate;
-  final int? dayOfMonth;
-  final int? dayOfWeek;
-
-  const NodeRecurrence({
-    required this.frequency,
-    this.customPeriodDays,
-    this.endDate,
-    this.dayOfMonth,
-    this.dayOfWeek,
-  });
-
-  NodeRecurrence copyWith({
-    TimeScale? frequency,
-    int? customPeriodDays,
-    DateTime? endDate,
-    bool clearEndDate = false,
-    int? dayOfMonth,
-    int? dayOfWeek,
-  }) =>
-      NodeRecurrence(
-        frequency: frequency ?? this.frequency,
-        customPeriodDays: customPeriodDays ?? this.customPeriodDays,
-        endDate: clearEndDate ? null : (endDate ?? this.endDate),
-        dayOfMonth: dayOfMonth ?? this.dayOfMonth,
-        dayOfWeek: dayOfWeek ?? this.dayOfWeek,
-      );
-
-  factory NodeRecurrence.fromJson(Map<String, dynamic> json) =>
-      NodeRecurrence(
-        frequency: TimeScale.values.firstWhere(
-          (e) => e.name == json['frequency'],
-          orElse: () => TimeScale.daily,
-        ),
-        customPeriodDays: (json['customPeriodDays'] as num?)?.toInt(),
-        endDate: _tryDate(json['endDate']),
-        dayOfMonth: (json['dayOfMonth'] as num?)?.toInt(),
-        dayOfWeek: (json['dayOfWeek'] as num?)?.toInt(),
-      );
-
-  Map<String, dynamic> toJson() => {
-        'frequency': frequency.name,
-        'customPeriodDays': customPeriodDays,
-        'endDate': endDate?.toIso8601String(),
-        'dayOfMonth': dayOfMonth,
-        'dayOfWeek': dayOfWeek,
-      };
-
-  @override
-  List<Object?> get props =>
-      [frequency, customPeriodDays, endDate, dayOfMonth, dayOfWeek];
-}
-
 /// Derived-goal definition. Evaluated by query at read time — no stored
 /// children to keep in sync on import.
 class RuleFacet extends Equatable {
@@ -518,11 +467,19 @@ class Node extends Equatable {
   /// stay tracked and old payloads load untouched.
   final bool isTracked;
 
+  /// Whether the user starred this goal as important. Additive flag,
+  /// defaults to false, so old payloads load untouched. Starred goals
+  /// show in the Home favorites section and the Nodes Favorites filter.
+  final bool isFavorite;
+
   final ScheduleFacet? schedule;
   final MoneyFacet? money;
   final EffortFacet? effort;
   final AnkiFacet? anki;
   final NodeRecurrence? recurrence;
+
+  /// Calendar series binding and lossless snapshots of reconciled records.
+  final NodeCalendarLink? calendarLink;
   final RuleFacet? rule;
 
   /// Template this was generated from, if any. Instances inherit the
@@ -545,6 +502,15 @@ class Node extends Equatable {
   final DateTime? timerStartedAt;
   final List<TaskAssignee> assignees;
 
+  /// Manual flag: a workout node auto-reports its duration from the
+  /// fitness app. Additive, defaults to false so old payloads load as
+  /// non-workouts.
+  final bool isWorkout;
+
+  /// Watch-backed target (sleep hours, activity time/count). Null means
+  /// untracked; old payloads without the key load as untracked.
+  final FitnessFacet? fitness;
+
   const Node({
     required this.id,
     required this.title,
@@ -555,11 +521,13 @@ class Node extends Equatable {
     required this.createdAt,
     this.isUnbounded = false,
     this.isTracked = true,
+    this.isFavorite = false,
     this.schedule,
     this.money,
     this.effort,
     this.anki,
     this.recurrence,
+    this.calendarLink,
     this.rule,
     this.instanceOfId,
     this.overriddenFields = const {},
@@ -572,6 +540,8 @@ class Node extends Equatable {
     this.actualEnd,
     this.timerStartedAt,
     this.assignees = const [],
+    this.isWorkout = false,
+    this.fitness,
   });
 
   bool get isTemplate => recurrence != null && instanceOfId == null;
@@ -583,7 +553,8 @@ class Node extends Equatable {
 
   /// Imported homework marker: provenance-based, never tag-based.
   bool get isHomework =>
-      sourceEventId != null || classId != null || feedId != null;
+      !(isInstance && calendarLink != null) &&
+      (sourceEventId != null || classId != null || feedId != null);
 
   bool get hasDue => schedule?.due != null;
   bool get hasCalendarBlock => schedule?.hasCalendarBlock ?? false;
@@ -633,6 +604,7 @@ class Node extends Equatable {
     DateTime? createdAt,
     bool? isUnbounded,
     bool? isTracked,
+    bool? isFavorite,
     ScheduleFacet? schedule,
     bool clearSchedule = false,
     MoneyFacet? money,
@@ -642,6 +614,8 @@ class Node extends Equatable {
     AnkiFacet? anki,
     bool clearAnki = false,
     NodeRecurrence? recurrence,
+    NodeCalendarLink? calendarLink,
+    bool clearCalendarLink = false,
     bool clearRecurrence = false,
     RuleFacet? rule,
     bool clearRule = false,
@@ -665,6 +639,9 @@ class Node extends Equatable {
     DateTime? timerStartedAt,
     bool clearTimerStartedAt = false,
     List<TaskAssignee>? assignees,
+    bool? isWorkout,
+    FitnessFacet? fitness,
+    bool clearFitness = false,
   }) =>
       Node(
         id: id,
@@ -677,11 +654,14 @@ class Node extends Equatable {
         createdAt: createdAt ?? this.createdAt,
         isUnbounded: isUnbounded ?? this.isUnbounded,
         isTracked: isTracked ?? this.isTracked,
+        isFavorite: isFavorite ?? this.isFavorite,
         schedule: clearSchedule ? null : (schedule ?? this.schedule),
         money: clearMoney ? null : (money ?? this.money),
         effort: clearEffort ? null : (effort ?? this.effort),
         anki: clearAnki ? null : (anki ?? this.anki),
         recurrence: clearRecurrence ? null : (recurrence ?? this.recurrence),
+        calendarLink: clearCalendarLink
+            ? null : (calendarLink ?? this.calendarLink),
         rule: clearRule ? null : (rule ?? this.rule),
         instanceOfId:
             clearInstanceOf ? null : (instanceOfId ?? this.instanceOfId),
@@ -703,6 +683,8 @@ class Node extends Equatable {
             ? null
             : (timerStartedAt ?? this.timerStartedAt),
         assignees: assignees ?? this.assignees,
+        isWorkout: isWorkout ?? this.isWorkout,
+        fitness: clearFitness ? null : (fitness ?? this.fitness),
       );
 
   /// Mark one field as owned by this node (stops inheriting it from the
@@ -741,6 +723,7 @@ class Node extends Equatable {
       // coercion also survives wrong-typed values: a corrupt flag reads
       // as bounded instead of dropping the whole node.
       isUnbounded: json['isUnbounded'] == true,
+      isFavorite: json['isFavorite'] == true,
       isTracked: () {
         final raw = json['isTracked'] ?? json['tracked'];
         if (raw == null) return true;
@@ -763,6 +746,7 @@ class Node extends Equatable {
           ? _facetOrNull(() => AnkiFacet.fromJson(
               Map<String, dynamic>.from(json['anki'] as Map)))
           : null,
+      calendarLink: NodeCalendarLink.tryParse(json['calendarLink']),
       recurrence: json['recurrence'] is Map
           ? _facetOrNull(() => NodeRecurrence.fromJson(
               Map<String, dynamic>.from(json['recurrence'] as Map)))
@@ -782,6 +766,12 @@ class Node extends Equatable {
       actualEnd: _tryDate(json['actualEnd']),
       timerStartedAt: _tryDate(json['timerStartedAt']),
       assignees: _assigneesFromJson(json['assignees']),
+      // Missing (pre-workout payloads) reads as a plain non-workout node.
+      isWorkout: json['isWorkout'] == true,
+      fitness: json['fitness'] is Map
+          ? _facetOrNull(() => FitnessFacet.fromJson(
+              Map<String, dynamic>.from(json['fitness'] as Map)))
+          : null,
     );
   }
 
@@ -797,11 +787,13 @@ class Node extends Equatable {
         'isUnbounded': isUnbounded,
         'isTracked': isTracked,
         'tracked': isTracked,
+        'isFavorite': isFavorite,
         'schedule': schedule?.toJson(),
         'money': money?.toJson(),
         'effort': effort?.toJson(),
         'anki': anki?.toJson(),
         'recurrence': recurrence?.toJson(),
+        'calendarLink': calendarLink?.toJson(),
         'rule': rule?.toJson(),
         'instanceOfId': instanceOfId,
         'overriddenFields': overriddenFields.toList(),
@@ -811,9 +803,11 @@ class Node extends Equatable {
         'classId': classId,
         'classLabel': classLabel,
         'actualStart': actualStart?.toIso8601String(),
-        'actualEnd': actualEnd?.toIso8601String(),
-        'timerStartedAt': timerStartedAt?.toIso8601String(),
+        'actualEnd': actualEnd?.toUtc().toIso8601String(),
+        'timerStartedAt': timerStartedAt?.toUtc().toIso8601String(),
         'assignees': assignees.map((a) => a.toJson()).toList(),
+        'isWorkout': isWorkout,
+        'fitness': fitness?.toJson(),
       };
 
   @override
@@ -827,11 +821,13 @@ class Node extends Equatable {
         createdAt,
         isUnbounded,
         isTracked,
+        isFavorite,
         schedule,
         money,
         effort,
         anki,
         recurrence,
+        calendarLink,
         rule,
         instanceOfId,
         overriddenFields,
@@ -844,6 +840,8 @@ class Node extends Equatable {
         actualEnd,
         timerStartedAt,
         assignees,
+        isWorkout,
+        fitness,
       ];
 }
 

@@ -7,10 +7,12 @@ import tempfile
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{tempfile.mkdtemp()}/test.db"
 os.environ["JWT_SECRET"] = "test-secret"
 
+from app.db import engine  # noqa: E402
 from app.main import create_app  # noqa: E402
 
 app = create_app()
@@ -281,3 +283,217 @@ def test_deleted_row_is_flagged_not_hidden(client: TestClient):
     )
     rows = [c for c in pull.json()["changes"] if c["item_id"] == "n-gone"]
     assert rows[-1]["deleted"] is False
+
+
+def _review_token(client: TestClient, h: dict, scopes: list[str]) -> dict:
+    created = client.post(
+        "/api/v1/tokens", headers=h,
+        json={"name": "review", "scopes": scopes, "review": True},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["review"] is True
+    return {"Authorization": f"Bearer {created.json()['token']}"}
+
+
+def test_approve_discard_keyed_by_collection_item_id(client: TestClient):
+    """The same item_id in two collections must act independently:
+    approving nodes:X must not touch events:X, and a bare id shared across
+    collections is rejected instead of silently acting on both."""
+    tokens = _register(client, "imp-x@example.com")
+    h = _auth(tokens)
+    ah = _review_token(client, h, ["nodes:write", "events:write"])
+
+    x = "shared-x"
+    sub = client.post(
+        "/api/v1/imports", headers=ah,
+        json={
+            "items": [
+                {"collection": "nodes", "item_id": x,
+                 "data": {"id": x, "title": "Node X"}},
+                {"collection": "events", "item_id": x,
+                 "data": {"id": x, "subject": "Event X"}},
+            ],
+            "source": "scraper",
+        },
+    )
+    assert sub.status_code == 201, sub.text
+    batch_id = sub.json()["batch_id"]
+
+    # Approve/discard are JWT-only; the review token only stages.
+    amb = client.post(
+        f"/api/v1/imports/{batch_id}/approve", headers=ah, json={"item_ids": [x]}
+    )
+    assert amb.status_code == 403
+
+    # A bare id shared across collections is ambiguous: rejected, not acted on both.
+    amb = client.post(
+        f"/api/v1/imports/{batch_id}/approve", headers=h, json={"item_ids": [x]}
+    )
+    assert amb.status_code == 400, amb.text
+    assert "multiple collections" in amb.json()["detail"]
+
+    # Approve only the nodes row: events:X stays pending and never syncs.
+    ok = client.post(
+        f"/api/v1/imports/{batch_id}/approve", headers=h,
+        json={"item_ids": [f"nodes:{x}"]},
+    )
+    assert ok.status_code == 200, ok.text
+    by_pair = {
+        (it["collection"], it["item_id"]): it["status"]
+        for it in ok.json()["items"]
+    }
+    assert by_pair[("nodes", x)] == "approved"
+    assert by_pair[("events", x)] == "pending"
+    pull = client.get("/api/v1/sync/pull", headers=h)
+    got = [c for c in pull.json()["changes"] if c["item_id"] == x]
+    assert len(got) == 1
+    assert got[0]["collection"] == "nodes"
+
+    # Discard only the events row: nodes:X stays approved.
+    d = client.post(
+        f"/api/v1/imports/{batch_id}/discard", headers=h,
+        json={"item_ids": [f"events:{x}"]},
+    )
+    assert d.status_code == 200, d.text
+    by_pair = {
+        (it["collection"], it["item_id"]): it["status"]
+        for it in d.json()["items"]
+    }
+    assert by_pair[("events", x)] == "rejected"
+    assert by_pair[("nodes", x)] == "approved"
+
+    # Inbox is empty once everything is decided.
+    assert client.get("/api/v1/imports/pending", headers=h).json() == []
+
+
+def test_single_item_decision_keeps_existing_on_rest(client: TestClient):
+    """Deciding one row must not wipe conflict warnings on the rest (#66).
+
+    The approve/discard/reject responses echo the same existing/
+    existing_deleted conflict context as the pending inbox, so remaining
+    rows keep their "updates existing" badges.
+    """
+    tokens = _register(client, "imp66@example.com")
+    h = _auth(tokens)
+    ah = _review_token(client, h, ["nodes:write"])
+
+    # Live row that the staged re-scrape collides with.
+    client.post(
+        "/api/v1/sync/push", headers=h, json={"changes": [_node("n-keep")]}
+    )
+    sub = client.post(
+        "/api/v1/imports",
+        headers=ah,
+        json={
+            "items": [_node("n-keep", title="HW 2"), _node("n-fresh")],
+            "source": "scraper",
+        },
+    )
+    assert sub.status_code == 201, sub.text
+    batch_id = sub.json()["batch_id"]
+
+    pend = client.get("/api/v1/imports/pending", headers=h).json()
+    by_id = {i["item_id"]: i for i in pend[0]["items"]}
+    assert by_id["n-keep"]["existing"] is not None
+    assert by_id["n-fresh"]["existing"] is None
+
+    # Approve only the fresh row: the colliding row keeps its warning.
+    ok = client.post(
+        f"/api/v1/imports/{batch_id}/approve",
+        headers=h,
+        json={"item_ids": ["n-fresh"]},
+    )
+    assert ok.status_code == 200, ok.text
+    by_id = {i["item_id"]: i for i in ok.json()["items"]}
+    assert by_id["n-fresh"]["status"] == "approved"
+    assert by_id["n-keep"]["status"] == "pending"
+    assert by_id["n-keep"]["existing"] is not None
+    assert by_id["n-keep"]["existing_deleted"] is False
+
+    # Discard the colliding row: the response still carries its warning.
+    d = client.post(
+        f"/api/v1/imports/{batch_id}/discard",
+        headers=h,
+        json={"item_ids": ["n-keep"]},
+    )
+    assert d.status_code == 200, d.text
+    by_id = {i["item_id"]: i for i in d.json()["items"]}
+    assert by_id["n-keep"]["status"] == "rejected"
+    assert by_id["n-keep"]["existing"] is not None
+
+    # The whole-batch reject carries warnings too.
+    sub2 = client.post(
+        "/api/v1/imports",
+        headers=ah,
+        json={"items": [_node("n-keep", title="HW 3")], "source": "scraper"},
+    )
+    assert sub2.status_code == 201, sub2.text
+    r = client.post(f"/api/v1/imports/{sub2.json()['batch_id']}/reject", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["items"][0]["existing"] is not None
+
+
+def test_put_item_singleton_force_corrects_id(client: TestClient):
+    """PUT /items on a singleton never stores a data.id that disagrees with
+    the row id (settings, waterfall and plaid are all singletons), so a
+    later push of that row is accepted instead of wedging."""
+    tokens = _register(client, "imp-singleton@example.com")
+    h = _auth(tokens)
+
+    for collection in ("settings", "waterfall", "plaid"):
+        r = client.put(
+            f"/api/v1/items/{collection}/singleton", headers=h,
+            json={"data": {"id": "WRONG", "k": "v"}},
+        )
+        assert r.status_code == 200, (collection, r.text)
+        assert r.json()["data"]["id"] == "singleton", (collection, r.json())
+
+        # A matching push of that row is accepted: not wedgeable.
+        out = client.post(
+            "/api/v1/sync/push", headers=h,
+            json={"changes": [{
+                "collection": collection, "item_id": "singleton",
+                "data": {"id": "singleton", "k": "v2"}, "deleted": False,
+            }]},
+        )
+        assert out.status_code == 200, (collection, out.text)
+
+
+def test_pending_fetch_batches_existence_lookups(client: TestClient):
+    """The pending inbox looks up existing sync rows per collection (one
+    batched IN query per collection), not one query per item."""
+    tokens = _register(client, "imp-b@example.com")
+    h = _auth(tokens)
+    ah = _review_token(client, h, ["nodes:write", "events:write"])
+
+    items = [
+        {"collection": "nodes", "item_id": f"n{i}",
+         "data": {"id": f"n{i}", "title": f"N{i}"}}
+        for i in range(25)
+    ] + [
+        {"collection": "events", "item_id": f"e{i}",
+         "data": {"id": f"e{i}", "subject": f"E{i}"}}
+        for i in range(25)
+    ]
+    sub = client.post("/api/v1/imports", headers=ah, json={"items": items, "source": "scraper"})
+    assert sub.status_code == 201, sub.text
+
+    eng = engine().sync_engine
+    hits: list[str] = []
+
+    def before(conn, cursor, statement, parameters, context, executemany):
+        hits.append(statement)
+
+    event.listen(eng, "before_cursor_execute", before)
+    try:
+        pend = client.get("/api/v1/imports/pending", headers=h)
+    finally:
+        event.remove(eng, "before_cursor_execute", before)
+
+    assert pend.status_code == 200
+    assert len(pend.json()) == 1
+    assert len(pend.json()[0]["items"]) == 50
+    selects = [s for s in hits if s.lstrip().lower().startswith("select")]
+    # Bounded (handful of queries), not one per item: with 50 staged items
+    # an N+1 lookup would issue far more than this.
+    assert len(selects) < 40, selects

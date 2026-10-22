@@ -33,15 +33,22 @@ List<String> findExpiredMarkers(Directory root, DateTime now) {
 
 void main() {
   group('migration expiry', () {
-    test('removeAfter gates on the deadline', () {
+    test('removeAfter is a source marker and never gates a restore', () {
       expect(
         Migration.removeAfter('2000-01-01', DateTime(2026, 9, 6)),
-        isFalse,
+        isTrue,
       );
       expect(
         Migration.removeAfter('2999-01-01', DateTime(2026, 9, 6)),
         isTrue,
       );
+    });
+
+    test('removeAfter without a clock never date-gates at runtime', () {
+      // Runtime fromJson calls without a clock: even a years-past deadline
+      // must still run the migration so stale devices never skip it.
+      expect(Migration.removeAfter('2000-01-01'), isTrue);
+      expect(Migration.removeAfter('2999-01-01'), isTrue);
     });
 
     test('scanner flags expired markers in fixtures', () {

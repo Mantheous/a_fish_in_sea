@@ -7,7 +7,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:mocktail/mocktail.dart';
 import 'package:timezone/data/latest_all.dart' as tzdata;
-import 'package:timezone/timezone.dart' as tz;
 
 class MockClient extends Mock implements http.Client {}
 
@@ -228,12 +227,45 @@ void main() {
     test('converts TZID times to the local zone instant', () {
       final events = service.parseIcs(tzEventIcs, feedId: 'f1');
       final event = events.single;
-      final location = tz.getLocation('America/New_York');
-      final expected = tz.TZDateTime.from(
-        DateTime(2026, 9, 10, 9),
-        location,
-      ).toUtc();
-      expect(event.start.toUtc(), expected);
+      // 09:00 in America/New_York on 2026-09-10 is EDT (UTC-4).
+      expect(event.start.toUtc(), DateTime.utc(2026, 9, 10, 13, 0));
+    });
+
+    test('converts TZID start and end together', () {
+      const ics = '''
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//Test//EN
+BEGIN:VEVENT
+UID:tz-range-1
+DTSTAMP:20260901T120000Z
+DTSTART;TZID=America/New_York:20260910T090000
+DTEND;TZID=America/New_York:20260910T100000
+SUMMARY:Morning class
+END:VEVENT
+END:VCALENDAR
+''';
+      final event = service.parseIcs(ics, feedId: 'f1').single;
+      expect(event.start.toUtc(), DateTime.utc(2026, 9, 10, 13, 0));
+      expect(event.end.toUtc(), DateTime.utc(2026, 9, 10, 14, 0));
+    });
+
+    test('converts TZID times ahead of UTC', () {
+      const ics = '''
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//Test//EN
+BEGIN:VEVENT
+UID:tz-tokyo-1
+DTSTAMP:20260901T120000Z
+DTSTART;TZID=Asia/Tokyo:20260910T090000
+SUMMARY:Tokyo standup
+END:VEVENT
+END:VCALENDAR
+''';
+      final event = service.parseIcs(ics, feedId: 'f1').single;
+      // 09:00 JST (UTC+9, no DST) is 00:00 UTC the same day.
+      expect(event.start.toUtc(), DateTime.utc(2026, 9, 10, 0, 0));
     });
 
     test('maps weekly RRULE to a canonical rule', () {

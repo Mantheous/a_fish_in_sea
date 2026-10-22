@@ -65,6 +65,7 @@ class _HomePageState extends State<HomePage> {
     final weekNodes = feedCubit.visibleNodes(
       nodeCubit.dueThisWeekAt(today),
     );
+    final favoriteNodes = feedCubit.visibleNodes(nodeCubit.favorites);
     return Scaffold(
       appBar: AppBar(title: const Text('Home')),
       drawer: const AppDrawer(),
@@ -79,6 +80,20 @@ class _HomePageState extends State<HomePage> {
           const ImportInboxCard(),
           const _TimeTrackingCard(),
           const _TrackingCard(),
+          _SectionCard(
+            title: 'Favorite goals',
+            onMore: () =>
+                context.read<NavigationCubit>().setPage(PlannerPage.nodes),
+            child: favoriteNodes.isEmpty
+                ? const _EmptyLine(
+                    'No favorite goals — star a goal to pin it here')
+                : Column(
+                    children: [
+                      for (final node in favoriteNodes.take(5))
+                        _NodeLine(node: node, now: today),
+                    ],
+                  ),
+          ),
           _SectionCard(
             title: 'Due today',
             onMore: () =>
@@ -310,6 +325,7 @@ class _TrackingCard extends StatefulWidget {
 
 class _TrackingCardState extends State<_TrackingCard> {
   bool _busy = false;
+  Timer? _poll;
 
   @override
   void initState() {
@@ -317,12 +333,44 @@ class _TrackingCardState extends State<_TrackingCard> {
     _mergePending();
   }
 
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  void _startPendingPoll(int intervalMinutes, TrackingCubit trackingCubit) {
+    _stopPendingPoll();
+    _poll = Timer.periodic(Duration(minutes: intervalMinutes), (_) {
+      if (!mounted ||
+          trackingCubit.isClosed ||
+          !trackingCubit.state.isRecording) {
+        _stopPendingPoll();
+        return;
+      }
+      _mergePending();
+    });
+  }
+
+  void _stopPendingPoll() {
+    _poll?.cancel();
+    _poll = null;
+  }
+
   Future<void> _mergePending() async {
     final pending = await takePendingPoints();
-    if (!mounted || pending.isEmpty) return;
+    if (pending.isEmpty) return;
+    if (!mounted) {
+      // The take already removed the batch from disk: put it back so the
+      // next mount (or Day review) still merges it instead of losing it.
+      await requeuePendingPoints(pending);
+      return;
+    }
     try {
       context.read<TrackingCubit>().mergePoints(pending);
-    } catch (_) {}
+    } catch (_) {
+      await requeuePendingPoints(pending);
+    }
   }
 
   Future<void> _toggle() async {
@@ -332,6 +380,7 @@ class _TrackingCardState extends State<_TrackingCard> {
     if (tracking.state.isRecording) {
       setState(() => _busy = true);
       try {
+        _stopPendingPoll();
         LocationService.stopForegroundSampling();
         await LocationService.stopBackground();
         tracking.stopRecording();
@@ -371,17 +420,26 @@ class _TrackingCardState extends State<_TrackingCard> {
       final trackingCubit = context.read<TrackingCubit>();
       var background = false;
       if (gpsAvailable) {
-        LocationService.startForegroundSampling(
-          intervalMinutes: interval,
-          onTick: () async {
-            final point = await samplePosition();
-            if (point == null || trackingCubit.isClosed) return;
-            try {
-              trackingCubit.addPoint(point);
-            } catch (_) {}
-          },
-        );
+        // One sampler at a time: the background service keeps recording with
+        // the app closed, so when it starts the in-app poller stays off and
+        // the card picks up its batches on a poll timer instead. Foreground
+        // sampling is the fallback when background is unavailable.
         background = await LocationService.startBackground(interval);
+        if (!mounted) return;
+        if (background) {
+          _startPendingPoll(interval, trackingCubit);
+        } else {
+          LocationService.startForegroundSampling(
+            intervalMinutes: interval,
+            onTick: () async {
+              final point = await samplePosition();
+              if (point == null || trackingCubit.isClosed) return;
+              try {
+                trackingCubit.addPoint(point);
+              } catch (_) {}
+            },
+          );
+        }
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -670,12 +728,13 @@ class _NodeTrackLine extends StatelessWidget {
         live.actualEnd != null;
     final statusLine = failed
         ? 'Marked as failed'
-        : live.isTracking && elapsed != null
-            ? 'Recording ${formatStopwatch(elapsed)}'
+        : live.isTracking
+            ? 'Recording ${formatStopwatch(elapsed ?? Duration.zero)}'
             : isReportedShown
                 ? 'Reported ${_homeTimeFormat.format(live.actualStart!)} – '
-                    '${_homeTimeFormat.format(live.actualEnd!)} (${reported.inMinutes}m)'
-                : plannedLine;
+                    '${_homeTimeFormat.format(live.actualEnd!)} '
+                    '(${reported.inMinutes == 0 ? '${reported.inSeconds}s' : '${reported.inMinutes}m'})'
+                : null;
     // Toggl-style: the status line opens the correction sheet — a late
     // press is fixed by moving the start, a finished session by editing
     // the interval. Only when there is something to correct.
@@ -716,7 +775,7 @@ class _NodeTrackLine extends StatelessWidget {
                         children: [
                           Flexible(
                             child: Text(
-                              statusLine,
+                              statusLine!,
                               style: theme.textTheme.labelSmall?.copyWith(
                                 color: failed
                                     ? theme.colorScheme.error
@@ -738,7 +797,7 @@ class _NodeTrackLine extends StatelessWidget {
                         ],
                       ),
                     )
-                  else
+                  else if (statusLine != null)
                     Text(
                       statusLine,
                       style: theme.textTheme.labelSmall?.copyWith(

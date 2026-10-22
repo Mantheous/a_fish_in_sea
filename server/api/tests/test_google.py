@@ -264,3 +264,113 @@ def test_fernet_roundtrip(monkeypatch):
     assert store.decrypt_secret(store.encrypt_secret("abc")) == "abc"
     assert store.decrypt_secret("") == ""
     assert store.encrypt_secret("") == ""
+
+
+def _connect_expired(client: TestClient, monkeypatch, email: str) -> dict:
+    """Connect a user whose cached access token is already expired."""
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "csecret")
+    h = _register(client, email)
+    auth = client.get("/api/google/auth_url", headers=h)
+    state = urllib.parse.parse_qs(
+        urllib.parse.urlparse(auth.json()["url"]).query
+    )["state"][0]
+
+    async def fake_redeem(code: str, redirect_uri: str):
+        return {
+            "access_token": "stale-at",
+            "refresh_token": "rt-dead",
+            "expires_in": -100,
+            "scope": g.GOOGLE_SCOPE,
+        }
+
+    monkeypatch.setattr(g, "redeem_code", fake_redeem)
+    client.get("/api/google/callback", params={"code": "c", "state": state})
+    return h
+
+
+def test_write_401_prompts_reconnect_not_502(client: TestClient, monkeypatch):
+    """A Google 401 on event create must surface needsReconnect (401),
+    not a bare 502 — the only fix is reconnecting the grant."""
+    h = _connect_expired(client, monkeypatch, "g9@example.com")
+
+    async def fake_refresh(refresh_token: str):
+        return ("fresh-at", 9999999999.0)
+
+    async def fake_create(access_token: str, calendar_id: str, body: dict):
+        raise g.GoogleAuthError(
+            "Calendar write failed (401): Invalid Credentials", status=401
+        )
+
+    monkeypatch.setattr(g, "refresh_access_token", fake_refresh)
+    monkeypatch.setattr(g, "create_event", fake_create)
+    r = client.post(
+        "/api/google/events",
+        json={"calendarId": "primary", "summary": "x"},
+        headers=h,
+    )
+    assert r.status_code == 401, r.text
+    body = r.json()["detail"]
+    assert body["needsReconnect"] is True
+
+
+def test_callback_error_param_is_escaped(client: TestClient):
+    """Reflected XSS guard: `?error=` text must be HTML-escaped (refs #59)."""
+    payload = "<script>alert(1)</script>"
+    r = client.get("/api/google/callback", params={"error": payload})
+    assert r.status_code == 400, r.text
+    assert "<script>" not in r.text
+    assert "&lt;script&gt;" in r.text
+
+
+def test_callback_upstream_error_is_escaped(
+    client: TestClient, monkeypatch
+):
+    """Upstream GoogleAuthError text in the callback must be escaped too."""
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "csecret")
+    h = _register(client, "gxss@example.com")
+    auth = client.get("/api/google/auth_url", headers=h)
+    assert auth.status_code == 200, auth.text
+    state = urllib.parse.parse_qs(
+        urllib.parse.urlparse(auth.json()["url"]).query
+    )["state"][0]
+
+    async def fake_redeem(code: str, redirect_uri: str):
+        raise g.GoogleAuthError("<script>alert(1)</script>")
+
+    monkeypatch.setattr(g, "redeem_code", fake_redeem)
+    r = client.get(
+        "/api/google/callback", params={"code": "c", "state": state}
+    )
+    assert r.status_code == 500, r.text
+    assert "<script>" not in r.text
+    assert "&lt;script&gt;" in r.text
+
+
+def test_dead_refresh_token_sanitized_with_reconnect(
+    client: TestClient, monkeypatch
+):
+    """Google answers refresh with 400 invalid_grant when the grant is dead.
+    The proxy must answer 401 + needsReconnect with an actionable message,
+    not the raw upstream body ("Token refresh failed (400): ... expired")."""
+    h = _connect_expired(client, monkeypatch, "g10@example.com")
+
+    async def fake_refresh(refresh_token: str):
+        raise g.GoogleAuthError(
+            'Token refresh failed (400): {"error": "invalid_grant", '
+            '"error_description": "Token has been expired or revoked."}'
+        )
+
+    monkeypatch.setattr(g, "refresh_access_token", fake_refresh)
+    r = client.post(
+        "/api/google/events",
+        json={"calendarId": "primary", "summary": "x"},
+        headers=h,
+    )
+    assert r.status_code == 401, r.text
+    body = r.json()["detail"]
+    assert body["needsReconnect"] is True
+    assert "Token refresh failed" not in body["error"]
+    assert "expired" not in body["error"].lower()
+    assert "reconnect" in body["error"].lower()

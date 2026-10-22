@@ -1,7 +1,9 @@
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/node_calendar.dart';
 import 'package:a_fish_in_sea/planner/bloc/tasks_view_options_cubit.dart';
+import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/model/task_filter.dart';
 import 'package:a_fish_in_sea/planner/model/task_rule.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -16,22 +18,24 @@ Node _node(
   NodeStatus status = NodeStatus.open,
   bool homework = false,
   bool planned = false,
+  Duration plannedOffset = Duration.zero,
+  bool allDayBlock = false,
   bool template = false,
 }) {
   final noon = due == null ? null : DateTime(due.year, due.month, due.day, 12);
+  final blockStart = planned ? noon?.add(plannedOffset) : null;
   return Node(
     id: id,
     title: id,
     createdAt: DateTime(2026, 10, 1),
     status: status,
-    schedule: due == null && !planned
+    schedule: due == null && blockStart == null
         ? null
         : ScheduleFacet(
             due: noon,
-            start: planned ? noon : null,
-            end: planned && noon != null
-                ? noon.add(const Duration(hours: 1))
-                : null,
+            start: blockStart,
+            end: blockStart?.add(const Duration(hours: 1)),
+            allDay: allDayBlock,
           ),
     sourceEventId: homework ? 'evt:$id' : null,
     classLabel: homework ? 'Physics' : null,
@@ -162,27 +166,109 @@ void main() {
       expect(both.matches(chem, monday), isFalse);
     });
 
-    test('planned narrows on calendar blocks', () {
+    test('planned narrows follow the given tint set', () {
       final all = TaskFilter(
           id: 'a', name: 'a', date: TaskFilterDate.all, showCompleted: true);
-      final planned = _node('p',
-          due: DateTime(2026, 10, 12, 9), planned: true);
+      final plannedOnly = all.copyWith(planned: TaskFilterPlanned.plannedOnly);
+      final unplannedOnly =
+          all.copyWith(planned: TaskFilterPlanned.unplannedOnly);
+      final planned = _node('p', due: DateTime(2026, 10, 12, 9));
       final unplanned = _node('u', due: DateTime(2026, 10, 12, 9));
-      expect(
-          all
-              .copyWith(planned: TaskFilterPlanned.plannedOnly)
-              .matches(planned, monday),
+      const tinted = {'p'};
+      expect(plannedOnly.matches(planned, monday, plannedNodeIds: tinted),
           isTrue);
-      expect(
-          all
-              .copyWith(planned: TaskFilterPlanned.plannedOnly)
-              .matches(unplanned, monday),
+      expect(plannedOnly.matches(unplanned, monday, plannedNodeIds: tinted),
           isFalse);
-      expect(
-          all
-              .copyWith(planned: TaskFilterPlanned.unplannedOnly)
-              .matches(unplanned, monday),
+      expect(unplannedOnly.matches(unplanned, monday, plannedNodeIds: tinted),
           isTrue);
+      expect(unplannedOnly.matches(planned, monday, plannedNodeIds: tinted),
+          isFalse);
+    });
+
+    test('planned falls back to the own future timed block', () {
+      final all = TaskFilter(
+          id: 'a', name: 'a', date: TaskFilterDate.all, showCompleted: true);
+      final plannedOnly = all.copyWith(planned: TaskFilterPlanned.plannedOnly);
+      final unplannedOnly =
+          all.copyWith(planned: TaskFilterPlanned.unplannedOnly);
+      final future = _node('f',
+          due: DateTime(2026, 10, 12, 9),
+          planned: true,
+          plannedOffset: const Duration(hours: 1));
+      // Starts exactly at `now`: past-or-started blocks are not planned,
+      // same as the tint.
+      final started =
+          _node('s', due: DateTime(2026, 10, 12, 9), planned: true);
+      final past = _node('p',
+          due: DateTime(2026, 10, 12, 9),
+          planned: true,
+          plannedOffset: const Duration(hours: -1));
+      final allDay = _node('d',
+          due: DateTime(2026, 10, 12, 9),
+          planned: true,
+          plannedOffset: const Duration(hours: 1),
+          allDayBlock: true);
+      final none = _node('n', due: DateTime(2026, 10, 12, 9));
+      expect(plannedOnly.matches(future, monday), isTrue);
+      expect(unplannedOnly.matches(future, monday), isFalse);
+      for (final node in [started, past, allDay, none]) {
+        expect(plannedOnly.matches(node, monday), isFalse);
+        expect(unplannedOnly.matches(node, monday), isTrue);
+      }
+    });
+
+    test('a linked future timed event plans a node; all-day or past does not',
+        () {
+      // The visible contract: "planned" is the schedule button's tint set
+      // (futureCalendarEntryCounts keys), real event links included — not
+      // just the node's own block.
+      final linked = _node('linked');
+      final allDay = _node('allday');
+      final past = _node('past');
+      final events = [
+        PlannerEvent(
+          id: 'e1',
+          subject: 'block',
+          taskId: 'linked',
+          isTask: true,
+          start: monday.add(const Duration(hours: 1)),
+          end: monday.add(const Duration(hours: 2)),
+        ),
+        PlannerEvent(
+          id: 'e2',
+          subject: 'due',
+          taskId: 'allday',
+          isTask: true,
+          allDay: true,
+          start: monday.add(const Duration(days: 1)),
+          end: monday.add(const Duration(days: 2)),
+        ),
+        PlannerEvent(
+          id: 'e3',
+          subject: 'yesterday',
+          taskId: 'past',
+          isTask: true,
+          start: monday.subtract(const Duration(days: 1)),
+          end: monday
+              .subtract(const Duration(days: 1))
+              .add(const Duration(hours: 1)),
+        ),
+      ];
+      final plannedIds = futureCalendarEntryCounts([linked, allDay, past],
+              events, monday)
+          .keys
+          .toSet();
+      expect(plannedIds, {'linked'});
+      final filter = TaskFilter(
+              id: 'a',
+              name: 'a',
+              date: TaskFilterDate.all,
+              showCompleted: true)
+          .copyWith(planned: TaskFilterPlanned.plannedOnly);
+      expect(filter.matches(linked, monday, plannedNodeIds: plannedIds), isTrue);
+      expect(
+          filter.matches(allDay, monday, plannedNodeIds: plannedIds), isFalse);
+      expect(filter.matches(past, monday, plannedNodeIds: plannedIds), isFalse);
     });
   });
 

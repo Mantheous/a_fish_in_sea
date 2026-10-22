@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
+import '../../common/undo/revertable_hydrated_cubit.dart';
 import '../../common/undo/undo_cubit.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
@@ -214,16 +215,20 @@ class _SyllabusImportSheetState extends State<_SyllabusImportSheet> {
       return;
     }
     final nodeCubit = context.read<NodeCubit>();
-    for (final node in nodes) {
-      nodeCubit.addNode(node);
-    }
+    final undoCubit = context.read<UndoCubit>();
+    final messenger = ScaffoldMessenger.of(context);
+    RevertableHydratedCubit.atomic([nodeCubit], () {
+      for (final node in nodes) {
+        nodeCubit.addNode(node);
+      }
+    });
     Navigator.of(context).pop();
-    ScaffoldMessenger.of(context).showSnackBar(
+    messenger.showSnackBar(
       SnackBar(
         content: Text('Created ${nodes.length} node${nodes.length == 1 ? '' : 's'}'),
         action: SnackBarAction(
           label: 'Undo',
-          onPressed: () => context.read<UndoCubit>().undo(),
+          onPressed: undoCubit.undo,
         ),
       ),
     );

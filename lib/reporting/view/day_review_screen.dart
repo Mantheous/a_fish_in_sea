@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 
@@ -19,58 +18,19 @@ import '../model/place.dart';
 import '../model/reported_entry.dart';
 import '../model/tracked_point.dart';
 import '../reporting_logic.dart';
+import '../service/day_plan.dart';
 import '../service/location_service.dart';
+import '../service/tracked_position.dart';
+
+import 'day_review_map.dart';
 import 'places_sheet.dart';
 import 'time_range_dial.dart';
+
+export '../service/day_plan.dart' show daySlices;
 
 final _reviewTimeFormat = DateFormat('h:mm a');
 final _reviewDayFormat = DateFormat('EEE, MMM d');
 final _reviewDayYearFormat = DateFormat('EEE, MMM d, yyyy');
-
-List<PlannedSlice> daySlices(
-  CalendarCubit calendar,
-  FeedCubit feeds,
-  DateTime day,
-) {
-  final dayStart = DateTime(day.year, day.month, day.day);
-  final dayEnd = dayStart.add(const Duration(days: 1));
-  final visible = feeds.visibleEvents(calendar.state);
-  final slices = <PlannedSlice>[];
-  for (final event in visible) {
-    if (event.allDay) {
-      if (event.start.isBefore(dayEnd) &&
-          event.endOfDay.isAfter(dayStart)) {
-        slices.add(PlannedSlice(
-          eventId: event.id,
-          title: event.subject,
-          placeId: event.placeId,
-          start: dayStart,
-          end: dayStart,
-          allDay: true,
-          classLabel: event.classLabel,
-          taskId: event.taskId,
-        ));
-      }
-      continue;
-    }
-    final duration = event.end.isAfter(event.start)
-        ? event.end.difference(event.start)
-        : const Duration(hours: 1);
-    for (final occ in calendar.occurrencesOf(event, dayStart, dayEnd)) {
-      slices.add(PlannedSlice(
-        eventId: event.id,
-        title: event.subject,
-        placeId: event.placeId,
-        start: occ,
-        end: occ.add(duration),
-        classLabel: event.classLabel,
-        taskId: event.taskId,
-      ));
-    }
-  }
-  slices.sort((a, b) => a.start.compareTo(b.start));
-  return slices;
-}
 
 class DayReviewScreen extends StatefulWidget {
   const DayReviewScreen({super.key});
@@ -120,7 +80,12 @@ class _DayReviewScreenState extends State<DayReviewScreen> {
     setState(() => _runningReport = true);
     try {
       final pending = await takePendingPoints();
-      if (!mounted) return;
+      if (!mounted) {
+        // The take already removed the batch from disk: put it back so the
+        // next merge still picks it up instead of losing it.
+        if (pending.isNotEmpty) await requeuePendingPoints(pending);
+        return;
+      }
       if (pending.isNotEmpty) {
         context.read<TrackingCubit>().mergePoints(pending);
       }
@@ -160,12 +125,6 @@ class _DayReviewScreenState extends State<DayReviewScreen> {
     final scrubTime =
         _dayStart.add(Duration(minutes: _scrubMin.round()));
     final atScrub = _positionAt(points, scrubTime);
-    final center = atScrub ??
-        (points.isNotEmpty
-            ? LatLng(points.last.lat, points.last.lng)
-            : places.isNotEmpty
-                ? LatLng(places.first.lat, places.first.lng)
-                : const LatLng(40.23, -111.66));
 
     return Scaffold(
       appBar: AppBar(
@@ -182,97 +141,7 @@ class _DayReviewScreenState extends State<DayReviewScreen> {
               _playTimer?.cancel();
             }),
           ),
-          SizedBox(
-          height: 240,
-          child: Stack(
-            children: [
-              FlutterMap(
-                options: MapOptions(initialCenter: center, initialZoom: points.isEmpty ? 11 : 14),
-                children: [
-                  TileLayer(
-                    urlTemplate:
-                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                    userAgentPackageName: 'a_fish_in_sea',
-                  ),
-                  if (places.isNotEmpty)
-                    CircleLayer(
-                      circles: [
-                        for (final place in places)
-                          CircleMarker(
-                            point: LatLng(place.lat, place.lng),
-                            radius: place.radiusM,
-                            useRadiusInMeter: true,
-                            color: Colors.teal.withValues(alpha: 0.15),
-                            borderColor: Colors.teal,
-                            borderStrokeWidth: 2,
-                          ),
-                      ],
-                    ),
-                  if (points.length >= 2)
-                    PolylineLayer(
-                      polylines: [
-                        Polyline(
-                          points: [
-                            for (final p in points) LatLng(p.lat, p.lng),
-                          ],
-                          color: Colors.blue,
-                          strokeWidth: 4,
-                        ),
-                      ],
-                    ),
-                  MarkerLayer(
-                    markers: [
-                      if (atScrub != null)
-                        Marker(
-                          point: atScrub,
-                          width: 36,
-                          height: 36,
-                          child: const Icon(Icons.location_on,
-                              color: Colors.red, size: 32),
-                        ),
-                      for (final place in places)
-                        Marker(
-                          point: LatLng(place.lat, place.lng),
-                          width: 120,
-                          height: 28,
-                          child: Container(
-                            alignment: Alignment.topCenter,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.teal),
-                              ),
-                              child: Text(place.name,
-                                  style: const TextStyle(fontSize: 11),
-                                  overflow: TextOverflow.ellipsis),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ],
-              ),
-              if (points.isEmpty)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: Container(
-                    color: Colors.black54,
-                    padding: const EdgeInsets.all(8),
-                    child: const Text(
-                      'No points this day — press Start on Home, or add a test point below.',
-                      style: TextStyle(color: Colors.white),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
+          DayReviewMap(points: points, places: places, atScrub: atScrub),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
           child: Row(
@@ -384,12 +253,8 @@ class _DayReviewScreenState extends State<DayReviewScreen> {
   }
 
   LatLng? _positionAt(List<TrackedPoint> points, DateTime time) {
-    LatLng? last;
-    for (final p in points) {
-      if (p.timestamp.isAfter(time)) break;
-      last = LatLng(p.lat, p.lng);
-    }
-    return last;
+    final point = trackedPointAt(points, time);
+    return point == null ? null : LatLng(point.lat, point.lng);
   }
 
   void _addTestPoint() {

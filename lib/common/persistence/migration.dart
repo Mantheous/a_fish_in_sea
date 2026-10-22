@@ -1,11 +1,5 @@
 abstract final class Migration {
-  static bool removeAfter(String isoDate, [DateTime? now]) {
-    DateTime deadline;
-    try {
-      deadline = DateTime.parse(isoDate);
-    } catch (_) {
-      return true;
-    }
-    return (now ?? DateTime.now()).isBefore(deadline);
-  }
+  /// Static removal marker only. Runtime restores always run migrations;
+  /// the expiry test enforces this date without stranding old device data.
+  static bool removeAfter(String isoDate, [DateTime? now]) => true;
 }

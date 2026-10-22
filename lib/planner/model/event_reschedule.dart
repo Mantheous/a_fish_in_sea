@@ -68,3 +68,47 @@ PlannerEvent resizeEvent(
   }
   return event.copyWith(start: start, end: end);
 }
+
+bool isSameDay(DateTime a, DateTime b) =>
+    a.year == b.year && a.month == b.month && a.day == b.day;
+
+/// Returns an updated draft that follows the calendar to the currently
+/// visible dates, or `null` when no travel is needed.
+///
+/// The ghost keeps its wall-clock time and duration — only the day moves —
+/// so the user can page with the header arrows and then drag the ghost
+/// to its final slot. When the draft day is already on screen, the ghost
+/// stays put instead of jumping.
+PlannerEvent? travelGhostToVisible(
+  PlannerEvent draft,
+  List<DateTime> visibleDates,
+  DateTime? displayDate, {
+  int snapMinutes = 1,
+}) {
+  if (visibleDates.isEmpty) return null;
+  if (visibleDates.any((d) => isSameDay(d, draft.start))) return null;
+  DateTime anchor = displayDate ??
+      visibleDates[visibleDates.length ~/ 2];
+  if (!visibleDates.any((d) => isSameDay(d, anchor))) {
+    anchor = visibleDates[visibleDates.length ~/ 2];
+  }
+  final anchorDay = DateTime(anchor.year, anchor.month, anchor.day);
+  if (isSameDay(anchorDay, draft.start)) return null;
+  final duration = draft.end.isAfter(draft.start)
+      ? draft.end.difference(draft.start)
+      : const Duration(hours: 1);
+  if (draft.allDay) {
+    return draft.copyWith(start: anchorDay, end: anchorDay.add(duration));
+  }
+  final start = snapToInterval(
+    DateTime(
+      anchorDay.year,
+      anchorDay.month,
+      anchorDay.day,
+      draft.start.hour,
+      draft.start.minute,
+    ),
+    snapMinutes,
+  );
+  return draft.copyWith(start: start, end: start.add(duration));
+}

@@ -6,6 +6,7 @@ import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_draft_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/calendar_panel_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
@@ -48,18 +49,33 @@ Future<SyncEngine> pumpGoldenPage(WidgetTester tester, Widget page) async {
   when(() => storage.clear()).thenAnswer((_) async {});
   HydratedBloc.storage = storage;
 
+  // mocktail needs concrete instances to build argument matchers for the
+  // stubbed http client below.
+  registerFallbackValue(Uri.parse('http://localhost:1'));
+  registerFallbackValue(const <String, String>{});
+
+  final mockClient = MockClient();
+  // Golden pages render offline: any page that calls the server on pump
+  // gets a harmless empty response instead of a null transport response.
+  when(() => mockClient.get(captureAny(), headers: captureAny(named: 'headers')))
+      .thenAnswer((invocation) async {
+    final url = invocation.positionalArguments.first as Uri;
+    final body = url.path.endsWith('/status') ? '{}' : '[]';
+    return http.Response(body, 200);
+  });
+  final syncClient = SyncClient(
+    serverBase: () => 'http://localhost:1',
+    accessToken: () => null,
+    refreshAccessToken: () async => null,
+    client: mockClient,
+  );
+
   tester.view.physicalSize = const Size(1280, 720);
   tester.view.devicePixelRatio = 1.0;
 
   final undo = UndoCubit();
   final navigation = NavigationCubit();
   final settings = SettingsCubit();
-  final syncClient = SyncClient(
-    serverBase: () => 'http://localhost:1',
-    accessToken: () => null,
-    refreshAccessToken: () async => null,
-    client: MockClient(),
-  );
   final auth = AuthCubit(client: () => syncClient);
   final meta = SyncMetaCubit();
   final nodes = NodeCubit();
@@ -74,6 +90,7 @@ Future<SyncEngine> pumpGoldenPage(WidgetTester tester, Widget page) async {
   final visibility = CalendarVisibilityCubit();
   final drafts = CalendarDraftCubit();
   final tasksTab = TasksTabCubit();
+  final calendarPanel = CalendarPanelCubit();
   final places = PlacesCubit();
   final tracking = TrackingCubit();
   final reporting = ReportingCubit();
@@ -109,6 +126,7 @@ Future<SyncEngine> pumpGoldenPage(WidgetTester tester, Widget page) async {
     tracking,
     places,
     tasksTab,
+    calendarPanel,
     drafts,
     visibility,
     events,
@@ -154,6 +172,7 @@ Future<SyncEngine> pumpGoldenPage(WidgetTester tester, Widget page) async {
           BlocProvider<CalendarVisibilityCubit>.value(value: visibility),
           BlocProvider<CalendarDraftCubit>.value(value: drafts),
           BlocProvider<TasksTabCubit>.value(value: tasksTab),
+          BlocProvider<CalendarPanelCubit>.value(value: calendarPanel),
           BlocProvider<PlacesCubit>.value(value: places),
           BlocProvider<TrackingCubit>.value(value: tracking),
           BlocProvider<ReportingCubit>.value(value: reporting),

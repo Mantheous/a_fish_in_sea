@@ -62,6 +62,13 @@ class AuthState extends Equatable {
 class AuthCubit extends HydratedCubit<AuthState> {
   final SyncClient Function() _client;
 
+  /// Changes whenever the authenticated identity is replaced or revoked.
+  /// SyncEngine uses this to discard responses started in an older session.
+  int _sessionGeneration = 0;
+  int get sessionGeneration => _sessionGeneration;
+
+  int _authAttempt = 0;
+
   AuthCubit({required SyncClient Function() client})
       : _client = client,
         super(const AuthState());
@@ -78,9 +85,14 @@ class AuthCubit extends HydratedCubit<AuthState> {
     Future<Map<String, dynamic>> Function() call,
     String email,
   ) async {
+    final attempt = ++_authAttempt;
+    // A new login attempt may replace the current identity. Invalidate
+    // requests and refreshes bound to the prior account immediately.
+    _sessionGeneration++;
     emit(state.copyWith(status: AuthStatus.working, clearError: true));
     try {
       final tokens = await call();
+      if (attempt != _authAttempt) return false;
       emit(AuthState(
         status: AuthStatus.signedIn,
         email: email,
@@ -89,9 +101,11 @@ class AuthCubit extends HydratedCubit<AuthState> {
       ));
       return true;
     } on SyncException catch (e) {
+      if (attempt != _authAttempt) return false;
       emit(state.copyWith(status: AuthStatus.signedOut, error: e.message));
       return false;
     } catch (e) {
+      if (attempt != _authAttempt) return false;
       emit(state.copyWith(
           status: AuthStatus.signedOut, error: e.toString()));
       return false;
@@ -103,23 +117,33 @@ class AuthCubit extends HydratedCubit<AuthState> {
   /// simultaneous refreshes with the same token would sign the user
   /// out — this dedups them into one network call.
   Future<String?>? _refreshing;
+  int? _refreshingGeneration;
 
   /// Refreshes the access token using the stored refresh token. Used by
   /// [SyncClient] on 401. Returns the new access token or null.
   Future<String?> refreshAccessToken() {
     final inFlight = _refreshing;
-    if (inFlight != null) return inFlight;
-    final fut = _doRefresh();
+    final generation = _sessionGeneration;
+    if (inFlight != null && _refreshingGeneration == generation) {
+      return inFlight;
+    }
+    final fut = _doRefresh(generation);
     _refreshing = fut;
+    _refreshingGeneration = generation;
     fut.whenComplete(() {
-      if (identical(_refreshing, fut)) _refreshing = null;
+      if (identical(_refreshing, fut)) {
+        _refreshing = null;
+        _refreshingGeneration = null;
+      }
     });
     return fut;
   }
 
-  Future<String?> _doRefresh() async {
+  Future<String?> _doRefresh(int generation) async {
     final refresh = state.refreshToken;
     if (refresh == null || refresh.isEmpty) {
+      if (generation != _sessionGeneration) return null;
+      _sessionGeneration++;
       emit(state.copyWith(
         status: AuthStatus.signedOut,
         clearAccess: true,
@@ -130,6 +154,7 @@ class AuthCubit extends HydratedCubit<AuthState> {
     }
     try {
       final tokens = await _client().refresh(refresh);
+      if (generation != _sessionGeneration) return null;
       final access = tokens['access_token'] as String?;
       final nextRefresh = tokens['refresh_token'] as String?;
       if (access == null || access.isEmpty) return null;
@@ -141,7 +166,9 @@ class AuthCubit extends HydratedCubit<AuthState> {
       ));
       return access;
     } on SyncException catch (e) {
+      if (generation != _sessionGeneration) return null;
       if (e.statusCode == 401 || e.statusCode == 403) {
+        _sessionGeneration++;
         emit(state.copyWith(
           status: AuthStatus.signedOut,
           clearAccess: true,
@@ -151,6 +178,7 @@ class AuthCubit extends HydratedCubit<AuthState> {
       }
       return null;
     } catch (_) {
+      if (generation != _sessionGeneration) return null;
       // Transient transport error: keep stored tokens so a momentary network
       // drop does not permanently sign the user out.
       return null;
@@ -165,6 +193,8 @@ class AuthCubit extends HydratedCubit<AuthState> {
           'use email + password for now.');
 
   void logout() {
+    _authAttempt++;
+    _sessionGeneration++;
     final refresh = state.refreshToken;
     if (refresh != null && refresh.isNotEmpty) {
       // Best-effort server revocation; local state clears regardless.

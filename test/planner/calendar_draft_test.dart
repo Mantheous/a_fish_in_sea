@@ -18,6 +18,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:syncfusion_flutter_calendar/calendar.dart';
 
 class MockStorage extends Mock implements Storage {}
 
@@ -34,7 +35,7 @@ void main() {
   });
 
   group('draftSeedFromNode', () {
-    test('builds a 9am ghost on the due date', () {
+    test('builds a noon ghost on the due date', () {
       final due = DateTime(2026, 9, 10, 23, 59);
       final seed = draftSeedFromNode(
         Node(
@@ -51,8 +52,8 @@ void main() {
       expect(seed.subject, 'Problem set 5');
       expect(seed.notes, 'Chapter 3');
       expect(seed.classLabel, 'Physics');
-      expect(seed.start, DateTime(2026, 9, 10, 9));
-      expect(seed.end, DateTime(2026, 9, 10, 10));
+      expect(seed.start, DateTime(2026, 9, 10, 12));
+      expect(seed.end, DateTime(2026, 9, 10, 13));
     });
 
     test('falls back to today when the task has no due date', () {
@@ -67,12 +68,12 @@ void main() {
       expect(seed.start.year, 2026);
       expect(seed.start.month, 9);
       expect(seed.start.day, 5);
-      // The default 9am slot has already passed, so the block starts at
+      // The default noon slot has already passed, so the block starts at
       // the current slot instead of in the past.
       expect(seed.start, DateTime(2026, 9, 5, 15, 30));
     });
 
-    test('keeps the default morning slot when it is still ahead', () {
+    test('keeps the default noon slot when it is still ahead', () {
       final now = DateTime(2026, 9, 5, 7, 30);
       final seed = draftSeedFromNode(
         Node(
@@ -81,8 +82,24 @@ void main() {
             createdAt: DateTime(2026)),
         now: now,
       );
-      expect(seed.start, DateTime(2026, 9, 5, 9));
-      expect(seed.end, DateTime(2026, 9, 5, 10));
+      expect(seed.start, DateTime(2026, 9, 5, 12));
+      expect(seed.end, DateTime(2026, 9, 5, 13));
+    });
+
+    test('late-night seeds never crash and stay placeable', () {
+      // Around 23:50 the "never seed in the past" start used to invert
+      // the end clamp (lower > upper throws).
+      for (final now in [DateTime(2026, 9, 5, 23, 50), DateTime(2026, 9, 5, 23, 55)]) {
+        final seed = draftSeedFromNode(
+          Node(
+              id: 'node:t1',
+              title: 'Read me',
+              createdAt: DateTime(2026)),
+          now: now,
+        );
+        expect(seed.start.day, 5);
+        expect(seed.end.isAfter(seed.start), isTrue);
+      }
     });
   });
 
@@ -236,6 +253,115 @@ void main() {
     expect(calendarCubit.state, hasLength(1));
     expect(calendarCubit.state.first.subject, 'Homework block');
     expect(find.textContaining('Ghost preview'), findsNothing);
+  });
+
+  testWidgets('cancelling a new event restores the pre-open selection',
+      (tester) async {
+    final calendarCubit = CalendarCubit();
+    final nodeCubit = NodeCubit();
+    final settingsCubit = SettingsCubit();
+    final draftCubit = CalendarDraftCubit();
+    final feedCubit = buildFeedCubit(calendarCubit, nodeCubit);
+
+    await pumpCalendar(
+      tester,
+      calendarCubit: calendarCubit,
+      feedCubit: feedCubit,
+      settingsCubit: settingsCubit,
+      draftCubit: draftCubit,
+    );
+
+    // A slot the user had selected before opening the creator: Cancel
+    // must put the highlight back here instead of leaving it on the
+    // discarded draft's 9:00 slot.
+    final selectedBefore = DateTime(2026, 10, 12, 14);
+    tester
+        .widget<SfCalendar>(find.byType(SfCalendar).first)
+        .controller
+        ?.selectedDate = selectedBefore;
+    await tester.pump();
+
+    await tester.tap(find.byType(FloatingActionButton));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Ghost preview'), findsOneWidget);
+    expect(calendarCubit.state, isEmpty);
+
+    final cancelButton = find.widgetWithText(TextButton, 'Cancel');
+    await tester.ensureVisible(cancelButton);
+    await tester.pumpAndSettle();
+    await tester.tap(cancelButton);
+    await tester.pumpAndSettle();
+
+    // Nothing was saved, so nothing remains: no ghost tile, no draft
+    // icon, and the selection highlight is back where it was.
+    expect(calendarCubit.state, isEmpty);
+    expect(find.textContaining('Ghost preview'), findsNothing);
+    expect(find.byIcon(Icons.edit_calendar), findsNothing);
+    expect(
+      tester
+          .widget<SfCalendar>(find.byType(SfCalendar).first)
+          .controller
+          ?.selectedDate,
+      selectedBefore,
+    );
+  });
+
+  testWidgets('ghost follows the visible dates when paging with arrows',
+      (tester) async {
+    final calendarCubit = CalendarCubit();
+    final nodeCubit = NodeCubit();
+    final settingsCubit = SettingsCubit();
+    final draftCubit = CalendarDraftCubit();
+    final feedCubit = buildFeedCubit(calendarCubit, nodeCubit);
+
+    await pumpCalendar(
+      tester,
+      calendarCubit: calendarCubit,
+      feedCubit: feedCubit,
+      settingsCubit: settingsCubit,
+      draftCubit: draftCubit,
+    );
+
+    await tester.tap(find.byType(FloatingActionButton));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Ghost preview'), findsOneWidget);
+    final before =
+        tester.widget<EventEditorForm>(find.byType(EventEditorForm));
+    final beforeDay = before.initialDate!;
+    final beforeTime = before.initialTime!;
+
+    final calendar = tester.widget<SfCalendar>(find.byType(SfCalendar));
+    expect(calendar.onViewChanged, isNotNull);
+
+    final anchorDay = DateTime(
+      beforeDay.year,
+      beforeDay.month,
+      beforeDay.day,
+    ).add(const Duration(days: 7));
+    final visible = List<DateTime>.generate(
+      7,
+      (i) => anchorDay.add(Duration(days: i)),
+    );
+    // Real header-arrow paging moves the controller's display date into the
+    // new range before onViewChanged fires.
+    calendar.controller?.displayDate = anchorDay;
+    calendar.onViewChanged!(ViewChangedDetails(visible));
+    await tester.pumpAndSettle();
+
+    final after =
+        tester.widget<EventEditorForm>(find.byType(EventEditorForm));
+    // The ghost travels to the newly visible date so it can be dragged
+    // to its final slot, keeping its wall-clock time.
+    expect(after.initialDate, DateTime(
+      anchorDay.year,
+      anchorDay.month,
+      anchorDay.day,
+    ));
+    expect(after.initialTime!.hour, beforeTime.hour);
+    expect(after.initialTime!.minute, beforeTime.minute);
+    expect(find.textContaining('ghost follows'), findsOneWidget);
   });
 
   testWidgets('saving a task-seeded draft returns to the task menu',
@@ -443,7 +569,13 @@ void main() {
 
     await tester.tap(find.text('Homework'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Add to calendar').first);
+    // Unified schedule: the tile opens the Day/Time sheet; Time mode
+    // offers the visual calendar pick that requests the draft.
+    await tester.tap(find.byTooltip('Scheduled — tap to change').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Time'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pick time on calendar'));
     await tester.pump();
 
     expect(draftCubit.state, isNotNull);

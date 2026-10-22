@@ -72,7 +72,6 @@ def test_ical_proxy_blocks_internal_hosts_without_network(client: TestClient):
         "http://127.0.0.1/x.ics",
         "http://169.254.169.254/",
         "http://192.168.1.1/f.ics",
-        "http://100.64.0.1/x.ics",
         "http://[::1]/x.ics",
         "http://[::ffff:127.0.0.1]/x.ics",
         "http://[::ffff:169.254.169.254]/x.ics",
@@ -81,6 +80,110 @@ def test_ical_proxy_blocks_internal_hosts_without_network(client: TestClient):
     ):
         r = client.get("/api/ical", params={"url": url})
         assert r.status_code == 400, (url, r.text)
+
+
+def test_ssrf_address_check_maps_cgnat_and_rejects_internal():
+    from ipaddress import ip_address
+
+    from app import ssrf
+
+    # IPv4-mapped loopback/metadata and IPv6 ULA are unwrapped/rejected.
+    for a in (
+        "127.0.0.1",
+        "10.0.0.1",
+        "172.16.0.1",
+        "192.168.1.1",
+        "169.254.169.254",
+        "::1",
+        "fc00::1",
+        "fd7a:115c:a1e0::1",
+        "fe80::1",
+        "::ffff:127.0.0.1",
+        "::ffff:169.254.169.254",
+    ):
+        assert ssrf._is_internal_ip(ip_address(a)), a
+    # Public IPs and CGNAT / Tailnet are not internal.
+    for a in ("8.8.8.8", "1.1.1.1", "100.64.0.1", "100.127.255.255"):
+        assert not ssrf._is_internal_ip(ip_address(a)), a
+    assert ssrf.is_cgnat_ip(ip_address("100.64.0.1"))
+    assert not ssrf.is_cgnat_ip(ip_address("8.8.8.8"))
+
+
+def test_ical_proxy_requires_auth_for_tailnet(client: TestClient):
+    # CGNAT / Tailnet targets are no longer blocked outright (they are valid
+    # self-hosted feed targets), but /api/ical requires sign-in to fetch them.
+    r = client.get("/api/ical", params={"url": "http://100.64.0.1/x.ics"})
+    assert r.status_code == 401, r.text
+
+
+def test_ical_proxy_tailnet_fetch_allowed_when_signed_in(monkeypatch, client):
+    import app.routers.proxy as proxy
+
+    h = _register(client, "sec-tailnet@example.com")
+    seen: list[str] = []
+
+    async def fake_fetch(url: str, timeout: float = 30.0):
+        seen.append(url)
+        return b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", ""
+
+    monkeypatch.setattr(proxy, "fetch_public_bytes", fake_fetch)
+    r = client.get(
+        "/api/ical", params={"url": "http://100.64.0.1/x.ics"}, headers=h
+    )
+    assert r.status_code == 200, r.text
+    assert seen == ["http://100.64.0.1/x.ics"]
+
+
+def test_ical_proxy_public_feed_stays_unauthenticated(monkeypatch, client):
+    import app.routers.proxy as proxy
+
+    async def fake_fetch(url: str, timeout: float = 30.0):
+        return b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", ""
+
+    monkeypatch.setattr(proxy, "fetch_public_bytes", fake_fetch)
+    r = client.get("/api/ical", params={"url": "https://example.com/public.ics"})
+    assert r.status_code == 200, r.text
+
+
+def test_feed_stream_is_capped_instead_of_buffered(monkeypatch):
+    import asyncio
+
+    import app.ssrf as ssrf
+
+    class FakeStream:
+        status_code = 200
+        headers = {}
+        extensions = {}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def aiter_bytes(self):
+            produced = 0
+            chunk = b"x" * 1024
+            while produced < ssrf.MAX_BYTES + 1024:
+                yield chunk
+                produced += len(chunk)
+
+    class FakeClient:
+        def __init__(self, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def stream(self, method, url):
+            return FakeStream()
+
+    monkeypatch.setattr(ssrf.httpx, "AsyncClient", FakeClient)
+    with pytest.raises(ValueError, match="too large"):
+        asyncio.run(ssrf.fetch_public_bytes("http://example.com/big.ics"))
 
 
 def test_fetch_refresh_stores_error_for_internal_host(client: TestClient):
@@ -92,6 +195,29 @@ def test_fetch_refresh_stores_error_for_internal_host(client: TestClient):
     )
     assert r.status_code == 200
     assert r.json()["status"] == "error"
+
+
+def test_fetch_public_bytes_reuses_pooled_http_client():
+    """fetch_public_bytes reuses one pooled httpx client instead of opening a
+    fresh client per request (and per redirect hop), which caps file-descriptor
+    churn under fetch abuse."""
+    import asyncio
+
+    import httpx
+
+    from app import ssrf
+
+    ssrf._HTTP_CLIENT = None
+    try:
+        first = ssrf._http_client()
+        second = ssrf._http_client()
+        assert isinstance(first, httpx.AsyncClient)
+        assert first is second  # same pooled instance, not one per request
+    finally:
+        client = ssrf._HTTP_CLIENT
+        ssrf._HTTP_CLIENT = None
+        if client is not None:
+            asyncio.run(client.aclose())
 
 
 def test_api_tokens_cannot_self_escalate_or_bypass_review(client: TestClient):

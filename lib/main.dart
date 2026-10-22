@@ -8,11 +8,14 @@ import 'package:a_fish_in_sea/feedback/view/feedback_page.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/finances_hub.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
+import 'package:a_fish_in_sea/nodes/service/recurring_goal_coordinator.dart';
+import 'package:a_fish_in_sea/nodes/bloc/schedule_prefs_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/navigation/view/home_page.dart';
 import 'package:a_fish_in_sea/nodes/view/nodes_page.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_draft_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/calendar_panel_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
@@ -79,6 +82,8 @@ class MyApp extends StatelessWidget {
           );
           ref = AuthCubit(client: () => client);
           SyncAuth.tokenProvider = () => ref?.state.accessToken;
+          SyncAuth.refreshProvider =
+              () => ref?.refreshAccessToken() ?? Future.value(null);
           return ref;
         }),
         BlocProvider(create: (_) => SyncMetaCubit()),
@@ -96,6 +101,8 @@ class MyApp extends StatelessWidget {
         BlocProvider(create: (_) => CalendarVisibilityCubit()),
         BlocProvider(create: (_) => CalendarDraftCubit()),
         BlocProvider(create: (_) => TasksTabCubit()),
+        BlocProvider(create: (_) => CalendarPanelCubit()),
+        BlocProvider(create: (_) => SchedulePrefsCubit()),
         BlocProvider(create: (_) => AssignmentRulesCubit()),
         BlocProvider(create: (_) => AssignmentEstimatesCubit(), lazy: false),
         BlocProvider(create: (_) => TasksViewOptionsCubit()),
@@ -126,12 +133,15 @@ class MyApp extends StatelessWidget {
                 return const <AssignmentRule>[];
               }
             },
+            estimatesCubit: context.read<AssignmentEstimatesCubit>(),
             canvasService: CanvasService(
               baseUrl: () =>
                   context.read<SettingsCubit>().state.icalProxyBase,
               userId: () => context.read<PlaidCubit>().state.userId,
               authToken: () =>
                   context.read<AuthCubit>().state.accessToken,
+              refreshAccessToken: () =>
+                  context.read<AuthCubit>().refreshAccessToken(),
             ),
           ),
         ),
@@ -181,8 +191,8 @@ class _DemoContent extends StatelessWidget {
   }
 }
 
-/// Boots the sync engine once (first pull if signed in) and runs the
-/// 5-minute background timer while the app lives.
+/// Boots the sync engine once (first pull if signed in) and keeps it live:
+/// the 5-minute background timer plus a debounced sync on local mutations.
 class _SyncBootstrap extends StatefulWidget {
   const _SyncBootstrap();
 
@@ -194,21 +204,46 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
   // Saved in initState: context.read in dispose() is unsafe once the
   // element is deactivated (crashed test teardown and hot restart).
   SyncEngine? _engine;
+  RecurringGoalCoordinator? _goalLinks;
 
   /// Feed ids seen on the last node/feed change, so a removed class can
   /// be dropped from the learned assignment data.
-  Set<String> _knownFeedIds = const {};
+  bool _estimatesScheduled = false;
+
+  /// The learned effort index is derived data over the whole node list, so
+  /// rebuilding it synchronously on every checkbox tap puts O(N) work on
+  /// the tap's UI frame (phone hang on check-off). Coalesce rapid edits
+  /// into one post-frame rebuild: the tap paints first, estimates land a
+  /// frame later. Idempotent pure function, so coalescing loses nothing.
+  void _scheduleEstimatesRebuild() {
+    if (_estimatesScheduled) return;
+    _estimatesScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _estimatesScheduled = false;
+      if (!mounted) return;
+      try {
+        context
+            .read<AssignmentEstimatesCubit>()
+            .rebuildFrom(context.read<NodeCubit>().state);
+      } catch (_) {}
+    });
+  }
 
   @override
   void initState() {
     super.initState();
+    _goalLinks = RecurringGoalCoordinator(context.read<NodeCubit>(),
+        context.read<CalendarCubit>(), context.read<TransactionsCubit>());
     _engine = context.read<SyncEngine>();
     _engine!.boot();
     _engine!.startAutoSync();
+    _engine!.startAutoSyncOnChanges();
   }
 
   @override
   void dispose() {
+    _goalLinks?.dispose();
+    _engine?.stopAutoSyncOnChanges();
     _engine?.stopAutoSync();
     super.dispose();
   }
@@ -219,27 +254,12 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
     // when do I usually start it" index in step with the node list. The
     // rebuild is a pure function of the nodes, so it is idempotent and
     // safe to run on every change.
-    //
-    // A removed class drops its learned rows too: the estimate index is
-    // derived from nodes, so deleting coursework would otherwise leave an
-    // orphan row in the stats forever.
-    final feeds = context.watch<FeedCubit>().state;
-    final feedIds = {for (final f in feeds) f.id};
-    final goneFeeds = _knownFeedIds.difference(feedIds);
-    _knownFeedIds = feedIds;
-    if (goneFeeds.isNotEmpty) {
-      final estimates = context.read<AssignmentEstimatesCubit>();
-      for (final id in goneFeeds) {
-        estimates.forgetFeed(id);
-      }
-    }
-
     return MultiBlocListener(
       listeners: [
         BlocListener<NodeCubit, List<Node>>(
           listenWhen: (a, b) => !identical(a, b),
           listener: (context, nodes) {
-            context.read<AssignmentEstimatesCubit>().rebuildFrom(nodes);
+            _scheduleEstimatesRebuild();
           },
         ),
       ],

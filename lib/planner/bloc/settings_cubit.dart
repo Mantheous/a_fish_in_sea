@@ -172,13 +172,14 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
   }
 
   /// Sync apply: takes the roamed settings but keeps the per-device
-  /// server URL (different networks need different URLs).
+  /// values (server URL, Anki host, and calendar view differ per device).
   void applySyncedJson(Map<String, dynamic> json) {
     final restored = fromJson(json);
     if (restored == null) return;
     emit(restored.copyWith(
       icalProxyBase: state.icalProxyBase,
       ankiConnectHost: state.ankiConnectHost,
+      defaultCalendarView: state.defaultCalendarView,
     ));
   }
 

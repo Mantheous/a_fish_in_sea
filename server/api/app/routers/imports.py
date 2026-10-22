@@ -26,9 +26,10 @@ import datetime as dt
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import and_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import get_session
+from ..db import dialect_insert, get_session
 from ..deps import check_token_scope, get_current_user
 from ..models import ImportBatch, ImportItem, SyncItem, User
 from ..schemas import (
@@ -167,10 +168,59 @@ async def _upsert_sync_item(
     data: dict,
 ) -> SyncRecord:
     """Same envelope write as PUT /items: create-or-replace, rev bump,
-    un-delete. Approval paths must use this (never tombstones)."""
+    un-delete. Approval paths must use this (never tombstones).
+
+    Upserts via ON CONFLICT so two requests racing for the same
+    (user, collection, item_id) end with one success and one clean update
+    instead of a unique-constraint 500; IntegrityError is the fallback.
+    """
     now = _now()
     payload = dict(data)
     payload["id"] = item_id
+    stmt = (
+        dialect_insert(SyncItem.__table__)
+        .values(
+            user_id=user_id,
+            collection=collection,
+            item_id=item_id,
+            data=payload,
+            deleted=False,
+            rev=1,
+            updated_at=now,
+        )
+        .on_conflict_do_update(
+            index_elements=[
+                SyncItem.user_id,
+                SyncItem.collection,
+                SyncItem.item_id,
+            ],
+            set_=dict(
+                data=payload,
+                deleted=False,
+                rev=SyncItem.rev + 1,
+                updated_at=now,
+            ),
+        )
+    )
+    try:
+        await session.execute(stmt)
+    except IntegrityError:
+        await session.rollback()
+        row = (
+            await session.execute(
+                select(SyncItem).where(
+                    and_(
+                        SyncItem.user_id == user_id,
+                        SyncItem.collection == collection,
+                        SyncItem.item_id == item_id,
+                    )
+                )
+            )
+        ).scalar_one()
+        row.data = payload
+        row.deleted = False
+        row.rev += 1
+        row.updated_at = now
     row = (
         await session.execute(
             select(SyncItem).where(
@@ -181,23 +231,7 @@ async def _upsert_sync_item(
                 )
             )
         )
-    ).scalar_one_or_none()
-    if row is None:
-        row = SyncItem(
-            user_id=user_id,
-            collection=collection,
-            item_id=item_id,
-            data=payload,
-            rev=1,
-            updated_at=now,
-        )
-        session.add(row)
-    else:
-        row.data = payload
-        row.deleted = False
-        row.rev += 1
-        row.updated_at = now
-    await session.flush()
+    ).scalar_one()
     return SyncRecord(
         collection=row.collection,
         item_id=row.item_id,
@@ -281,8 +315,13 @@ def _match_wanted_pairs(
 ) -> set[tuple[str, str]]:
     """Resolve caller-supplied item identifiers to (collection, item_id) pairs.
 
-    Accepts either qualified 'collection:item_id' (e.g. 'nodes:x') or bare
-    'item_id' for backward compatibility.
+    Approve/discard are keyed by (collection, item_id): a qualified
+    'collection:item_id' matches exactly that row. A bare 'item_id' is
+    accepted only when it is unambiguous within the batch (exactly one
+    pending row carries it). A bare id shared across collections is
+    ambiguous and is rejected instead of silently acting on every
+    collection at once — that was the cross-collection approve/discard
+    collision.
     """
     known_pairs = {(r.collection, r.item_id) for r in pending}
     by_bare: dict[str, set[tuple[str, str]]] = {}
@@ -290,19 +329,33 @@ def _match_wanted_pairs(
         by_bare.setdefault(pair[1], set()).add(pair)
     matched: set[tuple[str, str]] = set()
     unknown: list[str] = []
+    ambiguous: list[str] = []
     for raw in raw_ids:
         if ":" in raw:
             prefix, rest = raw.split(":", 1)
             if prefix in IMPORTABLE and (prefix, rest) in known_pairs:
                 matched.add((prefix, rest))
-                continue
-        if raw in by_bare:
-            matched.update(by_bare[raw])
-        else:
+            else:
+                unknown.append(raw)
+            continue
+        candidates = by_bare.get(raw, set())
+        if not candidates:
             unknown.append(raw)
+        elif len(candidates) == 1:
+            matched.update(candidates)
+        else:
+            ambiguous.append(raw)
     if unknown:
         raise HTTPException(
             status_code=400, detail=f"Unknown items: {sorted(set(unknown))}"
+        )
+    if ambiguous:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Ambiguous item id(s) exist in multiple collections; "
+                f"qualify with collection:item_id: {sorted(set(ambiguous))}"
+            ),
         )
     return matched
 
@@ -442,4 +495,5 @@ async def reject_batch(
     await session.commit()
     await session.refresh(batch)
     rows = await _batch_items(session, batch.id)
-    return _to_out(batch, rows)
+    existing = await _existing_map(session, user.id, rows)
+    return _to_out(batch, rows, existing)

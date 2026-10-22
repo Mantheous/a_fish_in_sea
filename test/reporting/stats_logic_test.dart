@@ -2,6 +2,7 @@ import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/planner/model/assignment_estimate.dart';
 import 'package:a_fish_in_sea/planner/model/assignment_rule.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
+import 'package:a_fish_in_sea/reporting/model/reported_entry.dart';
 import 'package:a_fish_in_sea/reporting/reporting_logic.dart';
 import 'package:a_fish_in_sea/reporting/stats_logic.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -399,11 +400,14 @@ void main() {
           homework(id: 'a', start: start, minutes: 60),
         ],
         reportedEntries: [
-          (
+          ReportedEntry(
+            id: 'rep:evt:a',
             eventId: 'evt:a',
+            title: 'Video Quiz',
             start: start,
             end: start.add(const Duration(hours: 1)),
-            title: 'Video Quiz',
+            status: ReportStatus.attended,
+            auto: false,
           ),
         ],
       );
@@ -419,16 +423,144 @@ void main() {
         plannedSlices: const [],
         nodes: const [],
         reportedEntries: [
-          (
+          ReportedEntry(
+            id: 'rep:evt:personal',
             eventId: 'evt:personal',
+            title: 'Temple trip',
             start: start,
             end: start.add(const Duration(minutes: 45)),
-            title: 'Temple trip',
+            status: ReportStatus.attended,
+            auto: false,
           ),
         ],
       );
       expect(report.trackedMinutes, 45);
       expect(report.trackedNotPlannedMinutes, 45);
+    });
+
+    test('missed and auto entries do not count as tracked time', () {
+      final start = dayOn(1, 9);
+      final report = buildAssignmentTimeReport(
+        range: _thisWeek,
+        plannedSlices: const [],
+        nodes: const [],
+        reportedEntries: [
+          // Skipped everything and ran Auto-report: the auto "missed" is
+          // the absence of work, not work.
+          ReportedEntry(
+            id: 'rep:auto-missed',
+            eventId: 'evt:skipped',
+            title: 'Skipped lecture',
+            start: start,
+            end: start.add(const Duration(hours: 1)),
+            status: ReportStatus.missed,
+            auto: true,
+          ),
+          // A manually-marked miss is still not work done.
+          ReportedEntry(
+            id: 'rep:manual-missed',
+            eventId: 'evt:skipped-2',
+            title: 'Skipped seminar',
+            start: start.add(const Duration(hours: 2)),
+            end: start.add(const Duration(hours: 3)),
+            status: ReportStatus.missed,
+            auto: false,
+          ),
+          // An unconfirmed auto "attended" is a guess, not a record.
+          ReportedEntry(
+            id: 'rep:auto-attended',
+            eventId: 'evt:maybe',
+            title: 'Maybe there',
+            start: start.add(const Duration(hours: 4)),
+            end: start.add(const Duration(hours: 5)),
+            status: ReportStatus.attended,
+            auto: true,
+          ),
+          ReportedEntry(
+            id: 'rep:manual-attended',
+            eventId: 'evt:real',
+            title: 'Temple trip',
+            start: start.add(const Duration(hours: 6)),
+            end: start.add(const Duration(minutes: 45 + 360)),
+            status: ReportStatus.attended,
+            auto: false,
+          ),
+        ],
+      );
+      // Only the confirmed manual attendance counts.
+      expect(report.trackedMinutes, 45);
+      expect(report.trackedNotPlannedMinutes, 45);
+    });
+
+    test('an overnight session splits at midnight', () {
+      final start = DateTime(2026, 10, 13, 22);
+      final report = buildAssignmentTimeReport(
+        range: _thisWeek,
+        plannedSlices: const [],
+        nodes: [
+          homework(
+            id: 'a',
+            start: start,
+            minutes: 600,
+          ),
+        ],
+      );
+      // 22:00-24:00 lands on Tuesday, 00:00-07:00 is night (outside the
+      // waking window), 07:00-08:00 lands on Wednesday.
+      expect(report.trackedMinutes, 180);
+      expect(report.days, hasLength(2));
+      final tuesday = report.days
+          .firstWhere((d) => d.day == DateTime(2026, 10, 13));
+      final wednesday = report.days
+          .firstWhere((d) => d.day == DateTime(2026, 10, 14));
+      expect(tuesday.coveredMinutes, 120);
+      expect(wednesday.coveredMinutes, 60);
+    });
+
+    test('night-only work carries no window penalty', () {
+      final report = buildAssignmentTimeReport(
+        range: _thisWeek,
+        plannedSlices: const [],
+        nodes: [
+          homework(
+            id: 'a',
+            start: dayOn(1, 2),
+            minutes: 60,
+          ),
+        ],
+      );
+      // 02:00-03:00 is outside the waking window: nothing is counted, and
+      // the day is not penalized with 17 "not accounted for" hours.
+      expect(report.trackedMinutes, 0);
+      expect(report.days.single.windowMinutes, 0);
+      expect(report.days.single.coveredMinutes, 0);
+      expect(report.unaccountedMinutes, 0);
+    });
+
+    test('overlapping planned and tracked fit under the covered axis', () {
+      final start = dayOn(1, 9);
+      final report = buildAssignmentTimeReport(
+        range: _thisWeek,
+        plannedSlices: [
+          slice(
+            taskId: 'a',
+            classLabel: 'MATH 290',
+            start: start,
+            duration: const Duration(hours: 2),
+          ),
+        ],
+        nodes: [
+          homework(id: 'a', start: start, minutes: 60),
+        ],
+      );
+      final day = report.days.single;
+      // Planned is net of the recorded overlap, so the two chart rods
+      // (tracked vs. planned) never sum past the covered axis max.
+      expect(day.trackedMinutes, 60);
+      expect(day.plannedMinutes, 60);
+      expect(day.coveredMinutes, 120);
+      expect(day.trackedMinutes + day.plannedMinutes,
+          lessThanOrEqualTo(day.coveredMinutes));
     });
 
     test('an empty range reports nothing', () {
@@ -631,9 +763,73 @@ void main() {
       expect(report.ankiTarget, 20);
     });
 
+    test('done money and time goals keep their metrics', () {
+      final report = buildGoalRangeReport(
+        range: _thisWeek,
+        nodes: [
+          Node(
+            id: 'm1',
+            title: 'Emergency fund',
+            createdAt: DateTime(2026),
+            money: const MoneyFacet(
+              targetAmount: 500,
+              actualAmount: 125,
+              direction: MoneyDirection.save,
+            ),
+            status: NodeStatus.done,
+            completedAt: dayOn(2, 18),
+          ),
+          Node(
+            id: 'g1',
+            title: 'Weightlifting',
+            createdAt: DateTime(2026),
+            effort: const EffortFacet(targetMinutes: 180),
+            actualStart: dayOn(1, 7),
+            actualEnd: dayOn(1, 8),
+            status: NodeStatus.done,
+            completedAt: dayOn(2, 10),
+          ),
+        ],
+      );
+      // Marking a goal Done lists it as finished without erasing its
+      // target and logged progress from the totals.
+      expect(report.completed, hasLength(2));
+      expect(report.moneyGoalCount, 1);
+      expect(report.moneyTarget, 500);
+      expect(report.moneyActual, 125);
+      expect(report.effortGoalCount, 1);
+      expect(report.effortTargetMinutes, 180);
+      expect(report.effortLoggedMinutes, 60);
+    });
+
+    test('a zero money target yields no progress, not NaN', () {
+      final report = buildGoalRangeReport(
+        range: _thisWeek,
+        nodes: [
+          Node(
+            id: 'm1',
+            title: 'Spare change',
+            createdAt: DateTime(2026),
+            money: const MoneyFacet(
+              targetAmount: 0,
+              actualAmount: 0,
+              direction: MoneyDirection.save,
+            ),
+          ),
+        ],
+      );
+      expect(report.moneyGoalCount, 1);
+      // Null so the page can show an empty bar instead of dividing by zero.
+      expect(report.moneyPct, isNull);
+    });
+
     test('counts overdue open goals', () {
       final report = buildGoalRangeReport(
         range: _thisWeek,
+        // Pin "now" to the fixture week: with a rolling DateTime.now both
+        // fixtures are overdue once the real week passes (pre-existing
+        // date drift, unrelated to this change).
+        now: dayOn(2, 12),
         nodes: [
           Node(
             id: 'g1',

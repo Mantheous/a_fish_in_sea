@@ -30,6 +30,7 @@ import '../../nodes/model/node.dart';
 import '../../planner/model/assignment_estimate.dart';
 import '../../planner/model/assignment_rule.dart';
 import '../../planner/model/assignment_template.dart';
+import 'model/reported_entry.dart';
 import 'reporting_logic.dart';
 
 /// Waking hours used for the "not accounted for" number. Local time.
@@ -415,6 +416,31 @@ int _overlap(DateTime aStart, DateTime aEnd, DateTime bStart, DateTime bEnd) {
   return (start: start, end: end);
 }
 
+/// Split a span at each midnight so overnight work lands on both days
+/// instead of dropping the post-midnight half.
+List<_Span> _splitByDay(_Span span) {
+  final out = <_Span>[];
+  var cursor = span.start;
+  while (cursor.isBefore(span.end)) {
+    final dayEnd = _startOfDay(cursor).add(const Duration(days: 1));
+    final pieceEnd = span.end.isBefore(dayEnd) ? span.end : dayEnd;
+    out.add(_Span(
+      start: cursor,
+      end: pieceEnd,
+      groupKey: span.groupKey,
+      label: span.label,
+      classLabel: span.classLabel,
+      title: span.title,
+      templateKey: span.templateKey,
+      nodeId: span.nodeId,
+      tracked: span.tracked,
+      estimateMinutes: span.estimateMinutes,
+    ));
+    cursor = pieceEnd;
+  }
+  return out;
+}
+
 /// Sum the union of [spans] (minutes), merging overlaps so nothing is
 /// double-counted.
 int _unionMinutes(List<_Span> spans) {
@@ -481,15 +507,16 @@ int _overlapWith(List<_Span> spans, List<_Span> others) {
 /// [plannedSlices] is every planned calendar slice in the range (the day
 /// review's `daySlices` output, merged across days), [nodes] the full node
 /// list (used for class/type attribution and estimates), and
-/// [reportedEntries] the accepted manual reports in the range.
+/// [reportedEntries] the day-review reports in the range. Only confirmed
+/// (non-auto) non-missed entries count as recorded time: an auto "missed"
+/// from skipping everything is the absence of work, not work.
 AssignmentTimeReport buildAssignmentTimeReport({
   required StatsRange range,
   required List<PlannedSlice> plannedSlices,
   required List<Node> nodes,
   List<AssignmentRule> rules = const [],
   List<AssignmentTypeEffort> efforts = const [],
-  List<({String? eventId, DateTime start, DateTime end, String title})>
-      reportedEntries = const [],
+  List<ReportedEntry> reportedEntries = const [],
 }) {
   final nodeById = {for (final n in nodes) n.id: n};
 
@@ -537,6 +564,9 @@ AssignmentTimeReport buildAssignmentTimeReport({
     ],
   };
   for (final entry in reportedEntries) {
+    // Missed events are the absence of work, and unconfirmed auto entries
+    // are guesses: neither counts as recorded time.
+    if (entry.auto || entry.status == ReportStatus.missed) continue;
     final eventId = entry.eventId;
     if (eventId != null && backedEventIds.contains(eventId)) continue;
     if (!range.contains(entry.start)) continue;
@@ -554,14 +584,17 @@ AssignmentTimeReport buildAssignmentTimeReport({
   }
 
   // Bucket by day, then union planned vs. tracked inside the waking window
-  // so nothing is counted twice.
+  // so nothing is counted twice. Spans are split at midnight first, so an
+  // overnight session contributes to both days.
   final days = <DateTime, List<_Span>>{};
   final dayKeys = <DateTime>{};
   for (final span in [...plannedSpans, ...trackedSpans]) {
-    final day = _startOfDay(span.start);
-    if (!range.contains(day)) continue;
-    dayKeys.add(day);
-    days.putIfAbsent(day, () => []).add(span);
+    for (final piece in _splitByDay(span)) {
+      final day = _startOfDay(piece.start);
+      if (!range.contains(day)) continue;
+      dayKeys.add(day);
+      days.putIfAbsent(day, () => []).add(piece);
+    }
   }
 
   final accounting = <DayAccounting>[];
@@ -597,11 +630,25 @@ AssignmentTimeReport buildAssignmentTimeReport({
     }
 
     final covered = _unionMinutes([...clippedPlanned, ...clippedTracked]);
-    final plannedToday = clippedPlanned.fold(0, (a, b) => a + b.minutes);
     final trackedToday = clippedTracked.fold(0, (a, b) => a + b.minutes);
+    // Planned time that a recorded session already covers is dropped, so
+    // the class/type totals stay faithful to what the user actually did.
+    // The per-day bar uses the same net number, so planned + tracked can
+    // never stack past the day's covered total (the chart axis).
+    final countedPerPlanned = <int>[];
+    var plannedToday = 0;
+    for (final span in clippedPlanned) {
+      final counted = span.minutes - _overlapWith([span], clippedTracked);
+      countedPerPlanned.add(counted);
+      if (counted > 0) plannedToday += counted;
+    }
     final dayAccount = DayAccounting(
       day: day,
-      windowMinutes: daySpans.isEmpty ? 0 : statsWakingMinutes,
+      // A day whose spans all fall outside the waking window (night-only
+      // work) has nothing accounted: no window, so no penalty.
+      windowMinutes: (clippedPlanned.isEmpty && clippedTracked.isEmpty)
+          ? 0
+          : statsWakingMinutes,
       coveredMinutes: covered,
       plannedMinutes: plannedToday,
       trackedMinutes: trackedToday,
@@ -609,11 +656,9 @@ AssignmentTimeReport buildAssignmentTimeReport({
     accounting.add(dayAccount);
     unaccountedTotal += dayAccount.unaccountedMinutes;
 
-    // Planned time that a recorded session already covers is dropped, so
-    // the class/type totals stay faithful to what the user actually did.
-    for (final span in clippedPlanned) {
-      final overlap = _overlapWith([span], clippedTracked);
-      final counted = span.minutes - overlap;
+    for (var i = 0; i < clippedPlanned.length; i++) {
+      final span = clippedPlanned[i];
+      final counted = countedPerPlanned[i];
       if (counted <= 0) continue;
       plannedTotal += counted;
       _addTo(byClass, span.groupKey, span.label, span.classLabel, planned: counted);
@@ -788,6 +833,24 @@ GoalRangeReport buildGoalRangeReport({
     if (node.isHomework || node.isTemplate || node.isUnbounded) continue;
     final kind = goalKindOf(node);
     final leaf = !isParent.contains(node.id);
+    // Finished goals keep their targets and logged progress: accumulate
+    // before the done-skip below, so marking a goal Done does not erase
+    // it from the totals.
+    if (kind == GoalKind.money) {
+      final money = node.money!;
+      moneyTarget += money.effectiveTarget;
+      moneyActual += money.actualAmount ?? 0;
+      moneyGoalCount++;
+    } else if (kind == GoalKind.time) {
+      effortTarget += node.effort!.targetMinutes;
+      effortLogged += node.reportedDuration?.inMinutes ?? 0;
+      effortGoalCount++;
+    } else if (kind == GoalKind.anki) {
+      final anki = node.anki!;
+      ankiTarget += anki.targetReviews;
+      ankiReviews += anki.reviewsActual ?? 0;
+      ankiGoalCount++;
+    }
     if (node.isDone) {
       final doneAt = node.completedAt;
       if (doneAt != null && range.contains(doneAt)) {
@@ -819,26 +882,6 @@ GoalRangeReport buildGoalRangeReport({
         checklistTotal++;
         if (node.isDone) checklistDone++;
       }
-      continue;
-    }
-    if (kind == GoalKind.money) {
-      final money = node.money!;
-      moneyTarget += money.effectiveTarget;
-      moneyActual += money.actualAmount ?? 0;
-      moneyGoalCount++;
-      continue;
-    }
-    if (kind == GoalKind.time) {
-      effortTarget += node.effort!.targetMinutes;
-      effortLogged += node.reportedDuration?.inMinutes ?? 0;
-      effortGoalCount++;
-      continue;
-    }
-    if (kind == GoalKind.anki) {
-      final anki = node.anki!;
-      ankiTarget += anki.targetReviews;
-      ankiReviews += anki.reviewsActual ?? 0;
-      ankiGoalCount++;
     }
   }
 

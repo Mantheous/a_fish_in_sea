@@ -13,6 +13,7 @@ import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_calendar.dart';
 import '../../nodes/service/node_event_link.dart';
+import '../../nodes/service/node_event_sync.dart';
 import '../../nodes/view/node_checkbox.dart';
 import '../../nodes/view/node_editor.dart';
 import '../../nodes/view/node_finish_sheet.dart';
@@ -24,25 +25,35 @@ import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/calendar_visibility_cubit.dart';
 import '../bloc/feed_cubit.dart';
 import '../model/event_reschedule.dart';
-import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../bloc/settings_cubit.dart';
 import '../service/calendar_report.dart';
+import '../service/event_reminders.dart';
+import 'calendar_data_source.dart';
+import 'calendar_projection.dart';
 import 'calendar_filter_sheet.dart';
+import 'calendar_report_layout.dart';
+import 'calendar_report_lane.dart';
+import 'calendar_side_panel.dart';
+import 'calendar_tile_metrics.dart';
 import 'event_editor.dart';
 import 'feed_manager.dart';
+import 'task_tile_helpers.dart';
+import 'tasks_panel.dart';
 
-const int _personalEventColor = 0xFF6B8F8A;
 const double _wideBreakpoint = 720;
-const double _drawerWidth = 360;
+const double _calendarTimeRulerWidth = 70;
+const double _calendarViewHeaderHeight = 60;
+
+/// Wide desktops land on the calendar with the task panel open; smaller
+/// (but still wide) windows stay calendar-first until the panel is opened.
+const double _panelDefaultBreakpoint = 1080;
 
 // Hoisted: DateFormat construction parses ICU skeletons — doing it per tile
 // per frame (30+ tiles) showed up in profiles.
 final _calendarTimeFormat = DateFormat('h:mm a');
 final _calendarMoveFormat = DateFormat('EEE, MMM d · h:mm a');
 final _calendarDayFormat = DateFormat('EEE, MMM d');
-
-enum _DrawerMode { closed, detail, creating, editing }
 
 class CalendarPage extends StatefulWidget {
   const CalendarPage({super.key});
@@ -55,8 +66,26 @@ class _CalendarPageState extends State<CalendarPage> {
   final CalendarController _controller = CalendarController();
   CalendarView _view = platformDefaultCalendarView;
   String? _selectedEventId;
-  _DrawerMode _drawerMode = _DrawerMode.closed;
+
+  /// What the side panel shows while open. [CalendarPanelMode.tasks] with
+  /// nothing selected is the panel's resting state.
+  CalendarPanelMode _panelMode = CalendarPanelMode.tasks;
+
+  /// Whether the side panel (wide screens only) is shown.
+  bool _panelOpen = false;
+  bool _appliedPanelDefault = false;
+
+  /// True when a pending draft was claimed as the page mounted (the user
+  /// navigated here from Tasks → Pick time on calendar): saving it returns
+  /// to Tasks. Seeds arriving while the page is already open (the side
+  /// panel's own schedule flow) keep the user on the calendar.
+  bool _seedFromPageMount = false;
   PlannerEvent? _draftEvent;
+  // Selection held before opening the create flow, restored on cancel so
+  // the calendar's selected-slot highlight (drawn from selectedDate) does
+  // not linger on the draft's old slot.
+  DateTime? _preCreateSelectedDate;
+  bool _preCreateSelectionCaptured = false;
   String? _draftSeedSubject;
   String? _draftSeedNotes;
   String? _draftSeedLocation;
@@ -66,9 +95,22 @@ class _CalendarPageState extends State<CalendarPage> {
   bool _sideBySide = false;
   Timer? _liveTicker;
   Timer? _suppressTimer;
+  PlannerCalendarDataSource? _dataSource;
+  PlannerCalendarDataSource? _railDataSource;
+  final _railController = CalendarController();
+  final _projection = CalendarProjection();
   TimeSlotViewSettings? _slotSettingsCache;
+  TimeSlotViewSettings? _railSlotSettingsCache;
   double? _slotStartHour;
   double? _slotEndHour;
+  // The report overlay is a separate calendar so it can keep its own report
+  // chips, but its day columns sit directly beside the matching plan columns.
+  // Both grids share the same time scroll offset (see [_onPlanScroll]).
+  ScrollPosition? _planScroll;
+  ScrollPosition? _railScroll;
+  bool _syncingScroll = false;
+  bool _initialScrollSynced = false;
+  bool _scrollSyncScheduled = false;
 
   TimeSlotViewSettings _slotSettings(double startHour, double endHour) {
     if (_slotSettingsCache == null ||
@@ -78,16 +120,39 @@ class _CalendarPageState extends State<CalendarPage> {
         timeInterval: const Duration(minutes: 30),
         startHour: startHour,
         endHour: endHour,
+        // Zero-duration events lay out at 0px without this: invisible and
+        // untappable, though they still show in lists and the month agenda.
+        // Every timed tile gets at least the app's minimum event span.
+        minimumAppointmentDuration: minimumTileDuration,
         // Default is 'h a' (e.g. "9 AM"), which renders 9:00 and 9:30
         // identically. Include minutes so each 30-min line is distinct.
         timeFormat: 'h:mm a',
         // Wide enough for "12:30 PM" on one line (auto size wraps it).
-        timeRulerSize: 70,
+        timeRulerSize: _calendarTimeRulerWidth,
       );
       _slotStartHour = startHour;
       _slotEndHour = endHour;
     }
     return _slotSettingsCache!;
+  }
+
+  /// Slot settings for the report calendar: reserve the same time-ruler
+  /// width as the plan grid, but keep its labels blank.
+  TimeSlotViewSettings _railSlotSettings(double startHour, double endHour) {
+    if (_railSlotSettingsCache == null ||
+        _slotStartHour != startHour ||
+        _slotEndHour != endHour) {
+      _railSlotSettingsCache = TimeSlotViewSettings(
+        timeInterval: const Duration(minutes: 30),
+        startHour: startHour,
+        endHour: endHour,
+        // Keep the day columns aligned with the plan calendar; the plan grid
+        // already shows the hour labels.
+        timeRulerSize: _calendarTimeRulerWidth,
+        timeFormat: '',
+      );
+    }
+    return _railSlotSettingsCache!;
   }
 
   /// Schedules the tap-suppression reset. Cancelable so a pending reset
@@ -98,6 +163,7 @@ class _CalendarPageState extends State<CalendarPage> {
       _suppressTap = false;
     });
   }
+
   PlannerEvent? _resizePreview;
   // Live preview of the event being edited in the side drawer: the edit
   // form owns its time/label state until Save, so without this the tile
@@ -108,20 +174,45 @@ class _CalendarPageState extends State<CalendarPage> {
   double _handleDy = 0;
   double _handlePxPerMinute = 1;
   bool _ignoreNativeDragEnd = false;
+  bool _isDragging = false;
+  PlannerEvent? _pairedDragOriginal;
+  Offset? _pairedDragOrigin;
+  DateTime? _pairedDragDropTime;
+  double _pairedDragCellWidth = 0;
+  double _pairedDragPixelsPerMinute = 0;
+  int _pairedDragDayCount = 0;
+  bool _pairedDragIsRtl = false;
 
-  bool get _isWide =>
-      MediaQuery.of(context).size.width >= _wideBreakpoint;
+  bool get _isWide => MediaQuery.of(context).size.width >= _wideBreakpoint;
   bool _appliedNarrowDefault = false;
+
+  /// Explicit Day/Week/Month switch: updates the visible calendar and keeps
+  /// the choice as this device's local default (device-local, never synced —
+  /// a phone stays on day while a desktop stays on week). The narrow-screen
+  /// day forcing in [didChangeDependencies] stays ephemeral on purpose.
+  void _setView(CalendarView view) {
+    setState(() => _view = view);
+    _controller.view = view;
+    try {
+      if (context.read<SettingsCubit>().state.defaultCalendarView != view) {
+        context.read<SettingsCubit>().setDefaultCalendarView(view);
+      }
+    } catch (_) {}
+  }
 
   @override
   void initState() {
     super.initState();
     _view = context.read<SettingsCubit>().state.defaultCalendarView;
     _controller.view = _view;
+    _controller.addPropertyChangedListener(_onCalendarControllerChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final pending = context.read<CalendarDraftCubit>().takePending();
-      if (pending != null) _openCreator(seed: pending);
+      if (pending != null) {
+        _seedFromPageMount = true;
+        _openCreator(seed: pending);
+      }
     });
   }
 
@@ -136,129 +227,447 @@ class _CalendarPageState extends State<CalendarPage> {
         _controller.view = _view;
       }
     }
+    if (!_appliedPanelDefault) {
+      _appliedPanelDefault = true;
+      _panelOpen = MediaQuery.of(context).size.width >= _panelDefaultBreakpoint;
+    }
   }
 
   @override
   void dispose() {
     _liveTicker?.cancel();
     _suppressTimer?.cancel();
+    _controller.removePropertyChangedListener(_onCalendarControllerChanged);
+    _dataSource?.dispose();
+    _railDataSource?.dispose();
+    _railController.dispose();
     _controller.dispose();
     super.dispose();
   }
 
+  /// Navigation happens inside SfCalendar (header arrows, swipes): the
+  /// controller tells us the display date moved, and the report column must
+  /// follow it (its own calendar, whose controller we drive). Deferred to the
+  /// frame's end — the controller can also be updated from inside the
+  /// calendar's own build.
+  void _onCalendarControllerChanged(String property) {
+    if (!_sideBySide || _view == CalendarView.month) return;
+    // Only touch the report calendar's controller while it is on screen:
+    // changing a calendar that is about to be removed schedules a post-frame
+    // relayout on a disposed state (Syncfusion calls setState there).
+    if (_railController.view != _controller.view) {
+      _railController.view = _controller.view;
+    }
+    final display = _controller.displayDate;
+    if (display != null && _railController.displayDate != display) {
+      _railController.displayDate = display;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  /// Scroll the report column and the plan grid together: whichever one the
+  /// user scrolls, the other is moved to the same offset. Offsets are in the
+  /// same units because both grids share slot settings and a start hour.
+  bool _onPlanScroll(ScrollNotification notification) {
+    final position = _captureVerticalScroll(notification);
+    if (position != null) _planScroll = position;
+    _mirrorScroll(from: position, to: _railScroll);
+    return false;
+  }
+
+  bool _onRailScroll(ScrollNotification notification) {
+    final position = _captureVerticalScroll(notification);
+    if (position != null) _railScroll = position;
+    _mirrorScroll(from: position, to: _planScroll);
+    return false;
+  }
+
+  /// Syncfusion keeps its agenda's ScrollController private; the position of
+  /// the Scrollable that built a tile is the handle we do have. Tiles are
+  /// laid out before the first scroll, so this also gives the correct offset
+  /// for the first frame and one initial plan → report alignment.
+  void _rememberScrollPosition(BuildContext context, {required bool rail}) {
+    final position = Scrollable.maybeOf(context)?.position;
+    if (position == null ||
+        !position.hasPixels ||
+        position.axis != Axis.vertical) {
+      return;
+    }
+    if (rail) {
+      if (identical(_railScroll, position)) return;
+      _railScroll = position;
+    } else {
+      if (identical(_planScroll, position)) return;
+      _planScroll = position;
+    }
+    _scheduleInitialScrollSync();
+  }
+
+  /// Once both grids have positions, align the report column with the plan
+  /// grid (the plan grid auto-scrolls to the first appointment; the report
+  /// column starts at the top of the day).
+  void _scheduleInitialScrollSync() {
+    if (_initialScrollSynced || _scrollSyncScheduled) return;
+    _scrollSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollSyncScheduled = false;
+      if (!mounted || _initialScrollSynced) return;
+      final plan = _planScroll;
+      final rail = _railScroll;
+      if (plan == null || rail == null) return;
+      _initialScrollSynced = true;
+      _mirrorScroll(from: plan, to: rail);
+    });
+  }
+
+  ScrollPosition? _captureVerticalScroll(ScrollNotification notification) {
+    if (notification.metrics.axis != Axis.vertical) return null;
+    final context = notification.context;
+    if (context == null) return null;
+    // The documented way to reach the ScrollableState that sent the
+    // notification (see Flutter's Scrollable.build comment).
+    return Scrollable.maybeOf(context)?.position;
+  }
+
+  void _mirrorScroll({ScrollPosition? from, ScrollPosition? to}) {
+    if (_syncingScroll || from == null || to == null || !to.hasPixels) return;
+    final target = from.pixels.clamp(to.minScrollExtent, to.maxScrollExtent);
+    if ((to.pixels - target).abs() < 0.5) return;
+    _syncingScroll = true;
+    try {
+      to.jumpTo(target);
+    } finally {
+      _syncingScroll = false;
+    }
+  }
+
+  /// The report overlay's calendar: same visible dates and time grid as the
+  /// plan calendar, with its header removed because the plan supplies the
+  /// shared date headers.
+  Widget _railCalendar(SettingsState settings) {
+    return SfCalendar(
+      key: _railCalendarKey,
+      controller: _railController,
+      // Keep the hidden calendar on a cheap view: its month grid is never
+      // shown (the report overlay only exists in day/week).
+      view: _view == CalendarView.month ? CalendarView.day : _view,
+      dataSource: _railDataSource!,
+      firstDayOfWeek: 7,
+      allowDragAndDrop: false,
+      allowAppointmentResize: false,
+      appointmentBuilder: (context, details) => _railAppointmentBuilder(
+        context,
+        details,
+        settings.dayStartHour,
+        settings.dayEndHour,
+      ),
+      onTap: _onRailTap,
+      timeSlotViewSettings: _railSlotSettings(
+        settings.dayStartHour,
+        settings.dayEndHour,
+      ),
+      todayHighlightColor: Theme.of(context).colorScheme.primary,
+      // The plan calendar supplies shared headers and navigation.
+      headerHeight: 0,
+      // Day view reserves one view-header-height row for its all-day area by
+      // default, even though it doesn't paint a weekday header. Keep that
+      // height so the report time grid lines up with the plan grid.
+      viewHeaderHeight: _view == CalendarView.day
+          ? _calendarViewHeaderHeight
+          : 0,
+      showNavigationArrow: false,
+    );
+  }
+
+  static const Key _railCalendarKey = Key('report-calendar');
+  static const Key _planCalendarKey = Key('plan-calendar');
+
+  /// Once the report column has been shown it stays mounted (just hidden):
+  /// removing a Syncfusion calendar from the tree can land its scheduled
+  /// relayout on a defunct state.
+  bool _railMounted = false;
+
+  Widget _railAppointmentBuilder(
+    BuildContext context,
+    CalendarAppointmentDetails details,
+    double startHour,
+    double endHour,
+  ) {
+    if (details.isMoreAppointmentRegion) return const SizedBox.shrink();
+    final raw = details.appointments.isNotEmpty
+        ? details.appointments.first
+        : null;
+    final event = raw is PlannerEvent ? raw : null;
+    if (event == null) return const SizedBox.shrink();
+    _rememberScrollPosition(context, rail: true);
+    // Copies of the plan calendar's all-day events keep both calendars' rows
+    // aligned and paint the report half over spanning plan tiles.
+    if (isReportPlaceholderId(event.id)) {
+      return ExcludeSemantics(
+        child: DecoratedBox(
+          key: ValueKey('report-mask:${event.id}'),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
+          ),
+          child: const SizedBox.expand(),
+        ),
+      );
+    }
+    final blocks = _projection.reportBlocksByLaneId[event.id];
+    if (blocks == null) return const SizedBox.shrink();
+    final isRtl = Directionality.of(context).name == 'rtl';
+    return Align(
+      alignment: isRtl ? Alignment.centerLeft : Alignment.centerRight,
+      child: SizedBox(
+        width: details.bounds.width / 2,
+        child: ReportLaneView(
+          blocks: blocks,
+          day: reportLaneDayOf(event.id) ?? event.start,
+          startHour: startHour,
+          endHour: endHour,
+          isRtl: isRtl,
+          colorFor: (block) =>
+              _projection.reportColorById[block.displayId] ??
+              const Color(defaultPersonalEventColor),
+          onTap: (block) {
+            _suppressNextTap();
+            _openReport(block.displayId);
+          },
+        ),
+      ),
+    );
+  }
+
+  /// The report column is read-only apart from its chips, which carry their
+  /// own tap handlers; an empty stretch of the column should not open
+  /// anything or create an event.
+  void _onRailTap(CalendarTapDetails details) {}
+
+  /// The days the report overlay must cover: what the calendar shows right
+  /// now — the display date in the day view, its Sunday-start week in the
+  /// week view. Lanes only exist while the Plan + Report view is on and a
+  /// time-slot grid is visible (the month view keeps its agenda chips).
+  List<DateTime> _visibleDaysForLane() {
+    final display = _controller.displayDate ?? DateTime.now();
+    final day = DateTime(display.year, display.month, display.day);
+    if (_view == CalendarView.day) return [day];
+    // firstDayOfWeek is 7 (Sunday): back up to the week's first day.
+    final start = day.subtract(Duration(days: day.weekday % 7));
+    return [for (var i = 0; i < 7; i++) start.add(Duration(days: i))];
+  }
+
   @override
   Widget build(BuildContext context) {
-    final feedCubit = context.watch<FeedCubit>();
-    final feedColors = <String, Color>{
-      for (final feed in feedCubit.state) feed.id: feed.color,
-    };
     final settings = context.watch<SettingsCubit>().state;
     final snap = settings.snapMinutes;
-    final drawerOpen = _isWide && _drawerMode != _DrawerMode.closed;
+    final panelVisible = _isWide && _panelOpen;
     // Narrow screens get a condensed single-row toolbar (icon-only
     // switches) and an abbreviated calendar header so the chrome above
     // the events stays one slim row tall.
     final compactHeader = !_isWide;
+    final addEventFab = FloatingActionButton.extended(
+      onPressed: _onAddPressed,
+      icon: const Icon(Icons.add),
+      label: const Text('Event'),
+    );
     return BlocListener<CalendarDraftCubit, PlannerEvent?>(
       listener: (context, pending) {
         if (pending != null) {
           context.read<CalendarDraftCubit>().clear();
+          // Live seed: the user is already here (side panel schedule flow).
+          _seedFromPageMount = false;
           _openCreator(seed: pending);
         }
       },
       child: Scaffold(
-      appBar: AppBar(
-        title: const Text('Calendar'),
-        actions: [
-          Builder(
-            builder: (buttonContext) {
-              final hasHidden = buttonContext.watch<CalendarVisibilityCubit>()
-                  .state
-                  .hasHidden;
-              return Badge(
-                isLabelVisible: hasHidden,
-                child: IconButton(
-                  tooltip: 'Calendars',
-                  icon: const Icon(Icons.layers_outlined),
-                  onPressed: () => showCalendarFilterSheet(buttonContext),
-                ),
-              );
-            },
-          ),
-          IconButton(
-            tooltip: 'Manage classes',
-            icon: const Icon(Icons.sync),
-            onPressed: () => showFeedManager(context),
-          ),
-          const UndoRedoActions(),
-        ],
-      ),
-      drawer: const AppDrawer(),
-      // Hidden while the side drawer is open: it floats above the drawer's
-      // lower rows (e.g. the editor's Add/Save) and would swallow their taps.
-      floatingActionButton: drawerOpen
-          ? null
-          : FloatingActionButton.extended(
-              onPressed: _onAddPressed,
-              icon: const Icon(Icons.add),
-              label: const Text('Event'),
+        appBar: AppBar(
+          title: const Text('Calendar'),
+          actions: [
+            if (_isWide)
+              IconButton(
+                tooltip: panelVisible ? 'Hide side panel' : 'Show tasks panel',
+                isSelected: panelVisible,
+                icon: const Icon(Icons.view_sidebar_outlined),
+                selectedIcon: const Icon(Icons.view_sidebar),
+                onPressed: _togglePanel,
+              ),
+            Builder(
+              builder: (buttonContext) {
+                final hasHidden = buttonContext
+                    .watch<CalendarVisibilityCubit>()
+                    .state
+                    .hasHidden;
+                return Badge(
+                  isLabelVisible: hasHidden,
+                  child: IconButton(
+                    tooltip: 'Calendars',
+                    icon: const Icon(Icons.layers_outlined),
+                    onPressed: () => showCalendarFilterSheet(buttonContext),
+                  ),
+                );
+              },
             ),
-      body: Column(
-        children: [
-          if (compactHeader)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-              child: Row(
-                children: [
-                  Expanded(
-                    flex: 3,
-                    child: GestureDetector(
-                      onDoubleTap: _goToToday,
+            IconButton(
+              tooltip: 'Manage classes',
+              icon: const Icon(Icons.sync),
+              onPressed: () => showFeedManager(context),
+            ),
+            const UndoRedoActions(),
+          ],
+        ),
+        drawer: const AppDrawer(),
+        // The panel owns the right edge: with a task list up, the Event button
+        // floats over the calendar pane instead (Stack below); while a form is
+        // open it steps aside so it can't swallow Add/Save taps.
+        floatingActionButton: panelVisible ? null : addEventFab,
+        body: Column(
+          children: [
+            if (compactHeader)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      flex: 3,
                       child: SegmentedButton<CalendarView>(
                         segments: const [
                           ButtonSegment(
                             value: CalendarView.day,
                             icon: Icon(Icons.view_day),
-                            tooltip: 'Day (double-click for today)',
+                            tooltip: 'Day (tap again for today)',
                           ),
                           ButtonSegment(
                             value: CalendarView.week,
                             icon: Icon(Icons.view_column),
-                            tooltip: 'Week (double-click for today)',
+                            tooltip: 'Week (tap again for today)',
                           ),
                           ButtonSegment(
                             value: CalendarView.month,
                             icon: Icon(Icons.calendar_view_month),
-                            tooltip: 'Month (double-click for today)',
+                            tooltip: 'Month (tap again for today)',
                           ),
                         ],
                         selected: {_view},
+                        emptySelectionAllowed: true,
                         showSelectedIcon: false,
                         style: const ButtonStyle(
                           visualDensity: VisualDensity.compact,
                           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
                         onSelectionChanged: (selection) {
-                          setState(() => _view = selection.first);
-                          _controller.view = _view;
+                          if (selection.isEmpty || selection.first == _view) {
+                            _goToToday();
+                          } else {
+                            _setView(selection.first);
+                          }
                         },
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    flex: 2,
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 2,
+                      child: SegmentedButton<bool>(
+                        segments: const [
+                          ButtonSegment(
+                            value: false,
+                            icon: Icon(Icons.calendar_month),
+                            tooltip: 'Plans',
+                          ),
+                          ButtonSegment(
+                            value: true,
+                            icon: Icon(Icons.fact_check),
+                            tooltip: 'Plan + Report',
+                          ),
+                        ],
+                        selected: {_sideBySide},
+                        showSelectedIcon: false,
+                        style: const ButtonStyle(
+                          visualDensity: VisualDensity.compact,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        onSelectionChanged: (selection) {
+                          _setSideBySide(selection.first);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 360),
+                          child: SegmentedButton<CalendarView>(
+                            segments: const [
+                              ButtonSegment(
+                                value: CalendarView.day,
+                                icon: Icon(Icons.view_day),
+                                label: Text('Day'),
+                                tooltip: 'Day (tap again for today)',
+                              ),
+                              ButtonSegment(
+                                value: CalendarView.week,
+                                icon: Icon(Icons.view_column),
+                                label: Text('Week'),
+                                tooltip: 'Week (tap again for today)',
+                              ),
+                              ButtonSegment(
+                                value: CalendarView.month,
+                                icon: Icon(Icons.calendar_view_month),
+                                label: Text('Month'),
+                                tooltip: 'Month (tap again for today)',
+                              ),
+                            ],
+                            selected: {_view},
+                            emptySelectionAllowed: true,
+                            showSelectedIcon: false,
+                            style: const ButtonStyle(
+                              visualDensity: VisualDensity.compact,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              textStyle: WidgetStatePropertyAll(
+                                TextStyle(fontSize: 13),
+                              ),
+                            ),
+                            onSelectionChanged: (selection) {
+                              if (selection.isEmpty ||
+                                  selection.first == _view) {
+                                _goToToday();
+                              } else {
+                                _setView(selection.first);
+                              }
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 360),
                     child: SegmentedButton<bool>(
                       segments: const [
                         ButtonSegment(
                           value: false,
                           icon: Icon(Icons.calendar_month),
-                          tooltip: 'Plans',
+                          label: Text('Plans'),
                         ),
                         ButtonSegment(
                           value: true,
                           icon: Icon(Icons.fact_check),
-                          tooltip: 'Plan + Report',
+                          label: Text('Plan + Report'),
                         ),
                       ],
                       selected: {_sideBySide},
@@ -266,334 +675,297 @@ class _CalendarPageState extends State<CalendarPage> {
                       style: const ButtonStyle(
                         visualDensity: VisualDensity.compact,
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        textStyle: WidgetStatePropertyAll(
+                          TextStyle(fontSize: 13),
+                        ),
                       ),
                       onSelectionChanged: (selection) {
                         _setSideBySide(selection.first);
                       },
                     ),
                   ),
-                ],
-              ),
-            )
-          else ...[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 360),
-                        child: GestureDetector(
-                          onDoubleTap: _goToToday,
-                          child: SegmentedButton<CalendarView>(
-                            segments: const [
-                              ButtonSegment(
-                                value: CalendarView.day,
-                                icon: Icon(Icons.view_day),
-                                label: Text('Day'),
-                                tooltip: 'Day (double-click for today)',
-                              ),
-                              ButtonSegment(
-                                value: CalendarView.week,
-                                icon: Icon(Icons.view_column),
-                                label: Text('Week'),
-                                tooltip: 'Week (double-click for today)',
-                              ),
-                              ButtonSegment(
-                                value: CalendarView.month,
-                                icon: Icon(Icons.calendar_view_month),
-                                label: Text('Month'),
-                                tooltip: 'Month (double-click for today)',
-                              ),
-                            ],
-                            selected: {_view},
-                            showSelectedIcon: false,
-                            style: const ButtonStyle(
-                              visualDensity: VisualDensity.compact,
-                              tapTargetSize:
-                                  MaterialTapTargetSize.shrinkWrap,
-                              textStyle: WidgetStatePropertyAll(
-                                TextStyle(fontSize: 13),
-                              ),
-                            ),
-                            onSelectionChanged: (selection) {
-                              setState(() => _view = selection.first);
-                              _controller.view = _view;
-                            },
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 360),
-                  child: SegmentedButton<bool>(
-                    segments: const [
-                      ButtonSegment(
-                        value: false,
-                        icon: Icon(Icons.calendar_month),
-                        label: Text('Plans'),
-                      ),
-                      ButtonSegment(
-                        value: true,
-                        icon: Icon(Icons.fact_check),
-                        label: Text('Plan + Report'),
-                      ),
-                    ],
-                    selected: {_sideBySide},
-                    showSelectedIcon: false,
-                    style: const ButtonStyle(
-                      visualDensity: VisualDensity.compact,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      textStyle: WidgetStatePropertyAll(
-                        TextStyle(fontSize: 13),
-                      ),
-                    ),
-                    onSelectionChanged: (selection) {
-                      _setSideBySide(selection.first);
-                    },
-                  ),
                 ),
               ),
-            ),
-          ],
-          if (_sideBySide)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-              child: Text(
-                'Left: plan · Right: report (timer logs + accepted '
-                'auto-reports) · red = recording now · ▶ on a tile starts recording',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color:
-                          Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                textAlign: TextAlign.center,
+            ],
+            if (_sideBySide)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                child: Text(
+                  'Each day: plan on the left, report right beside it · '
+                  'red = recording now · ▶ starts recording',
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
               ),
-            ),
-          // Toggl-style running-entry bar: always visible while an event
-          // timer is recording, with elapsed time and Stop.
-          _RecordingBannerSlot(
-            onOpen: (event) {
-              PlannerEvent? live;
-              try {
-                live =
-                    context.read<CalendarCubit>().byId(event.id) ?? event;
-              } catch (_) {
-                live = event;
-              }
-              _openDetail(live);
-            },
-          ),
-          Expanded(
-            child: BlocBuilder<CalendarCubit, List<PlannerEvent>>(
-              builder: (context, events) {
-                final feeds = context.watch<FeedCubit>();
-                final feedVisible = feeds.visibleEvents(events);
-                final feedById = {
-                  for (final feed in feeds.state) feed.id: feed,
-                };
-                final visible = context
-                    .watch<CalendarVisibilityCubit>()
-                    .filterVisible(feedVisible, feedById);
-                final preview = _resizePreview;
-                var shown = visible;
-                final draft = _draftEvent;
-                // Wide only: the side drawer leaves the calendar
-                // interactive, so the ghost can be dragged/resized live.
-                // On narrow screens the creator is a modal bottom sheet:
-                // the scrim dims the calendar ("grayed out") and swallows
-                // all gestures, so rendering the ghost there is a
-                // non-draggable teaser. Times are edited via the form.
-                if (draft != null &&
-                    _drawerMode == _DrawerMode.creating &&
-                    _isWide) {
-                  shown = [...shown, draft];
-                }
-                final editPreview = _editPreview;
-                if (editPreview != null &&
-                    _drawerMode == _DrawerMode.editing &&
-                    _isWide) {
-                  shown = [
-                    for (final e in shown)
-                      if (e.id == editPreview.id) editPreview else e,
-                  ];
-                }
-                if (preview != null) {
-                  shown = [
-                    for (final e in shown)
-                      if (e.id == preview.id) preview else e,
-                  ];
-                }
-                final sideBySide = _sideBySide;
-                var reportById = const <String, ReportBlock>{};
-                if (sideBySide) {
-                  final nodes = context.watch<NodeCubit>().state;
-                  final reports = context.watch<ReportingCubit>().state;
-                  final blocks = buildReportBlocks(
-                    visibleEvents: visible,
-                    nodes: nodes,
-                    reportsByDay: reports,
-                    now: DateTime.now(),
-                  );
-                  final byId = {for (final e in visible) e.id: e};
-                  shown = [
-                    ...shown,
-                    for (final block in blocks)
-                      reportBlockToDisplayEvent(
-                        block,
-                        template: block.eventId == null
-                            ? null
-                            : byId[block.eventId],
-                      ),
-                  ];
-                  reportById = {
-                    for (final block in blocks) block.displayId: block,
-                  };
-                }
-                // Unified-node schedule blocks render as appointments.
-                // Taps/drags on `node:` ids route back to the node.
-                List<Node> nodeState = const [];
+            // Toggl-style running-entry bar: always visible while an event
+            // timer is recording, with elapsed time and Stop.
+            _RecordingBannerSlot(
+              onOpen: (event) {
+                PlannerEvent? live;
                 try {
-                  nodeState = context.watch<NodeCubit>().state;
-                  shown = [
-                    ...shown,
-                    ...nodeCalendarBlocks(nodeState),
-                  ];
-                } catch (_) {}
-                // ── Hoisted per-build tile data (not per tile) ──────────
-                // _eventColor (HSL round-trip + hash), _isMovable (O(F) byId
-                // scan), node scans (O(N) per tile), and assignee joins were
-                // all recomputed inside appointmentBuilder for every tile,
-                // every frame. Compute once here.
-                final colorById = <String, Color>{};
-                for (final e in shown) {
-                  colorById[e.id] = _eventColor(e, feedColors);
+                  live = context.read<CalendarCubit>().byId(event.id) ?? event;
+                } catch (_) {
+                  live = event;
                 }
-                final remoteEditableFeedIds = <String>{};
-                for (final f in feeds.state) {
-                  if (f.kind == FeedKind.google &&
-                      f.calendarId != null &&
-                      f.calendarId!.isNotEmpty) {
-                    remoteEditableFeedIds.add(f.id);
-                  }
-                }
-                final nodeById = {for (final n in nodeState) n.id: n};
-                final nodeByEventId = <String, Node>{};
-                final trackingNodeIds = <String>{};
-                for (final n in nodeState) {
-                  final c = n.calendarEventId;
-                  if (c != null) nodeByEventId.putIfAbsent(c, () => n);
-                  final s = n.sourceEventId;
-                  if (s != null) nodeByEventId.putIfAbsent(s, () => n);
-                  if (n.calendarEventId == null && n.sourceEventId == null) {
-                    // plain nodes addressable by taskId link
-                  }
-                  nodeByEventId.putIfAbsent('task:${n.id}', () => n);
-                  if (n.isTracking) trackingNodeIds.add(n.id);
-                }
-                final trackingEventIds = <String>{};
-                for (final e in shown) {
-                  if (e.isTracking) trackingEventIds.add(e.id);
-                }
-                final assigneeLabelById = <String, String>{};
-                for (final e in shown) {
-                  if (e.assignees.isNotEmpty) {
-                    assigneeLabelById[e.id] = e.assignees
-                        .map((a) => a.displayName)
-                        .join(', ');
-                  }
-                }
-                final calendar = SfCalendar(
-                  controller: _controller,
-                  view: _view,
-                  dataSource: PlannerCalendarDataSource(
+                _openDetail(live);
+              },
+            ),
+            Expanded(
+              child: BlocBuilder<CalendarCubit, List<PlannerEvent>>(
+                builder: (context, events) {
+                  final sideBySide = _sideBySide;
+                  final wide = _isWide;
+                  final reportLanes = sideBySide && _view != CalendarView.month;
+                  final laneDays = reportLanes
+                      ? _visibleDaysForLane()
+                      : const <DateTime>[];
+                  _projection.update(
+                    events: events,
+                    feeds: context.watch<FeedCubit>().state,
+                    visibility: context.watch<CalendarVisibilityCubit>().state,
+                    nodes: context.watch<NodeCubit>().state,
+                    reports: sideBySide
+                        ? context.watch<ReportingCubit>().state
+                        : const <String, List<ReportedEntry>>{},
+                    showReports: sideBySide,
+                    showReportLanes: reportLanes,
+                    visibleDays: laneDays,
+                    visibleStartHour: settings.dayStartHour,
+                    visibleEndHour: settings.dayEndHour,
+                    now: DateTime.now(),
+                    draft: wide && _panelMode == CalendarPanelMode.creating
+                        ? _draftEvent
+                        : null,
+                    edit: wide && _panelMode == CalendarPanelMode.editing
+                        ? _editPreview
+                        : null,
+                    resize: _resizePreview,
+                  );
+                  final shown = _projection.shown;
+                  final feedColors = _projection.feedColors;
+                  final colorById = _projection.colorById;
+                  final reportById = sideBySide
+                      ? _projection.reportById
+                      : const <String, ReportBlock>{};
+                  if (_dataSource == null) {
+                    _dataSource = PlannerCalendarDataSource(
+                      shown,
+                      feedColors,
+                      colorById,
+                    );
+                  } else if (!_dataSource!.matches(
                     shown,
                     feedColors,
                     colorById,
-                  ),
-                  firstDayOfWeek: 7,
-                  allowDragAndDrop: true,
-                  allowAppointmentResize: false,
-                  dragAndDropSettings: const DragAndDropSettings(
-                    allowNavigation: true,
-                    allowScroll: true,
-                    autoNavigateDelay: Duration(milliseconds: 500),
-                    showTimeIndicator: true,
-                  ),
-                  appointmentBuilder: (context, details) =>
-                      _appointmentBuilder(
-                    feedColors,
-                    context,
-                    details,
-                    sideBySide: sideBySide,
-                    reportById: reportById,
-                    colorById: colorById,
-                    remoteEditableFeedIds: remoteEditableFeedIds,
-                    nodeById: nodeById,
-                    nodeByEventId: nodeByEventId,
-                    trackingNodeIds: trackingNodeIds,
-                    trackingEventIds: trackingEventIds,
-                    assigneeLabelById: assigneeLabelById,
-                  ),
-                  onDragStart: _onDragStart,
-                  onDragEnd: _onDragEnd,
-                  onTap: _onTap,
-                  monthViewSettings: const MonthViewSettings(
-                    showAgenda: true,
-                    appointmentDisplayMode:
-                        MonthAppointmentDisplayMode.appointment,
-                    agendaItemHeight: 44,
-                  ),
-                  timeSlotViewSettings: _slotSettings(
-                    settings.dayStartHour,
-                    settings.dayEndHour,
-                  ),
-                  todayHighlightColor: Theme.of(context).colorScheme.primary,
-                  headerDateFormat: compactHeader ? 'MMM y' : null,
-                  headerHeight: compactHeader ? 32 : 40,
-                  headerStyle: compactHeader
-                      ? const CalendarHeaderStyle(
-                          textStyle: TextStyle(fontSize: 14),
-                        )
-                      : const CalendarHeaderStyle(),
-                  showNavigationArrow: true,
-                );
-                final Widget calendarView =
-                    (sideBySide && reportById.isEmpty)
-                        ? Stack(
-                            children: [
-                              calendar,
-                              Positioned(
-                                left: 0,
-                                right: 0,
-                                bottom: 12,
-                                child: _noReportHint(),
+                  )) {
+                    _dataSource!.update(shown, feedColors, colorById);
+                  }
+                  if (reportLanes) {
+                    final rails = _projection.reportRails;
+                    if (_railDataSource == null) {
+                      _railDataSource = PlannerCalendarDataSource(
+                        rails,
+                        const {},
+                      );
+                    } else if (!_railDataSource!.matches(
+                      rails,
+                      const {},
+                      null,
+                    )) {
+                      _railDataSource!.update(rails, const {});
+                    }
+                    // The rail calendar is never removed from the tree
+                    // again: disposing a Syncfusion calendar mid-flight can
+                    // land its scheduled relayout on a defunct state.
+                    _railMounted = true;
+                  }
+                  // Keep the calendar at a stable tree position. Opening a
+                  // drawer or report hint must not dispose/recreate SfCalendar
+                  // and regenerate every appointment (or leave its scheduled
+                  // data-source callbacks pointing at a disposed state).
+                  //
+                  // The report calendar is clipped to the trailing half of
+                  // every day cell over the plan grid. Plan tiles are laid out
+                  // in the matching leading half; both calendars stay
+                  // scrolled together (see _onPlanScroll/_onRailScroll).
+                  final calendarView = LayoutBuilder(
+                    builder: (context, constraints) {
+                      final isRtl = Directionality.of(context).name == 'rtl';
+                      final headerHeight = compactHeader ? 32.0 : 40.0;
+                      final viewHeaderHeight = _view == CalendarView.week
+                          ? _calendarViewHeaderHeight
+                          : 0.0;
+                      final slotSettings = _slotSettings(
+                        settings.dayStartHour,
+                        settings.dayEndHour,
+                      );
+                      final cellWidth = laneDays.isEmpty
+                          ? 0.0
+                          : (constraints.maxWidth - _calendarTimeRulerWidth) /
+                                laneDays.length;
+                      final pixelsPerMinute =
+                          slotSettings.timeIntervalHeight /
+                          slotSettings.timeInterval.inMinutes;
+                      final calendar = SfCalendar(
+                        key: _planCalendarKey,
+                        controller: _controller,
+                        view: _view,
+                        dataSource: _dataSource!,
+                        firstDayOfWeek: 7,
+                        allowDragAndDrop: true,
+                        allowAppointmentResize: false,
+                        dragAndDropSettings: const DragAndDropSettings(
+                          allowNavigation: true,
+                          allowScroll: true,
+                          autoNavigateDelay: Duration(milliseconds: 500),
+                          showTimeIndicator: true,
+                        ),
+                        appointmentBuilder: (context, details) {
+                          final tile = _appointmentBuilder(
+                            feedColors,
+                            context,
+                            details,
+                            reportById: reportById,
+                            colorById: colorById,
+                            remoteEditableFeedIds:
+                                _projection.remoteEditableFeedIds,
+                            nodeById: _projection.nodeById,
+                            nodeByEventId: _projection.nodeByEventId,
+                            trackingNodeIds: _projection.trackingNodeIds,
+                            trackingEventIds: _projection.trackingEventIds,
+                            assigneeLabelById: _projection.assigneeLabelById,
+                          );
+                          final raw = details.appointments.isNotEmpty
+                              ? details.appointments.first
+                              : null;
+                          final event = raw is PlannerEvent ? raw : null;
+                          if (!reportLanes ||
+                              details.isMoreAppointmentRegion ||
+                              event == null) {
+                            return tile;
+                          }
+                          return planAppointmentInTrack(
+                            child: tile,
+                            bounds: details.bounds,
+                            day: details.date,
+                            visibleDays: laneDays,
+                            calendarWidth: constraints.maxWidth,
+                            timeRulerWidth: _calendarTimeRulerWidth,
+                            isRtl: isRtl,
+                            eventId: event.id,
+                            onTap: () {
+                              if (_suppressTap ||
+                                  event.id == calendarDraftEventId) {
+                                return;
+                              }
+                              if (isReportDisplayId(event.id)) {
+                                _openReport(event.id);
+                              } else if (isNodeBlockId(event.id)) {
+                                _openNodeBlock(event.id);
+                              } else {
+                                _openDetail(event);
+                              }
+                            },
+                            onLongPressStart: (drag) => _onPairedPlanDragStart(
+                              event,
+                              drag.globalPosition,
+                              cellWidth: cellWidth,
+                              pixelsPerMinute: pixelsPerMinute,
+                              dayCount: laneDays.length,
+                              isRtl: isRtl,
+                            ),
+                            onLongPressMoveUpdate: (drag) =>
+                                _onPairedPlanDragMove(drag.globalPosition),
+                            onLongPressEnd: (_) => _onPairedPlanDragEnd(event),
+                            onLongPressCancel: _cancelPairedPlanDrag,
+                          );
+                        },
+                        onDragStart: _onDragStart,
+                        onDragEnd: _onDragEnd,
+                        onTap: _onTap,
+                        onViewChanged: _onViewChanged,
+                        monthViewSettings: const MonthViewSettings(
+                          showAgenda: true,
+                          appointmentDisplayMode:
+                              MonthAppointmentDisplayMode.appointment,
+                          agendaItemHeight: 44,
+                        ),
+                        timeSlotViewSettings: slotSettings,
+                        todayHighlightColor: Theme.of(
+                          context,
+                        ).colorScheme.primary,
+                        headerDateFormat: compactHeader ? 'MMM y' : null,
+                        headerHeight: headerHeight,
+                        viewHeaderHeight: _view == CalendarView.week
+                            ? _calendarViewHeaderHeight
+                            : -1,
+                        headerStyle: compactHeader
+                            ? const CalendarHeaderStyle(
+                                textStyle: TextStyle(fontSize: 14),
+                              )
+                            : const CalendarHeaderStyle(),
+                        showNavigationArrow: true,
+                      );
+                      final reportCalendar = _railMounted
+                          ? Visibility(
+                              visible: reportLanes,
+                              maintainState: true,
+                              child: NotificationListener<ScrollNotification>(
+                                onNotification: _onRailScroll,
+                                child: _railCalendar(settings),
                               ),
-                            ],
-                          )
-                        : calendar;
-                if (!drawerOpen) return calendarView;
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(child: calendarView),
-                    _buildDrawer(snap),
-                  ],
-                );
-              },
+                            )
+                          : null;
+                      return Stack(
+                        children: [
+                          Positioned.fill(
+                            child: CalendarReportLayout(
+                              plans: NotificationListener<ScrollNotification>(
+                                onNotification: _onPlanScroll,
+                                child: calendar,
+                              ),
+                              reports: reportCalendar,
+                              reportTopInset: headerHeight + viewHeaderHeight,
+                              dayCount: laneDays.length,
+                              timeRulerWidth: _calendarTimeRulerWidth,
+                              isRtl: isRtl,
+                            ),
+                          ),
+                          if (sideBySide && reportById.isEmpty)
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              bottom: 12,
+                              child: _noReportHint(),
+                            ),
+                          // With the panel open the Event button anchors to
+                          // the calendar pane instead of hovering over the
+                          // panel.
+                          if (panelVisible &&
+                              _panelMode == CalendarPanelMode.tasks)
+                            Positioned(
+                              right: 16,
+                              bottom: 16,
+                              child: addEventFab,
+                            ),
+                        ],
+                      );
+                    },
+                  );
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(child: calendarView),
+                      if (panelVisible) _buildSidePanel(snap),
+                    ],
+                  );
+                },
+              ),
             ),
-          ),
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }
@@ -602,7 +974,6 @@ class _CalendarPageState extends State<CalendarPage> {
     Map<String, Color> feedColors,
     BuildContext context,
     CalendarAppointmentDetails details, {
-    required bool sideBySide,
     required Map<String, ReportBlock> reportById,
     Map<String, Color>? colorById,
     Set<String>? remoteEditableFeedIds,
@@ -624,15 +995,15 @@ class _CalendarPageState extends State<CalendarPage> {
         ),
       );
     }
-    final raw =
-        details.appointments.isNotEmpty ? details.appointments.first : null;
+    final raw = details.appointments.isNotEmpty
+        ? details.appointments.first
+        : null;
     final event = raw is PlannerEvent ? raw : null;
     if (event == null) return const SizedBox.shrink();
+    _rememberScrollPosition(context, rail: false);
     final report = reportById[event.id];
-    final laneSplit = sideBySide && _view != CalendarView.month;
     final isDraft = event.id == calendarDraftEventId;
-    final baseColor =
-        colorById?[event.id] ?? _eventColor(event, feedColors);
+    final baseColor = colorById?[event.id] ?? _eventColor(event, feedColors);
     var color = isDraft ? baseColor.withValues(alpha: 0.55) : baseColor;
     if (event.isTask && event.done) {
       color = color.withValues(alpha: 0.55);
@@ -654,8 +1025,9 @@ class _CalendarPageState extends State<CalendarPage> {
     } else {
       movable = _isMovable(event) && selected;
     }
-    final displaySubject =
-        isDraft && event.subject.trim().isEmpty ? 'New event' : event.subject;
+    final displaySubject = isDraft && event.subject.trim().isEmpty
+        ? 'New event'
+        : event.subject;
     final String timeLabel;
     if (report == null) {
       timeLabel = event.allDay
@@ -671,305 +1043,294 @@ class _CalendarPageState extends State<CalendarPage> {
         ReportBlockKind.accepted => '$range · accepted',
       };
     }
-    final durationMinutes = event.end.isAfter(event.start)
-        ? event.end.difference(event.start).inSeconds / 60.0
-        : 60.0;
+    // Resize-handle drags convert px → minutes with this span, so it must
+    // match what the tile actually renders: zero-duration events now show
+    // at the visible floor instead of the old 60-minute fallback, which
+    // made their handles move four times too fast.
+    final durationMinutes = tileDuration(event).inSeconds / 60.0;
     final Widget tile = Opacity(
+      key: ValueKey('tile:${event.id}'),
       opacity: isDraft ? 0.85 : 1,
       child: Container(
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(6),
-        border: (selected || isDraft)
-            ? Border.all(color: Colors.white, width: 2)
-            : report?.kind == ReportBlockKind.live
-                ? Border.all(
-                    color: const Color(0xFFFF5252),
-                    width: 2,
-                  )
-                : null,
-        boxShadow: selected
-            ? const [
-                BoxShadow(
-                  color: Colors.black38,
-                  blurRadius: 6,
-                  offset: Offset(0, 2),
-                ),
-              ]
-            : null,
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          // details.bounds doesn't always match the rendered box, so all
-          // sizing decisions use the measured height (falling back to the
-          // reported bounds when unbounded).
-          final realHeight = constraints.maxHeight.isFinite
-              ? constraints.maxHeight
-              : details.bounds.height;
-          final showText = realHeight.isInfinite || realHeight >= 20;
-          final showTime = realHeight.isInfinite || realHeight >= 34;
-          final twoLines =
-              realHeight.isInfinite || realHeight >= 58;
-          final maxWidth =
-              constraints.maxWidth.isFinite ? constraints.maxWidth : null;
-          // A 15-min event measures ~15px tall here (40px per 30-min
-          // interval minus the calendar's appointment insets), so the
-          // floor sits just under that: anything shorter can't show two
-          // tappable circles and falls back to the edit form.
-          final showHandles = movable &&
-              !event.allDay &&
-              (realHeight.isInfinite || realHeight >= 12) &&
-              (maxWidth == null || maxWidth >= 48);
-          // Full-size circles need room (both 28px grabs stacked plus the
-          // title row). Below that — e.g. a 15-min event is ~25px at the
-          // 30-min/50px interval — fall back to compact circles so a
-          // shortened event can still be dragged long again. Without this
-          // the handles vanished the moment a drag made the tile short.
-          final compactHandles = showHandles &&
-              !((realHeight.isInfinite || realHeight >= 58) &&
-                  (maxWidth == null || maxWidth >= 96));
-          // Very short tiles can't stack two grabs vertically without the
-          // circles landing on top of each other, so offset them to
-          // opposite corners (start = top-left, end = bottom-right).
-          final tightHandles = compactHandles &&
-              realHeight.isFinite &&
-              realHeight < 40;
-          final pxPerMinute = (realHeight.isFinite ? realHeight : details.bounds.height) /
-              durationMinutes.clamp(1.0, 1440.0);
-          Widget body = Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (report?.kind == ReportBlockKind.live)
-                    const Padding(
-                      padding: EdgeInsets.only(right: 3),
-                      child: Icon(
-                        Icons.fiber_manual_record,
-                        size: 12,
-                        color: Color(0xFFFF5252),
-                      ),
-                    ),
-                  if (report?.kind == ReportBlockKind.timer)
-                    const Padding(
-                      padding: EdgeInsets.only(right: 3),
-                      child: Icon(
-                        Icons.timer_outlined,
-                        size: 12,
-                        color: Colors.white,
-                      ),
-                    ),
-                  if (report?.kind == ReportBlockKind.accepted)
-                    const Padding(
-                      padding: EdgeInsets.only(right: 3),
-                      child: Icon(
-                        Icons.fact_check,
-                        size: 12,
-                        color: Colors.white,
-                      ),
-                    ),
-                  if (isDraft)
-                    const Padding(
-                      padding: EdgeInsets.only(right: 3),
-                      child: Icon(
-                        Icons.edit_calendar,
-                        size: 12,
-                        color: Colors.white,
-                      ),
-                    ),
-                  if (event.isTask)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 1),
-                      child: GestureDetector(
-                        onTapDown: (_) => _suppressNextTap(),
-                        onDoubleTapDown: (_) => _suppressNextTap(),
-                        child: IconTheme(
-                          data: const IconThemeData(color: Colors.white),
-                          child: _blockCheckbox(
-                            event: event,
-                            size: 20,
-                            doneColor: Colors.white,
-                            nodeById: nodeById,
-                            nodeByEventId: nodeByEventId,
-                            liveEvent: event,
-                          ),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(6),
+          border: (selected || isDraft)
+              ? Border.all(color: Colors.white, width: 2)
+              : report?.kind == ReportBlockKind.live
+              ? Border.all(color: const Color(0xFFFF5252), width: 2)
+              : null,
+          boxShadow: selected
+              ? const [
+                  BoxShadow(
+                    color: Colors.black38,
+                    blurRadius: 6,
+                    offset: Offset(0, 2),
+                  ),
+                ]
+              : null,
+        ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // details.bounds doesn't always match the rendered box, so all
+            // sizing decisions use the measured height (falling back to the
+            // reported bounds when unbounded).
+            final realHeight = constraints.maxHeight.isFinite
+                ? constraints.maxHeight
+                : details.bounds.height;
+            final showText = realHeight.isInfinite || realHeight >= 20;
+            final showTime = realHeight.isInfinite || realHeight >= 34;
+            final twoLines = realHeight.isInfinite || realHeight >= 58;
+            final maxWidth = constraints.maxWidth.isFinite
+                ? constraints.maxWidth
+                : null;
+            // A 15-min event measures ~15px tall here (40px per 30-min
+            // interval minus the calendar's appointment insets), so the
+            // floor sits just under that: anything shorter can't show two
+            // tappable circles and falls back to the edit form.
+            final showHandles =
+                movable &&
+                !event.allDay &&
+                (realHeight.isInfinite || realHeight >= 12) &&
+                (maxWidth == null || maxWidth >= 48);
+            // Full-size circles need room (both 28px grabs stacked plus the
+            // title row). Below that — e.g. a 15-min event is ~25px at the
+            // 30-min/50px interval — fall back to compact circles so a
+            // shortened event can still be dragged long again. Without this
+            // the handles vanished the moment a drag made the tile short.
+            final compactHandles =
+                showHandles &&
+                !((realHeight.isInfinite || realHeight >= 58) &&
+                    (maxWidth == null || maxWidth >= 96));
+            // Very short tiles can't stack two grabs vertically without the
+            // circles landing on top of each other, so offset them to
+            // opposite corners (start = top-left, end = bottom-right).
+            final tightHandles =
+                compactHandles && realHeight.isFinite && realHeight < 40;
+            final pxPerMinute =
+                (realHeight.isFinite ? realHeight : details.bounds.height) /
+                durationMinutes.clamp(1.0, 1440.0);
+            Widget body = Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (report?.kind == ReportBlockKind.live)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 3),
+                        child: Icon(
+                          Icons.fiber_manual_record,
+                          size: 12,
+                          color: Color(0xFFFF5252),
                         ),
                       ),
-                    ),
-                  Flexible(
-                    child: Text(
-                      displaySubject,
-                      maxLines: twoLines ? 2 : 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        fontStyle:
-                            isDraft ? FontStyle.italic : FontStyle.normal,
-                        decoration: event.isTask && event.done
-                            ? TextDecoration.lineThrough
-                            : null,
-                      ),
-                    ),
-                  ),
-                  if (event.assignees.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 3),
-                      child: Tooltip(
-                        message: assigneeLabelById?[event.id] ??
-                            event.assignees
-                                .map((a) => a.displayName)
-                                .join(', '),
-                        child: const Icon(
-                          Icons.group,
+                    if (report?.kind == ReportBlockKind.timer)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 3),
+                        child: Icon(
+                          Icons.timer_outlined,
                           size: 12,
                           color: Colors.white,
                         ),
                       ),
+                    if (report?.kind == ReportBlockKind.accepted)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 3),
+                        child: Icon(
+                          Icons.fact_check,
+                          size: 12,
+                          color: Colors.white,
+                        ),
+                      ),
+                    if (isDraft)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 3),
+                        child: Icon(
+                          Icons.edit_calendar,
+                          size: 12,
+                          color: Colors.white,
+                        ),
+                      ),
+                    if (event.isTask)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 1),
+                        child: GestureDetector(
+                          onTapDown: (_) => _suppressNextTap(),
+                          child: IconTheme(
+                            data: const IconThemeData(color: Colors.white),
+                            child: _blockCheckbox(
+                              event: event,
+                              size: 20,
+                              doneColor: Colors.white,
+                              nodeById: nodeById,
+                              nodeByEventId: nodeByEventId,
+                              liveEvent: event,
+                            ),
+                          ),
+                        ),
+                      ),
+                    Flexible(
+                      child: Text(
+                        displaySubject,
+                        maxLines: twoLines ? 2 : 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          fontStyle: isDraft
+                              ? FontStyle.italic
+                              : FontStyle.normal,
+                          decoration: event.isTask && event.done
+                              ? TextDecoration.lineThrough
+                              : null,
+                        ),
+                      ),
                     ),
+                    if (event.assignees.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 3),
+                        child: Tooltip(
+                          message:
+                              assigneeLabelById?[event.id] ??
+                              event.assignees
+                                  .map((a) => a.displayName)
+                                  .join(', '),
+                          child: const Icon(
+                            Icons.group,
+                            size: 12,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                if (showTime) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    timeLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white, fontSize: 11),
+                  ),
                 ],
-              ),
-              if (showTime) ...[
-                const SizedBox(height: 2),
-                Text(
-                  timeLabel,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                  ),
-                ),
               ],
-            ],
-          );
-          // Belt and braces: never let text overflow a cramped box.
-          if (maxWidth != null) {
-            body = SizedBox(
-              width: maxWidth,
-              height: realHeight.isFinite ? realHeight : null,
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.topLeft,
-                child: SizedBox(width: maxWidth, child: body),
-              ),
             );
-          }
-          return Stack(
-            // Hard edge: nothing (badge, handles) may paint outside the
-            // tile. With Clip.none a 28px badge on a ~20px 15-min tile
-            // overflowed onto the empty grid and read as a floating ▶
-            // disconnected from any event.
-            clipBehavior: Clip.hardEdge,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
-                child: showText ? body : const SizedBox.shrink(),
-              ),
-              if (showHandles)
-                // Narrow grab area centered on the visible circle: a
-                // full-width strip would swallow taps on the header row
-                // (title, checkbox, play button) whenever handles show.
-                // Compact tiles use a slimmer strip so the smaller circle
-                // stays clear of the title on narrow week columns.
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: Center(
-                    child: SizedBox(
-                      width: compactHandles ? 40 : 48,
-                      child: _resizeHandle(
-                        top: true,
-                        event: event,
-                        color: baseColor,
-                        pxPerMinute: pxPerMinute,
-                        compact: compactHandles,
-                        tight: tightHandles,
+            // Belt and braces: never let text overflow a cramped box.
+            if (maxWidth != null) {
+              body = SizedBox(
+                width: maxWidth,
+                height: realHeight.isFinite ? realHeight : null,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.topLeft,
+                  child: SizedBox(width: maxWidth, child: body),
+                ),
+              );
+            }
+            return Stack(
+              // Hard edge: nothing (badge, handles) may paint outside the
+              // tile. With Clip.none a 28px badge on a ~20px 15-min tile
+              // overflowed onto the empty grid and read as a floating ▶
+              // disconnected from any event.
+              clipBehavior: Clip.hardEdge,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
+                  child: showText ? body : const SizedBox.shrink(),
+                ),
+                if (showHandles)
+                  // Narrow grab area centered on the visible circle: a
+                  // full-width strip would swallow taps on the header row
+                  // (title, checkbox, play button) whenever handles show.
+                  // Compact tiles use a slimmer strip so the smaller circle
+                  // stays clear of the title on narrow week columns.
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: SizedBox(
+                        width: compactHandles ? 40 : 48,
+                        child: _resizeHandle(
+                          top: true,
+                          event: event,
+                          color: baseColor,
+                          pxPerMinute: pxPerMinute,
+                          compact: compactHandles,
+                          tight: tightHandles,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              if (showHandles)
-                Positioned(
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
-                  child: Center(
-                    child: SizedBox(
-                      width: compactHandles ? 40 : 48,
-                      child: _resizeHandle(
-                        top: false,
-                        event: event,
-                        color: baseColor,
-                        pxPerMinute: pxPerMinute,
-                        compact: compactHandles,
-                        tight: tightHandles,
+                if (showHandles)
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: SizedBox(
+                        width: compactHandles ? 40 : 48,
+                        child: _resizeHandle(
+                          top: false,
+                          event: event,
+                          color: baseColor,
+                          pxPerMinute: pxPerMinute,
+                          compact: compactHandles,
+                          tight: tightHandles,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              // Toggl-style one-tap recording badge, pinned top-right so it
-              // never shrinks with the title text and always sits above the
-              // full-size resize handles. Compact handles (short selected
-              // tiles) take priority instead: the badge would bury the
-              // smaller circle — start recording from the open detail view.
-              // Covers timed tiles in day/week views that
-              // are big enough to hold it (28px badge + offsets); smaller
-              // tiles (15-min events, thin side-by-side halves, crowded
-              // overlaps) skip it — an overflowing badge reads as a
-              // floating ▶ disconnected from any tile. Month cells stay
-              // clean (too many tiny tiles to tap reliably).
-              if (report == null &&
-                  !isDraft &&
-                  !event.allDay &&
-                  !isReportDisplayId(event.id) &&
-                  !isNodeBlockId(event.id) &&
-                  !compactHandles &&
-                  _view != CalendarView.month &&
-                  (realHeight.isInfinite || realHeight >= 30) &&
-                  (maxWidth == null || maxWidth >= 36))
-                Positioned(
-                  top: 2,
-                  right: 2,
-                  child: _tilePlayBadge(
-                    event,
-                    backing: _backingNodeFor(
-                      context,
+                // Toggl-style one-tap recording badge, pinned top-right so it
+                // never shrinks with the title text and always sits above the
+                // full-size resize handles. Compact handles (short selected
+                // tiles) take priority instead: the badge would bury the
+                // smaller circle — start recording from the open detail view.
+                // Covers timed tiles in day/week views that
+                // are big enough to hold it (28px badge + offsets); smaller
+                // tiles (15-min events, thin side-by-side halves, crowded
+                // overlaps) skip it — an overflowing badge reads as a
+                // floating ▶ disconnected from any tile. Month cells stay
+                // clean (too many tiny tiles to tap reliably).
+                if (report == null &&
+                    !isDraft &&
+                    !event.allDay &&
+                    !isReportDisplayId(event.id) &&
+                    !isNodeBlockId(event.id) &&
+                    !compactHandles &&
+                    _view != CalendarView.month &&
+                    (realHeight.isInfinite || realHeight >= 30) &&
+                    (maxWidth == null || maxWidth >= 36))
+                  Positioned(
+                    top: 2,
+                    right: 2,
+                    child: _tilePlayBadge(
                       event,
-                      nodeByEventId: nodeByEventId,
-                      nodeById: nodeById,
-                    ),
-                    tracking: _tileTrackingFor(
-                      event,
-                      nodeByEventId: nodeByEventId,
-                      nodeById: nodeById,
-                      trackingNodeIds: trackingNodeIds,
-                      trackingEventIds: trackingEventIds,
+                      backing: _backingNodeFor(
+                        context,
+                        event,
+                        nodeByEventId: nodeByEventId,
+                        nodeById: nodeById,
+                      ),
+                      tracking: _tileTrackingFor(
+                        event,
+                        nodeByEventId: nodeByEventId,
+                        nodeById: nodeById,
+                        trackingNodeIds: trackingNodeIds,
+                        trackingEventIds: trackingEventIds,
+                      ),
                     ),
                   ),
-                ),
-            ],
-          );
-        },
-      ),
+              ],
+            );
+          },
+        ),
       ),
     );
-    if (!laneSplit) return tile;
-    const spacer = Expanded(child: SizedBox.shrink());
-    if (report != null) {
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [spacer, Expanded(child: tile)],
-      );
-    }
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [Expanded(child: tile), spacer],
-    );
+    return tile;
   }
 
   Widget _resizeHandle({
@@ -993,8 +1354,7 @@ class _CalendarPageState extends State<CalendarPage> {
         : (tight ? Alignment.bottomRight : Alignment.bottomCenter);
     return GestureDetector(
       behavior: HitTestBehavior.deferToChild,
-      onVerticalDragStart: (_) =>
-          _onHandleDragStart(event, top, pxPerMinute),
+      onVerticalDragStart: (_) => _onHandleDragStart(event, top, pxPerMinute),
       onVerticalDragUpdate: _onHandleDragUpdate,
       onVerticalDragEnd: (_) => _onHandleDragEnd(),
       onVerticalDragCancel: _onHandleDragCancel,
@@ -1010,7 +1370,9 @@ class _CalendarPageState extends State<CalendarPage> {
             right: tight ? 6 : 0,
           ),
           child: Semantics(
-            label: top ? 'Drag to change start time' : 'Drag to change end time',
+            label: top
+                ? 'Drag to change start time'
+                : 'Drag to change end time',
             child: Container(
               width: diameter,
               height: diameter,
@@ -1042,6 +1404,7 @@ class _CalendarPageState extends State<CalendarPage> {
 
   bool _isMovable(PlannerEvent event) {
     if (isReportDisplayId(event.id)) return false;
+    if (isReportLaneId(event.id)) return false;
     if (isNodeBlockId(event.id)) return true;
     if (!event.isFromFeed) return event.recurrenceRule.isEmpty;
     if (!mounted) return false;
@@ -1052,6 +1415,7 @@ class _CalendarPageState extends State<CalendarPage> {
   /// per tile per frame.
   bool _isMovableFast(PlannerEvent event, Set<String> remoteEditableFeedIds) {
     if (isReportDisplayId(event.id)) return false;
+    if (isReportLaneId(event.id)) return false;
     if (isNodeBlockId(event.id)) return true;
     if (!event.isFromFeed) return event.recurrenceRule.isEmpty;
     final feedId = event.feedId;
@@ -1095,14 +1459,17 @@ class _CalendarPageState extends State<CalendarPage> {
 
   /// Node backing a calendar event, if any (same triple-match the detail
   /// sheet uses). Null for plain events.
-  Node? _backingNodeFor(BuildContext context, PlannerEvent event,
-      {Map<String, Node>? nodeByEventId, Map<String, Node>? nodeById}) {
+  Node? _backingNodeFor(
+    BuildContext context,
+    PlannerEvent event, {
+    Map<String, Node>? nodeByEventId,
+    Map<String, Node>? nodeById,
+  }) {
     // Fast path: hoisted maps from the outer builder (no watch, O(1)).
     if (nodeByEventId != null) {
-      final hit = nodeByEventId[event.id] ??
-          (event.taskId == null
-              ? null
-              : nodeByEventId['task:${event.taskId}']);
+      final hit =
+          nodeByEventId[event.id] ??
+          (event.taskId == null ? null : nodeByEventId['task:${event.taskId}']);
       if (hit != null) return hit;
       if (nodeById != null && event.taskId != null) {
         return nodeById[event.taskId];
@@ -1134,10 +1501,9 @@ class _CalendarPageState extends State<CalendarPage> {
     }
     Node? backing;
     if (nodeByEventId != null) {
-      backing = nodeByEventId[event.id] ??
-          (event.taskId == null
-              ? null
-              : nodeByEventId['task:${event.taskId}']);
+      backing =
+          nodeByEventId[event.id] ??
+          (event.taskId == null ? null : nodeByEventId['task:${event.taskId}']);
       backing ??= event.taskId == null ? null : nodeById?[event.taskId!];
     }
     if (backing != null) {
@@ -1198,15 +1564,15 @@ class _CalendarPageState extends State<CalendarPage> {
         node = nodeById?[id] ?? context.read<NodeCubit>().byId(id);
       } catch (_) {}
       if (node != null) {
-        return NodeCheckbox(
-            node: node, size: size, doneColor: doneColor);
+        return NodeCheckbox(node: node, size: size, doneColor: doneColor);
       }
     }
     // Pre-resolve backing from hoisted maps so the checkbox itself needs
     // no cubit subscription (it used to watch both cubits per tile).
     Node? backing;
     if (nodeByEventId != null || nodeById != null) {
-      backing = nodeByEventId?[event.id] ??
+      backing =
+          nodeByEventId?[event.id] ??
           (event.taskId == null
               ? null
               : nodeByEventId?['task:${event.taskId}']) ??
@@ -1236,6 +1602,7 @@ class _CalendarPageState extends State<CalendarPage> {
     if (updated.start == previous.start && updated.end == previous.end) {
       return;
     }
+    final undoCubit = context.read<UndoCubit>();
     // A committed move is newer than the open edit form (native drag path):
     // drop its stale preview so the tile shows the committed times.
     // Callers repaint after this returns.
@@ -1243,42 +1610,42 @@ class _CalendarPageState extends State<CalendarPage> {
     if (isNodeBlockId(previous.id)) {
       Node? node;
       try {
-        node = context
-            .read<NodeCubit>()
-            .byId(nodeIdFromBlockId(previous.id));
+        node = context.read<NodeCubit>().byId(nodeIdFromBlockId(previous.id));
       } catch (_) {}
       if (node == null) return;
       final s = node.schedule;
-      context.read<NodeCubit>().updateNode(node.copyWith(
-            schedule: ScheduleFacet(
-              due: s?.due,
-              start: updated.start,
-              end: updated.end,
-              allDay: updated.allDay,
-              isFixed: s?.isFixed ?? false,
-            ),
-          ));
+      context.read<NodeCubit>().updateNode(
+        node.copyWith(
+          schedule: ScheduleFacet(
+            due: s?.due,
+            start: updated.start,
+            end: updated.end,
+            allDay: updated.allDay,
+            isFixed: s?.isFixed ?? false,
+          ),
+        ),
+      );
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(_movedText(updated)),
-          action: SnackBarAction(
-            label: 'Undo',
-            onPressed: () => context.read<UndoCubit>().undo(),
-          ),
+          action: SnackBarAction(label: 'Undo', onPressed: undoCubit.undo),
         ),
       );
       return;
     }
     final calendarCubit = context.read<CalendarCubit>();
+    final nodesCubit = context.read<NodeCubit>();
     final messenger = ScaffoldMessenger.of(context);
-    calendarCubit.updateEvent(updated);
+    NodeEventSync.rescheduleLinkedEvent(calendarCubit, nodesCubit, updated);
+    if (updated.reminderMinutesBefore == null) {
+      unawaited(EventReminderService.cancelReminder(updated.id));
+    } else {
+      unawaited(EventReminderService.scheduleReminder(updated));
+    }
     messenger.showSnackBar(
       SnackBar(
         content: Text(_movedText(updated)),
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: () => context.read<UndoCubit>().undo(),
-        ),
+        action: SnackBarAction(label: 'Undo', onPressed: undoCubit.undo),
       ),
     );
     if (!previous.isFromFeed) return;
@@ -1287,10 +1654,15 @@ class _CalendarPageState extends State<CalendarPage> {
     final error = await context.read<FeedCubit>().pushEventUpdate(updated);
     if (!mounted) return;
     if (error != null) {
-      calendarCubit.updateEvent(previous);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error)),
-      );
+      NodeEventSync.rescheduleLinkedEvent(calendarCubit, nodesCubit, previous);
+      if (previous.reminderMinutesBefore == null) {
+        unawaited(EventReminderService.cancelReminder(previous.id));
+      } else {
+        unawaited(EventReminderService.scheduleReminder(previous));
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error)));
     }
   }
 
@@ -1306,11 +1678,7 @@ class _CalendarPageState extends State<CalendarPage> {
         'open the event to edit it instead.';
   }
 
-  void _onHandleDragStart(
-    PlannerEvent event,
-    bool top,
-    double pxPerMinute,
-  ) {
+  void _onHandleDragStart(PlannerEvent event, bool top, double pxPerMinute) {
     _suppressTap = true;
     _handleOriginal = event;
     _handleTop = top;
@@ -1381,192 +1749,41 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   Color _eventColor(PlannerEvent event, Map<String, Color> feedColors) {
-    final label = event.classLabel;
-    if (label != null && label.isNotEmpty) return courseColor(label);
-    final eventColor = event.colorValue;
-    if (eventColor != null) return mutedCalendarColor(Color(eventColor));
-    final feedColor = feedColors[event.feedId];
-    if (feedColor != null) return mutedCalendarColor(feedColor);
-    return const Color(_personalEventColor);
+    return calendarEventColor(event, feedColors);
   }
 
-  Widget _buildDrawer(int snap) {
-    final theme = Theme.of(context);
-    final String title;
-    switch (_drawerMode) {
-      case _DrawerMode.detail:
-        title = 'Event details';
-      case _DrawerMode.creating:
-        title = 'New event';
-      case _DrawerMode.editing:
-        title = 'Edit event';
-      case _DrawerMode.closed:
-        title = '';
-    }
-    return Container(
-      width: _drawerWidth,
-      decoration: BoxDecoration(
-        border: Border(left: BorderSide(color: theme.dividerColor)),
-      ),
-      child: Material(
-        color: theme.colorScheme.surface,
-        child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(title, style: theme.textTheme.titleMedium),
-                ),
-                IconButton(
-                  tooltip: 'Close panel',
-                  icon: const Icon(Icons.close),
-                  onPressed: _closeDrawer,
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-          if (_drawerMode == _DrawerMode.detail)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Text(
-                'Drag the event to move it · drag a circle to resize '
-                '(snaps to $snap min) · hold at the edge to turn the page',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-          Expanded(
-            child: BlocBuilder<CalendarCubit, List<PlannerEvent>>(
-              builder: (context, events) {
-                if (_drawerMode == _DrawerMode.creating) {
-                  final draft = _draftEvent;
-                  if (draft == null) {
-                    return const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Text('Preparing new event…'),
-                      ),
-                    );
-                  }
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                        child: Text(
-                          'Ghost preview on the calendar — drag it to move it, '
-                          'drag a circle to resize (snaps to $snap min). '
-                          'Nothing is saved until you press Add.',
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodySmall
-                              ?.copyWith(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurfaceVariant,
-                              ),
-                        ),
-                      ),
-                      Expanded(
-                        child: EventEditorForm(
-                          key: const ValueKey('new:draft'),
-                          initialDate: DateTime(
-                            draft.start.year,
-                            draft.start.month,
-                            draft.start.day,
-                          ),
-                          initialTime: draft.allDay
-                              ? null
-                              : TimeOfDay.fromDateTime(draft.start),
-                          initialEndTime: draft.allDay
-                              ? null
-                              : TimeOfDay.fromDateTime(draft.end),
-                          initialSubject: _draftSeedSubject,
-                          initialNotes: _draftSeedNotes,
-                          initialLocation: _draftSeedLocation,
-                          initialClassLabel: _draftSeedClassLabel,
-                          initialTaskId: _draftSeedTaskId,
-                          onDraftChanged: _onDraftChanged,
-                          autofocusTitle: true,
-                          onFinished: () => _finishCreating(saved: true),
-                          onCancelled: () => _finishCreating(saved: false),
-                        ),
-                      ),
-                    ],
-                  );
-                }
-                final selectedId = _selectedEventId;
-                PlannerEvent? event;
-                if (selectedId != null) {
-                  for (final e in events) {
-                    if (e.id == selectedId) {
-                      event = e;
-                      break;
-                    }
-                  }
-                }
-                if (event == null) {
-                  return const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text('This event was deleted.'),
-                    ),
-                  );
-                }
-                if (_drawerMode == _DrawerMode.editing) {
-                  return EventEditorForm(
-                    key: ValueKey('edit:${event.id}'),
-                    existing: event,
-                    allowDelete: true,
-                    onDraftChanged: _onEditChanged,
-                    onFinished: () {
-                      final stillThere =
-                          context.read<CalendarCubit>().byId(event!.id);
-                      if (stillThere == null) {
-                        _closeDrawer();
-                      } else {
-                        setState(() {
-                          _drawerMode = _DrawerMode.detail;
-                          _editPreview = null;
-                        });
-                      }
-                    },
-                    onCancelled: () => setState(() {
-                      _drawerMode = _DrawerMode.detail;
-                      _editPreview = null;
-                    }),
-                  );
-                }
-                final detailEvent = event;
-                return SingleChildScrollView(
-                  child: EventDetailView(
-                    key: ValueKey('detail:${detailEvent.id}'),
-                    event: detailEvent,
-                    onEdit: () => setState(
-                      () => _drawerMode = _DrawerMode.editing,
-                    ),
-                    onReport: detailEvent.isTask
-                        ? () => _reportEvent(detailEvent)
-                        : null,
-                    onClose: _closeDrawer,
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-        ),
-      ),
+  Widget _buildSidePanel(int snap) {
+    return CalendarSidePanel(
+      mode: _panelMode,
+      snapMinutes: snap,
+      selectedEventId: _selectedEventId,
+      draft: _draftEvent,
+      seedSubject: _draftSeedSubject,
+      seedNotes: _draftSeedNotes,
+      seedLocation: _draftSeedLocation,
+      seedClassLabel: _draftSeedClassLabel,
+      seedTaskId: _draftSeedTaskId,
+      tasksContent: TasksPanel(onTaskTap: _selectTaskOnCalendar),
+      onDraftChanged: _onDraftChanged,
+      onEditChanged: _onEditChanged,
+      onCreatingFinished: (saved) => _finishCreating(saved: saved),
+      onEditingFinished: _finishEditing,
+      onEditingCancelled: () => setState(() {
+        _panelMode = CalendarPanelMode.detail;
+        _editPreview = null;
+      }),
+      onEditRequested: () =>
+          setState(() => _panelMode = CalendarPanelMode.editing),
+      onBack: _backFromPanel,
+      onClose: _closeDrawer,
+      onReport: _reportEvent,
     );
   }
 
   void _onAddPressed() {
-    if (_drawerMode == _DrawerMode.creating && _draftEvent != null) return;
+    if (_panelMode == CalendarPanelMode.creating && _draftEvent != null) {
+      return;
+    }
     final selected = _controller.selectedDate ?? DateTime.now();
     _openCreator(initialDate: selected);
   }
@@ -1581,37 +1798,111 @@ class _CalendarPageState extends State<CalendarPage> {
     showNodeEditor(context, existing: node);
   }
 
-  void _openDetail(PlannerEvent event) {    if (!_isWide) {
+  void _openDetail(PlannerEvent event) {
+    if (!_isWide) {
       if (_selectedEventId != null) {
         setState(() => _selectedEventId = null);
       }
       showEventDetail(
         context,
         event: event,
-        onReport:
-            event.isTask ? () => _reportEvent(event) : null,
+        onReport: event.isTask ? () => _reportEvent(event) : null,
       );
       return;
     }
+    final wasCreating = _panelMode == CalendarPanelMode.creating;
+    final captured = _preCreateSelectionCaptured;
+    final preCreate = _preCreateSelectedDate;
     setState(() {
       _selectedEventId = event.id;
-      _drawerMode = _DrawerMode.detail;
+      _panelMode = CalendarPanelMode.detail;
+      _panelOpen = true;
       _editPreview = null;
       _clearDraft();
+      // Abandoning a draft for another event ends the create flow without
+      // going through _finishCreating/_closeDrawer: undo the selection
+      // takeover so no highlight lingers on the discarded draft's slot,
+      // and drop the stash so a later close cannot restore a stale slot.
+      if (wasCreating && captured) {
+        _controller.selectedDate = preCreate;
+      }
+      if (wasCreating) {
+        _preCreateSelectedDate = null;
+        _preCreateSelectionCaptured = false;
+      }
     });
+  }
+
+  /// Panel task tap: highlights the task's calendar entry, navigating the
+  /// calendar to its day, without replacing the task list. The node menu
+  /// stays one tap away in the tile's ⋮ menu. Falls back to the node's own
+  /// schedule block; a task that isn't on the calendar yet jumps straight
+  /// into a ghost block on its due date instead of asking how to schedule
+  /// it.
+  void _selectTaskOnCalendar(Node node) {
+    final calendar = context.read<CalendarCubit>();
+    PlannerEvent? target;
+    for (final id in [node.calendarEventId, node.sourceEventId]) {
+      if (id == null) continue;
+      final linked = calendar.byId(id);
+      if (linked != null) {
+        target = linked;
+        break;
+      }
+    }
+    if (target == null) {
+      // No direct link: prefer the next upcoming occurrence, then the
+      // earliest one, so seeded events and old series land usefully.
+      final now = DateTime.now();
+      PlannerEvent? next;
+      PlannerEvent? earliest;
+      for (final event in calendar.state) {
+        if (event.taskId != node.id) continue;
+        if (event.start.isBefore(now)) {
+          if (earliest == null || event.start.isBefore(earliest.start)) {
+            earliest = event;
+          }
+        } else if (next == null || event.start.isBefore(next.start)) {
+          next = event;
+        }
+      }
+      target = next ?? earliest;
+    }
+    final schedule = node.schedule;
+    final blockStart = target == null && isSeedableBlock(schedule)
+        ? schedule!.start
+        : null;
+    if (target == null && blockStart == null) {
+      // Nothing on the calendar yet: jump straight into a ghost block on
+      // the task's due date (noon by default, inside the visible hours)
+      // instead of asking how to schedule it. The ⋮ menu keeps the full
+      // schedule sheet for choosing day vs. time by hand.
+      final snap = context.read<SettingsCubit>().state.snapMinutes;
+      final seed = draftSeedFromNode(
+        node,
+        estimate: estimateForNode(context, node),
+        snapMinutes: snap,
+      );
+      _seedFromPageMount = false;
+      _openCreator(seed: seed);
+      return;
+    }
+    final start = target?.start ?? blockStart!;
+    setState(() {
+      _selectedEventId = target?.id ?? nodeBlockId(node.id);
+      _editPreview = null;
+    });
+    _controller.displayDate = start;
   }
 
   void _setSideBySide(bool value) {
     if (_sideBySide == value) return;
     setState(() => _sideBySide = value);
     if (value) {
-      _liveTicker ??= Timer.periodic(
-        const Duration(seconds: 30),
-        (_) {
-          if (!mounted) return;
-          setState(() {});
-        },
-      );
+      _liveTicker ??= Timer.periodic(const Duration(seconds: 30), (_) {
+        if (!mounted) return;
+        setState(() {});
+      });
     } else {
       _liveTicker?.cancel();
       _liveTicker = null;
@@ -1619,9 +1910,8 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   /// Jumps the calendar back to today, keeping the current Day/Week/Month
-  /// view. Reached via double-tap/click on the view switcher (a re-tap on
-  /// the active segment never reaches `onSelectionChanged`, so the
-  /// switcher is wrapped in a `GestureDetector.onDoubleTap` instead).
+  /// view. Reached by re-tapping the active view segment (empty selection
+  /// or same value): no double-tap detector, so view switches stay instant.
   void _goToToday() {
     final now = DateTime.now();
     _controller.displayDate = now;
@@ -1641,8 +1931,7 @@ class _CalendarPageState extends State<CalendarPage> {
       reporting.upsertEntry(day, entry);
     }
     if (!mounted) return;
-    final saved =
-        findReportEntryForEvent(reporting.state, event.id) ?? entry;
+    final saved = findReportEntryForEvent(reporting.state, event.id) ?? entry;
     await showReportedEditor(context, day: day, entry: saved);
   }
 
@@ -1650,12 +1939,10 @@ class _CalendarPageState extends State<CalendarPage> {
     final calendar = context.read<CalendarCubit>();
     ReportedEntry? entry;
     try {
-      final reporting = context.read<ReportingCubit>();
-      for (final entries in reporting.state.values) {
-        for (final e in entries) {
-          if ('report:${e.id}' == displayId) entry = e;
-        }
-      }
+      entry = findReportEntryByDisplayId(
+        context.read<ReportingCubit>().state,
+        displayId,
+      );
     } catch (_) {}
     var eventId = entry?.eventId;
     if (eventId == null) {
@@ -1685,22 +1972,22 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   PlannerEvent _asDraft(PlannerEvent event) => PlannerEvent(
-        id: calendarDraftEventId,
-        subject: event.subject,
-        notes: event.notes,
-        location: event.location,
-        start: event.start,
-        end: event.end,
-        allDay: event.allDay,
-        recurrenceRule: event.recurrenceRule,
-        classLabel: event.classLabel,
-        colorValue: event.colorValue,
-        taskId: event.taskId,
-        isTask: event.isTask,
-        done: event.done,
-        completedAt: event.completedAt,
-        placeId: event.placeId,
-      );
+    id: calendarDraftEventId,
+    subject: event.subject,
+    notes: event.notes,
+    location: event.location,
+    start: event.start,
+    end: event.end,
+    allDay: event.allDay,
+    recurrenceRule: event.recurrenceRule,
+    classLabel: event.classLabel,
+    colorValue: event.colorValue,
+    taskId: event.taskId,
+    isTask: event.isTask,
+    done: event.done,
+    completedAt: event.completedAt,
+    placeId: event.placeId,
+  );
 
   PlannerEvent _initialDraft({
     DateTime? initialDate,
@@ -1718,7 +2005,12 @@ class _CalendarPageState extends State<CalendarPage> {
     if (initialTime != null) {
       start = snapToInterval(
         DateTime(
-            day.year, day.month, day.day, initialTime.hour, initialTime.minute),
+          day.year,
+          day.month,
+          day.day,
+          initialTime.hour,
+          initialTime.minute,
+        ),
         snap,
       );
     } else {
@@ -1727,8 +2019,13 @@ class _CalendarPageState extends State<CalendarPage> {
     var end = initialEndTime == null
         ? start.add(const Duration(hours: 1))
         : snapToInterval(
-            DateTime(day.year, day.month, day.day, initialEndTime.hour,
-                initialEndTime.minute),
+            DateTime(
+              day.year,
+              day.month,
+              day.day,
+              initialEndTime.hour,
+              initialEndTime.minute,
+            ),
             snap,
           );
     if (!end.isAfter(start)) end = start.add(const Duration(hours: 1));
@@ -1755,10 +2052,14 @@ class _CalendarPageState extends State<CalendarPage> {
   }) {
     final draft = seed != null
         ? _asDraft(seed)
-        : _initialDraft(
-            initialDate: initialDate,
-            initialTime: initialTime,
-          );
+        : _initialDraft(initialDate: initialDate, initialTime: initialTime);
+    // Remember the slot the user had selected before this create flow
+    // took over the calendar selection, so a cancel can put it back.
+    if (!_preCreateSelectionCaptured &&
+        _panelMode != CalendarPanelMode.creating) {
+      _preCreateSelectedDate = _controller.selectedDate;
+      _preCreateSelectionCaptured = true;
+    }
     _focusOnDraft(draft.start);
     if (!_isWide) {
       _openSheetCreator(draft);
@@ -1766,7 +2067,8 @@ class _CalendarPageState extends State<CalendarPage> {
     }
     setState(() {
       _selectedEventId = null;
-      _drawerMode = _DrawerMode.creating;
+      _panelMode = CalendarPanelMode.creating;
+      _panelOpen = true;
       _draftEvent = draft;
       _draftSeedSubject = seed?.subject;
       _draftSeedNotes = seed?.notes;
@@ -1779,7 +2081,7 @@ class _CalendarPageState extends State<CalendarPage> {
   Future<void> _openSheetCreator(PlannerEvent draft) async {
     setState(() {
       _selectedEventId = null;
-      _drawerMode = _DrawerMode.creating;
+      _panelMode = CalendarPanelMode.creating;
       _draftEvent = draft;
       _draftSeedSubject = draft.subject.isEmpty ? null : draft.subject;
       _draftSeedNotes = draft.notes;
@@ -1789,12 +2091,13 @@ class _CalendarPageState extends State<CalendarPage> {
     });
     final saved = await showEventEditor(
       context,
-      initialDate:
-          DateTime(draft.start.year, draft.start.month, draft.start.day),
-      initialTime:
-          draft.allDay ? null : TimeOfDay.fromDateTime(draft.start),
-      initialEndTime:
-          draft.allDay ? null : TimeOfDay.fromDateTime(draft.end),
+      initialDate: DateTime(
+        draft.start.year,
+        draft.start.month,
+        draft.start.day,
+      ),
+      initialTime: draft.allDay ? null : TimeOfDay.fromDateTime(draft.start),
+      initialEndTime: draft.allDay ? null : TimeOfDay.fromDateTime(draft.end),
       initialSubject: _draftSeedSubject,
       initialNotes: _draftSeedNotes,
       initialLocation: _draftSeedLocation,
@@ -1849,28 +2152,111 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   void _closeDrawer() {
+    final wasCreating = _panelMode == CalendarPanelMode.creating;
+    final captured = _preCreateSelectionCaptured;
+    final preCreate = _preCreateSelectedDate;
     setState(() {
-      _drawerMode = _DrawerMode.closed;
+      _panelOpen = false;
+      _panelMode = CalendarPanelMode.tasks;
       _selectedEventId = null;
       _editPreview = null;
+      _seedFromPageMount = false;
       _clearDraft();
+      if (wasCreating && captured) {
+        _controller.selectedDate = preCreate;
+      }
+    });
+    if (wasCreating) {
+      _preCreateSelectedDate = null;
+      _preCreateSelectionCaptured = false;
+    }
+  }
+
+  /// Opens the panel (task list) or closes it entirely. Reached from the
+  /// toolbar toggle (wide screens only).
+  void _togglePanel() {
+    if (_panelOpen) {
+      _closeDrawer();
+    } else {
+      setState(() => _panelOpen = true);
+    }
+  }
+
+  /// Header back arrow: leaves whatever the panel is showing for the task
+  /// list. A draft in progress is cancelled; an open edit falls back to the
+  /// event's detail. Closing the panel entirely stays on the ✕ / toggle.
+  void _backFromPanel() {
+    switch (_panelMode) {
+      case CalendarPanelMode.creating:
+        _finishCreating(saved: false);
+      case CalendarPanelMode.editing:
+        setState(() {
+          _panelMode = CalendarPanelMode.detail;
+          _editPreview = null;
+        });
+      case CalendarPanelMode.detail:
+      case CalendarPanelMode.tasks:
+        setState(() {
+          _panelMode = CalendarPanelMode.tasks;
+          _selectedEventId = null;
+          _editPreview = null;
+          _clearDraft();
+        });
+    }
+  }
+
+  /// Finishes the edit form: back to the event's detail when it still
+  /// exists; when it was just deleted, back to the task list — deleting an
+  /// event must not close the panel. (Narrow screens keep their sheet
+  /// behaviour: the editor sheet dismisses itself.)
+  void _finishEditing() {
+    final id = _selectedEventId;
+    final stillThere = id == null
+        ? null
+        : context.read<CalendarCubit>().byId(id);
+    if (stillThere == null) {
+      setState(() {
+        _panelMode = CalendarPanelMode.tasks;
+        _selectedEventId = null;
+        _editPreview = null;
+        _clearDraft();
+      });
+      return;
+    }
+    setState(() {
+      _panelMode = CalendarPanelMode.detail;
+      _editPreview = null;
     });
   }
 
-  /// Closes the create flow and, when the draft came from the task list
-  /// (Add to calendar) and was actually saved, returns to Tasks so the
-  /// next assignment can be scheduled without extra taps. Plain calendar
-  /// creates (no task link) and cancelled sheets stay on the calendar.
+  /// Closes the create flow and falls back to the panel's task list. When
+  /// the draft was claimed as this page mounted (Tasks → Pick time on
+  /// calendar) and was actually saved, returns to Tasks so the next
+  /// assignment can be scheduled without extra taps; plain calendar
+  /// creates, cancelled drafts, and seeds delivered while the page was
+  /// already open (the side panel's own schedule flow) stay here.
   void _finishCreating({required bool saved}) {
     final taskId = _draftSeedTaskId;
+    final returnsToTasks =
+        _seedFromPageMount && saved && taskId != null && taskId.isNotEmpty;
+    _seedFromPageMount = false;
+    // On cancel (not saved), drop the create flow's takeover of the
+    // calendar selection so no teal highlight lingers on the draft slot.
+    final captured = _preCreateSelectionCaptured;
+    final preCreate = _preCreateSelectedDate;
     if (!mounted) return;
     setState(() {
-      _drawerMode = _DrawerMode.closed;
+      _panelMode = CalendarPanelMode.tasks;
       _selectedEventId = null;
       _editPreview = null;
       _clearDraft();
+      if (!saved && captured) {
+        _controller.selectedDate = preCreate;
+      }
     });
-    if (saved && taskId != null && taskId.isNotEmpty) {
+    _preCreateSelectedDate = null;
+    _preCreateSelectionCaptured = false;
+    if (returnsToTasks) {
       try {
         context.read<NavigationCubit>().setPage(PlannerPage.tasks);
       } catch (_) {}
@@ -1884,6 +2270,9 @@ class _CalendarPageState extends State<CalendarPage> {
           ? details.appointments!.first
           : null;
       if (raw is PlannerEvent && raw.id == calendarDraftEventId) return;
+      // Lane placeholder taps (the empty part of a report column) are not
+      // events; the chips handle their own taps.
+      if (raw is PlannerEvent && isReportLaneId(raw.id)) return;
       if (raw is PlannerEvent && isReportDisplayId(raw.id)) {
         _openReport(raw.id);
         return;
@@ -1902,7 +2291,7 @@ class _CalendarPageState extends State<CalendarPage> {
         details.date != null) {
       final date = details.date!;
       final tappedMidnight = date.hour == 0 && date.minute == 0;
-      if (_drawerMode == _DrawerMode.creating && _draftEvent != null) {
+      if (_panelMode == CalendarPanelMode.creating && _draftEvent != null) {
         _moveDraftTo(date, keepTimeOfDay: tappedMidnight);
         return;
       }
@@ -1942,13 +2331,97 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   void _onDragStart(AppointmentDragStartDetails details) {
+    _isDragging = true;
     _suppressTap = true;
     if (_handleOriginal != null) {
       _ignoreNativeDragEnd = true;
     }
   }
 
+  void _onPairedPlanDragStart(
+    PlannerEvent event,
+    Offset globalPosition, {
+    required double cellWidth,
+    required double pixelsPerMinute,
+    required int dayCount,
+    required bool isRtl,
+  }) {
+    _pairedDragOriginal = event;
+    _pairedDragOrigin = globalPosition;
+    _pairedDragDropTime = event.start;
+    _pairedDragCellWidth = cellWidth;
+    _pairedDragPixelsPerMinute = pixelsPerMinute;
+    _pairedDragDayCount = dayCount;
+    _pairedDragIsRtl = isRtl;
+    _isDragging = true;
+    _suppressTap = true;
+  }
+
+  void _onPairedPlanDragMove(Offset globalPosition) {
+    final original = _pairedDragOriginal;
+    final origin = _pairedDragOrigin;
+    if (original == null || origin == null) return;
+    final days = _pairedDragDayCount > 1 && _pairedDragCellWidth > 0
+        ? ((globalPosition.dx - origin.dx) / _pairedDragCellWidth).round() *
+              (_pairedDragIsRtl ? -1 : 1)
+        : 0;
+    final minutes = original.allDay || _pairedDragPixelsPerMinute <= 0
+        ? 0
+        : ((globalPosition.dy - origin.dy) / _pairedDragPixelsPerMinute)
+              .round();
+    _pairedDragDropTime = original.start.add(
+      Duration(days: days, minutes: minutes),
+    );
+  }
+
+  Future<void> _onPairedPlanDragEnd(PlannerEvent event) async {
+    final original = _pairedDragOriginal ?? event;
+    final droppingTime = _pairedDragDropTime;
+    _pairedDragOriginal = null;
+    _pairedDragOrigin = null;
+    _pairedDragDropTime = null;
+    if (droppingTime == null || droppingTime == original.start) {
+      _isDragging = false;
+      if (mounted) setState(() {});
+      _resetSuppressSoon();
+      return;
+    }
+    await _onDragEnd(
+      AppointmentDragEndDetails(original, null, null, droppingTime),
+    );
+  }
+
+  void _cancelPairedPlanDrag() {
+    if (_pairedDragOriginal == null) return;
+    _pairedDragOriginal = null;
+    _pairedDragOrigin = null;
+    _pairedDragDropTime = null;
+    _isDragging = false;
+    if (mounted) setState(() {});
+    _resetSuppressSoon();
+  }
+
+  /// Keeps the creation ghost on screen while the user pages with the
+  /// header arrows (or switches Day/Week/Month): when the draft day scrolls
+  /// out of view, the ghost travels to the newly visible date, keeping its
+  /// wall-clock time and duration so it can be dragged to its final slot.
+  /// A mid-drag page turn is left to the native drop target instead.
+  void _onViewChanged(ViewChangedDetails details) {
+    if (_panelMode != CalendarPanelMode.creating) return;
+    final draft = _draftEvent;
+    if (draft == null || _isDragging) return;
+    final snap = context.read<SettingsCubit>().state.snapMinutes;
+    final traveled = travelGhostToVisible(
+      draft,
+      details.visibleDates,
+      _controller.displayDate,
+      snapMinutes: snap,
+    );
+    if (traveled != null) _updateDraftFromCalendar(traveled);
+  }
+
   Future<void> _onDragEnd(AppointmentDragEndDetails details) async {
+    _isDragging = false;
     if (_ignoreNativeDragEnd) {
       _ignoreNativeDragEnd = false;
       setState(() {});
@@ -1962,7 +2435,8 @@ class _CalendarPageState extends State<CalendarPage> {
       final appointment = details.appointment;
       final droppingTime = details.droppingTime;
       if (appointment is PlannerEvent &&
-          isReportDisplayId(appointment.id)) {
+          (isReportDisplayId(appointment.id) ||
+              isReportLaneId(appointment.id))) {
         if (mounted) setState(() {});
         return;
       }
@@ -1977,19 +2451,18 @@ class _CalendarPageState extends State<CalendarPage> {
         }
         return;
       }
-      if (appointment is PlannerEvent &&
-          isNodeBlockId(appointment.id)) {
+      if (appointment is PlannerEvent && isNodeBlockId(appointment.id)) {
         if (droppingTime == null) {
           if (mounted) setState(() {});
           return;
         }
         Node? node;
         try {
-          node = context
-              .read<NodeCubit>()
-              .byId(nodeIdFromBlockId(appointment.id));
+          node = context.read<NodeCubit>().byId(
+            nodeIdFromBlockId(appointment.id),
+          );
         } catch (_) {}
-        if (node == null || node.schedule?.start == null) {
+        if (node == null || node.schedule?.hasCalendarBlock != true) {
           if (mounted) setState(() {});
           return;
         }
@@ -1999,7 +2472,13 @@ class _CalendarPageState extends State<CalendarPage> {
           droppingTime,
           snapMinutes: snap,
         );
-        await _commitReschedule(appointment, shifted);
+        // Syncfusion already moved its callback object. Compare with the
+        // stored schedule so a real node move is not mistaken for a no-op.
+        final schedule = node.schedule!;
+        await _commitReschedule(
+          appointment.copyWith(start: schedule.start, end: schedule.end),
+          shifted,
+        );
         return;
       }
       if (appointment is! PlannerEvent || droppingTime == null) {
@@ -2012,13 +2491,13 @@ class _CalendarPageState extends State<CalendarPage> {
         }
         return;
       }
-      final event = context.read<CalendarCubit>().byId(appointment.id) ??
-          appointment;
+      final event =
+          context.read<CalendarCubit>().byId(appointment.id) ?? appointment;
       if (!_isMovable(event)) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(_blockedMessage(event))),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(_blockedMessage(event))));
         }
         return;
       }
@@ -2044,9 +2523,7 @@ class _CalendarPageState extends State<CalendarPage> {
       final cubit = context.read<CalendarCubit>();
       final feedCubit = context.read<FeedCubit>();
       final visibility = context.read<CalendarVisibilityCubit>();
-      final feedById = {
-        for (final feed in feedCubit.state) feed.id: feed,
-      };
+      final feedById = {for (final feed in feedCubit.state) feed.id: feed};
       // Set-based visibility (was O(F) byId per event); skip non-recurring
       // up front — only recurring series need occurrence expansion, and
       // expansion is the expensive part of this tap path.
@@ -2072,8 +2549,7 @@ class _CalendarPageState extends State<CalendarPage> {
         final occurrences = cubit.occurrencesOf(event, dayStart, dayEnd);
         if (occurrences.isEmpty) continue;
         final exact = occurrences.any(
-          (o) =>
-              o.hour == tappedDate.hour && o.minute == tappedDate.minute,
+          (o) => o.hour == tappedDate.hour && o.minute == tappedDate.minute,
         );
         if (exact) return event;
         candidates.add(event);
@@ -2081,80 +2557,6 @@ class _CalendarPageState extends State<CalendarPage> {
       if (candidates.length == 1) return candidates.first;
     }
     return null;
-  }
-}
-
-class PlannerCalendarDataSource extends CalendarDataSource {
-  final List<PlannerEvent> _events;
-  final Map<String, Color> feedColors;
-  final Map<String, Color>? colorCache;
-
-  PlannerCalendarDataSource(this._events, this.feedColors, [this.colorCache]) {
-    appointments = _events;
-  }
-
-  /// Maps a dragged occurrence back onto our event model. Syncfusion calls
-  /// this when a drag starts and ends; without it the drag callbacks
-  /// receive null and drops silently do nothing.
-  @override
-  dynamic convertAppointmentToObject(
-    dynamic customData,
-    Appointment appointment,
-  ) {
-    if (customData is! PlannerEvent) return customData;
-    return customData.copyWith(
-      start: appointment.startTime,
-      end: appointment.endTime,
-      allDay: appointment.isAllDay,
-    );
-  }
-
-  @override
-  DateTime getStartTime(int index) => _events[index].start;
-
-  @override
-  DateTime getEndTime(int index) {
-    final event = _events[index];
-    if (event.allDay && !event.end.isAfter(event.start)) {
-      return event.start.add(const Duration(days: 1));
-    }
-    return event.end;
-  }
-
-  @override
-  bool isAllDay(int index) => _events[index].allDay;
-
-  @override
-  String getSubject(int index) => _events[index].subject;
-
-  @override
-  String? getNotes(int index) => _events[index].notes;
-
-  @override
-  String? getLocation(int index) => _events[index].location;
-
-  @override
-  String getRecurrenceRule(int index) => _events[index].recurrenceRule;
-
-  @override
-  Object? getId(int index) => _events[index].id;
-
-  @override
-  Color getColor(int index) {
-    final cached = colorCache;
-    if (cached != null) {
-      final event = _events[index];
-      final hit = cached[event.id];
-      if (hit != null) return hit;
-    }
-    final event = _events[index];
-    final label = event.classLabel;
-    if (label != null && label.isNotEmpty) return courseColor(label);
-    final eventColor = event.colorValue;
-    if (eventColor != null) return mutedCalendarColor(Color(eventColor));
-    final feedColor = feedColors[event.feedId];
-    if (feedColor != null) return mutedCalendarColor(feedColor);
-    return const Color(_personalEventColor);
   }
 }
 
@@ -2254,21 +2656,18 @@ class _RecordingBannerState extends State<_RecordingBanner> {
                   children: [
                     Text(
                       'Recording · ${_elapsed(startedAt)}',
-                      style: Theme.of(context)
-                          .textTheme
-                          .labelMedium
-                          ?.copyWith(
-                            color: scheme.onErrorContainer,
-                            fontWeight: FontWeight.w700,
-                          ),
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: scheme.onErrorContainer,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                     Text(
                       widget.event.subject,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: scheme.onErrorContainer,
-                          ),
+                        color: scheme.onErrorContainer,
+                      ),
                     ),
                   ],
                 ),

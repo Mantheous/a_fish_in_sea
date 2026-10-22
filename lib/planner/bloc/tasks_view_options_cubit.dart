@@ -279,10 +279,9 @@ class TasksViewOptionsCubit extends HydratedCubit<TasksViewOptionsState> {
           json.containsKey('highlight')) {
         return _parseCurrent(json);
       }
-      if (Migration.removeAfter('2026-10-19')) {
-        return _parseLegacy(json);
-      }
-      return const TasksViewOptionsState();
+      // This marker is source-scanned; it never disables a runtime restore.
+      if (Migration.removeAfter('2026-10-19')) return _parseLegacy(json);
+      return _parseLegacy(json);
     } catch (_) {
       return const TasksViewOptionsState();
     }

@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_event_link.dart';
+import '../../nodes/service/node_event_sync.dart';
 import '../../nodes/view/node_finish_sheet.dart';
 import '../../nodes/view/timer_edit_sheet.dart';
 import '../bloc/calendar_cubit.dart';
@@ -147,7 +148,11 @@ class TaskTimeSection extends StatelessWidget {
                 TextButton(
                   onPressed: () {
                     try {
-                      context.read<NodeCubit>().clearReported(nodeId);
+                      NodeEventSync.clearNodeReported(
+                        context.read<NodeCubit>(),
+                        context.read<CalendarCubit>(),
+                        nodeId,
+                      );
                     } catch (_) {}
                   },
                   child: const Text('Clear reported'),

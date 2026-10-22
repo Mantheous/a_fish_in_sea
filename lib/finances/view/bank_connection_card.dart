@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/demo/demo_mode.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
@@ -185,8 +186,12 @@ class BankConnectionCard extends StatelessWidget {
 Future<void> syncPlaidTransactions(BuildContext context) async {
   final plaidCubit = context.read<PlaidCubit>();
   final transactionsCubit = context.read<TransactionsCubit>();
+  final startedInDemo = DemoMode.isActive;
 
   final rawTransactions = await plaidCubit.fetchTransactions();
+  // A quick demo exit mid-fetch must not land mock bank rows in real
+  // storage (same guard as the demo paths in PlaidCubit/FeedCubit).
+  if (DemoMode.isActive != startedInDemo) return;
   final transactions =
       rawTransactions.map((json) => Transaction.fromPlaid(json)).toList();
 

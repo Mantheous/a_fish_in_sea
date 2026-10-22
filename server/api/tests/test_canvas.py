@@ -172,3 +172,117 @@ def test_normalize_planner_item():
     assert c.normalize_planner_item({**item, "plannable_type": "announcement"}) is None
     assert c.normalize_planner_item({**item, "submissions": False}) is None
     assert c.normalize_planner_item({}) is None
+
+
+def test_assignment_detail_roundtrip(client: TestClient, monkeypatch):
+    h = _connect(client, monkeypatch, "c6@example.com")
+    seen: dict = {}
+
+    async def fake_get_assignment(host, token, assignment_id, course_id=None):
+        seen.update(
+            host=host, token=token, assignment_id=assignment_id, course_id=course_id
+        )
+        return {
+            "assignment_id": assignment_id,
+            "course_id": course_id or 7,
+            "title": "Essay 2",
+            "description": "<p>Write 800 words.</p>",
+            "html_url": "https://byu.instructure.com/courses/7/assignments/99",
+            "due_at": "2026-10-20T23:59:00Z",
+            "points_possible": 100,
+        }
+
+    monkeypatch.setattr(c, "get_assignment", fake_get_assignment)
+    r = client.get("/api/canvas/assignment/99", headers=h)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["assignment_id"] == 99
+    assert body["assignment"]["description"] == "<p>Write 800 words.</p>"
+    # Flattened for callers that read fields at the top level.
+    assert body["description"] == "<p>Write 800 words.</p>"
+    assert body["html_url"].endswith("/assignments/99")
+    assert seen["course_id"] is None
+
+    r = client.get("/api/canvas/assignment/99?course_id=7", headers=h)
+    assert r.status_code == 200, r.text
+    assert seen["course_id"] == 7
+
+    # In-course path variants resolve the same helper.
+    r = client.get("/api/canvas/courses/7/assignments/99", headers=h)
+    assert r.status_code == 200, r.text
+    assert seen["course_id"] == 7
+
+
+def test_assignment_detail_not_found_and_disconnected(
+    client: TestClient, monkeypatch
+):
+    h = _connect(client, monkeypatch, "c7@example.com")
+
+    async def fake_missing(host, token, assignment_id, course_id=None):
+        raise c.CanvasAuthError("Assignment not found", status=404)
+
+    monkeypatch.setattr(c, "get_assignment", fake_missing)
+    r = client.get("/api/canvas/assignment/12345", headers=h)
+    assert r.status_code == 404, r.text
+
+    outsider = _register(client, "c8@example.com")
+    r = client.get("/api/canvas/assignment/99", headers=outsider)
+    assert r.status_code == 401, r.text
+    assert r.json()["detail"]["needsReconnect"] is True
+
+
+class _FakeResp:
+    def __init__(self, payload, status_code=200):
+        self._payload = payload
+        self.status_code = status_code
+        self.text = str(payload)
+        self.headers = {}
+
+    def json(self):
+        return self._payload
+
+
+class _FakeHttpx:
+    """Stands in for httpx.AsyncClient; records GET URLs."""
+
+    instances: list = []
+
+    def __init__(self, *args, **kwargs):
+        self.calls: list = []
+        _FakeHttpx.instances.append(self)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def get(self, url, headers=None, params=None):
+        self.calls.append(url)
+        if url.endswith("/api/v1/courses/7/assignments/99"):
+            return _FakeResp(
+                {
+                    "id": 99,
+                    "course_id": 7,
+                    "name": "Essay 2",
+                    "description": "<p>Write.</p>",
+                    "html_url": "https://byu.instructure.com/x/99",
+                    "due_at": None,
+                    "points_possible": 10,
+                }
+            )
+        return _FakeResp({"error": "nope"}, status_code=404)
+
+
+def test_get_assignment_direct_course(monkeypatch):
+    import asyncio
+
+    _FakeHttpx.instances.clear()
+    monkeypatch.setattr(c.httpx, "AsyncClient", _FakeHttpx)
+    out = asyncio.run(c.get_assignment("byu.instructure.com", "tok", 99, 7))
+    assert out["assignment_id"] == 99
+    assert out["course_id"] == 7
+    assert out["description"] == "<p>Write.</p>"
+    assert _FakeHttpx.instances[0].calls == [
+        "https://byu.instructure.com/api/v1/courses/7/assignments/99"
+    ]

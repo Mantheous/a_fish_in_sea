@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
-import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/model/node.dart';import 'package:a_fish_in_sea/planner/bloc/assignment_estimates_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
+import 'package:a_fish_in_sea/planner/model/assignment_estimate.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
@@ -15,7 +18,6 @@ import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:mocktail/mocktail.dart';
 
 class MockStorage extends Mock implements Storage {}
-
 class MockClient extends Mock implements http.Client {}
 
 class MockGoogleService extends Mock implements GoogleCalendarService {}
@@ -79,6 +81,7 @@ void main() {
     late FeedCubit feedCubit;
     late CalendarCubit calendarCubit;
     late NodeCubit nodeCubit;
+    late AssignmentEstimatesCubit estimatesCubit;
     late MockClient client;
     late MockGoogleService googleService;
 
@@ -91,12 +94,14 @@ void main() {
           .thenAnswer((_) async => http.Response(ics, 200));
       calendarCubit = CalendarCubit();
       nodeCubit = NodeCubit();
+      estimatesCubit = AssignmentEstimatesCubit();
       feedCubit = FeedCubit(
         calendarCubit: calendarCubit,
         nodeCubit: nodeCubit,
         icalService: IcalService(client: client),
         googleService: googleService,
         proxyBase: () => 'http://localhost:8000',
+        estimatesCubit: estimatesCubit,
       );
     });
 
@@ -109,6 +114,43 @@ void main() {
       expect(nodeCubit.state.single.sourceEventId, 'hw:f1:a1');
       expect(feedCubit.state.single.lastSyncAt, isNotNull);
       expect(feedCubit.state.single.lastError, isNull);
+    });
+
+    test('a multi-feed sync emits feed status once', () async {
+      const second = Feed(
+        id: 'f2',
+        name: 'REL 226',
+        url: 'https://example.com/feed2.ics',
+      );
+      feedCubit.addFeed(feed);
+      feedCubit.addFeed(second);
+      final emissions = <List<Feed>>[];
+      final sub = feedCubit.stream.listen(emissions.add);
+      await feedCubit.syncAll();
+      await Future<void>.delayed(Duration.zero);
+      await sub.cancel();
+
+      expect(emissions, hasLength(1));
+      expect(feedCubit.state.every((f) => f.lastSyncAt != null), isTrue);
+    });
+
+    test('feed resync preserves local reminder and tags and undo history', () async {
+      feedCubit.addFeed(feed.copyWith(createTasks: false));
+      final undo = UndoCubit.instance!;
+      expect(undo.canUndo, isTrue);
+
+      await feedCubit.syncAll();
+      final event = calendarCubit.state.single.copyWith(
+        reminderMinutesBefore: 15,
+        tagIds: const ['important'],
+      );
+      calendarCubit.replaceFeedEvents('f1', [event]);
+      await feedCubit.syncFeed('f1');
+
+      final synced = calendarCubit.state.single;
+      expect(synced.reminderMinutesBefore, 15);
+      expect(synced.tagIds, ['important']);
+      expect(undo.canUndo, isTrue);
     });
 
     test('sync errors are recorded on the feed', () async {
@@ -142,6 +184,71 @@ void main() {
       expect(calendarCubit.state.length, 1);
       expect(nodeCubit.state.length, 1);
       expect(nodeCubit.state.single.title, 'Assignment A1');
+    });
+
+    test('removeOrphanedClass clears leftovers of a vanished feed', () async {
+      feedCubit.addFeed(feed);
+      await feedCubit.syncAll();
+      // Simulate the duplicate feed row disappearing (a class re-added while
+      // sync was down, then the duplicate feed was dropped) while its
+      // imported homework and events stayed behind.
+      feedCubit.emit(const []);
+      expect(feedCubit.state, isEmpty);
+      expect(calendarCubit.state, isNotEmpty);
+      expect(nodeCubit.state, isNotEmpty);
+
+      feedCubit.removeOrphanedClass('f1');
+      expect(calendarCubit.state, isEmpty);
+      expect(nodeCubit.state, isEmpty);
+
+      final undoCubit = UndoCubit.instance!;
+      expect(undoCubit.canUndo, isTrue);
+      undoCubit.undo();
+      expect(calendarCubit.state.length, 1);
+      expect(nodeCubit.state.single.sourceEventId, 'hw:f1:a1');
+    });
+
+    test('removeOrphanedClass ignores a class whose feed still exists',
+        () async {
+      feedCubit.addFeed(feed);
+      await feedCubit.syncAll();
+
+      feedCubit.removeOrphanedClass('f1');
+      expect(calendarCubit.state.length, 1);
+      expect(nodeCubit.state.length, 1);
+      expect(feedCubit.state.single.id, 'f1');
+    });
+
+    test('removeFeed drops learned estimates and one undo restores them',
+        () async {
+      AssignmentTypeEffort effortFor(String feedId) => AssignmentTypeEffort(
+            feedId: feedId,
+            templateKey: 'quiz',
+            samples: 3,
+            totalMinutes: 90,
+            minutes: const [30],
+            startMinutes: const [1140],
+            minMinutes: 30,
+            maxMinutes: 30,
+            updatedAt: DateTime(2026, 1, 1),
+          );
+      estimatesCubit.emit([effortFor('f1'), effortFor('f2')]);
+      feedCubit.addFeed(feed);
+      await feedCubit.syncAll();
+
+      feedCubit.removeFeed('f1');
+      expect(
+        estimatesCubit.state.map((e) => e.feedId),
+        ['f2'],
+        reason: 'explicit class delete drops only that class',
+      );
+
+      UndoCubit.instance!.undo();
+      expect(
+        estimatesCubit.state.map((e) => e.feedId),
+        ['f1', 'f2'],
+        reason: 'undo brings the learned estimates back',
+      );
     });
 
     test('google feeds sync via the google service', () async {
@@ -420,7 +527,7 @@ void main() {
           )).thenAnswer((_) async => events);
     }
 
-    test('pushEventUpdate syncs the server copy locally', () async {
+    test('pushEventUpdate applies the write response locally', () async {
       final original = googleEvent();
       calendarCubit.addEvent(original);
       final updated = original.copyWith(subject: 'Dentist (moved)');
@@ -444,6 +551,61 @@ void main() {
             event: updated,
             instanceEdit: false,
           )).called(1);
+      // The save path must not wait on a full feed refetch.
+      verifyNever(() => googleService.fetchEvents(
+            calendarId: any(named: 'calendarId'),
+            feedId: any(named: 'feedId'),
+          ));
+    });
+
+    test('pushEventUpdate keeps local-only fields off the network', () async {
+      const assignees = [TaskAssignee(id: 'people/1', displayName: 'Amy')];
+      final original = googleEvent();
+      calendarCubit.addEvent(original);
+      final updated = original.copyWith(
+        subject: 'Dentist (moved)',
+        assignees: assignees,
+        reminderMinutesBefore: 15,
+        isTask: true,
+      );
+      when(() => googleService.updateEvent(
+            calendarId: any(named: 'calendarId'),
+            feedId: any(named: 'feedId'),
+            eventId: any(named: 'eventId'),
+            event: any(named: 'event'),
+            instanceEdit: any(named: 'instanceEdit'),
+          )).thenAnswer((_) async => updated.copyWith(
+                assignees: const [],
+                clearReminder: true,
+                isTask: false,
+              ));
+
+      await feedCubit.pushEventUpdate(updated);
+
+      final saved = calendarCubit.byId(original.id)!;
+      expect(saved.assignees, assignees);
+      expect(saved.reminderMinutesBefore, 15);
+      expect(saved.isTask, isTrue);
+    });
+
+    test('resync preserves reminders and tags on task-marked events',
+        () async {
+      final fresh = googleEvent();
+      stubSync([fresh]);
+      await feedCubit.syncFeed(googleFeed.id);
+      calendarCubit.updateEvent(
+        calendarCubit.byId(fresh.id)!.copyWith(
+          isTask: true,
+          tagIds: const ['tag-focus'],
+          reminderMinutesBefore: 30,
+        ),
+      );
+      stubSync([fresh]);
+      await feedCubit.syncFeed(googleFeed.id);
+      final after = calendarCubit.byId(fresh.id)!;
+      expect(after.isTask, isTrue);
+      expect(after.tagIds, ['tag-focus']);
+      expect(after.reminderMinutesBefore, 30);
     });
 
     test('google resync preserves local assignees', () async {
@@ -485,6 +647,7 @@ void main() {
       final error = await feedCubit.pushEventUpdate(moved);
 
       expect(error, isNull);
+      expect(calendarCubit.byId(instance.id)?.start, moved.start);
       verify(() => googleService.updateEvent(
             calendarId: 'cal1',
             feedId: 'gcal:cal1',
@@ -492,6 +655,10 @@ void main() {
             event: moved,
             instanceEdit: true,
           )).called(1);
+      verifyNever(() => googleService.fetchEvents(
+            calendarId: any(named: 'calendarId'),
+            feedId: any(named: 'feedId'),
+          ));
     });
 
     test('pushEventUpdate patches the master for series edits', () async {
@@ -525,6 +692,11 @@ void main() {
             event: master,
             instanceEdit: false,
           )).called(1);
+      // Series writes still refetch: one write reshapes every occurrence.
+      verify(() => googleService.fetchEvents(
+            calendarId: any(named: 'calendarId'),
+            feedId: any(named: 'feedId'),
+          )).called(1);
     });
 
     test('pushEventUpdate returns the error and keeps local state', () async {
@@ -549,14 +721,87 @@ void main() {
           ));
     });
 
-    test('pushEventDelete removes the event via re-sync', () async {
+    test('a write during an in-flight sync is reconciled after it', () async {
+      final original = googleEvent();
+      calendarCubit.addEvent(original);
+      final updated = original.copyWith(subject: 'Dentist (moved)');
+      final firstFetch = Completer<List<PlannerEvent>>();
+      final secondFetch = Completer<List<PlannerEvent>>();
+      var fetches = 0;
+      when(() => googleService.fetchEvents(
+            calendarId: any(named: 'calendarId'),
+            feedId: any(named: 'feedId'),
+          )).thenAnswer((_) {
+        fetches++;
+        return fetches == 1 ? firstFetch.future : secondFetch.future;
+      });
+      when(() => googleService.updateEvent(
+            calendarId: any(named: 'calendarId'),
+            feedId: any(named: 'feedId'),
+            eventId: any(named: 'eventId'),
+            event: any(named: 'event'),
+            instanceEdit: any(named: 'instanceEdit'),
+          )).thenAnswer((_) async => updated);
+
+      final sync = feedCubit.syncFeed(googleFeed.id);
+      await pumpEventQueue();
+      expect(fetches, 1, reason: 'the pre-write fetch is in flight');
+
+      final error = await feedCubit.pushEventUpdate(updated);
+      expect(error, isNull);
+      expect(calendarCubit.byId(original.id)?.subject, 'Dentist (moved)');
+
+      // The stale snapshot from before the write lands after the write...
+      firstFetch.complete([original]);
+      await sync;
+      await pumpEventQueue();
+      expect(fetches, 2, reason: 'a reconcile pass was queued');
+      secondFetch.complete([updated]);
+      await pumpEventQueue();
+
+      expect(calendarCubit.byId(original.id)?.subject, 'Dentist (moved)');
+    });
+
+    test('recurring create keeps the refetch', () async {
+      final draft = PlannerEvent(
+        id: 'evt:tmp',
+        subject: 'New standup',
+        start: DateTime(2026, 9, 10, 12, 30),
+        end: DateTime(2026, 9, 10, 13, 30),
+        recurrenceRule: 'FREQ=WEEKLY;BYDAY=WE',
+      );
+      final created = googleEvent().copyWith(
+        subject: 'New standup',
+        recurrenceRule: 'FREQ=WEEKLY;BYDAY=WE',
+      );
+      when(() => googleService.createEvent(
+            calendarId: any(named: 'calendarId'),
+            feedId: any(named: 'feedId'),
+            event: any(named: 'event'),
+          )).thenAnswer((_) async => created);
+      stubSync([created]);
+
+      final result = await feedCubit.pushEventCreate(
+        feed: googleFeed,
+        event: draft,
+      );
+
+      expect(result.error, isNull);
+      // Google expands recurring creates into instance rows; the refetch
+      // is what makes local state match every later resync.
+      verify(() => googleService.fetchEvents(
+            calendarId: any(named: 'calendarId'),
+            feedId: any(named: 'feedId'),
+          )).called(1);
+    });
+
+    test('pushEventDelete removes the event without a refetch', () async {
       final original = googleEvent();
       calendarCubit.addEvent(original);
       when(() => googleService.deleteEvent(
             calendarId: any(named: 'calendarId'),
             eventId: any(named: 'eventId'),
           )).thenAnswer((_) async {});
-      stubSync([]);
 
       final error = await feedCubit.pushEventDelete(original);
 
@@ -566,6 +811,52 @@ void main() {
             calendarId: 'cal1',
             eventId: 'ev1',
           )).called(1);
+      verifyNever(() => googleService.fetchEvents(
+            calendarId: any(named: 'calendarId'),
+            feedId: any(named: 'feedId'),
+          ));
+    });
+
+    test('pushEventDelete(series) drops every local occurrence', () async {
+      final master = PlannerEvent(
+        id: 'gcal:gcal:cal1:ev1',
+        subject: 'Standup',
+        start: DateTime(2026, 9, 2, 12, 30),
+        end: DateTime(2026, 9, 2, 13, 30),
+        feedId: 'gcal:cal1',
+        sourceUid: 'ev1',
+        seriesId: 'ev1',
+        recurrenceRule: 'FREQ=WEEKLY;BYDAY=WE',
+      );
+      final instance = PlannerEvent(
+        id: 'gcal:gcal:cal1:ev1_20260910T123000Z',
+        subject: 'Standup',
+        start: DateTime(2026, 9, 10, 12, 30),
+        end: DateTime(2026, 9, 10, 13, 30),
+        feedId: 'gcal:cal1',
+        sourceUid: 'ev1_20260910T123000Z',
+        seriesId: 'ev1',
+      );
+      calendarCubit.addEvent(master);
+      calendarCubit.addEvent(instance);
+      when(() => googleService.deleteEvent(
+            calendarId: any(named: 'calendarId'),
+            eventId: any(named: 'eventId'),
+          )).thenAnswer((_) async {});
+
+      final error = await feedCubit.pushEventDelete(instance, series: true);
+
+      expect(error, isNull);
+      expect(calendarCubit.byId(master.id), isNull);
+      expect(calendarCubit.byId(instance.id), isNull);
+      verify(() => googleService.deleteEvent(
+            calendarId: 'cal1',
+            eventId: 'ev1',
+          )).called(1);
+      verifyNever(() => googleService.fetchEvents(
+            calendarId: any(named: 'calendarId'),
+            feedId: any(named: 'feedId'),
+          ));
     });
 
     test('pushEventCreate posts and picks up the synced event', () async {
@@ -574,7 +865,6 @@ void main() {
         subject: 'New standup',
         start: DateTime(2026, 9, 10, 12, 30),
         end: DateTime(2026, 9, 10, 13, 30),
-        recurrenceRule: 'FREQ=WEEKLY;BYDAY=WE',
       );
       final created = googleEvent().copyWith(subject: 'New standup');
       when(() => googleService.createEvent(
@@ -597,6 +887,12 @@ void main() {
             feedId: 'gcal:cal1',
             event: draft,
           )).called(1);
+      // The created event is applied from the write response, not a
+      // full refetch of the calendar.
+      verifyNever(() => googleService.fetchEvents(
+            calendarId: any(named: 'calendarId'),
+            feedId: any(named: 'feedId'),
+          ));
     });
 
     test('manually marked Google events keep isTask across resync',
