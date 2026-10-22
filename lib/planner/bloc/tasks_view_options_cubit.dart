@@ -1,7 +1,6 @@
 import 'package:equatable/equatable.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 
-import '../../common/persistence/migration.dart';
 import '../model/task_filter.dart';
 import '../model/task_rule.dart';
 
@@ -279,8 +278,6 @@ class TasksViewOptionsCubit extends HydratedCubit<TasksViewOptionsState> {
           json.containsKey('highlight')) {
         return _parseCurrent(json);
       }
-      // This marker is source-scanned; it never disables a runtime restore.
-      if (Migration.removeAfter('2026-10-19')) return _parseLegacy(json);
       return _parseLegacy(json);
     } catch (_) {
       return const TasksViewOptionsState();
