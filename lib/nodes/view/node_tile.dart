@@ -11,6 +11,7 @@ import '../../planner/bloc/calendar_cubit.dart';
 import '../../planner/bloc/feed_cubit.dart';
 import '../../planner/model/feed.dart';
 import '../../planner/model/planner_event.dart';
+import '../../planner/service/feed_links.dart';
 import '../../planner/view/task_highlight_tint.dart';
 import '../../planner/view/task_tile_helpers.dart';
 import '../bloc/node_cubit.dart';
@@ -341,10 +342,9 @@ class NodeTile extends StatelessWidget {
                 icon: const Icon(Icons.open_in_new, size: 16),
                 label: const Text('Open in Learning Suite'),
                 onPressed: () async {
-                  var uri = Uri.tryParse(resolvedFeed?.url ?? '');
-                  if (uri == null || uri.host.isEmpty) {
-                    uri = Uri.parse('https://learningsuite.byu.edu');
-                  }
+                  // The feed URL is the iCal export, not a page: opening it
+                  // downloads a .ics file. Jump to Learning Suite instead.
+                  final uri = learningSuiteHomeUri();
                   try {
                     if (kIsWeb) {
                       await launchUrl(uri, webOnlyWindowName: '_blank');
