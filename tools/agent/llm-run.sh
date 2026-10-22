@@ -126,10 +126,42 @@ case "$BACKEND" in
   opencode) BASE_MODEL="$DEFAULT_OPENCODE_MODEL" ;;
   *) echo "[llm-run] $ROLE: unsupported backend '$BACKEND'" >&2; exit 2 ;;
 esac
-if ! command -v "$BACKEND" >/dev/null 2>&1; then
-  echo "[llm-run] $ROLE: backend binary '$BACKEND' not found on PATH" >&2
-  exit 2
+
+# The systemd timer's PATH does not include ~/.local/bin, where the codex
+# symlink lives. Resolve the binary without relying on the service PATH.
+resolve_bin() { # name override
+  local name="$1" override="${2:-}" cand
+  if [ -n "$override" ]; then
+    [ -x "$override" ] && { printf '%s\n' "$override"; return 0; }
+    return 1
+  fi
+  if command -v "$name" >/dev/null 2>&1; then
+    command -v "$name"
+    return 0
+  fi
+  for cand in "$HOME/.local/bin/$name" "$HOME/.opencode/bin/$name" \
+              "/usr/local/bin/$name" "/usr/bin/$name"; do
+    [ -x "$cand" ] && { printf '%s\n' "$cand"; return 0; }
+  done
+  return 1
+}
+
+CODEX_BIN=""
+OPENCODE_BIN=""
+if [ "$BACKEND" = "codex" ]; then
+  CODEX_BIN="$(resolve_bin codex "${FISH_LLM_CODEX_BIN:-}" || true)"
+  if [ -z "$CODEX_BIN" ]; then
+    echo "[llm-run] $ROLE: codex binary not found (PATH, ~/.local/bin, ~/.opencode/bin, /usr/local/bin, /usr/bin); set FISH_LLM_CODEX_BIN" >&2
+    exit 2
+  fi
+else
+  OPENCODE_BIN="$(resolve_bin opencode "${FISH_LLM_OPENCODE_BIN:-}" || true)"
+  if [ -z "$OPENCODE_BIN" ]; then
+    echo "[llm-run] $ROLE: opencode binary not found (PATH, ~/.local/bin, ~/.opencode/bin, /usr/local/bin, /usr/bin); set FISH_LLM_OPENCODE_BIN" >&2
+    exit 2
+  fi
 fi
+
 MODEL="${MODEL:-${!MODEL_VAR:-$BASE_MODEL}}"
 TIMEOUT="${TIMEOUT:-${!TIMEOUT_VAR:-$DEFAULT_TIMEOUT}}"
 AGENT="${AGENT:-$DEFAULT_AGENT}"
@@ -195,14 +227,14 @@ if [ "$BACKEND" = "codex" ]; then
     -o "$LAST_FILE"
     -
   )
-  timeout "$TIMEOUT" codex "${CODEX_ARGS[@]}" <"$FULL_PROMPT" >"$OUT_FILE" 2>"$ERR_FILE"
+  timeout "$TIMEOUT" "$CODEX_BIN" "${CODEX_ARGS[@]}" <"$FULL_PROMPT" >"$OUT_FILE" 2>"$ERR_FILE"
   ST=$?
 else
   OPENCODE_ARGS=(run)
   [ "$DEFAULT_AUTO" = "1" ] && OPENCODE_ARGS+=(--auto)
   [ -n "$AGENT" ] && OPENCODE_ARGS+=(--agent "$AGENT")
   OPENCODE_ARGS+=(--model "$MODEL" --title "$TITLE")
-  timeout "$TIMEOUT" opencode "${OPENCODE_ARGS[@]}" "$(cat "$FULL_PROMPT")" \
+  timeout "$TIMEOUT" "$OPENCODE_BIN" "${OPENCODE_ARGS[@]}" "$(cat "$FULL_PROMPT")" \
     </dev/null >"$OUT_FILE" 2>"$ERR_FILE"
   ST=$?
 fi
