@@ -65,6 +65,28 @@ to one hot spot per issue.
 2. After a perf fix merges, re-run `tools/agent/perf-walk.sh --force` to
    confirm before updating the baseline.
 
+## Loop model backends: one adapter, fail-closed
+
+Every headless LLM call in the loop goes through
+`tools/agent/llm-run.sh`; its role table chooses the vendor. As of
+2026-10-22 PR review and the security guardian run on `codex` with
+`gpt-6.1-sol` (ChatGPT-subscription auth). Triage, builder, rework, and
+ux-walk stay on opencode because they need screenshots or Playwright;
+data-guard stays on its pinned deepseek model. Flip any role for one host without editing scripts:
+
+```bash
+FISH_LLM_REVIEW_BACKEND=opencode tools/agent/review.sh
+# or persistently, outside the repo:
+echo 'FISH_LLM_REVIEW_BACKEND=opencode' >> ~/.config/a_fish_in_sea/llm-backends.env
+```
+
+A model run that exits non-zero, returns an empty final message, or
+breaks its `--expect` contract is a failed run — never an implicit pass.
+`review.sh` labels nothing in that case and retries next poll; the
+guardians already fail closed. New vendors/roles get added to the
+adapter's role table, never by editing a call site. Tests:
+`tools/agent/test/llm-run-test.sh` (fake CLIs, no network).
+
 ## Persisted state: never wipe device data
 
 All app state is per-device HydratedBloc (`hydrated_box`: IndexedDB on

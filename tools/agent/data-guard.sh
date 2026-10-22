@@ -83,11 +83,8 @@ PR: $N
 Audit this pull request for risks to the user's existing data before a human
 merges it. Read-only. Follow your agent instructions exactly."
   OUT_FILE="$(mktemp)"
-  # NOTE: `opencode run --agent` does NOT apply the agent's frontmatter model
-  # (a primary-agent session keeps the configured default, which resolves to a
-  # free-tier model). Pin --model explicitly so audits stay on opencode-go.
-  if ! opencode run --agent data-guardian --model opencode-go/deepseek-v4.1-flash#high --title "data-guard-pr-$N" \
-      "$PROMPT" </dev/null >"$OUT_FILE" 2>"$OUT_FILE.err"; then
+  if ! printf '%s' "$PROMPT" | "$DIR/llm-run.sh" --role data-guard --title "data-guard-pr-$N" --read-only \
+      --expect '^Verdict:' >"$OUT_FILE" 2>"$OUT_FILE.err"; then
     echo "[data-guard] PR #$N audit run failed: $(tail -n 3 "$OUT_FILE.err")"
     rm -f "$OUT_FILE" "$OUT_FILE.err"
     continue
@@ -205,12 +202,13 @@ main this is the incoming origin/main commits deploy.sh is about to
 fast-forward to (NOT an empty origin/main..HEAD — that range is backwards).
 Uncommitted work in the worktree (git diff HEAD) ships too when present.
 Read-only. Follow your agent instructions exactly."
-if ! opencode run --agent data-guardian --model opencode-go/deepseek-v4.1-flash#high --title "data-guard-$DESC" \
-    "$PROMPT" >/tmp/opencode/data-guard-audit.log 2>&1; then
-  echo "[data-guard] audit run failed (next poll retries); not blocking"
+AUDIT_LOG=/tmp/opencode/data-guard-audit.log
+if ! printf '%s' "$PROMPT" | "$DIR/llm-run.sh" --role data-guard --title "data-guard-$DESC" --read-only \
+    --expect '^Verdict:' >"$AUDIT_LOG" 2>"$AUDIT_LOG.err"; then
+  echo "[data-guard] audit run failed (next poll retries); not blocking: $(tail -n 3 "$AUDIT_LOG.err" 2>/dev/null || true)"
   exit 0
 fi
-cp /tmp/opencode/data-guard-audit.log "$REPORT"
+cp "$AUDIT_LOG" "$REPORT"
 VERDICT="$(grep -m1 '^Verdict:' "$REPORT" || true)"
 # No usable verdict = failed audit run (template echo). Not safe, not
 # blocked: re-audited next poll. The template is 'Verdict: safe | block', so
