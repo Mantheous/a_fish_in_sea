@@ -74,6 +74,16 @@ assert_contains "$ARGS1" "-s read-only" "review: read-only sandbox"
 assert_contains "$ARGS1" "model_reasoning_effort=high" "review: pins high effort"
 assert_contains "$(cat "$TMP/stdin1")" "Review this PR." "review: prompt reaches stdin"
 
+# ── 1b. binary resolution does not depend on the service PATH ───────────
+set +e
+OUT="$(printf 'x' | env PATH="/usr/bin:/bin" FISH_LLM_CODEX_BIN="$BIN/codex" \
+  FAKE_CODEX_MESSAGE='Verdict: pass' \
+  "$ADAPTER" --role review --expect '^Verdict: (pass|changes-requested)$' 2>"$TMP/err1b")"
+ST=$?
+set -e
+assert_eq 0 "$ST" "binary override: codex missing from PATH still works"
+assert_eq "Verdict: pass" "$OUT" "binary override: returns the verdict"
+
 # ── 2. contract mismatch is fail-closed ─────────────────────────────────
 set +e
 OUT="$(printf 'x' | env PATH="$BIN:$PATH" FAKE_CODEX_MESSAGE='no verdict here' \
