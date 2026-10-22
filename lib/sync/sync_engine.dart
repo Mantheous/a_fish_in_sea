@@ -468,6 +468,9 @@ class SyncEngine {
           preserveRunningTimer(collection, current[r.itemId], merged);
           current[r.itemId] = merged;
           changed = true;
+          // Meta tracks what the server holds, not our merged copy: any
+          // local divergence (e.g. a preserved timer) differs from this
+          // hash and is pushed by [_pushDiffs] on the way out.
           upsertMeta[k] = ItemMeta(
               hash: contentHash(r.data), serverTime: seen);
           continue;
