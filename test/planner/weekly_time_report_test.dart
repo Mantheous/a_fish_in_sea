@@ -328,6 +328,101 @@ void main() {
       expect(report.weekTotal, const Duration(minutes: 30));
     });
 
+    test('mirrored stopped sessions count once even when event-owned', () {
+      // stopNodeTrackingAligned copies the node's actuals onto every linked
+      // event, so both events carry their own identical interval.
+      final nodes = [
+        node(
+          'task',
+          parents: ['goal'],
+          actualStart: DateTime(2026, 9, 8, 9),
+          actualEnd: DateTime(2026, 9, 8, 9, 30),
+        ),
+        node('goal'),
+      ];
+      final report = buildWeeklyTimeReport(
+        nodes: nodes,
+        events: [
+          event(
+            'e1',
+            taskId: 'task',
+            actualStart: DateTime(2026, 9, 8, 9),
+            actualEnd: DateTime(2026, 9, 8, 9, 30),
+          ),
+          event(
+            'e2',
+            taskId: 'task',
+            actualStart: DateTime(2026, 9, 8, 9),
+            actualEnd: DateTime(2026, 9, 8, 9, 30),
+          ),
+        ],
+        reportsByDay: const {},
+        weekStart: _weekStart,
+      );
+      expect(report.entries, hasLength(1));
+      expect(report.weekTotal, const Duration(minutes: 30));
+    });
+
+    test('accepted manual report on an all-day event still counts', () {
+      final nodes = [
+        node('goal'),
+        node('task', parents: ['goal']),
+      ];
+      final report = buildWeeklyTimeReport(
+        nodes: nodes,
+        events: [event('e1', taskId: 'task', allDay: true)],
+        reportsByDay: {
+          '2026-09-08': [
+            manual(
+              id: 'rep:e1',
+              eventId: 'e1',
+              start: DateTime(2026, 9, 8, 9),
+              end: DateTime(2026, 9, 8, 9, 45),
+            ),
+          ],
+        },
+        weekStart: _weekStart,
+      );
+      expect(report.weekTotal, const Duration(minutes: 45));
+      expect(report.byGoal.single.title, 'Node goal');
+    });
+
+    test('fall-back week keeps its final hour', () {
+      // US fall-back 2026-11-01: the week is 169 hours long.
+      final report = buildWeeklyTimeReport(
+        nodes: const [],
+        events: [
+          event(
+            'e1',
+            start: DateTime(2026, 11, 1, 23, 30),
+            actualStart: DateTime(2026, 11, 1, 23, 30),
+            actualEnd: DateTime(2026, 11, 1, 23, 45),
+          ),
+        ],
+        reportsByDay: const {},
+        weekStart: DateTime(2026, 10, 26),
+      );
+      expect(report.weekTotal, const Duration(minutes: 15));
+    });
+
+    test('spring-forward week does not include next Monday', () {
+      // US spring-forward 2026-03-08: the week is 167 hours long.
+      final report = buildWeeklyTimeReport(
+        nodes: const [],
+        events: [
+          event(
+            'e1',
+            start: DateTime(2026, 3, 9, 0, 30),
+            actualStart: DateTime(2026, 3, 9, 0, 30),
+            actualEnd: DateTime(2026, 3, 9, 1),
+          ),
+        ],
+        reportsByDay: const {},
+        weekStart: DateTime(2026, 3, 2),
+      );
+      expect(report.weekTotal, Duration.zero);
+    });
+
     test('goal colors are stable and (no goal) has a color', () {
       expect(goalColorFor('goal'), goalColorFor('goal'));
       expect(goalColorFor('a'), isNotNull);

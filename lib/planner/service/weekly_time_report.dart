@@ -69,7 +69,9 @@ WeeklyTimeReport buildWeeklyTimeReport({
   DateTime? now,
 }) {
   final at = now ?? DateTime.now();
-  final weekEnd = weekStart.add(const Duration(days: 7));
+  // Calendar-date arithmetic, not 7 x 24h: a DST week is 167 or 169 hours,
+  // and adding a fixed duration would drop or include an hour at the edge.
+  final weekEnd = DateTime(weekStart.year, weekStart.month, weekStart.day + 7);
 
   bool overlaps(DateTime start, DateTime end) =>
       end.isAfter(weekStart) && start.isBefore(weekEnd);
@@ -106,9 +108,13 @@ WeeklyTimeReport buildWeeklyTimeReport({
 
   final out = <WeeklyTimeEntry>[];
   final consumedNodeIds = <String>{};
-  // A backing node's live/reported interval is counted once even when
-  // several events mirror the same task (recurring copies, duplicates).
-  final emittedBackingIds = <String>{};
+  // One task's session can be mirrored onto several events (calendar sync
+  // copies the node's actuals). Count an identical session once, while
+  // keeping genuinely distinct sessions on the same task separate.
+  final emittedSessions = <String>{};
+  String sessionKey(String backingId, DateTime start, DateTime end) =>
+      '$backingId|${start.microsecondsSinceEpoch}|'
+      '${end.microsecondsSinceEpoch}';
   final coveredEventIds = <String>{};
   final eventIds = {for (final e in events) e.id};
 
@@ -147,51 +153,53 @@ WeeklyTimeReport buildWeeklyTimeReport({
   }
 
   for (final event in events) {
-    if (event.allDay) continue;
     if (isReportDisplayId(event.id)) continue;
     final backing = backingFor(event);
-    if (backing != null) consumedNodeIds.add(backing.id);
     final goal = goalFor(backing);
 
-    final eventLive = event.timerStartedAt;
-    final liveStart = eventLive ?? _firstTrackingStart(backing);
-    if (liveStart != null) {
-      // A run owned by the backing task is the same interval for every
-      // event that mirrors it; only count it once.
-      if (eventLive == null &&
-          backing != null &&
-          !emittedBackingIds.add(backing.id)) {
+    // All-day blocks never carry a timed session, but the user can still
+    // file an accepted manual report against one, so only skip the
+    // timer/actuals passes for them.
+    if (!event.allDay) {
+      // Only a timed event represents its backing node's own interval;
+      // an all-day block must leave the node to the node pass below.
+      if (backing != null) consumedNodeIds.add(backing.id);
+      final liveStart = event.timerStartedAt ?? _firstTrackingStart(backing);
+      if (liveStart != null) {
+        final end = at.isAfter(liveStart)
+            ? at
+            : liveStart.add(const Duration(minutes: 1));
+        if (backing != null &&
+            !emittedSessions.add(sessionKey(backing.id, liveStart, end))) {
+          continue;
+        }
+        coveredEventIds.add(event.id);
+        addIfOverlaps(
+          title: event.subject,
+          goal: goal,
+          start: liveStart,
+          end: end,
+          live: true,
+        );
         continue;
       }
-      final end = at.isAfter(liveStart)
-          ? at
-          : liveStart.add(const Duration(minutes: 1));
-      coveredEventIds.add(event.id);
-      addIfOverlaps(
-        title: event.subject,
-        goal: goal,
-        start: liveStart,
-        end: end,
-        live: true,
-      );
-      continue;
-    }
 
-    final reported = _reportedInterval(event, backing);
-    if (reported != null) {
-      if (reported.fromBacking &&
-          backing != null &&
-          !emittedBackingIds.add(backing.id)) {
+      final reported = _reportedInterval(event, backing);
+      if (reported != null) {
+        if (backing != null &&
+            !emittedSessions.add(
+                sessionKey(backing.id, reported.start, reported.end))) {
+          continue;
+        }
+        coveredEventIds.add(event.id);
+        addIfOverlaps(
+          title: event.subject,
+          goal: goal,
+          start: reported.start,
+          end: reported.end,
+        );
         continue;
       }
-      coveredEventIds.add(event.id);
-      addIfOverlaps(
-        title: event.subject,
-        goal: goal,
-        start: reported.start,
-        end: reported.end,
-      );
-      continue;
     }
 
     final matches = acceptedByEvent[event.id];
@@ -315,7 +323,7 @@ const String noGoalTitle = '(no goal)';
 
 DateTime? _firstTrackingStart(Node? backing) => backing?.timerStartedAt;
 
-({DateTime start, DateTime end, bool fromBacking})? _reportedInterval(
+({DateTime start, DateTime end})? _reportedInterval(
   PlannerEvent event,
   Node? backing,
 ) {
@@ -323,7 +331,7 @@ DateTime? _firstTrackingStart(Node? backing) => backing?.timerStartedAt;
     final start = event.actualStart!;
     var end = event.actualEnd!;
     if (!end.isAfter(start)) end = start.add(const Duration(minutes: 1));
-    return (start: start, end: end, fromBacking: false);
+    return (start: start, end: end);
   }
   final nodeStart = backing?.actualStart;
   final nodeEnd = backing?.actualEnd;
@@ -332,7 +340,7 @@ DateTime? _firstTrackingStart(Node? backing) => backing?.timerStartedAt;
     if (!end.isAfter(nodeStart)) {
       end = nodeStart.add(const Duration(minutes: 1));
     }
-    return (start: nodeStart, end: end, fromBacking: true);
+    return (start: nodeStart, end: end);
   }
   return null;
 }

@@ -88,7 +88,11 @@ class _StatsBodyState extends State<_StatsBody> {
 
   List<DateTime> get _weekDays {
     final monday = _day.subtract(Duration(days: _day.weekday - 1));
-    return [for (var i = 0; i < 7; i++) monday.add(Duration(days: i))];
+    // Calendar dates, not 24h steps: a DST week is 167 or 169 hours.
+    return [
+      for (var i = 0; i < 7; i++)
+        DateTime(monday.year, monday.month, monday.day + i),
+    ];
   }
 
   DateTime get _weekStart {

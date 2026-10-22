@@ -1,5 +1,6 @@
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/reporting/view/stats_page.dart';
@@ -96,6 +97,47 @@ void main() {
     await scrollToGoalCard(tester);
     expect(find.text('Time by goal'), findsOneWidget);
     expect(find.textContaining('No tracked time this week'), findsOneWidget);
+  });
+
+  testWidgets('stopped linked session is counted once in Stats',
+      (tester) async {
+    await pumpStats(tester);
+    final nodes = BlocProvider.of<NodeCubit>(
+      tester.element(find.byType(StatsPage)),
+    );
+    final calendar = BlocProvider.of<CalendarCubit>(
+      tester.element(find.byType(StatsPage)),
+    );
+    final monday = mondayOfThisWeek();
+    final start = monday.add(const Duration(days: 1, hours: 9));
+    final end = start.add(const Duration(minutes: 30));
+
+    nodes.addNode(Node(id: 'goal', title: 'Study goal', createdAt: monday));
+    nodes.addNode(Node(
+      id: 'task',
+      title: 'Homework',
+      parentIds: const ['goal'],
+      createdAt: monday,
+    ));
+    for (final id in ['e1', 'e2']) {
+      calendar.addEvent(PlannerEvent(
+        id: id,
+        subject: 'Math HW $id',
+        start: start,
+        end: start.add(const Duration(hours: 1)),
+        isTask: true,
+        taskId: 'task',
+      ));
+    }
+
+    // The real stop path mirrors the node's interval onto both events.
+    nodes.startTracking('task', now: start);
+    NodeEventLink.stopNodeTrackingAligned(nodes, calendar, 'task', now: end);
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump(const Duration(milliseconds: 200));
+    await scrollToGoalCard(tester);
+
+    expect(find.text('Week total 30m'), findsOneWidget);
   });
 
   testWidgets('running timer advances without another state change',
