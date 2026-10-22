@@ -16,12 +16,18 @@ double leafProgress(
   if (node.money != null) {
     final target = node.money!.effectiveTarget;
     if (target <= 0) return node.isDone ? 1.0 : 0.0;
-    return (moneyActual / target).clamp(0.0, 1.0);
+    final actual = moneyActual != 0
+        ? moneyActual
+        : (node.money!.actualAmount?.abs() ?? 0);
+    return (actual / target).clamp(0.0, 1.0);
   }
   if (node.effort != null) {
     final target = node.effort!.targetMinutes;
     if (target <= 0) return node.isDone ? 1.0 : 0.0;
-    return (timeActualMinutes / target).clamp(0.0, 1.0);
+    final actual = timeActualMinutes != 0
+        ? timeActualMinutes
+        : (node.reportedDuration?.inMinutes.toDouble() ?? 0);
+    return (actual / target).clamp(0.0, 1.0);
   }
   if (node.fitness != null) {
     return fitnessProgress(node.fitness!, fitnessActual);
@@ -105,7 +111,7 @@ Map<String, double> progressForest(
           [for (final k in rated) visit(k.id, {...stack})]);
     }
     final moneyFlavor = node.money != null ||
-        kids.any((k) => _subtreeHasMoney(k.id, byParent));
+        kids.any((k) => k.money != null || _subtreeHasMoney(k.id, byParent));
     if (moneyFlavor) {
       final target = node.money?.effectiveTarget ??
           kids.fold<double>(
@@ -121,7 +127,7 @@ Map<String, double> progressForest(
       return (actual / target).clamp(0.0, 1.0);
     }
     final effortFlavor = node.effort != null ||
-        kids.any((k) => _subtreeHasEffort(k.id, byParent));
+        kids.any((k) => k.effort != null || _subtreeHasEffort(k.id, byParent));
     if (effortFlavor) {
       final ownTarget = (node.effort?.targetMinutes ?? 0).toDouble();
       final target = ownTarget != 0
@@ -139,7 +145,7 @@ Map<String, double> progressForest(
       return (actual / target).clamp(0.0, 1.0);
     }
     final ankiFlavor = node.anki != null ||
-        kids.any((k) => _subtreeHasAnki(k.id, byParent));
+        kids.any((k) => k.anki != null || _subtreeHasAnki(k.id, byParent));
     if (ankiFlavor) {
       final ownTarget = (node.anki?.targetReviews ?? 0).toDouble();
       final target = ownTarget != 0
@@ -198,12 +204,30 @@ double _leafValue(
   if (node.money != null) {
     final target = node.money!.effectiveTarget;
     if (target <= 0) return node.isDone ? 1.0 : 0.0;
-    return ((moneyActualByNodeId[node.id] ?? 0) / target).clamp(0.0, 1.0);
+    // Node-keyed override wins; otherwise the node's own recorded amount
+    // (set by linkTransaction) is authoritative. Fall back to summing
+    // linked transaction ids through the same map for callers that still
+    // pass txn-id-keyed amounts.
+    final override = moneyActualByNodeId[node.id];
+    double actual;
+    if (override != null) {
+      actual = override;
+    } else if (node.money!.actualAmount != null) {
+      actual = node.money!.actualAmount!.abs();
+    } else {
+      actual = 0;
+      for (final txnId in node.money!.linkedTransactionIds) {
+        actual += (moneyActualByNodeId[txnId] ?? 0).abs();
+      }
+    }
+    return (actual / target).clamp(0.0, 1.0);
   }
   if (node.effort != null) {
     final target = node.effort!.targetMinutes;
     if (target <= 0) return node.isDone ? 1.0 : 0.0;
-    return ((timeActualByNodeId[node.id] ?? 0) / target).clamp(0.0, 1.0);
+    final actual = timeActualByNodeId[node.id] ??
+        (node.reportedDuration?.inMinutes.toDouble() ?? 0);
+    return (actual / target).clamp(0.0, 1.0);
   }
   if (node.anki != null) {
     // Anki actuals are cached on the facet itself (synced from
@@ -249,11 +273,16 @@ double _subtreeTimeActual(
   Set<String> seen,
 ) {
   if (!seen.add(id)) return 0.0;
-  var total = overrides[id] ?? 0.0;
+  // Node-keyed override replaces the recorded duration (callers build it
+  // from reportedDuration, so adding both would double-count).
+  var total = overrides[id] ??
+      (() {
+        final node = byId[id];
+        final d = node?.reportedDuration;
+        return d != null ? d.inMinutes.toDouble() : 0.0;
+      })();
   final node = byId[id];
   if (node != null) {
-    final d = node.reportedDuration;
-    if (d != null) total += d.inMinutes.toDouble();
     for (final kid in byParent[id] ?? const <Node>[]) {
       total += _subtreeTimeActual(kid.id, byId, byParent, overrides, seen);
     }
@@ -322,12 +351,21 @@ double _subtreeMoneyActual(
   var total = 0.0;
   final node = byId[id];
   if (node != null) {
-    final m = node.money;
-    if (m?.actualAmount != null) {
-      total += m!.actualAmount!.abs();
-    } else if (m != null) {
-      for (final txnId in m.linkedTransactionIds) {
-        total += (txnAmountsById[txnId] ?? 0).abs();
+    // Node-keyed override (built from actualAmount + assigned sums)
+    // replaces the recorded amount; otherwise the facet's own actualAmount
+    // is authoritative, with linked-transaction amounts as fallback for
+    // callers that still pass txn-id-keyed maps.
+    final override = txnAmountsById[id];
+    if (override != null) {
+      total += override.abs();
+    } else {
+      final m = node.money;
+      if (m?.actualAmount != null) {
+        total += m!.actualAmount!.abs();
+      } else if (m != null) {
+        for (final txnId in m.linkedTransactionIds) {
+          total += (txnAmountsById[txnId] ?? 0).abs();
+        }
       }
     }
     for (final kid in byParent[id] ?? const <Node>[]) {
