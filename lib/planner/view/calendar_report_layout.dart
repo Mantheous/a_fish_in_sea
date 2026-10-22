@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 /// Pairs the plan and report tracks inside each day cell while leaving the
@@ -84,7 +85,10 @@ Widget planAppointmentInTrack({
   required double timeRulerWidth,
   required bool isRtl,
   required String eventId,
+  required Rect? timeGridViewportGlobal,
   VoidCallback? onTap,
+  ValueChanged<PointerSignalEvent>? onPointerSignal,
+  GestureDragUpdateCallback? onVerticalDragUpdate,
   GestureLongPressStartCallback? onLongPressStart,
   GestureLongPressMoveUpdateCallback? onLongPressMoveUpdate,
   GestureLongPressEndCallback? onLongPressEnd,
@@ -120,7 +124,10 @@ Widget planAppointmentInTrack({
     shift: shift,
     width: bounds.width / 2,
     height: bounds.height,
+    timeGridViewportGlobal: timeGridViewportGlobal,
     onTap: onTap,
+    onPointerSignal: onPointerSignal,
+    onVerticalDragUpdate: onVerticalDragUpdate,
     onLongPressStart: onLongPressStart,
     onLongPressMoveUpdate: onLongPressMoveUpdate,
     onLongPressEnd: onLongPressEnd,
@@ -136,8 +143,11 @@ class _PlanAppointmentOverlay extends StatefulWidget {
     required this.shift,
     required this.width,
     required this.height,
+    required this.timeGridViewportGlobal,
     required this.child,
     required this.onTap,
+    required this.onPointerSignal,
+    required this.onVerticalDragUpdate,
     required this.onLongPressStart,
     required this.onLongPressMoveUpdate,
     required this.onLongPressEnd,
@@ -148,8 +158,11 @@ class _PlanAppointmentOverlay extends StatefulWidget {
   final double shift;
   final double width;
   final double height;
+  final Rect? timeGridViewportGlobal;
   final Widget child;
   final VoidCallback? onTap;
+  final ValueChanged<PointerSignalEvent>? onPointerSignal;
+  final GestureDragUpdateCallback? onVerticalDragUpdate;
   final GestureLongPressStartCallback? onLongPressStart;
   final GestureLongPressMoveUpdateCallback? onLongPressMoveUpdate;
   final GestureLongPressEndCallback? onLongPressEnd;
@@ -170,34 +183,75 @@ class _PlanAppointmentOverlayState extends State<_PlanAppointmentOverlay> {
       link: widget.link,
       child: OverlayPortal(
         controller: _controller,
-        overlayChildBuilder: (context) => Positioned(
-          left: 0,
-          top: 0,
-          child: CompositedTransformFollower(
-            link: widget.link,
-            showWhenUnlinked: false,
-            targetAnchor: Alignment.topLeft,
-            followerAnchor: Alignment.topLeft,
-            offset: Offset(widget.shift, 0),
-            child: SizedBox(
-              width: widget.width,
-              height: widget.height,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: widget.onTap,
-                onLongPressStart: widget.onLongPressStart,
-                onLongPressMoveUpdate: widget.onLongPressMoveUpdate,
-                onLongPressEnd: widget.onLongPressEnd,
-                onLongPressCancel: widget.onLongPressCancel,
-                child: widget.child,
+        overlayChildBuilder: (context) {
+          final overlayBox = Overlay.of(context).context.findRenderObject();
+          final viewport = widget.timeGridViewportGlobal;
+          final Rect? localViewport;
+          if (overlayBox is RenderBox &&
+              overlayBox.hasSize &&
+              viewport != null) {
+            final overlayOrigin = overlayBox.localToGlobal(Offset.zero);
+            localViewport = viewport.shift(-overlayOrigin);
+          } else {
+            localViewport = null;
+          }
+          return Positioned.fill(
+            child: ClipRect(
+              clipper: _TimeGridViewportClipper(localViewport),
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Positioned(
+                    left: 0,
+                    top: 0,
+                    child: CompositedTransformFollower(
+                      link: widget.link,
+                      showWhenUnlinked: false,
+                      targetAnchor: Alignment.topLeft,
+                      followerAnchor: Alignment.topLeft,
+                      offset: Offset(widget.shift, 0),
+                      child: SizedBox(
+                        width: widget.width,
+                        height: widget.height,
+                        child: Listener(
+                          onPointerSignal: widget.onPointerSignal,
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: widget.onTap,
+                            onVerticalDragUpdate: widget.onVerticalDragUpdate,
+                            onLongPressStart: widget.onLongPressStart,
+                            onLongPressMoveUpdate: widget.onLongPressMoveUpdate,
+                            onLongPressEnd: widget.onLongPressEnd,
+                            onLongPressCancel: widget.onLongPressCancel,
+                            child: widget.child,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
-        ),
+          );
+        },
         child: const SizedBox.expand(),
       ),
     );
   }
+}
+
+class _TimeGridViewportClipper extends CustomClipper<Rect> {
+  const _TimeGridViewportClipper(this.viewport);
+
+  final Rect? viewport;
+
+  @override
+  Rect getClip(Size size) =>
+      viewport?.intersect(Offset.zero & size) ?? (Offset.zero & size);
+
+  @override
+  bool shouldReclip(_TimeGridViewportClipper oldClipper) =>
+      viewport != oldClipper.viewport;
 }
 
 class _ReportColumnClipper extends CustomClipper<Path> {
