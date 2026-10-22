@@ -139,6 +139,23 @@ void main() {
       expect(restored?.single.isTracking, isTrue);
     });
 
+    test('timer fields serialize with a timezone; old zone-less loads', () {
+      final t0 = DateTime(2026, 9, 7, 9, 5);
+      final tracked = event('e1', DateTime(2026, 9, 7, 9)).copyWith(
+        actualStart: t0,
+        actualEnd: t0.add(const Duration(minutes: 45)),
+        timerStartedAt: t0,
+      );
+      final json = tracked.toJson();
+      expect((json['timerStartedAt'] as String).endsWith('Z'), isTrue);
+      expect((json['actualStart'] as String).endsWith('Z'), isTrue);
+      expect((json['actualEnd'] as String).endsWith('Z'), isTrue);
+      expect(PlannerEvent.fromJson(json), tracked);
+      final legacy = Map<String, dynamic>.from(json)
+        ..['timerStartedAt'] = t0.toIso8601String();
+      expect(PlannerEvent.fromJson(legacy).timerStartedAt, t0);
+    });
+
     test('setTimerStart moves the start but keeps recording', () {
       final cubit = CalendarCubit();
       cubit.addEvent(event('e1', DateTime(2026, 9, 7, 9)));

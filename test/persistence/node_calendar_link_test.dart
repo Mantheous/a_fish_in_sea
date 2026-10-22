@@ -18,7 +18,9 @@ void main() {
     title: 'Recorded work',
     createdAt: DateTime(2026),
     actualStart: DateTime(2026, 10, 18, 6),
-    actualEnd: DateTime.utc(2026, 10, 18, 13),
+    // Timer instants live in state as local times and serialize as UTC, so
+    // the fixture is local too (a UTC fixture would come back local).
+    actualEnd: DateTime(2026, 10, 18, 13),
     notes: 'Keep these notes',
     status: NodeStatus.done,
   );

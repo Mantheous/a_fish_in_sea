@@ -697,6 +697,31 @@ void main() {
       expect(restored?.single.isTracking, isTrue);
       expect(restored?.single.timerStartedAt, t0);
     });
+
+    test('timer fields serialize with a timezone; old zone-less loads', () {
+      final t0 = DateTime(2026, 9, 12, 9);
+      final n = Node(
+        id: 'a',
+        title: 'a',
+        createdAt: DateTime(2026, 9, 1),
+        actualStart: t0,
+        actualEnd: t0.add(const Duration(minutes: 30)),
+        timerStartedAt: t0,
+      );
+      final json = n.toJson();
+      // UTC strings carry an offset so comparisons hold across timezones.
+      expect((json['timerStartedAt'] as String).endsWith('Z'), isTrue);
+      expect((json['actualStart'] as String).endsWith('Z'), isTrue);
+      expect((json['actualEnd'] as String).endsWith('Z'), isTrue);
+      expect(Node.fromJson(json), n);
+      // Payloads written before the offset still parse to the same instant.
+      final legacy = Map<String, dynamic>.from(json)
+        ..['timerStartedAt'] = t0.toIso8601String()
+        ..['actualStart'] = t0.toIso8601String();
+      final restored = Node.fromJson(legacy);
+      expect(restored.timerStartedAt, t0);
+      expect(restored.actualStart, t0);
+    });
   });
 
   group('legacy importers', () {
@@ -1165,6 +1190,82 @@ void main() {
         ),
         0,
       );
+    });
+  });
+
+  group('leaf money/time progress (refs #69)', () {
+    test('leaf money with recorded actual shows nonzero without maps', () {
+      final leaf = node('m',
+          money: const MoneyFacet(targetAmount: 100, actualAmount: 50));
+      final progress = progressForest([leaf]);
+      expect(progress['m'], closeTo(0.5, 0.001));
+      expect(
+          leafProgress(node('m2',
+              money:
+                  const MoneyFacet(targetAmount: 100, actualAmount: 50))),
+          closeTo(0.5, 0.001));
+    });
+
+    test('leaf money linked via cubit shows nonzero without maps', () {
+      final cubit = NodeCubit();
+      cubit.addNode(node('save',
+          money: const MoneyFacet(
+              targetAmount: 100, direction: MoneyDirection.spend)));
+      cubit.linkTransaction(
+          nodeId: 'save', transactionId: 'tx-1', transactionAmount: -100);
+      final progress = progressForest(cubit.state);
+      expect(progress['save'], closeTo(1.0, 0.001));
+    });
+
+    test('leaf effort with reported time shows nonzero without maps', () {
+      final start = DateTime(2026, 9, 12, 9);
+      final end = start.add(const Duration(minutes: 30));
+      final leaf = node('e',
+          effort: const EffortFacet(targetMinutes: 60),
+          actualStart: start,
+          actualEnd: end);
+      final progress = progressForest([leaf]);
+      expect(progress['e'], closeTo(0.5, 0.001));
+      expect(
+          leafProgress(node('e2',
+              effort: const EffortFacet(targetMinutes: 60),
+              actualStart: start,
+              actualEnd: end)),
+          closeTo(0.5, 0.001));
+    });
+
+    test('plain parent detects money in direct children', () {
+      final nodes = [
+        node('p'),
+        node('c1',
+            parents: ['p'],
+            money: const MoneyFacet(targetAmount: 100, actualAmount: 100)),
+        node('c2',
+            parents: ['p'],
+            money: const MoneyFacet(targetAmount: 300)),
+      ];
+      final progress = progressForest(nodes);
+      // Money flavor: 100 / (100 + 300) = 0.25. Plain average would be
+      // (1.0 + 0.0) / 2 = 0.5.
+      expect(progress['p'], closeTo(0.25, 0.001));
+    });
+
+    test('plain parent detects effort in direct children', () {
+      final start = DateTime(2026, 9, 12, 9);
+      final nodes = [
+        node('p'),
+        node('c1',
+            parents: ['p'],
+            effort: const EffortFacet(targetMinutes: 30),
+            actualStart: start,
+            actualEnd: start.add(const Duration(minutes: 30))),
+        node('c2',
+            parents: ['p'],
+            effort: const EffortFacet(targetMinutes: 90)),
+      ];
+      final progress = progressForest(nodes);
+      // Effort flavor: 30 / (30 + 90) = 0.25. Plain average would be 0.5.
+      expect(progress['p'], closeTo(0.25, 0.001));
     });
   });
 }

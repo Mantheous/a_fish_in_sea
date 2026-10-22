@@ -186,15 +186,9 @@ class PlannerEvent extends Equatable {
             ? null
             : DateTime.parse(json['completedAt'] as String),
         placeId: json['placeId'] as String?,
-        actualStart: json['actualStart'] == null
-            ? null
-            : DateTime.tryParse(json['actualStart'] as String),
-        actualEnd: json['actualEnd'] == null
-            ? null
-            : DateTime.tryParse(json['actualEnd'] as String),
-        timerStartedAt: json['timerStartedAt'] == null
-            ? null
-            : DateTime.tryParse(json['timerStartedAt'] as String),
+        actualStart: _tryTimerDate(json['actualStart']),
+        actualEnd: _tryTimerDate(json['actualEnd']),
+        timerStartedAt: _tryTimerDate(json['timerStartedAt']),
         failed: json['failed'] as bool? ?? false,
         assignees: _assigneesFromJson(json['assignees']),
         tagIds: _tagIdsFromJson(json['tagIds']),
@@ -207,6 +201,15 @@ class PlannerEvent extends Equatable {
     final parsed = raw is num ? raw.toInt() : int.tryParse('$raw');
     if (parsed == null || parsed <= 0) return null;
     return parsed;
+  }
+
+  /// Timer instants serialize as UTC strings (so they compare across
+  /// timezones) but live in state as local times: normalize back on read.
+  /// Pre-offset payloads already parse as local; [toLocal] is a no-op.
+  static DateTime? _tryTimerDate(Object? raw) {
+    if (raw == null) return null;
+    if (raw is! String || raw.isEmpty) return null;
+    return DateTime.tryParse(raw)?.toLocal();
   }
 
   static List<String> _tagIdsFromJson(Object? raw) {
@@ -249,7 +252,7 @@ class PlannerEvent extends Equatable {
         'done': done,
         'completedAt': completedAt?.toIso8601String(),
         'placeId': placeId,
-        'actualStart': actualStart?.toIso8601String(),
+        'actualStart': actualStart?.toUtc().toIso8601String(),
         'actualEnd': actualEnd?.toUtc().toIso8601String(),
         'timerStartedAt': timerStartedAt?.toUtc().toIso8601String(),
         'failed': failed,

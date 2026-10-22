@@ -5,6 +5,12 @@
 # the diff against the linked issue + triage plan and posts exactly one of:
 #   review:pass — matches the plan, gates green, no new risks
 #   review:changes-requested — with a concrete, bounded fix list
+#
+# Backend: codex/gpt-6.1-sol through tools/agent/llm-run.sh (role `review`).
+# FISH_LLM_REVIEW_BACKEND=opencode falls back to the previous opencode model.
+# Verdicts are fail-closed: an empty/garbled run, or one without an exact
+# `Verdict: pass|changes-requested` line, labels nothing and is retried on
+# the next poll — it can never become an implicit review:pass.
 # PRs with review:changes-requested get bounded rework (max 2 rounds,
 # tracked by <!-- agent-rework --> comments) in their existing worktree.
 # After 2 rounds the verdict stands and a human is pinged. The reviewer
@@ -132,7 +138,7 @@ Loop behavior: PR is skipped every poll; this ping repeats at most once/day. No 
   PROMPT="You are the reviewer agent. READ-ONLY on code: do NOT modify, create or delete any files. Do NOT run builds or tests. Do NOT commit or push. You may only use gh to READ.
 1. Run: gh pr view $N --json number,title,body,comments and: gh pr diff $N
 2. Find the linked issue (Closes #<n> in the PR body) and read its LATEST <!-- agent-plan --> triage comment PLUS any tester follow-ups after it: gh issue view <n> --json number,title,body,comments. The builder was told the contract is latest plan + follow-up clarifications (newest tester comment wins on conflict) — judge fidelity against that combined scope, not the first plan alone.
-3. Explore the repo read-only (read/grep/glob) to check the diff against the plan. Read AGENTS.md first for persistence rules.
+3. Explore the repo read-only (file reads, grep/ripgrep, globbing — shell is fine) to check the diff against the plan. Read AGENTS.md first for persistence rules.
 4. Write for a maintainer who is NOT deep in the codebase: the Plain words
 line must make sense without reading any code (name screens and behavior,
 no class/function names, no unexplained jargon); technical detail belongs
@@ -151,16 +157,27 @@ Walker: <for any user-visible change (lib/*/view, navigation, dialogs/sheets, bu
 Smallness: <ok | bloated — what should be cut?>
 Fix list: <if changes-requested: numbered, concrete, bounded items. If pass: none.>"
   REVIEW_FILE="$(mktemp)"
-  # NOTE: `opencode run` without --model keeps the configured default (a
-  # free-tier model). Pin --model explicitly so reviews stay on opencode-go.
-  if ! opencode run --model opencode-go/muse-spark-1.3-contributor#xhigh --title "review-#$N" "$PROMPT" </dev/null >"$REVIEW_FILE" 2>"$REVIEW_FILE.err"; then
-    echo "[review] #$N reviewer run failed: $(tail -n 3 "$REVIEW_FILE.err")"
+  # llm-run.sh enforces the verdict contract fail-closed: empty output, a
+  # non-zero model run, or a verdict line that does not match exactly is a
+  # failed review (retried next poll), never an implicit pass.
+  if ! printf '%s' "$PROMPT" | "$DIR/llm-run.sh" --role review --title "review-#$N" --read-only \
+      --expect '^Verdict: (pass|changes-requested)[[:space:]]*$' \
+      >"$REVIEW_FILE" 2>"$REVIEW_FILE.err"; then
+    echo "[review] #$N reviewer run produced no usable verdict: $(tail -n 3 "$REVIEW_FILE.err")"
     rm -f "$REVIEW_FILE" "$REVIEW_FILE.err"
     continue
   fi
   rm -f "$REVIEW_FILE.err"
   REVIEW="$(cat "$REVIEW_FILE"; rm -f "$REVIEW_FILE")"
-  VERDICT="$(echo "$REVIEW" | grep -m1 '^Verdict:' | grep -o 'changes-requested' || echo pass)"
+  VERDICT_LINE="$(printf '%s\n' "$REVIEW" | grep -m1 -E '^Verdict: (pass|changes-requested)[[:space:]]*$' || true)"
+  case "$VERDICT_LINE" in
+    *changes-requested*) VERDICT="changes-requested" ;;
+    *pass*) VERDICT="pass" ;;
+    *)
+      echo "[review] #$N no parseable verdict after the contract check — leaving unlabeled, retried next poll (fail-closed)"
+      continue
+      ;;
+  esac
   # SHA-key the verdict (stale-pass guard): the merge step only trusts a
   # pass whose comment covers the PR's current head SHA. Fall back to the
   # live head SHA when the list-time value is empty.

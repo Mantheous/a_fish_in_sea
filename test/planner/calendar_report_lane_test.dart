@@ -1,15 +1,14 @@
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
-import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/service/calendar_report.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_page.dart';
-import 'package:a_fish_in_sea/planner/view/calendar_projection.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_report_lane.dart';
 import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
 import 'package:a_fish_in_sea/reporting/model/reported_entry.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
 import '../goldens/golden_app.dart';
@@ -116,155 +115,25 @@ void main() {
     });
   });
 
-  group('CalendarProjection report columns', () {
-    late CalendarProjection projection;
-    final day = DateTime(2026, 10, 5);
-    final event = _event('e1', DateTime(2026, 10, 5, 9));
-    final allDay = PlannerEvent(
-      id: 'allday-1',
-      subject: 'Conference',
-      start: DateTime(2026, 10, 5),
-      end: DateTime(2026, 10, 6),
-      allDay: true,
-    );
-    final reports = <String, List<ReportedEntry>>{
-      '2026-10-05': [
-        _accepted(
-          id: 'r1',
-          eventId: 'e1',
-          start: DateTime(2026, 10, 5, 9, 5),
-          end: DateTime(2026, 10, 5, 9, 45),
-        ),
-      ],
-    };
-
-    void update({
-      bool showReportLanes = true,
-      List<DateTime> visibleDays = const [],
-      double startHour = 6,
-      double endHour = 24,
-      List<PlannerEvent>? events,
-    }) {
-      projection.update(
-        events: events ?? [event, allDay],
-        feeds: const [],
-        visibility: const CalendarVisibilityState(),
-        nodes: const [],
-        reports: reports,
-        showReports: true,
-        showReportLanes: showReportLanes,
-        visibleDays: visibleDays,
-        visibleStartHour: startHour,
-        visibleEndHour: endHour,
-        now: DateTime(2026, 10, 5, 12),
-      );
-    }
-
-    setUp(() => projection = CalendarProjection());
-
-    test('the report column replaces report appointments in `shown`', () {
-      update(visibleDays: [day]);
-      // Plans keep the grid to themselves: no report tiles, no lanes.
-      expect(projection.shown.map((e) => e.id), ['e1', 'allday-1']);
-      expect(projection.reportRails.map((e) => e.id), [
-        reportLaneIdForDay(day),
-        '${reportPlaceholderIdPrefix}allday-1',
-      ]);
-      expect(
-        projection.reportBlocksByLaneId[reportLaneIdForDay(day)],
-        hasLength(1),
-      );
-      expect(projection.reportById.keys, ['report:r1']);
-      expect(projection.reportColorById, hasLength(1));
-      expect(projection.shown.any((e) => isReportDisplayId(e.id)), isFalse);
-    });
-
-    test('one lane per visible day', () {
-      update(
-        visibleDays: [
-          for (var i = 0; i < 7; i++)
-            DateTime(2026, 10, 5).add(Duration(days: i)),
-        ],
-      );
-      expect(
-        projection.reportRails.where((e) => isReportLaneId(e.id)),
-        hasLength(7),
-      );
-    });
-
-    test('all-day copies keep the rail header as tall as the plan one', () {
-      update(visibleDays: [day]);
-      final placeholders = projection.reportRails.where(
-        (e) => isReportPlaceholderId(e.id),
-      );
-      expect(placeholders, hasLength(1));
-      expect(placeholders.single.allDay, isTrue);
-      expect(placeholders.single.start, allDay.start);
-      expect(placeholders.single.end, allDay.end);
-    });
-
-    test('month-style mode keeps report blocks as appointments', () {
-      update(showReportLanes: false);
-      expect(projection.shown.map((e) => e.id), [
-        'e1',
-        'allday-1',
-        'report:r1',
-      ]);
-      expect(projection.reportBlocksByLaneId, isEmpty);
-      expect(projection.reportRails, isEmpty);
-    });
-
-    test('blocks outside the visible grid hours are not placed in a lane', () {
-      final late = <String, List<ReportedEntry>>{
-        '2026-10-05': [
-          _accepted(
-            id: 'r2',
-            eventId: 'e1',
-            start: DateTime(2026, 10, 5, 2),
-            end: DateTime(2026, 10, 5, 3),
-          ),
-        ],
-      };
-      projection.update(
-        events: [event],
-        feeds: const [],
-        visibility: const CalendarVisibilityState(),
-        nodes: const [],
-        reports: late,
-        showReports: true,
-        showReportLanes: true,
-        visibleDays: [day],
-        visibleStartHour: 6,
-        visibleEndHour: 24,
-        now: DateTime(2026, 10, 5, 12),
-      );
-      expect(
-        projection.reportRails.where((e) => isReportLaneId(e.id)),
-        hasLength(1),
-      );
-      expect(projection.reportBlocksByLaneId[reportLaneIdForDay(day)], isEmpty);
-      expect(projection.reportById, isNotEmpty);
-    });
-  });
-
   group('Plan + Report calendar layout', () {
-    /// The first vertical, scrollable grid inside [calendarFinder].
-    ScrollableState verticalScrollableIn(
-      WidgetTester tester,
-      Finder calendarFinder,
-    ) {
+    double timeGridTopIn(WidgetTester tester, Finder calendarFinder) {
       final candidates = find.descendant(
         of: calendarFinder,
         matching: find.byType(Scrollable),
       );
       for (var i = 0; i < candidates.evaluate().length; i++) {
         final state = tester.state<ScrollableState>(candidates.at(i));
-        if (state.position.axis == Axis.vertical &&
-            state.position.maxScrollExtent > 0) {
-          return state;
+        if (state.position.axis != Axis.vertical ||
+            state.position.viewportDimension <= 100 ||
+            state.position.maxScrollExtent <= 0) {
+          continue;
+        }
+        final render = state.context.findRenderObject();
+        if (render is RenderBox && render.hasSize) {
+          return render.localToGlobal(Offset.zero).dy;
         }
       }
-      fail('no vertical scrollable in the calendar');
+      fail('no time-grid viewport in the calendar');
     }
 
     testWidgets('each day places its report to the right of its plan', (
@@ -323,15 +192,18 @@ void main() {
       expect(chipRect.height, closeTo(60, 6));
 
       // Scrolling one grid scrolls the other, to the same offset.
-      final calendars = find.byType(SfCalendar);
-      final railScroll = verticalScrollableIn(tester, calendars.first);
-      final planScroll = verticalScrollableIn(tester, calendars.last);
-      planScroll.position.jumpTo(200);
+      final planScroll = Scrollable.maybeOf(
+        tester.element(find.byKey(const ValueKey('tile:e1'))),
+      )!.position;
+      final railScroll = Scrollable.maybeOf(
+        tester.element(railFinder),
+      )!.position;
+      planScroll.jumpTo(200);
       await tester.pump(const Duration(milliseconds: 200));
-      expect(railScroll.position.pixels, planScroll.position.pixels);
-      railScroll.position.jumpTo(120);
+      expect(railScroll.pixels, planScroll.pixels);
+      railScroll.jumpTo(120);
       await tester.pump(const Duration(milliseconds: 200));
-      expect(planScroll.position.pixels, railScroll.position.pixels);
+      expect(planScroll.pixels, railScroll.pixels);
     });
 
     testWidgets('week view keeps a report column per visible day', (
@@ -440,6 +312,59 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(calendar.byId('e2')!.start.isAfter(start), isTrue);
+    });
+
+    testWidgets('wheel scrolling over a paired plan tile stays in the grid', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final now = DateTime.now();
+      final start = DateTime(now.year, now.month, now.day, 9);
+      calendar.addEvent(_event('e1', start));
+      calendar.addEvent(_event('e2', start));
+      context.read<ReportingCubit>().upsertEntry(
+        DateTime(now.year, now.month, now.day),
+        _accepted(
+          id: 'wheel-report',
+          eventId: 'e2',
+          start: start.add(const Duration(minutes: 5)),
+          end: start.add(const Duration(minutes: 50)),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final tileFinder = find.byKey(const ValueKey('tile:e2'));
+      final chipFinder = find.byKey(
+        const ValueKey('report-chip:report:wheel-report'),
+      );
+      final gridTop = timeGridTopIn(
+        tester,
+        find.byKey(const Key('plan-calendar')),
+      );
+      final tileBefore = tester.getRect(tileFinder);
+      final chipBefore = tester.getRect(chipFinder);
+      final offsetBefore = chipBefore.top - tileBefore.top;
+      final pointer = tester.getCenter(tileFinder);
+      tester.binding.handlePointerEvent(
+        PointerScrollEvent(position: pointer, scrollDelta: const Offset(0, 60)),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final tileAfter = tester.getRect(tileFinder);
+      final chipAfter = tester.getRect(chipFinder);
+      expect(tileAfter.top, lessThan(tileBefore.top));
+      expect(chipAfter.top, lessThan(chipBefore.top));
+      expect(chipAfter.top - tileAfter.top, closeTo(offsetBefore, 1));
+      expect(tileAfter.top, lessThan(gridTop));
+      await tester.tapAt(Offset(tileAfter.center.dx, tileAfter.top + 4));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('Event details'), findsNothing);
     });
 
     testWidgets('month view stays a single calendar with report chips', (
