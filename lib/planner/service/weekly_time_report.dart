@@ -58,6 +58,12 @@ class WeeklyTimeReport {
   });
 }
 
+/// Local-midnight Monday of the week containing [day]. Calendar-date
+/// arithmetic, not elapsed days: a DST change makes some days 23 or 25
+/// hours long, and subtracting 24h steps can shift the wall-clock time.
+DateTime weekStartFor(DateTime day) =>
+    DateTime(day.year, day.month, day.day - (day.weekday - 1));
+
 /// Builds the week report for the 7 days starting at [weekStart]
 /// (a local-midnight Monday). Durations are clipped to the week window;
 /// intervals outside it are skipped. A running timer counts up to [now].
@@ -161,14 +167,12 @@ WeeklyTimeReport buildWeeklyTimeReport({
     // file an accepted manual report against one, so only skip the
     // timer/actuals passes for them.
     if (!event.allDay) {
-      // Only a timed event represents its backing node's own interval;
-      // an all-day block must leave the node to the node pass below.
-      if (backing != null) consumedNodeIds.add(backing.id);
       final liveStart = event.timerStartedAt ?? _firstTrackingStart(backing);
       if (liveStart != null) {
         final end = at.isAfter(liveStart)
             ? at
             : liveStart.add(const Duration(minutes: 1));
+        if (backing != null) consumedNodeIds.add(backing.id);
         if (backing != null &&
             !emittedSessions.add(sessionKey(backing.id, liveStart, end))) {
           continue;
@@ -184,20 +188,35 @@ WeeklyTimeReport buildWeeklyTimeReport({
         continue;
       }
 
-      final reported = _reportedInterval(event, backing);
-      if (reported != null) {
+      // An event and its backing node can hold distinct recordings: a
+      // restart leaves the old interval on the event while the node has
+      // the new one. Count each distinct interval that overlaps the week;
+      // mirrors of the same session dedupe by key. Only mark the backing
+      // represented when one of its intervals was actually counted, so an
+      // out-of-week event recording cannot hide this week's node session.
+      var represented = false;
+      void consider(({DateTime start, DateTime end})? interval) {
+        if (interval == null) return;
+        if (!overlaps(interval.start, interval.end)) return;
+        represented = true;
         if (backing != null &&
             !emittedSessions.add(
-                sessionKey(backing.id, reported.start, reported.end))) {
-          continue;
+                sessionKey(backing.id, interval.start, interval.end))) {
+          return;
         }
-        coveredEventIds.add(event.id);
         addIfOverlaps(
           title: event.subject,
           goal: goal,
-          start: reported.start,
-          end: reported.end,
+          start: interval.start,
+          end: interval.end,
         );
+      }
+
+      consider(_eventInterval(event));
+      consider(_nodeInterval(backing));
+      if (represented) {
+        if (backing != null) consumedNodeIds.add(backing.id);
+        coveredEventIds.add(event.id);
         continue;
       }
     }
@@ -323,26 +342,23 @@ const String noGoalTitle = '(no goal)';
 
 DateTime? _firstTrackingStart(Node? backing) => backing?.timerStartedAt;
 
-({DateTime start, DateTime end})? _reportedInterval(
-  PlannerEvent event,
-  Node? backing,
-) {
-  if (event.actualStart != null && event.actualEnd != null) {
-    final start = event.actualStart!;
-    var end = event.actualEnd!;
-    if (!end.isAfter(start)) end = start.add(const Duration(minutes: 1));
-    return (start: start, end: end);
+({DateTime start, DateTime end})? _eventInterval(PlannerEvent event) {
+  if (event.actualStart == null || event.actualEnd == null) return null;
+  final start = event.actualStart!;
+  var end = event.actualEnd!;
+  if (!end.isAfter(start)) end = start.add(const Duration(minutes: 1));
+  return (start: start, end: end);
+}
+
+({DateTime start, DateTime end})? _nodeInterval(Node? backing) {
+  final start = backing?.actualStart;
+  final end = backing?.actualEnd;
+  if (start == null || end == null) return null;
+  var safeEnd = end;
+  if (!safeEnd.isAfter(start)) {
+    safeEnd = start.add(const Duration(minutes: 1));
   }
-  final nodeStart = backing?.actualStart;
-  final nodeEnd = backing?.actualEnd;
-  if (nodeStart != null && nodeEnd != null) {
-    var end = nodeEnd;
-    if (!end.isAfter(nodeStart)) {
-      end = nodeStart.add(const Duration(minutes: 1));
-    }
-    return (start: nodeStart, end: end);
-  }
-  return null;
+  return (start: start, end: safeEnd);
 }
 
 /// The root ancestor of [node] following [parentIds] upward (cycle-safe).

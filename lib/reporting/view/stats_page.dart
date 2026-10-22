@@ -86,18 +86,15 @@ class _StatsBodyState extends State<_StatsBody> {
     super.dispose();
   }
 
+  /// Local-midnight Monday of the week containing [_day].
+  DateTime get _weekStart => weekStartFor(_day);
+
   List<DateTime> get _weekDays {
-    final monday = _day.subtract(Duration(days: _day.weekday - 1));
-    // Calendar dates, not 24h steps: a DST week is 167 or 169 hours.
+    final start = _weekStart;
     return [
       for (var i = 0; i < 7; i++)
-        DateTime(monday.year, monday.month, monday.day + i),
+        DateTime(start.year, start.month, start.day + i),
     ];
-  }
-
-  DateTime get _weekStart {
-    final monday = _day.subtract(Duration(days: _day.weekday - 1));
-    return DateTime(monday.year, monday.month, monday.day);
   }
 
   @override

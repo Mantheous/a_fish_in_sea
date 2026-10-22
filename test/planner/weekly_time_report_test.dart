@@ -363,6 +363,61 @@ void main() {
       expect(report.weekTotal, const Duration(minutes: 30));
     });
 
+    test('old event recording does not hide this week task recording', () {
+      final nodes = [
+        node(
+          'task',
+          parents: ['goal'],
+          actualStart: DateTime(2026, 9, 8, 9),
+          actualEnd: DateTime(2026, 9, 8, 9, 30),
+        ),
+        node('goal'),
+      ];
+      final report = buildWeeklyTimeReport(
+        nodes: nodes,
+        events: [
+          // Last week's recording still sits on the linked event.
+          event(
+            'e1',
+            taskId: 'task',
+            actualStart: DateTime(2026, 9, 1, 9),
+            actualEnd: DateTime(2026, 9, 1, 9, 30),
+          ),
+        ],
+        reportsByDay: const {},
+        weekStart: _weekStart,
+      );
+      expect(report.entries, hasLength(1));
+      expect(report.weekTotal, const Duration(minutes: 30));
+    });
+
+    test('distinct same-week event and task recordings both count', () {
+      final nodes = [
+        node(
+          'task',
+          parents: ['goal'],
+          actualStart: DateTime(2026, 9, 8, 9),
+          actualEnd: DateTime(2026, 9, 8, 9, 30),
+        ),
+        node('goal'),
+      ];
+      final report = buildWeeklyTimeReport(
+        nodes: nodes,
+        events: [
+          event(
+            'e1',
+            taskId: 'task',
+            actualStart: DateTime(2026, 9, 8, 8),
+            actualEnd: DateTime(2026, 9, 8, 8, 30),
+          ),
+        ],
+        reportsByDay: const {},
+        weekStart: _weekStart,
+      );
+      expect(report.entries, hasLength(2));
+      expect(report.weekTotal, const Duration(hours: 1));
+    });
+
     test('accepted manual report on an all-day event still counts', () {
       final nodes = [
         node('goal'),
@@ -385,6 +440,19 @@ void main() {
       );
       expect(report.weekTotal, const Duration(minutes: 45));
       expect(report.byGoal.single.title, 'Node goal');
+    });
+
+    test('weekStartFor stays on local Monday across DST nights', () {
+      for (final sunday in [
+        DateTime(2026, 11, 1, 23, 30), // fall back
+        DateTime(2026, 3, 8, 23, 30), // spring forward
+      ]) {
+        final start = weekStartFor(sunday);
+        expect(start.weekday, DateTime.monday);
+        expect(start.hour, 0);
+        expect(start.minute, 0);
+        expect(sunday.difference(start).inDays, greaterThanOrEqualTo(6));
+      }
     });
 
     test('fall-back week keeps its final hour', () {
