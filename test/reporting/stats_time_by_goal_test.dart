@@ -30,6 +30,17 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
   }
 
+  /// The stats page is taller than the test viewport, so the week card at
+  /// the bottom is only built after scrolling to it.
+  Future<void> scrollToGoalCard(WidgetTester tester) async {
+    await tester.scrollUntilVisible(
+      find.text('Time by goal'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pump();
+  }
+
   testWidgets('stopped event timer shows under its goal with week total',
       (tester) async {
     await pumpStats(tester);
@@ -72,6 +83,7 @@ void main() {
     ));
     await tester.pump(const Duration(milliseconds: 200));
     await tester.pump(const Duration(milliseconds: 200));
+    await scrollToGoalCard(tester);
 
     expect(find.text('Time by goal'), findsOneWidget);
     expect(find.text('Week total 45m'), findsOneWidget);
@@ -81,7 +93,47 @@ void main() {
 
   testWidgets('empty week shows the no-tracked-time hint', (tester) async {
     await pumpStats(tester);
+    await scrollToGoalCard(tester);
     expect(find.text('Time by goal'), findsOneWidget);
     expect(find.textContaining('No tracked time this week'), findsOneWidget);
+  });
+
+  testWidgets('running timer advances without another state change',
+      (tester) async {
+    final monday = mondayOfThisWeek();
+    final start = monday.add(const Duration(days: 1, hours: 9));
+    var fakeNow = start.add(const Duration(minutes: 5));
+    await pumpGoldenPage(
+      tester,
+      StatsPage(
+        now: () => fakeNow,
+        liveTick: const Duration(milliseconds: 10),
+      ),
+    );
+    final nodes = BlocProvider.of<NodeCubit>(
+      tester.element(find.byType(StatsPage)),
+    );
+
+    expect(
+      nodes.addNode(Node(
+        id: 'task',
+        title: 'Homework',
+        createdAt: monday,
+        timerStartedAt: start,
+      )),
+      isNull,
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+    await scrollToGoalCard(tester);
+    expect(find.text('Week total 5m'), findsOneWidget);
+
+    // No cubit emits while a timer runs; the card's own tick refreshes it.
+    fakeNow = fakeNow.add(const Duration(minutes: 2));
+    // pumpGoldenPage runs in the real async zone, so let the real tick fire.
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 25)),
+    );
+    await tester.pump();
+    expect(find.text('Week total 7m'), findsOneWidget);
   });
 }

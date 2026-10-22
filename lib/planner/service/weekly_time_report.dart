@@ -91,7 +91,10 @@ WeeklyTimeReport buildWeeklyTimeReport({
   final extras = <ReportedEntry>[];
   for (final entries in reportsByDay.values) {
     for (final entry in entries) {
-      if (entry.auto) continue;
+      // Missed events are the absence of work, and unconfirmed auto entries
+      // are guesses: neither counts as logged time (same rule as
+      // stats_logic's recorded-time accounting).
+      if (entry.auto || entry.status == ReportStatus.missed) continue;
       final eventId = entry.eventId;
       if (eventId == null) {
         extras.add(entry);
@@ -103,6 +106,9 @@ WeeklyTimeReport buildWeeklyTimeReport({
 
   final out = <WeeklyTimeEntry>[];
   final consumedNodeIds = <String>{};
+  // A backing node's live/reported interval is counted once even when
+  // several events mirror the same task (recurring copies, duplicates).
+  final emittedBackingIds = <String>{};
   final coveredEventIds = <String>{};
   final eventIds = {for (final e in events) e.id};
 
@@ -147,9 +153,16 @@ WeeklyTimeReport buildWeeklyTimeReport({
     if (backing != null) consumedNodeIds.add(backing.id);
     final goal = goalFor(backing);
 
-    final liveStart =
-        event.timerStartedAt ?? _firstTrackingStart(backing);
+    final eventLive = event.timerStartedAt;
+    final liveStart = eventLive ?? _firstTrackingStart(backing);
     if (liveStart != null) {
+      // A run owned by the backing task is the same interval for every
+      // event that mirrors it; only count it once.
+      if (eventLive == null &&
+          backing != null &&
+          !emittedBackingIds.add(backing.id)) {
+        continue;
+      }
       final end = at.isAfter(liveStart)
           ? at
           : liveStart.add(const Duration(minutes: 1));
@@ -166,6 +179,11 @@ WeeklyTimeReport buildWeeklyTimeReport({
 
     final reported = _reportedInterval(event, backing);
     if (reported != null) {
+      if (reported.fromBacking &&
+          backing != null &&
+          !emittedBackingIds.add(backing.id)) {
+        continue;
+      }
       coveredEventIds.add(event.id);
       addIfOverlaps(
         title: event.subject,
@@ -196,16 +214,17 @@ WeeklyTimeReport buildWeeklyTimeReport({
   // timers, or nodes whose event is not in the loaded list): the event
   // pass never sees them, so they are added directly. Nodes already
   // consumed as an event's backing are skipped — their time is counted
-  // once, on the event — as are nodes linked to a loaded event, which the
-  // event pass already considered (one block per event, timer first).
+  // once, on the event. A linked node is skipped only when that event
+  // actually represented its time: an all-day or display-only event never
+  // does, so the node's own timer still counts.
   for (final node in nodes) {
     if (consumedNodeIds.contains(node.id)) continue;
     if (node.calendarEventId != null &&
-        eventIds.contains(node.calendarEventId)) {
+        coveredEventIds.contains(node.calendarEventId)) {
       continue;
     }
     if (node.sourceEventId != null &&
-        eventIds.contains(node.sourceEventId)) {
+        coveredEventIds.contains(node.sourceEventId)) {
       continue;
     }
     final goal = _rootGoal(node, nodesById);
@@ -296,7 +315,7 @@ const String noGoalTitle = '(no goal)';
 
 DateTime? _firstTrackingStart(Node? backing) => backing?.timerStartedAt;
 
-({DateTime start, DateTime end})? _reportedInterval(
+({DateTime start, DateTime end, bool fromBacking})? _reportedInterval(
   PlannerEvent event,
   Node? backing,
 ) {
@@ -304,7 +323,7 @@ DateTime? _firstTrackingStart(Node? backing) => backing?.timerStartedAt;
     final start = event.actualStart!;
     var end = event.actualEnd!;
     if (!end.isAfter(start)) end = start.add(const Duration(minutes: 1));
-    return (start: start, end: end);
+    return (start: start, end: end, fromBacking: false);
   }
   final nodeStart = backing?.actualStart;
   final nodeEnd = backing?.actualEnd;
@@ -313,7 +332,7 @@ DateTime? _firstTrackingStart(Node? backing) => backing?.timerStartedAt;
     if (!end.isAfter(nodeStart)) {
       end = nodeStart.add(const Duration(minutes: 1));
     }
-    return (start: nodeStart, end: end);
+    return (start: nodeStart, end: end, fromBacking: true);
   }
   return null;
 }

@@ -34,6 +34,7 @@ PlannerEvent event(
   DateTime? timerStartedAt,
   String? taskId,
   String? feedId,
+  bool allDay = false,
 }) =>
     PlannerEvent(
       id: id,
@@ -41,6 +42,7 @@ PlannerEvent event(
       start: start ?? DateTime(2026, 9, 8, 9),
       end: (start ?? DateTime(2026, 9, 8, 9))
           .add(const Duration(hours: 1)),
+      allDay: allDay,
       feedId: feedId,
       taskId: taskId,
       actualStart: actualStart,
@@ -247,6 +249,78 @@ void main() {
             actualEnd: DateTime(2026, 9, 14, 10),
           ),
         ],
+        reportsByDay: const {},
+        weekStart: _weekStart,
+      );
+      expect(report.entries, hasLength(1));
+      expect(report.weekTotal, const Duration(minutes: 30));
+    });
+
+    test('missed manual entries count as zero, linked or not', () {
+      ReportedEntry missed({required String id, String? eventId}) =>
+          ReportedEntry(
+            id: id,
+            eventId: eventId,
+            title: 'Missed $id',
+            start: DateTime(2026, 9, 8, 9),
+            end: DateTime(2026, 9, 8, 10),
+            status: ReportStatus.missed,
+            auto: false,
+          );
+      final report = buildWeeklyTimeReport(
+        nodes: [node('goal')],
+        events: [event('e1', taskId: 'goal')],
+        reportsByDay: {
+          '2026-09-08': [
+            missed(id: 'rep:e1', eventId: 'e1'),
+            missed(id: 'rep:extra'),
+          ],
+        },
+        weekStart: _weekStart,
+      );
+      expect(report.entries, isEmpty);
+      expect(report.weekTotal, Duration.zero);
+      expect(report.byGoal, isEmpty);
+    });
+
+    test('two events mirroring one task count its session once', () {
+      final nodes = [
+        node(
+          'task',
+          parents: ['goal'],
+          actualStart: DateTime(2026, 9, 8, 9, 10),
+          actualEnd: DateTime(2026, 9, 8, 9, 40),
+        ),
+        node('goal'),
+      ];
+      final report = buildWeeklyTimeReport(
+        nodes: nodes,
+        events: [
+          event('e1', taskId: 'task'),
+          event('e2', taskId: 'task'),
+        ],
+        reportsByDay: const {},
+        weekStart: _weekStart,
+      );
+      expect(report.entries, hasLength(1));
+      expect(report.weekTotal, const Duration(minutes: 30));
+      expect(report.byGoal.single.total, const Duration(minutes: 30));
+    });
+
+    test('all-day event does not suppress its task timer', () {
+      final nodes = [
+        node(
+          'task',
+          parents: ['goal'],
+          calendarEventId: 'e1',
+          actualStart: DateTime(2026, 9, 8, 9, 10),
+          actualEnd: DateTime(2026, 9, 8, 9, 40),
+        ),
+        node('goal'),
+      ];
+      final report = buildWeeklyTimeReport(
+        nodes: nodes,
+        events: [event('e1', taskId: 'task', allDay: true)],
         reportsByDay: const {},
         weekStart: _weekStart,
       );
