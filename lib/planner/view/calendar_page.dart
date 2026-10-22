@@ -34,6 +34,7 @@ import 'calendar_projection.dart';
 import 'calendar_filter_sheet.dart';
 import 'calendar_report_layout.dart';
 import 'calendar_report_lane.dart';
+import 'calendar_scroll_sync.dart';
 import 'calendar_side_panel.dart';
 import 'calendar_tile_metrics.dart';
 import 'event_editor.dart';
@@ -103,14 +104,10 @@ class _CalendarPageState extends State<CalendarPage> {
   TimeSlotViewSettings? _railSlotSettingsCache;
   double? _slotStartHour;
   double? _slotEndHour;
-  // The report overlay is a separate calendar so it can keep its own report
-  // chips, but its day columns sit directly beside the matching plan columns.
-  // Both grids share the same time scroll offset (see [_onPlanScroll]).
-  ScrollPosition? _planScroll;
-  ScrollPosition? _railScroll;
-  bool _syncingScroll = false;
-  bool _initialScrollSynced = false;
-  bool _scrollSyncScheduled = false;
+  late final _pairedScrollSync = CalendarScrollSync(
+    isMounted: () => mounted,
+    timeGridViewportThreshold: _calendarViewHeaderHeight,
+  );
 
   TimeSlotViewSettings _slotSettings(double startHour, double endHour) {
     if (_slotSettingsCache == null ||
@@ -267,82 +264,6 @@ class _CalendarPageState extends State<CalendarPage> {
     });
   }
 
-  /// Scroll the report column and the plan grid together: whichever one the
-  /// user scrolls, the other is moved to the same offset. Offsets are in the
-  /// same units because both grids share slot settings and a start hour.
-  bool _onPlanScroll(ScrollNotification notification) {
-    final position = _captureVerticalScroll(notification);
-    if (position != null) _planScroll = position;
-    _mirrorScroll(from: position, to: _railScroll);
-    return false;
-  }
-
-  bool _onRailScroll(ScrollNotification notification) {
-    final position = _captureVerticalScroll(notification);
-    if (position != null) _railScroll = position;
-    _mirrorScroll(from: position, to: _planScroll);
-    return false;
-  }
-
-  /// Syncfusion keeps its agenda's ScrollController private; the position of
-  /// the Scrollable that built a tile is the handle we do have. Tiles are
-  /// laid out before the first scroll, so this also gives the correct offset
-  /// for the first frame and one initial plan → report alignment.
-  void _rememberScrollPosition(BuildContext context, {required bool rail}) {
-    final position = Scrollable.maybeOf(context)?.position;
-    if (position == null ||
-        !position.hasPixels ||
-        position.axis != Axis.vertical) {
-      return;
-    }
-    if (rail) {
-      if (identical(_railScroll, position)) return;
-      _railScroll = position;
-    } else {
-      if (identical(_planScroll, position)) return;
-      _planScroll = position;
-    }
-    _scheduleInitialScrollSync();
-  }
-
-  /// Once both grids have positions, align the report column with the plan
-  /// grid (the plan grid auto-scrolls to the first appointment; the report
-  /// column starts at the top of the day).
-  void _scheduleInitialScrollSync() {
-    if (_initialScrollSynced || _scrollSyncScheduled) return;
-    _scrollSyncScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _scrollSyncScheduled = false;
-      if (!mounted || _initialScrollSynced) return;
-      final plan = _planScroll;
-      final rail = _railScroll;
-      if (plan == null || rail == null) return;
-      _initialScrollSynced = true;
-      _mirrorScroll(from: plan, to: rail);
-    });
-  }
-
-  ScrollPosition? _captureVerticalScroll(ScrollNotification notification) {
-    if (notification.metrics.axis != Axis.vertical) return null;
-    final context = notification.context;
-    if (context == null) return null;
-    // The documented way to reach the ScrollableState that sent the
-    // notification (see Flutter's Scrollable.build comment).
-    return Scrollable.maybeOf(context)?.position;
-  }
-
-  void _mirrorScroll({ScrollPosition? from, ScrollPosition? to}) {
-    if (_syncingScroll || from == null || to == null || !to.hasPixels) return;
-    final target = from.pixels.clamp(to.minScrollExtent, to.maxScrollExtent);
-    if ((to.pixels - target).abs() < 0.5) return;
-    _syncingScroll = true;
-    try {
-      to.jumpTo(target);
-    } finally {
-      _syncingScroll = false;
-    }
-  }
-
   /// The report overlay's calendar: same visible dates and time grid as the
   /// plan calendar, with its header removed because the plan supplies the
   /// shared date headers.
@@ -401,7 +322,6 @@ class _CalendarPageState extends State<CalendarPage> {
         : null;
     final event = raw is PlannerEvent ? raw : null;
     if (event == null) return const SizedBox.shrink();
-    _rememberScrollPosition(context, rail: true);
     // Copies of the plan calendar's all-day events keep both calendars' rows
     // aligned and paint the report half over spanning plan tiles.
     if (isReportPlaceholderId(event.id)) {
@@ -415,6 +335,7 @@ class _CalendarPageState extends State<CalendarPage> {
         ),
       );
     }
+    _pairedScrollSync.rememberPosition(context, rail: true, timeGrid: true);
     final blocks = _projection.reportBlocksByLaneId[event.id];
     if (blocks == null) return const SizedBox.shrink();
     final isRtl = Directionality.of(context).name == 'rtl';
@@ -789,7 +710,7 @@ class _CalendarPageState extends State<CalendarPage> {
                   // The report calendar is clipped to the trailing half of
                   // every day cell over the plan grid. Plan tiles are laid out
                   // in the matching leading half; both calendars stay
-                  // scrolled together (see _onPlanScroll/_onRailScroll).
+                  // scrolled together by [_pairedScrollSync].
                   final calendarView = LayoutBuilder(
                     builder: (context, constraints) {
                       final isRtl = Directionality.of(context).name == 'rtl';
@@ -855,6 +776,8 @@ class _CalendarPageState extends State<CalendarPage> {
                             timeRulerWidth: _calendarTimeRulerWidth,
                             isRtl: isRtl,
                             eventId: event.id,
+                            timeGridViewportGlobal:
+                                _pairedScrollSync.planTimeViewportGlobal,
                             onTap: () {
                               if (_suppressTap ||
                                   event.id == calendarDraftEventId) {
@@ -868,6 +791,10 @@ class _CalendarPageState extends State<CalendarPage> {
                                 _openDetail(event);
                               }
                             },
+                            onPointerSignal:
+                                _pairedScrollSync.onPlanPointerSignal,
+                            onVerticalDragUpdate:
+                                _pairedScrollSync.onPlanVerticalDrag,
                             onLongPressStart: (drag) => _onPairedPlanDragStart(
                               event,
                               drag.globalPosition,
@@ -913,7 +840,7 @@ class _CalendarPageState extends State<CalendarPage> {
                               visible: reportLanes,
                               maintainState: true,
                               child: NotificationListener<ScrollNotification>(
-                                onNotification: _onRailScroll,
+                                onNotification: _pairedScrollSync.onRailScroll,
                                 child: _railCalendar(settings),
                               ),
                             )
@@ -923,7 +850,7 @@ class _CalendarPageState extends State<CalendarPage> {
                           Positioned.fill(
                             child: CalendarReportLayout(
                               plans: NotificationListener<ScrollNotification>(
-                                onNotification: _onPlanScroll,
+                                onNotification: _pairedScrollSync.onPlanScroll,
                                 child: calendar,
                               ),
                               reports: reportCalendar,
@@ -1000,7 +927,11 @@ class _CalendarPageState extends State<CalendarPage> {
         : null;
     final event = raw is PlannerEvent ? raw : null;
     if (event == null) return const SizedBox.shrink();
-    _rememberScrollPosition(context, rail: false);
+    _pairedScrollSync.rememberPosition(
+      context,
+      rail: false,
+      timeGrid: !event.allDay,
+    );
     final report = reportById[event.id];
     final isDraft = event.id == calendarDraftEventId;
     final baseColor = colorById?[event.id] ?? _eventColor(event, feedColors);
