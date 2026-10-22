@@ -60,6 +60,7 @@ dev_dependencies:
   mocktail: ^1.0.4
   path_provider_platform_interface: ^2.1.2
   plugin_platform_interface: ^2.1.8
+  url_launcher_platform_interface: ^2.3.2
   patrol: ^4.10.0
   patrol_mcp: ^0.2.1
   image: ^4.12.0
