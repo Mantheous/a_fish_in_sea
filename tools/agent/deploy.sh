@@ -93,6 +93,13 @@ fi
 # deploy goes bad; cheap and skipped when nothing changed).
 "$DIR/backup-db.sh" || echo "[deploy] backup-db failed (continuing)"
 
+# What is about to ship (for the Telegram "shipped" note): subjects landed
+# since the last deployed bundle. Merge commits from the loop's merge step
+# carry the PR title; fast-forwarded ad-hoc commits show their own subjects.
+OLD_SHA=""
+if [ -f "$MARKER" ]; then
+  case "$(cat "$MARKER")" in main-*) OLD_SHA="$(cat "$MARKER" | sed 's/^main-//')";; esac
+fi
 echo "[deploy] rebuilding web bundle for $DESC"
 if "$FLUTTER" build web --base-href /fish/ 2>&1 | tail -n 3; then
   if ! grep -q '<base href="/fish/">' build/web/index.html; then
@@ -102,7 +109,37 @@ if "$FLUTTER" build web --base-href /fish/ 2>&1 | tail -n 3; then
   echo "$DESC" >"$MARKER"
   rm -f "$FAIL_MARKER"
   echo "[deploy] done $DESC"
-  "$DIR/tg.sh" "🚀 Web app rebuilt ($DESC) — hard-refresh /fish/ to see it" || true
+  NEW_SHA="$(git rev-parse HEAD)"
+  SHIPPED=""
+  if [ -n "${OLD_SHA:-}" ] && [ "$OLD_SHA" != "$NEW_SHA" ] \
+      && git cat-file -e "$OLD_SHA" 2>/dev/null; then
+    # Prefer PR titles (what the "Working on" messages named) over raw
+    # merge-commit subjects. Best-effort: any gh hiccup falls back to plain
+    # commit subjects, and an empty range keeps the generic message.
+    MERGES="$(git log --merges --format=%H "$OLD_SHA..$NEW_SHA" 2>/dev/null | head -n 3 || true)"
+    if [ -n "${MERGES:-}" ]; then
+      SLUG="$(git remote get-url origin \
+        | sed -E 's#^(git@github.com:|https://github.com/)##; s#\.git$##')"
+      while read -r M; do
+        [ -z "${M:-}" ] && continue
+        T=""
+        [ -n "${SLUG:-}" ] && T="$(gh api "repos/$SLUG/commits/$M/pulls" \
+          --jq '.[0].title // empty' 2>/dev/null || true)"
+        [ -z "${T:-}" ] && T="$(git log -1 --format=%s "$M" 2>/dev/null || true)"
+        T="$(echo "$T" | sed -E 's/^\[agent #[0-9]+\] //')"
+        [ -n "${T:-}" ] && SHIPPED="${SHIPPED}${SHIPPED:+; }$T"
+      done <<< "$MERGES"
+    fi
+    if [ -z "${SHIPPED:-}" ]; then
+      SHIPPED="$(git log --format=%s "$OLD_SHA..$NEW_SHA" 2>/dev/null \
+        | grep -vE '^(fix\(loop\)|chore:)' | head -n 3 | tr '\n' ';' | sed 's/; *$//' | sed 's/; */; /g' || true)"
+    fi
+  fi
+  if [ -n "${SHIPPED:-}" ]; then
+    "$DIR/tg.sh" "🚀 Shipped to /fish/: $SHIPPED — hard-refresh to see it" || true
+  else
+    "$DIR/tg.sh" "🚀 Web app rebuilt ($DESC) — hard-refresh /fish/ to see it" || true
+  fi
 else
   echo "[deploy] flutter build failed for $DESC"
   if [ ! -f "$FAIL_MARKER" ] || [ "$(cat "$FAIL_MARKER")" != "$DESC" ]; then

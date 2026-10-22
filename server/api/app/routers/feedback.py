@@ -17,12 +17,13 @@ import datetime as dt
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..db import get_session
-from ..deps import get_current_user
+from ..deps import require_jwt_user
 from ..github_issues import build_issue_body, create_issue
 from ..models import FeedbackReport, TrustedReporter, User
 from ..ratelimit import limit
@@ -123,7 +124,7 @@ async def _file_on_github(row: FeedbackReport) -> None:
 
 @router.get("/status", response_model=FeedbackStatusOut)
 async def status(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     admin = _is_admin(user)
@@ -134,7 +135,7 @@ async def status(
 @router.post("", response_model=FeedbackOut, status_code=201)
 async def submit(
     body: FeedbackSubmitIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
     _rl: None = Depends(limit("feedback:submit", 20, 3600, by_user=True)),
 ):
@@ -161,7 +162,7 @@ async def submit(
 
 @router.get("/mine", response_model=list[FeedbackOut])
 async def mine(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     rows = (
@@ -177,7 +178,7 @@ async def mine(
 
 @router.get("/pending", response_model=list[FeedbackAdminOut])
 async def pending(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     _require_admin(user)
@@ -196,22 +197,46 @@ async def pending(
 async def approve(
     report_id: int,
     body: FeedbackApproveIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     _require_admin(user)
     row = await session.get(FeedbackReport, report_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Report not found")
+    if row.status == "denied":
+        raise HTTPException(
+            status_code=409, detail="Report was denied; cannot approve"
+        )
     if row.status != "filed":
-        await _file_on_github(row)
-        if row.status != "filed":
-            await session.commit()
-            await session.refresh(row)
-            raise HTTPException(
-                status_code=502,
-                detail=f"GitHub filing failed: {row.github_error or 'unknown'}",
+        claim = await session.execute(
+            update(FeedbackReport)
+            .where(
+                FeedbackReport.id == report_id,
+                FeedbackReport.status == "pending",
             )
+            .values(status="filing")
+        )
+        if (claim.rowcount or 0) != 1:
+            await session.refresh(row)
+            if row.status != "filed":
+                raise HTTPException(
+                    status_code=409, detail="Report is already being processed"
+                )
+        else:
+            await session.flush()
+            await _file_on_github(row)
+            if row.status != "filed":
+                row.status = "pending"
+                await session.commit()
+                await session.refresh(row)
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"GitHub filing failed: {row.github_error or 'unknown'}",
+                )
+    row.reviewed_by = user.email
+    row.reviewed_at = dt.datetime.now(dt.timezone.utc)
+    await session.commit()
     if body.trust_user and row.email:
         email = row.email.lower().strip()
         exists = (
@@ -221,15 +246,17 @@ async def approve(
         ).scalar_one_or_none()
         if exists is None:
             session.add(TrustedReporter(email=email, added_by=user.email))
-            log.warning(
-                "feedback trust granted: %s by admin %s (via approve #%d)",
-                email,
-                user.email,
-                row.id,
-            )
-    row.reviewed_by = user.email
-    row.reviewed_at = dt.datetime.now(dt.timezone.utc)
-    await session.commit()
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+            else:
+                log.warning(
+                    "feedback trust granted: %s by admin %s (via approve #%d)",
+                    email,
+                    user.email,
+                    row.id,
+                )
     await session.refresh(row)
     return _to_admin_out(row)
 
@@ -238,7 +265,7 @@ async def approve(
 async def deny(
     report_id: int,
     body: FeedbackDenyIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     _require_admin(user)
@@ -260,7 +287,7 @@ async def deny(
 
 @router.get("/trusted", response_model=list[TrustedOut])
 async def trusted_list(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     _require_admin(user)
@@ -278,7 +305,7 @@ async def trusted_list(
 @router.post("/trusted", response_model=TrustedOut, status_code=201)
 async def trusted_add(
     body: TrustedAddIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     _require_admin(user)
@@ -292,7 +319,11 @@ async def trusted_add(
         raise HTTPException(status_code=409, detail="Already trusted")
     row = TrustedReporter(email=email, added_by=user.email)
     session.add(row)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Already trusted")
     await session.refresh(row)
     log.warning("feedback trust granted: %s by admin %s (direct add)", email, user.email)
     return TrustedOut(
@@ -303,7 +334,7 @@ async def trusted_add(
 @router.delete("/trusted/{email}")
 async def trusted_remove(
     email: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     _require_admin(user)

@@ -129,11 +129,19 @@ class FeedManagerBody extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
           child: Text(
             helpText ??
-                'Canvas: one link covers all classes (Canvas web → Calendar → '
+                'Canvas: one link covers all classes (Canvas web > Calendar > '
                     'Calendar Feed) — courses are split automatically. Learning '
                     'Suite: add each class separately. Google calendars: use the '
                     'Google button below.',
             style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: () => showIcalTutorial(context),
+            icon: const Icon(Icons.help_outline, size: 18),
+            label: const Text('How do I find my iCal link?'),
           ),
         ),
         if (feeds.isEmpty)
@@ -269,6 +277,121 @@ void _confirmDelete(BuildContext context, Feed feed, [String itemNoun = 'class']
       ],
     ),
   );
+}
+
+/// Step-by-step tutorial for finding the iCal feed URLs that classes need.
+///
+/// Canvas exposes ONE user-level feed covering every course; Learning Suite
+/// exposes one feed PER course. Opened from the feed editor and from the
+/// classes manager help text.
+Future<void> showIcalTutorial(BuildContext context) {
+  return showDialog<void>(
+    context: context,
+    builder: (dialogContext) => const _IcalTutorialDialog(),
+  );
+}
+
+class _IcalTutorialDialog extends StatelessWidget {
+  const _IcalTutorialDialog();
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('How do I find my iCal link?'),
+      content: SingleChildScrollView(
+        child: SizedBox(
+          width: 440,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Canvas — one link covers every class',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 4),
+              const _TutorialSteps(
+                steps: [
+                  'Open Canvas in a browser and log in (e.g. byu.instructure.com).',
+                  'In the left-hand global navigation, click Calendar.',
+                  'In the calendar sidebar (bottom right), click Calendar Feed.',
+                  'Copy the URL in the URL field — it looks like https://<school>.instructure.com/feeds/calendars/user_….ics — and paste it into the iCal link field here.',
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Copy the link itself, not “Click here to view”: that downloads a one-time .ics file, while this app needs the live link so future assignments keep syncing. Courses split automatically — leave the source as Canvas.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Learning Suite — one link per class',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 4),
+              const _TutorialSteps(
+                steps: [
+                  'Open learningsuite.byu.edu in a browser and log in.',
+                  'From the Course List, open the course, then click its Schedule tab.',
+                  'At the top of the Schedule page, click Get iCalendar Feed.',
+                  'Copy the link provided and paste it into the iCal link field here. Name it after the class.',
+                  'Repeat for each class — every course needs its own feed.',
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Learning Suite refreshes its feed about once a day, so brand-new schedule changes can lag behind. Press sync in the app to pull the latest.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Got it'),
+        ),
+      ],
+    );
+  }
+}
+
+class _TutorialSteps extends StatelessWidget {
+  final List<String> steps;
+
+  const _TutorialSteps({required this.steps});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < steps.length; i++)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 24,
+                  child: Text(
+                    '${i + 1}.',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ),
+                Expanded(
+                  child: Text(
+                    steps[i],
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 class _FeedTile extends StatelessWidget {
@@ -410,9 +533,9 @@ class _FeedEditorDialogState extends State<_FeedEditorDialog> {
                 controller: _url,
                 decoration: const InputDecoration(
                   labelText: 'iCal link',
-                  helperText: 'Canvas: one link for all classes (Calendar → '
-                      'Calendar Feed). Learning Suite: course → Calendar → '
-                      'subscribe / export.',
+                  helperText: 'Canvas: one link for all classes (Calendar > '
+                      'Calendar Feed). Learning Suite: course > Schedule > '
+                      'Get iCalendar Feed.',
                   border: OutlineInputBorder(),
                 ),
                 onChanged: (value) {
@@ -422,7 +545,15 @@ class _FeedEditorDialogState extends State<_FeedEditorDialog> {
                   }
                 },
               ),
-              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () => showIcalTutorial(context),
+                  icon: const Icon(Icons.help_outline, size: 18),
+                  label: const Text('How do I find my iCal link?'),
+                ),
+              ),
+              const SizedBox(height: 4),
               DropdownButtonFormField<FeedKind>(
                 initialValue: _kind,
                 decoration: const InputDecoration(

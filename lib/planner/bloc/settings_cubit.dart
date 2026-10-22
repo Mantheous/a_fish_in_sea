@@ -37,6 +37,11 @@ class SettingsState extends Equatable {
   final bool trackingEnabled;
   final int trackingIntervalMinutes;
 
+  /// AnkiConnect endpoint for memorization goals. Per-device like
+  /// [icalProxyBase]: a desktop talks to its own localhost, a phone to a
+  /// LAN address — roaming one value would break the other device.
+  final String ankiConnectHost;
+
   const SettingsState({
     this.icalProxyBase = '',
     this.defaultCalendarView = CalendarView.week,
@@ -46,6 +51,7 @@ class SettingsState extends Equatable {
     this.defaultEventFeedId,
     this.trackingEnabled = true,
     this.trackingIntervalMinutes = 5,
+    this.ankiConnectHost = SettingsCubit.defaultAnkiConnectHost,
   });
 
   SettingsState copyWith({
@@ -58,6 +64,7 @@ class SettingsState extends Equatable {
     bool clearDefaultEventFeedId = false,
     bool? trackingEnabled,
     int? trackingIntervalMinutes,
+    String? ankiConnectHost,
   }) {
     return SettingsState(
       icalProxyBase: icalProxyBase ?? this.icalProxyBase,
@@ -71,6 +78,7 @@ class SettingsState extends Equatable {
       trackingEnabled: trackingEnabled ?? this.trackingEnabled,
       trackingIntervalMinutes:
           trackingIntervalMinutes ?? this.trackingIntervalMinutes,
+      ankiConnectHost: ankiConnectHost ?? this.ankiConnectHost,
     );
   }
 
@@ -84,10 +92,13 @@ class SettingsState extends Equatable {
         defaultEventFeedId,
         trackingEnabled,
         trackingIntervalMinutes,
+        ankiConnectHost,
       ];
 }
 
 class SettingsCubit extends HydratedCubit<SettingsState> {
+  static const String defaultAnkiConnectHost = 'http://127.0.0.1:8765';
+
   SettingsCubit()
       : super(SettingsState(defaultCalendarView: platformDefaultCalendarView));
 
@@ -151,12 +162,25 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
     }
   }
 
+  /// AnkiConnect endpoint. Blank resets to the local default; validation
+  /// (and its displayable error) lives in the client at sync time.
+  void setAnkiConnectHost(String host) {
+    final trimmed = host.trim();
+    emit(state.copyWith(
+        ankiConnectHost:
+            trimmed.isEmpty ? defaultAnkiConnectHost : trimmed));
+  }
+
   /// Sync apply: takes the roamed settings but keeps the per-device
-  /// server URL (different networks need different URLs).
+  /// values (server URL, Anki host, and calendar view differ per device).
   void applySyncedJson(Map<String, dynamic> json) {
     final restored = fromJson(json);
     if (restored == null) return;
-    emit(restored.copyWith(icalProxyBase: state.icalProxyBase));
+    emit(restored.copyWith(
+      icalProxyBase: state.icalProxyBase,
+      ankiConnectHost: state.ankiConnectHost,
+      defaultCalendarView: state.defaultCalendarView,
+    ));
   }
 
   static CalendarView _parseView(String? name) {
@@ -194,7 +218,13 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
         trackingEnabled: json['trackingEnabled'] as bool? ?? true,
         trackingIntervalMinutes:
             _parseTrackingInterval(json['trackingIntervalMinutes']),
+        ankiConnectHost: _parseAnkiHost(json['ankiConnectHost']),
       );
+
+  static String _parseAnkiHost(Object? value) {
+    if (value is String && value.trim().isNotEmpty) return value.trim();
+    return defaultAnkiConnectHost;
+  }
 
   @override
   Map<String, dynamic> toJson(SettingsState state) => {
@@ -206,5 +236,6 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
         'defaultEventFeedId': state.defaultEventFeedId,
         'trackingEnabled': state.trackingEnabled,
         'trackingIntervalMinutes': state.trackingIntervalMinutes,
+        'ankiConnectHost': state.ankiConnectHost,
       };
 }

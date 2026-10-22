@@ -12,16 +12,26 @@ import '../../nodes/model/node.dart';
 import '../../nodes/service/node_feed.dart';
 import '../../sync/sync_client.dart';
 import '../model/assignment_rule.dart';
+import 'assignment_estimates_cubit.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../service/canvas_service.dart';
+import '../service/feed_event_merge.dart';
 import '../service/google_calendar_service.dart';
 import '../service/ical_service.dart';
 import 'calendar_cubit.dart';
 
+/// One feed's pending status change while a batched sync is running.
+typedef _FeedStatusPatch = ({
+  DateTime? lastSyncAt,
+  bool clearError,
+  String? error,
+});
+
 class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   final CalendarCubit _calendarCubit;
   final NodeCubit _nodeCubit;
+  final Set<String> _pendingFeedSyncs = {};
   final IcalService _icalService;
   final GoogleCalendarService _googleService;
   final String Function() _proxyBase;
@@ -38,6 +48,14 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   /// (rather than a cubit reference) so tests can omit it; null means
   /// no shifts, exactly as before rules existed.
   final List<AssignmentRule> Function()? assignmentRulesProvider;
+
+  /// Learned per-class time estimates, dropped for a class only when the
+  /// user explicitly removes it ([removeFeed]/[removeOrphanedClass]) — and
+  /// folded into that action's undo record. Null (tests, or unwired trees)
+  /// means estimates are left untouched. Never touched on idle rebuilds:
+  /// entering/exiting demo swaps the whole feed list, which must not wipe
+  /// what the app learned about the user's real courses.
+  final AssignmentEstimatesCubit? estimatesCubit;
 
   final ValueNotifier<bool> isSyncing = ValueNotifier(false);
   DateTime? _lastAutoSync;
@@ -60,6 +78,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     this.syncClient,
     CanvasService? canvasService,
     this.assignmentRulesProvider,
+    this.estimatesCubit,
   })  : _calendarCubit = calendarCubit,
         _nodeCubit = nodeCubit,
         _icalService = icalService,
@@ -97,31 +116,72 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   void removeFeed(String feedId) {
     final feed = byId(feedId);
     if (feed == null) return;
-    final feedBefore = toJson(state);
+    final feedBefore = state;
     emit(state.where((f) => f.id != feedId).toList());
-    final calendarBefore = _calendarCubit.toJson(_calendarCubit.state);
-    _calendarCubit.removeFeedEvents(feedId);
-    final nodeBefore = _nodeCubit.toJson(_nodeCubit.state);
-    _nodeCubit.removeImportedNodesFor(feedId);
+    final cascade = _removeClassData(feedId);
     UndoCubit.instance?.record(
       ChangeRecord(entries: [
         StateSnapshot(
           cubitId: changeId,
-          before: feedBefore,
-          after: toJson(state),
+          stateBefore: feedBefore,
+          stateAfter: state,
         ),
-        StateSnapshot(
-          cubitId: _calendarCubit.changeId,
-          before: calendarBefore,
-          after: _calendarCubit.toJson(_calendarCubit.state),
-        ),
-        StateSnapshot(
-          cubitId: _nodeCubit.changeId,
-          before: nodeBefore,
-          after: _nodeCubit.toJson(_nodeCubit.state),
-        ),
+        ...cascade,
       ]),
     );
+  }
+
+  /// Removes the leftover data of a class whose feed entry is already gone.
+  ///
+  /// Re-adding a class while sync was down (or losing the feeds cubit's
+  /// stored copy) can leave imported homework and calendar events whose
+  /// classId points at a feed that no longer exists. Those show up under
+  /// "Unknown class" in Assignments by class, with no Settings row to remove
+  /// them from. This drops the class's imported homework + events as one
+  /// undoable step, leaving the feed list untouched.
+  void removeOrphanedClass(String classId) {
+    if (classId.isEmpty || byId(classId) != null) return;
+    final hasEvents = _calendarCubit.state.any((e) => e.feedId == classId);
+    final hasNodes = _nodeCubit.state
+        .any((n) => n.classId == classId && n.sourceEventId != null);
+    if (!hasEvents && !hasNodes) return;
+    final entries = _removeClassData(classId);
+    UndoCubit.instance?.record(ChangeRecord(entries: entries));
+  }
+
+  /// Cascade shared by [removeFeed] and [removeOrphanedClass]: drop
+  /// [classId]'s calendar events and imported homework. Returns the undo
+  /// snapshots for the cubits it touched.
+  List<StateSnapshot> _removeClassData(String classId) {
+    final calendarBefore = _calendarCubit.state;
+    _calendarCubit.removeFeedEvents(classId);
+    final nodeBefore = _nodeCubit.state;
+    _nodeCubit.removeImportedNodesFor(classId);
+    final snapshots = [
+      StateSnapshot(
+        cubitId: _calendarCubit.changeId,
+        stateBefore: calendarBefore,
+        stateAfter: _calendarCubit.state,
+      ),
+      StateSnapshot(
+        cubitId: _nodeCubit.changeId,
+        stateBefore: nodeBefore,
+        stateAfter: _nodeCubit.state,
+      ),
+    ];
+    final estimates = estimatesCubit;
+    if (estimates != null) {
+      final estimatesBefore = estimates.state;
+      estimates.forgetFeed(classId);
+      if (!identical(estimatesBefore, estimates.state)) {
+        snapshots.add(StateSnapshot(
+          cubitId: estimates.changeId,
+          stateBefore: estimatesBefore,
+          stateAfter: estimates.state,
+        ));
+      }
+    }
+    return snapshots;
   }
 
   Feed? byId(String feedId) => _byIdMap[feedId];
@@ -175,20 +235,85 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     return feed;
   }
 
-  Future<String?> _pushAndResync(
+  /// Message shown when the Google grant is dead (expired/revoked refresh
+  /// token or rejected access token). The server marks these with
+  /// `needsReconnect`; surfacing the raw upstream body (e.g. "Token refresh
+  /// failed (400): ... Token has been expired or revoked") strands the user
+  /// with no action, so substitute directions to the fix.
+  static const String googleReconnectMessage =
+      'Google account needs reconnect — open Feeds to reconnect.';
+
+  /// Runs one remote write and maps its failure to a user-facing message.
+  Future<String?> _pushRemote(
     String feedId,
     Future<void> Function() push,
   ) async {
     try {
       await push();
     } on GoogleCalendarException catch (e) {
-      _updateFeedStatus(feedId, error: e.message);
-      return e.message;
+      final message = e.needsReconnect ? googleReconnectMessage : e.message;
+      _updateFeedStatus(feedId, error: message);
+      return message;
     } catch (e) {
       return e.toString();
     }
+    return null;
+  }
+
+  /// Push + full feed refetch. Only used when ONE write can change many
+  /// local events (series edits): the write response alone cannot tell us
+  /// how Google re-shaped every other occurrence.
+  Future<String?> _pushAndResync(
+    String feedId,
+    Future<void> Function() push,
+  ) async {
+    final error = await _pushRemote(feedId, push);
+    if (error != null) return error;
     await syncFeed(feedId);
     return null;
+  }
+
+  /// Applies the canonical event returned by a single-event write. The
+  /// response is authoritative for Google-visible fields, so the full feed
+  /// refetch that used to hold the editor's save spinner is not needed.
+  /// Returns the merged local copy.
+  PlannerEvent _applyWriteResult(PlannerEvent saved, PlannerEvent local) {
+    final merged = preserveLocalFieldsOnWrite(saved, local);
+    _calendarCubit.applySyncedEvent(merged);
+    // Defensive: if Google ever answers a write with a different id, keep
+    // one copy rather than leaving the old local row behind.
+    if (saved.id != local.id) {
+      _calendarCubit.removeEventsSilently({local.id});
+    }
+    return merged;
+  }
+
+  /// A sync already in flight fetched the feed BEFORE this write landed;
+  /// its snapshot would overwrite the write result a few milliseconds
+  /// later. Queue one more pass so the fresh server copy wins. With no
+  /// sync running there is no stale snapshot to guard against.
+  void _reconcileIfSyncInFlight(String feedId) {
+    if (isSyncing.value) _pendingFeedSyncs.add(feedId);
+  }
+
+  /// Removes the local copies of a remotely deleted event (the whole
+  /// series when Google deleted the master).
+  void _removeDeletedLocally(PlannerEvent event, {required bool series}) {
+    if (!series) {
+      _calendarCubit.removeEventsSilently({event.id});
+      return;
+    }
+    final key = seriesKeyFor(event);
+    _calendarCubit.removeEventsSilently({
+      event.id,
+      // Feed-scoped like the refetch this replaces: another feed mirroring
+      // the same master must not lose its rows.
+      for (final e in _calendarCubit.state)
+        if (e.feedId == event.feedId &&
+            key != null &&
+            seriesKeyFor(e) == key)
+          e.id,
+    });
   }
 
   /// Resolves the remote id for a series-wide write. Real Google masters
@@ -215,10 +340,12 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     return null;
   }
 
-  /// Pushes a Google event to the server, then re-syncs the feed so local
-  /// state matches. With [series] true the series master is patched
-  /// (whole series); otherwise the event's own id is patched (for a
-  /// recurring instance that edits just that occurrence).
+  /// Pushes a Google event to the server and applies the returned copy
+  /// locally, preserving local-only fields. Single-event writes never
+  /// refetch the feed; [series] writes do, because one master patch
+  /// re-shapes every occurrence. With [series] true the series master is
+  /// patched (whole series); otherwise the event's own id is patched (for
+  /// a recurring instance that edits just that occurrence).
   /// Returns null on success, else an error message.
   Future<String?> pushEventUpdate(
     PlannerEvent updated, {
@@ -244,18 +371,39 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     if (remoteId == null || remoteId.isEmpty) {
       return 'This event can only be edited locally.';
     }
-    return _pushAndResync(feed.id, () async {
-      await _googleService.updateEvent(
+    if (series) {
+      // A series write re-shapes every other occurrence, which the single
+      // write response cannot describe. Keep the full refetch for this
+      // path; single-event edits apply the response directly.
+      return _pushAndResync(feed.id, () async {
+        await _googleService.updateEvent(
+          calendarId: feed.calendarId!,
+          feedId: feed.id,
+          eventId: remoteId,
+          event: updated,
+          instanceEdit: false,
+        );
+      });
+    }
+    var saved = updated;
+    final error = await _pushRemote(feed.id, () async {
+      saved = await _googleService.updateEvent(
         calendarId: feed.calendarId!,
         feedId: feed.id,
         eventId: remoteId,
         event: updated,
-        instanceEdit: !series && updated.isRecurringInstance,
+        instanceEdit: updated.isRecurringInstance,
       );
     });
+    if (error != null) return error;
+    _applyWriteResult(saved, updated);
+    _reconcileIfSyncInFlight(feed.id);
+    return null;
   }
 
-  /// Creates [event] on the Google calendar backing [feed], then re-syncs.
+  /// Creates [event] on the Google calendar backing [feed]. The created
+  /// event is applied locally from the write response — no refetch, so the
+  /// editor closes on one round trip.
   /// Returns a record with an error message (null on success) and the
   /// created event as returned by the server.
   Future<({String? error, PlannerEvent? created})> pushEventCreate({
@@ -305,17 +453,27 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
         event: event,
       );
     } on GoogleCalendarException catch (e) {
-      _updateFeedStatus(feed.id, error: e.message);
-      return (error: e.message, created: null);
+      final message = e.needsReconnect ? googleReconnectMessage : e.message;
+      _updateFeedStatus(feed.id, error: message);
+      return (error: message, created: null);
     } catch (e) {
       return (error: e.toString(), created: null);
     }
-    await syncFeed(feed.id);
-    return (error: null, created: created);
+    if (event.recurrenceRule.isNotEmpty) {
+      // Google expands a recurring create into per-instance rows on the
+      // next fetch. Keep that refetch so the local calendar matches the
+      // shape every later resync will return.
+      await syncFeed(feed.id);
+      return (error: null, created: created);
+    }
+    final merged = _applyWriteResult(created, event);
+    _reconcileIfSyncInFlight(feed.id);
+    return (error: null, created: merged);
   }
 
-  /// Deletes a Google event on the server and re-syncs. With [series] true
-  /// the whole series is deleted, otherwise just that occurrence.
+  /// Deletes a Google event on the server and drops the local copy. With
+  /// [series] true the whole series is deleted, otherwise just that
+  /// occurrence.
   /// Returns null on success, else an error message.
   Future<String?> pushEventDelete(
     PlannerEvent event, {
@@ -342,12 +500,17 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     if (remoteId == null || remoteId.isEmpty) {
       return 'This event can only be deleted locally.';
     }
-    return _pushAndResync(feed.id, () async {
+    final error = await _pushRemote(feed.id, () async {
       await _googleService.deleteEvent(
         calendarId: feed.calendarId!,
         eventId: remoteId,
       );
     });
+    if (error != null) return error;
+    // The refetch that used to remove the local copy is gone; drop it here.
+    _removeDeletedLocally(event, series: series);
+    _reconcileIfSyncInFlight(feed.id);
+    return null;
   }
 
   /// Fetches the series master for a recurring instance, or null.
@@ -364,7 +527,8 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
         eventId: seriesId,
       );
     } on GoogleCalendarException catch (e) {
-      _updateFeedStatus(feed.id, error: e.message);
+      _updateFeedStatus(
+          feed.id, error: e.needsReconnect ? googleReconnectMessage : e.message);
       return null;
     } catch (_) {
       return null;
@@ -425,6 +589,10 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   Future<void> syncFeed(String feedId) async {
     final feed = byId(feedId);
     if (feed == null || !feed.enabled) return;
+    if (isSyncing.value) {
+      _pendingFeedSyncs.add(feedId);
+      return;
+    }
     await _sync([feed], force: true);
   }
 
@@ -439,28 +607,52 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   }
 
   Future<void> _sync(List<Feed> feeds, {required bool force}) async {
-    if (isSyncing.value) return;
+    if (isSyncing.value) {
+      _pendingFeedSyncs.addAll(feeds.map((f) => f.id));
+      return;
+    }
     isSyncing.value = true;
     _lastAutoSync = DateTime.now();
-    UndoCubit.instance?.resetHistory();
+    // Demo entry/exit swaps the whole feed list mid-sync: a sync that
+    // started in demo must not write into real storage after a quick exit
+    // (and vice versa). [_syncOne] bails per feed; the Canvas heal below
+    // is the only other writer, so skip it on a flip too.
+    final startedInDemo = DemoMode.isActive;
+    // Status rows (lastSyncAt / lastError) change on every resync. Patch
+    // them in ONE emit at the end: a multi-feed sync must rebuild feed
+    // watchers once, not once per feed.
+    final statusPatches = <String, _FeedStatusPatch>{};
     try {
       for (final feed in feeds) {
-        await _syncOne(feed);
+        await _syncOne(feed, statusPatches);
       }
       // Submitted-in-Canvas homework completes itself. Runs after the
       // iCal import so fresh nodes are covered too; failures never fail
       // the feed sync (reconnect is handled in the classes sheet).
-      await _applyCanvasCompletions(feeds);
+      if (DemoMode.isActive == startedInDemo) {
+        await _applyCanvasCompletions(feeds);
+      }
     } finally {
+      _flushFeedStatuses(statusPatches);
       isSyncing.value = false;
+      if (_pendingFeedSyncs.isNotEmpty) {
+        final pending = _pendingFeedSyncs.toList();
+        _pendingFeedSyncs.clear();
+        unawaited(syncFeeds(pending));
+      }
     }
   }
 
-  Future<void> _syncOne(Feed feed) async {
+  Future<void> _syncOne(
+    Feed feed,
+    Map<String, _FeedStatusPatch> statusPatches,
+  ) async {
     try {
+      final startedInDemo = DemoMode.isActive;
       final fresh = feed.kind == FeedKind.google
           ? await _syncGoogle(feed)
           : await _syncIcal(feed);
+      if (DemoMode.isActive != startedInDemo) return;
       final now = DateTime.now();
       final previous = <String, PlannerEvent>{
         for (final e in _calendarCubit.state)
@@ -479,7 +671,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
         final old = previous[event.id];
         if (old != null) {
           if (old.isTask) {
-            return event.copyWith(
+            return preserveLocalFeedMetadata(event.copyWith(
               isTask: old.isTask,
               done: old.done,
               completedAt: old.completedAt,
@@ -496,7 +688,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
               timerStartedAt: old.timerStartedAt,
               clearTimerStartedAt: old.timerStartedAt == null,
               failed: old.failed,
-            );
+            ), old);
           }
           // The task flag is local-only (Google never stores it), so a
           // lost calendar flag must not wipe the mark while its backing
@@ -506,7 +698,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
           final backing = _nodeCubit.nodesForEventId(event.id);
           if (backing.isNotEmpty) {
             final shadow = backing.first;
-            return event.copyWith(
+            return preserveLocalFeedMetadata(event.copyWith(
               isTask: true,
               done: shadow.isDone,
               completedAt: shadow.completedAt,
@@ -524,9 +716,9 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
               timerStartedAt: old.timerStartedAt,
               clearTimerStartedAt: old.timerStartedAt == null,
               failed: old.failed,
-            );
+            ), old);
           }
-          return event.copyWith(
+          return preserveLocalFeedMetadata(event.copyWith(
             isTask: old.isTask,
             done: old.done,
             completedAt: old.completedAt,
@@ -543,7 +735,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
             timerStartedAt: old.timerStartedAt,
             clearTimerStartedAt: old.timerStartedAt == null,
             failed: old.failed,
-          );
+          ), old);
         }
         // Same heal for events the calendar has never seen (or lost):
         // a surviving node re-asserts the mark.
@@ -573,13 +765,17 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
           assignmentRules: assignmentRulesProvider?.call() ?? const [],
         );
       }
-      _updateFeedStatus(
+      _queueFeedStatus(
+        statusPatches,
         feed.id,
         lastSyncAt: DateTime.now(),
         clearError: true,
       );
     } catch (e) {
-      _updateFeedStatus(feed.id, error: e.toString());
+      final message = e is GoogleCalendarException && e.needsReconnect
+          ? googleReconnectMessage
+          : e.toString();
+      _queueFeedStatus(statusPatches, feed.id, error: message);
     }
   }
 
@@ -784,17 +980,56 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     bool clearError = false,
     String? error,
   }) {
-    emit(
-      state
-          .map((f) => f.id == feedId
-              ? f.copyWith(
-                  lastSyncAt: lastSyncAt,
-                  clearLastError: clearError,
-                  lastError: error,
-                )
-              : f)
-          .toList(),
+    var changed = false;
+    final next = state.map((f) {
+      if (f.id != feedId) return f;
+      final updated = f.copyWith(
+        lastSyncAt: lastSyncAt,
+        clearLastError: clearError,
+        lastError: error,
+      );
+      if (updated != f) changed = true;
+      return updated;
+    }).toList();
+    if (changed) emit(next);
+  }
+
+  /// Records a status change for [feedId] during a batched sync. The last
+  /// patch per feed wins; [_flushFeedStatuses] applies them all at once.
+  void _queueFeedStatus(
+    Map<String, _FeedStatusPatch> patches,
+    String feedId, {
+    DateTime? lastSyncAt,
+    bool clearError = false,
+    String? error,
+  }) {
+    final previous = patches[feedId];
+    patches[feedId] = (
+      lastSyncAt: lastSyncAt ?? previous?.lastSyncAt,
+      clearError: clearError || (previous?.clearError ?? false),
+      error: error ?? previous?.error,
     );
+  }
+
+  void _flushFeedStatuses(Map<String, _FeedStatusPatch> patches) {
+    if (patches.isEmpty) return;
+    var changed = false;
+    final next = <Feed>[];
+    for (final feed in state) {
+      final patch = patches[feed.id];
+      if (patch == null) {
+        next.add(feed);
+        continue;
+      }
+      final updated = feed.copyWith(
+        lastSyncAt: patch.lastSyncAt,
+        clearLastError: patch.clearError,
+        lastError: patch.error,
+      );
+      if (updated != feed) changed = true;
+      next.add(updated);
+    }
+    if (changed) emit(next);
   }
 
   @override

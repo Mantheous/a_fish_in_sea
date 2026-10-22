@@ -47,7 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import plaid as p
 from ..db import get_session
-from ..deps import get_current_user
+from ..deps import require_jwt_user
 from ..models import User
 from ..oauth_store import (
     clear_connection,
@@ -55,10 +55,14 @@ from ..oauth_store import (
     get_connection,
     save_connection,
 )
+from ..ratelimit import limit
 
 router = APIRouter(tags=["plaid"])
 
 _PROVIDER = "plaid"
+_MAX_SYNC_PAGES = 50
+_MAX_EMPTY_CURSOR_POLLS = 10
+_MAX_LINK_EXIT_BYTES = 16 * 1024
 
 
 def _missing_key_response(e: p.PlaidConfigError) -> JSONResponse:
@@ -80,7 +84,7 @@ async def _access_token(
 
 @router.post("/info")
 async def info(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     import os
@@ -97,7 +101,7 @@ async def info(
 
 @router.post("/sandbox/auto_connect")
 async def sandbox_auto_connect(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     if not p.is_sandbox():
@@ -142,7 +146,7 @@ async def sandbox_auto_connect(
 
 @router.post("/disconnect")
 async def disconnect(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     await clear_connection(session, user.id, _PROVIDER)
@@ -151,7 +155,7 @@ async def disconnect(
 
 @router.post("/create_link_token")
 async def create_link_token(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
 ):
     try:
         client = p.get_client()
@@ -187,7 +191,7 @@ async def create_link_token(
 @router.post("/set_access_token")
 async def set_access_token(
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     public_token = await _read_public_token(request)
@@ -242,7 +246,7 @@ async def _read_public_token(request: Request) -> str | None:
 
 @router.get("/auth")
 async def get_auth(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     token, err = await _access_token(session, user)
@@ -264,7 +268,7 @@ async def get_auth(
 
 @router.get("/transactions")
 async def get_transactions(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     token, err = await _access_token(session, user)
@@ -279,7 +283,9 @@ async def get_transactions(
         cursor = ""
         added: list = []
         has_more = True
-        while has_more:
+        empty_polls = 0
+        pages = 0
+        while has_more and pages < _MAX_SYNC_PAGES:
             response = p.to_dict(
                 await asyncio.to_thread(
                     client.transactions_sync,
@@ -288,13 +294,17 @@ async def get_transactions(
                     ),
                 )
             )
-            cursor = response["next_cursor"]
-            # No data yet (webhook-less quickstart flow): wait and poll.
+            cursor = response.get("next_cursor") or ""
+            # No data yet (webhook-less quickstart flow): wait and poll, bounded.
             if cursor == "":
-                await asyncio.sleep(2)
+                empty_polls += 1
+                if empty_polls >= _MAX_EMPTY_CURSOR_POLLS:
+                    break
+                await asyncio.sleep(0.5)
                 continue
-            added.extend(response["added"])
-            has_more = response["has_more"]
+            pages += 1
+            added.extend(response.get("added") or [])
+            has_more = bool(response.get("has_more"))
             p.log_response(response)
     except plaid.ApiException as e:
         return p.plaid_error_response(e)
@@ -304,7 +314,7 @@ async def get_transactions(
 
 @router.get("/identity")
 async def get_identity(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     token, err = await _access_token(session, user)
@@ -326,7 +336,7 @@ async def get_identity(
 
 @router.get("/balance")
 async def get_balance(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     token, err = await _access_token(session, user)
@@ -349,7 +359,7 @@ async def get_balance(
 
 @router.get("/accounts")
 async def get_accounts(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     token, err = await _access_token(session, user)
@@ -371,7 +381,7 @@ async def get_accounts(
 
 @router.get("/item")
 async def get_item(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     token, err = await _access_token(session, user)
@@ -404,13 +414,24 @@ async def get_item(
 
 
 @router.post("/link_exit_error")
-async def link_exit_error(request: Request):
+async def link_exit_error(
+    request: Request,
+    _rl: None = Depends(limit("plaid:link_exit_error", 30, 60)),
+):
+    raw = await request.body()
+    if len(raw) > _MAX_LINK_EXIT_BYTES:
+        return JSONResponse(
+            status_code=413, content={"error": "Payload too large"}
+        )
     try:
-        data = await request.json()
+        data = json.loads(raw or b"null")
     except (json.JSONDecodeError, ValueError):
         return JSONResponse(
             status_code=400, content={"error": "Invalid JSON"}
         )
-    print("[Link Exit Error (frontend)]")
-    p.pretty_print_response(data)
+    if not isinstance(data, dict):
+        return JSONResponse(
+            status_code=400, content={"error": "Expected JSON object"}
+        )
+    p.log_response(data)
     return {"status": "logged"}

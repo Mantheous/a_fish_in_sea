@@ -18,7 +18,7 @@ class SyllabusLlmException implements Exception {
 }
 
 /// Calls the app server's `/api/syllabus/extract` (which proxies to
-/// Ollama on Alauris over localhost — the app never talks to Ollama
+/// Ollama over localhost — the app never talks to Ollama
 /// directly, so no new public surface). Any failure throws
 /// [SyllabusLlmException] and the caller falls back to [parseSyllabusLocally].
 Future<List<SyllabusDraft>> extractSyllabusViaServer(

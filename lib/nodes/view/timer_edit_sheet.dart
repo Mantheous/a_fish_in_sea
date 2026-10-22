@@ -6,7 +6,9 @@ import 'package:intl/intl.dart';
 
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/service/event_tracking.dart';
+import 'package:a_fish_in_sea/nodes/service/node_event_sync.dart';
 import '../bloc/node_cubit.dart';
+import 'goal_picker.dart';
 
 /// Toggl-style correction for a running or recorded timer.
 ///
@@ -65,7 +67,18 @@ Future<void> showEditNodeTimerSheet(
     },
     onSaveRange: (start, end) {
       try {
-        context.read<NodeCubit>().setReported(nodeId, start, end);
+        NodeEventSync.setNodeReported(
+          context.read<NodeCubit>(),
+          context.read<CalendarCubit>(),
+          nodeId,
+          start,
+          end,
+        );
+      } catch (_) {}
+    },
+    onReassignGoal: (goalId) {
+      try {
+        context.read<NodeCubit>().reassignChunk(nodeId, goalId);
       } catch (_) {}
     },
   );
@@ -131,6 +144,7 @@ Future<void> showTimerEditSheet(
   required DateTime initialEnd,
   required ValueChanged<DateTime> onSaveStart,
   required void Function(DateTime start, DateTime end) onSaveRange,
+  ValueChanged<String>? onReassignGoal,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -147,6 +161,7 @@ Future<void> showTimerEditSheet(
         initialEnd: initialEnd,
         onSaveStart: onSaveStart,
         onSaveRange: onSaveRange,
+        onReassignGoal: onReassignGoal,
       ),
     ),
   );
@@ -160,6 +175,7 @@ class _TimerEditSheet extends StatefulWidget {
   final DateTime initialEnd;
   final ValueChanged<DateTime> onSaveStart;
   final void Function(DateTime start, DateTime end) onSaveRange;
+  final ValueChanged<String>? onReassignGoal;
 
   const _TimerEditSheet({
     required this.recordTitle,
@@ -169,6 +185,7 @@ class _TimerEditSheet extends StatefulWidget {
     required this.initialEnd,
     required this.onSaveStart,
     required this.onSaveRange,
+    this.onReassignGoal,
   });
 
   @override
@@ -347,6 +364,27 @@ class _TimerEditSheetState extends State<_TimerEditSheet> {
                   ),
                 ),
               ),
+            if (widget.onReassignGoal != null) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () async {
+                    final picked = await showGoalPicker(
+                      context,
+                      title: 'Move chunk to goal',
+                      excludeNodeId: null,
+                    );
+                    if (picked != null) {
+                      widget.onReassignGoal!(picked.id);
+                      if (context.mounted) Navigator.of(context).pop();
+                    }
+                  },
+                  icon: const Icon(Icons.flag_outlined, size: 18),
+                  label: const Text('Move to another goal'),
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,

@@ -90,6 +90,7 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
         clearError: true,
       ));
       await Future<void>.delayed(const Duration(milliseconds: 600));
+      if (!DemoMode.isActive) return;
       _demoConnected();
       return;
     }
@@ -143,6 +144,7 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
         clearError: true,
       ));
       await Future<void>.delayed(const Duration(milliseconds: 600));
+      if (!DemoMode.isActive) return;
       _demoConnected();
       return;
     }
@@ -297,11 +299,25 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
     try {
       final userId = json['userId'] as String?;
       if (userId == null || userId.isEmpty) return;
+      final hasItemKey = json.containsKey('itemId');
+      final itemId = json['itemId'] as String?;
+      // wasConnected is stripped from synced payloads (device-local, would
+      // ping-pong); itemId null is the disconnect signal. Only clear when
+      // this device actually holds a connection, so a fresh device's empty
+      // state can never wipe a live bank link (pull-before-push means a new
+      // device adopts the server copy first anyway).
       emit(state.copyWith(
         userId: userId,
-        itemId: json['itemId'] as String?,
+        itemId: itemId,
+        clearConnection:
+            hasItemKey && itemId == null && state.itemId != null,
       ));
     } catch (_) {}
+  }
+
+  /// Clears device-local bank connection state (sign-out / account switch).
+  void clearLocalSession() {
+    emit(PlaidState(userId: PlaidUserId.generate()));
   }
 
   @override

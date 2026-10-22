@@ -79,3 +79,29 @@ def test_api_under_fish_prefix_mirrors_funnel():
         )
         assert r.status_code == 200, r.text
         assert r.json()["token_type"] == "bearer"
+
+
+def test_spa_fallback_blocks_path_traversal_and_symlinks(monkeypatch, tmp_path):
+    import app.main as main_mod
+
+    web_dir = tmp_path / "web"
+    web_dir.mkdir()
+    (web_dir / "index.html").write_text('<!DOCTYPE html><base href="/fish/"></html>')
+    secret_file = tmp_path / "secret.env"
+    secret_file.write_text("JWT_SECRET=super-secret-value")
+    try:
+        (web_dir / "escape.txt").symlink_to(secret_file)
+    except OSError:
+        pass
+
+    monkeypatch.setattr(main_mod, "WEB_BUILD_DIR", web_dir.resolve())
+    mounted_app = main_mod.create_app()
+    with TestClient(mounted_app) as client:
+        for attack in (
+            "/..%2fsecret.env",
+            "/fish/..%2fsecret.env",
+            "/escape.txt",
+            "/fish/escape.txt",
+        ):
+            r = client.get(attack)
+            assert "super-secret-value" not in r.text, attack

@@ -12,25 +12,45 @@ import datetime as dt
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import and_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
 from .models import OAuthConnection
 
 
+def validate_fernet_key(raw_key: str) -> Fernet:
+    """Parse and validate a Fernet key (44-char urlsafe base64 or 32 raw bytes).
+
+    Raises ValueError when the key is malformed so the server never silently
+    falls back to storing plaintext secrets when TOKEN_FERNET_KEY is set.
+    """
+    key = raw_key.strip()
+    if not key:
+        raise ValueError("TOKEN_FERNET_KEY is empty")
+    raw = key.encode("utf-8")
+    if len(raw) == 32:
+        return Fernet(base64.urlsafe_b64encode(raw))
+    try:
+        return Fernet(raw)
+    except Exception:
+        try:
+            decoded = base64.urlsafe_b64decode(raw)
+            if len(decoded) == 32:
+                return Fernet(base64.urlsafe_b64encode(decoded))
+        except Exception:
+            pass
+    raise ValueError(
+        "Invalid TOKEN_FERNET_KEY: expected a 32-byte urlsafe-base64 Fernet key "
+        "or 32 raw ASCII bytes"
+    )
+
+
 def _fernet() -> Fernet | None:
     key = get_settings().token_fernet_key.strip()
     if not key:
         return None
-    raw = key.encode()
-    # Accept both raw 32 bytes and base64-encoded keys.
-    try:
-        return Fernet(base64.urlsafe_b64encode(base64.urlsafe_b64decode(raw)))
-    except Exception:
-        try:
-            return Fernet(raw)
-        except Exception:
-            return None
+    return validate_fernet_key(key)
 
 
 def encrypt_secret(value: str) -> str:
@@ -47,11 +67,16 @@ def decrypt_secret(value: str) -> str:
         return ""
     f = _fernet()
     if f is None:
+        if value.startswith("gAAAAAB"):
+            return ""
         return value
     try:
         return f.decrypt(value.encode()).decode()
     except InvalidToken:
-        # Pre-key plaintext row: return as-is so the next save encrypts it.
+        # Ciphertext from another key must never be sent upstream as a bearer
+        # token; only pre-key plaintext rows pass through for upgrade-on-save.
+        if value.startswith("gAAAAAB"):
+            return ""
         return value
 
 
@@ -98,6 +123,24 @@ async def save_connection(
             updated_at=now,
         )
         session.add(row)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            row = await get_connection(session, user_id, provider)
+            if row is None:
+                raise
+            if access_token:
+                row.access_token = encrypt_secret(access_token)
+            if refresh_token or not merge_refresh:
+                row.refresh_token = encrypt_secret(refresh_token)
+            if item_id:
+                row.item_id = item_id
+            if scopes:
+                row.scopes = scopes
+            row.expires_at = expires_at
+            row.updated_at = now
+            await session.commit()
     else:
         if access_token:
             row.access_token = encrypt_secret(access_token)
@@ -109,7 +152,7 @@ async def save_connection(
             row.scopes = scopes
         row.expires_at = expires_at
         row.updated_at = now
-    await session.commit()
+        await session.commit()
     await session.refresh(row)
     return row
 

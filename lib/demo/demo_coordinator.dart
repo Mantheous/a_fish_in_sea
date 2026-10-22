@@ -10,14 +10,17 @@ import '../finances/bloc/transactions_cubit.dart';
 import '../finances/bloc/waterfall_cubit.dart';
 import '../navigation/bloc/navigation_cubit.dart';
 import '../nodes/bloc/node_cubit.dart';
+import '../feedback/feedback_service.dart';
 import '../nodes/model/node.dart';
 import '../planner/bloc/assignment_rules_cubit.dart';
+import '../planner/bloc/assignment_estimates_cubit.dart';
 import '../planner/bloc/calendar_cubit.dart';
 import '../planner/bloc/calendar_visibility_cubit.dart';
 import '../planner/bloc/feed_cubit.dart';
 import '../planner/bloc/settings_cubit.dart';
 import '../planner/bloc/tasks_view_options_cubit.dart';
 import '../planner/model/assignment_rule.dart';
+import '../planner/model/assignment_estimate.dart';
 import '../planner/model/feed.dart';
 import '../planner/model/planner_event.dart';
 import '../reporting/bloc/places_cubit.dart';
@@ -50,6 +53,7 @@ class _DemoSnapshot {
   final CalendarVisibilityState visibility;
   final TasksViewOptionsState viewOptions;
   final List<AssignmentRule> rules;
+  final List<AssignmentTypeEffort> estimates;
   final SyncMetaState syncMeta;
 
   const _DemoSnapshot({
@@ -66,6 +70,7 @@ class _DemoSnapshot {
     required this.visibility,
     required this.viewOptions,
     required this.rules,
+    required this.estimates,
     required this.syncMeta,
   });
 }
@@ -102,6 +107,7 @@ class DemoCoordinator {
       visibility: context.read<CalendarVisibilityCubit>().state,
       viewOptions: context.read<TasksViewOptionsCubit>().state,
       rules: context.read<AssignmentRulesCubit>().state,
+      estimates: context.read<AssignmentEstimatesCubit>().state,
       syncMeta: context.read<SyncMetaCubit>().state,
     );
 
@@ -204,7 +210,9 @@ class DemoCoordinator {
     context.read<CalendarVisibilityCubit>().emit(snapshot.visibility);
     context.read<TasksViewOptionsCubit>().emit(snapshot.viewOptions);
     context.read<AssignmentRulesCubit>().emit(snapshot.rules);
+    context.read<AssignmentEstimatesCubit>().emit(snapshot.estimates);
     context.read<SyncMetaCubit>().emit(snapshot.syncMeta);
+    context.read<WaterfallCubit>().emit(snapshot.waterfall);
 
     UndoCubit.instance?.resetHistory();
     try {
@@ -267,6 +275,33 @@ class DemoCoordinator {
     }
     await Future<void>.delayed(const Duration(milliseconds: 300));
     return DemoData.importBatch(DateTime.now());
+  }
+
+  // ── Demo feedback ────────────────────────────────────────────────
+  //
+  // The feedback endpoints need a signed-in session, so the demo tab shows
+  // seeded read-only reports and never calls the server.
+
+  static ({
+    FeedbackStatus status,
+    List<FeedbackReport> mine,
+    List<FeedbackReport> pending,
+    List<TrustedReporter> trusted,
+  }) demoFeedback() {
+    if (!DemoMode.isActive) {
+      return (
+        status: const FeedbackStatus(),
+        mine: const [],
+        pending: const [],
+        trusted: const [],
+      );
+    }
+    return (
+      status: const FeedbackStatus(),
+      mine: DemoData.demoReports(DateTime.now()),
+      pending: const [],
+      trusted: const [],
+    );
   }
 
   static void _applyStagedItem(

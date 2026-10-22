@@ -16,6 +16,7 @@ capped at 5MB.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import socket
 import urllib.parse
@@ -31,6 +32,39 @@ _RFC1918 = (
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
 )
+
+# CGNAT / shared address space (RFC 6598, 100.64.0.0/10): Tailnet territory.
+# It is not loopback, link-local, multicast, or a LAN range, and
+# self-hosted Tailnet feeds must be fetchable, so it is explicitly NOT treated
+# as an internal address here. /api/ical still requires a signed-in user before
+# fetching a CGNAT target (see routers/proxy.py), so unauthenticated callers
+# cannot use the public funnel to probe private Tailnet services.
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
+
+def is_cgnat_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True for 100.64.0.0/10 (CGNAT/Tailnet) addresses."""
+    return isinstance(ip, ipaddress.IPv4Address) and ip in _CGNAT
+
+
+def _is_internal_ip(raw_ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    ip = raw_ip
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    # Explicit CGNAT handling: Tailnet addresses are allowed targets (auth is
+    # gated at the /api/ical proxy), so never treat them as internal.
+    if is_cgnat_ip(ip):
+        return False
+    return (
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        or not ip.is_global
+        or (isinstance(ip, ipaddress.IPv4Address) and any(ip in net for net in _RFC1918))
+    )
 
 
 def assert_public_http_url(url: str) -> str:
@@ -48,39 +82,67 @@ def assert_public_http_url(url: str) -> str:
         addrinfo = socket.getaddrinfo(host, parsed.port or 0)
     except socket.gaierror:
         raise ValueError(f"Could not resolve feed host: {host}")
+    if not addrinfo:
+        raise ValueError(f"Could not resolve feed host: {host}")
     for _, _, _, _, sockaddr in addrinfo:
         try:
             ip = ipaddress.ip_address(sockaddr[0])
         except ValueError:
             raise ValueError(f"Could not resolve feed host: {host}")
-        if (
-            ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-            or any(ip in net for net in _RFC1918)
-        ):
+        if _is_internal_ip(ip):
             raise ValueError("Feed host resolves to an internal address")
     return url
 
 
+_HTTP_CLIENT: httpx.AsyncClient | None = None
+
+
+def _http_client() -> httpx.AsyncClient:
+    """Return a shared, pooled httpx client.
+
+    Opening a fresh client per request -- and once more per redirect hop --
+    churns file descriptors under load. One long-lived client reuses its
+    connection pool instead, which matters most for the abuse-prone fetch
+    paths (/fetch/refresh, /fetch/refresh-due, /api/ical).
+    """
+    global _HTTP_CLIENT
+    if _HTTP_CLIENT is None:
+        _HTTP_CLIENT = httpx.AsyncClient(timeout=30.0, follow_redirects=False)
+    return _HTTP_CLIENT
+
+
 async def fetch_public_bytes(url: str, timeout: float = 30.0) -> tuple[bytes, str]:
-    """Fetch url with per-hop SSRF validation. Returns (body, etag)."""
+    """Fetch url with per-hop SSRF validation and streaming size enforcement."""
     current = url
     for _ in range(MAX_REDIRECTS + 1):
-        assert_public_http_url(current)
-        async with httpx.AsyncClient(
-            timeout=timeout, follow_redirects=False
-        ) as c:
-            resp = await c.get(current)
-        location = resp.headers.get("location")
-        if resp.status_code in (301, 302, 303, 307, 308) and location:
-            current = urllib.parse.urljoin(current, location)
-            continue
-        if resp.status_code >= 400:
-            raise ValueError(f"Feed returned {resp.status_code}")
-        if len(resp.content) > MAX_BYTES:
-            raise ValueError("Feed too large (>5MB)")
-        return resp.content, resp.headers.get("etag", "")
+        await asyncio.to_thread(assert_public_http_url, current)
+        c = _http_client()
+        async with c.stream("GET", current) as resp:
+            stream = resp.extensions.get("network_stream")
+            if stream is not None and hasattr(stream, "get_extra_info"):
+                peer = stream.get_extra_info("peername")
+                if isinstance(peer, tuple) and peer:
+                    try:
+                        peer_ip = ipaddress.ip_address(peer[0])
+                    except ValueError:
+                        peer_ip = None
+                    if peer_ip is not None and _is_internal_ip(peer_ip):
+                        raise ValueError(
+                            "Feed host resolves to an internal address"
+                        )
+            location = resp.headers.get("location")
+            if resp.status_code in (301, 302, 303, 307, 308) and location:
+                current = urllib.parse.urljoin(current, location)
+                continue
+            if resp.status_code >= 400:
+                raise ValueError(f"Feed returned {resp.status_code}")
+            cl = resp.headers.get("content-length")
+            if cl and cl.isdigit() and int(cl) > MAX_BYTES:
+                raise ValueError("Feed too large (>5MB)")
+            chunks = bytearray()
+            async for chunk in resp.aiter_bytes():
+                chunks.extend(chunk)
+                if len(chunks) > MAX_BYTES:
+                    raise ValueError("Feed too large (>5MB)")
+            return bytes(chunks), resp.headers.get("etag", "")
     raise ValueError("Too many redirects")

@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import secrets
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
-from .models import RefreshToken
+from .models import RefreshToken, User
 from .security import decode_refresh, refresh_token
 
 
@@ -58,55 +59,67 @@ async def issue(session: AsyncSession, user_id: int) -> tuple[str, str]:
 async def redeem(session: AsyncSession, presented: str) -> tuple[int, str]:
     """Rotate: revoke the presented token, issue a successor.
 
-    Returns (user_id, new_token). Raises InvalidRefresh (unknown,
-    expired, or legacy-unusable token) or ReusedRefresh (revoked token
-    presented: the user's whole family is revoked as a theft response).
+    Returns (user_id, new_token). Raises InvalidRefresh (unknown, expired,
+    legacy-unusable, or already-revoked token). A revoked token presented
+    again is rejected with 401 without touching the rest of the user's
+    token family, so a concurrent double-refresh yields exactly one winner
+    and leaves the family intact.
+
+    The revoke+claim is a single atomic UPDATE (... WHERE jti AND NOT
+    revoked) whose rowcount decides the winner, so concurrent redemptions
+    of the same token cannot mint parallel chains.
     """
     try:
         user_id, jti = decode_refresh(presented)
     except Exception:
         raise InvalidRefresh from None
     if jti is None:
-        # Pre-rotation legacy token (no jti claim): valid signature, so
-        # upgrade the session in place instead of forcing a re-login.
-        # The legacy token itself is stateless and stays usable until it
-        # expires; the issued successor rotates from here on.
-        return user_id, (await issue(session, user_id))[0]
+        # Pre-rotation tokens carry no jti and cannot be rotated; reject
+        # instead of issuing an untracked successor that bypasses revocation.
+        raise InvalidRefresh
+    user = await session.get(User, user_id)
+    if user is None:
+        raise InvalidRefresh
+    presented_hash = _hash(presented)
     row = (
         await session.execute(
             select(RefreshToken).where(RefreshToken.jti == jti)
         )
     ).scalar_one_or_none()
-    if row is None or row.user_id != user_id:
+    if (
+        row is None
+        or row.user_id != user_id
+        or not secrets.compare_digest(row.token_hash or "", presented_hash)
+    ):
         raise InvalidRefresh
-    if row.revoked:
-        await session.execute(
-            update(RefreshToken)
-            .where(
-                RefreshToken.user_id == user_id,
-                RefreshToken.revoked.is_(False),
-            )
-            .values(revoked=True)
-        )
-        await session.commit()
-        raise ReusedRefresh(user_id)
+    now = _now()
     expires = row.expires_at
     if expires.tzinfo is None:
         expires = expires.replace(tzinfo=dt.timezone.utc)
-    if expires <= _now():
-        row.revoked = True
-        await session.commit()
+    if expires <= now:
         raise InvalidRefresh
     new_token, new_jti = refresh_token(user_id)
-    row.revoked = True
-    row.replaced_by = new_jti
-    row.last_used_at = _now()
+    # Atomically claim the token: only one transaction can flip an unrevoked
+    # row to revoked, so concurrent redemptions yield exactly one winner;
+    # the loser is rejected without revoking the family.
+    claim = await session.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.jti == jti,
+            RefreshToken.user_id == user_id,
+            RefreshToken.revoked.is_(False),
+        )
+        .values(revoked=True, replaced_by=new_jti, last_used_at=now)
+    )
+    if (claim.rowcount or 0) != 1:
+        await session.rollback()
+        raise InvalidRefresh
     session.add(
         RefreshToken(
             user_id=user_id,
             jti=new_jti,
             token_hash=_hash(new_token),
-            expires_at=_now()
+            expires_at=now
             + dt.timedelta(days=get_settings().refresh_token_days),
         )
     )

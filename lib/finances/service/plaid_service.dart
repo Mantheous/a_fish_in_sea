@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:a_fish_in_sea/sync/sync_client.dart' show SyncAuth;
@@ -11,15 +12,29 @@ class PlaidService {
   final String baseUrl;
   final String userId;
   final String? Function()? authToken;
+
+  /// Refreshes the app session (JWT) and returns the new access token.
+  /// Defaults to the global [SyncAuth] hook because [PlaidCubit] builds
+  /// this service internally (no context for a closure). Without it an
+  /// access token that expires mid-session (15 min) turns every bank call
+  /// into a 401 "Invalid token" until something else refreshes.
+  final Future<String?> Function()? refreshAccessToken;
+
+  /// Bounds every request so a blackholed socket fails fast instead of
+  /// hanging the caller forever.
+  final Duration timeout;
   final http.Client _client;
 
   PlaidService({
     String? baseUrl,
     required this.userId,
     this.authToken,
+    this.refreshAccessToken,
     http.Client? client,
+    Duration? timeout,
   })  : baseUrl = baseUrl ?? _defaultBaseUrl(),
-        _client = client ?? http.Client();
+        _client = client ?? http.Client(),
+        timeout = timeout ?? const Duration(seconds: 30);
 
   static String _defaultBaseUrl() => platform_url.resolvePlaidBaseUrl();
 
@@ -108,8 +123,15 @@ class PlaidService {
 
   Future<http.Response> _get(String path) async {
     try {
-      final response =
-          await _client.get(Uri.parse('$baseUrl$path'), headers: _headers);
+      var response = await _client
+          .get(Uri.parse('$baseUrl$path'), headers: _headers)
+          .timeout(timeout);
+      if (response.statusCode == 401 &&
+          await _refreshAppSession(response)) {
+        response = await _client
+            .get(Uri.parse('$baseUrl$path'), headers: _headers)
+            .timeout(timeout);
+      }
       _checkResponse(response);
       return response;
     } catch (e) {
@@ -122,11 +144,23 @@ class PlaidService {
     Map<String, String>? body,
   }) async {
     try {
-      final response = await _client.post(
-        Uri.parse('$baseUrl$path'),
-        headers: _headers,
-        body: body,
-      );
+      var response = await _client
+          .post(
+            Uri.parse('$baseUrl$path'),
+            headers: _headers,
+            body: body,
+          )
+          .timeout(timeout);
+      if (response.statusCode == 401 &&
+          await _refreshAppSession(response)) {
+        response = await _client
+            .post(
+              Uri.parse('$baseUrl$path'),
+              headers: _headers,
+              body: body,
+            )
+            .timeout(timeout);
+      }
       _checkResponse(response);
       return response;
     } catch (e) {
@@ -134,8 +168,40 @@ class PlaidService {
     }
   }
 
+  /// Refreshes the app session once when [response] looks like our own JWT
+  /// expired (FastAPI string `detail`, e.g. "Invalid token"). Provider-side
+  /// failures (no bank connected, Plaid upstream errors) arrive as bare
+  /// `{"error": ...}` payloads — refreshing can't fix those, so they are
+  /// left for [_checkResponse] to surface. Returns true when a fresh token
+  /// was obtained and the caller should retry with re-read [_headers].
+  Future<bool> _refreshAppSession(http.Response response) async {
+    if (!_isAppSessionExpiry(response)) return false;
+    final refresh = refreshAccessToken ?? SyncAuth.refreshProvider;
+    if (refresh == null) return false;
+    try {
+      final fresh = await refresh();
+      return fresh != null && fresh.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _isAppSessionExpiry(http.Response response) {
+    try {
+      final body = jsonDecode(response.body);
+      if (body is Map) return body['detail'] is String;
+    } catch (_) {}
+    return false;
+  }
+
   PlaidServiceException _mapRequestError(Object e) {
     if (e is PlaidServiceException) return e;
+    if (e is TimeoutException) {
+      return const PlaidServiceException(
+        'Plaid server timed out — is the server running?',
+        0,
+      );
+    }
     if (platform_url.isConnectionError(e)) {
       return PlaidServiceException(
         'Cannot reach the Plaid server at $baseUrl. '

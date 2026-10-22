@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/granularity.dart';
 import 'package:a_fish_in_sea/finances/model/ledger_entry.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
@@ -275,6 +276,86 @@ void main() {
       );
       expect(narrow.single.granularity, DisplayGranularity.weekly);
       expect(wide.single.granularity, DisplayGranularity.daily);
+    });
+
+    test('large runs retain every row and separate bucket buffers', () {
+      final first = List.generate(10000, (i) => row('$i', today));
+      final nextDay = row('next', today.add(const Duration(days: 1)));
+      final buckets = groupLedgerEntries(
+        rows: [...first, nextDay],
+        thresholds: t,
+        today: today,
+      );
+      expect(buckets, hasLength(2));
+      expect(buckets.first.entries, orderedEquals(first));
+      expect(buckets.last.entries, [nextDay]);
+      expect(identical(buckets.first.entries.first, first.first), isTrue);
+      expect(identical(buckets.first.entries.last, first.last), isTrue);
+    });
+
+    test('LedgerBucket supports value equality', () {
+      final b1 = LedgerBucket(
+        granularity: DisplayGranularity.daily,
+        bucketStart: DateTime(2026, 10, 7),
+        entries: [row('a', today)],
+      );
+      final b2 = LedgerBucket(
+        granularity: DisplayGranularity.daily,
+        bucketStart: DateTime(2026, 10, 7),
+        entries: [row('a', today)],
+      );
+      final b3 = LedgerBucket(
+        granularity: DisplayGranularity.weekly,
+        bucketStart: DateTime(2026, 10, 7),
+        entries: [row('a', today)],
+      );
+      // Unequal in bucketStart and entries as well, not just granularity.
+      final b4 = LedgerBucket(
+        granularity: DisplayGranularity.daily,
+        bucketStart: DateTime(2026, 10, 8),
+        entries: [row('a', today)],
+      );
+      final b5 = LedgerBucket(
+        granularity: DisplayGranularity.daily,
+        bucketStart: DateTime(2026, 10, 7),
+        entries: [row('b', today)],
+      );
+      expect(b1, equals(b2));
+      expect(b1.hashCode, equals(b2.hashCode));
+      expect(b1, isNot(equals(b3)));
+      expect(b1, isNot(equals(b4)));
+      expect(b1, isNot(equals(b5)));
+    });
+
+    test('grouping the same rows twice yields equal bucket lists', () {
+      // Fresh objects both times (as rebuild() produces), still equal —
+      // so a redundant rebuild compares equal and Bloc suppresses the
+      // emit (no redundant HydratedBloc disk write).
+      List<LedgerBucket> build() => groupLedgerEntries(
+            rows: [
+              row('a', DateTime(2027, 1, 3), amount: -10),
+              row('b', DateTime(2027, 1, 28), amount: -32.5),
+            ],
+            thresholds: t,
+            today: today,
+          );
+      expect(build(), build());
+    });
+
+    test('WaterfallStates with identically built buckets compare equal', () {
+      WaterfallState build() {
+        final rows = [row('a', DateTime(2027, 1, 3))];
+        return WaterfallState(
+          projectionHorizon: DateTime(2027, 6, 1),
+          rows: rows,
+          buckets: groupLedgerEntries(
+            rows: rows,
+            thresholds: const GranularityThresholds(),
+            today: today,
+          ),
+        );
+      }
+      expect(build(), build());
     });
   });
 }

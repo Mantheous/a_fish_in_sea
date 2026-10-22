@@ -77,4 +77,46 @@ void main() {
     expect(find.byIcon(Icons.add_task_outlined), findsNWidgets(2));
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('goal rows expose the overflow menu with an explicit icon',
+      (tester) async {
+    final nodes = NodeCubit();
+    expect(
+        nodes.addNode(Node(
+          id: 'node:p',
+          title: 'Parent',
+          createdAt: DateTime(2026, 10, 11),
+        )),
+        isNull);
+    expect(
+        nodes.addNode(Node(
+          id: 'node:c',
+          title: 'Child',
+          parentIds: const ['node:p'],
+          createdAt: DateTime(2026, 10, 11),
+        )),
+        isNull);
+    await tester.pumpWidget(harness(nodes));
+    await tester.pump();
+
+    // Parent goals render as expandable rows in the All view.
+    await tester.tap(find.text('All'));
+    await tester.pump();
+    expect(find.text('Parent'), findsOneWidget);
+
+    // The overflow menu must carry an explicit icon (not rely on the
+    // PopupMenuButton default) so it stays visible even when the web
+    // icon-font subset drops the default glyph (refs #32).
+    final popups = find.byType(PopupMenuButton<String>);
+    expect(popups, findsNWidgets(1));
+    expect(
+      find.descendant(
+        of: popups,
+        matching: find.byIcon(Icons.more_vert),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byTooltip('More actions'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

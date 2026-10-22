@@ -13,13 +13,13 @@ from __future__ import annotations
 import datetime as dt
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import canvas as c
 from ..db import get_session
-from ..deps import get_current_user
+from ..deps import require_jwt_user
 from ..models import User
 from ..oauth_store import (
     clear_connection,
@@ -71,7 +71,7 @@ def _canvas_error(e: Exception, reconnect_statuses=(401, 403)):
 
 @router.get("/status")
 async def status(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     row = await get_connection(session, user.id, _PROVIDER)
@@ -86,7 +86,7 @@ async def status(
 @router.post("/connect")
 async def connect(
     body: ConnectIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
     _rl: None = Depends(limit("canvas:connect", 30, 60, by_user=True)),
 ):
@@ -122,7 +122,7 @@ async def connect(
 
 @router.post("/disconnect")
 async def disconnect(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     await clear_connection(session, user.id, _PROVIDER)
@@ -133,7 +133,7 @@ async def disconnect(
 async def submissions(
     start_date: str | None = None,
     end_date: str | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
     _rl: None = Depends(limit("canvas:submissions", 60, 60, by_user=True)),
 ):
@@ -148,3 +148,62 @@ async def submissions(
         "submissions": items,
         "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
+
+
+async def _fetch_assignment(
+    assignment_id: int,
+    course_id: int | None,
+    user,
+    session,
+):
+    try:
+        token, host = await _stored_token(session, user.id)
+        data = await c.get_assignment(host, token, assignment_id, course_id)
+    except c.CanvasAuthError as e:
+        if e.status == 404:
+            raise HTTPException(
+                status_code=404, detail={"error": str(e) or "Not found"}
+            )
+        payload, status = _canvas_error(e)
+        raise HTTPException(status_code=status, detail=payload)
+    except httpx.HTTPError as e:
+        payload, status = _canvas_error(e)
+        raise HTTPException(status_code=status, detail=payload)
+    response = {
+        "host": host,
+        "assignment_id": assignment_id,
+        "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "assignment": data,
+    }
+    # Flatten for callers that read fields at the top level.
+    if isinstance(data, dict):
+        response.update(data)
+    return response
+
+
+@router.get("/assignment/{assignment_id}")
+@router.get("/assignments/{assignment_id}")
+async def assignment(
+    assignment_id: int,
+    course_id: int | None = Query(None),
+    user: User = Depends(require_jwt_user),
+    session: AsyncSession = Depends(get_session),
+    _rl: None = Depends(limit("canvas:assignment", 60, 60, by_user=True)),
+):
+    """One assignment's details (description, link). The token stays
+    server-side; the client passes only the assignment id from the
+    imported iCal UID (`event-assignment-<id>`)."""
+    return await _fetch_assignment(assignment_id, course_id, user, session)
+
+
+@router.get("/course/{course_id}/assignment/{assignment_id}")
+@router.get("/courses/{course_id}/assignments/{assignment_id}")
+@router.get("/course/{course_id}/assignments/{assignment_id}")
+async def assignment_in_course(
+    course_id: int,
+    assignment_id: int,
+    user: User = Depends(require_jwt_user),
+    session: AsyncSession = Depends(get_session),
+    _rl: None = Depends(limit("canvas:assignment", 60, 60, by_user=True)),
+):
+    return await _fetch_assignment(assignment_id, course_id, user, session)

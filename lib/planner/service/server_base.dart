@@ -2,19 +2,14 @@ import 'package:flutter/foundation.dart';
 
 /// The ONE backend this app talks to.
 ///
-/// Industry standard: the app pairs with a fixed server address baked in
-/// at build time — never a per-device override. (A stored per-device URL
-/// caused real lock-outs: reinstalls kept a stale address that overrode
-/// the current server and pointed sign-in at a retired backend.)
+/// The web app resolves its server from `Uri.base` (`ServerConfig.webBase`),
+/// preserving any reverse-proxy subpath (such as `/fish`) without hardcoding
+/// hostnames or IP addresses in source control.
 ///
-/// Override at build/run time when the server runs on another host:
-/// `flutter run --dart-define=SERVER_URL=http://192.168.1.10:8000`
+/// Native builds default to loopback for local development and accept the
+/// server address at build/run time via `--dart-define`:
+/// `flutter run --dart-define=SERVER_URL=https://example.com/fish`
 /// (the legacy `PLAID_SERVER_URL` define still works as a fallback).
-///
-/// The default is the Tailscale Funnel HTTPS endpoint (publicly-trusted
-/// Let's Encrypt cert, proxied to the API server), so auth tokens and
-/// bank data are never sent in cleartext. Only use an `http://` override
-/// for local development.
 class ServerConfig {
   static const String _fromEnvironment = String.fromEnvironment(
     'SERVER_URL',
@@ -29,7 +24,7 @@ class ServerConfig {
     }
     if (_legacyEnvironment.isNotEmpty) return _trim(_legacyEnvironment);
     if (kIsWeb) return webBase;
-    return 'https://alauris.tail088878.ts.net/fish';
+    return 'http://127.0.0.1:8000';
   }
 
   /// Same-origin base for web builds, preserving the subpath the app is

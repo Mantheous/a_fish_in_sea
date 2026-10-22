@@ -58,16 +58,28 @@ happened: feature code + another session's tests vanished into one
 
 ## 4. Merge in isolation, verify, then publish
 
-- Merge into `main` from a throwaway worktree on `main`
-  (`git worktree add /tmp/opencode/merge-<topic> main`), never inside
-  someone's live tree. Fast-forward when possible; resolve conflicts
-  there.
+- Branch protection blocks every direct push to `main` — the ONLY path
+  onto `main` is a PR merged with `gh pr merge --merge` (or the GitHub
+  UI). Never `git push origin main` / `HEAD:main`, never force-push
+  `main`. This is what stopped being optional after a 2026-10-18
+  session pushed unaudited persistence/auth changes straight to `main`.
+- For a conflicted or risky PR: check it out in a throwaway worktree on
+  `main` (`git worktree add /tmp/opencode/merge-<topic> main`), never
+  inside someone's live tree. Fast-forward when possible; resolve
+  conflicts there, push the resolution to the PR branch, then
+  `gh pr merge --merge`.
 - Verify the result before it becomes shared truth: server
   `pytest tests/`, `flutter analyze`, and note pre-existing breakage
   explicitly rather than shipping it silently.
-- Pushing `main` moves every other agent's base — say so in your
+- Merging to `main` moves every other agent's base — say so in your
   report. Remote branch cleanup (`git push origin --delete …`) only
   for branches you own.
+- Never write `fix(es|ed) #N` / `close(s|d) #N` / `resolve(s|d) #N` in a
+  commit message unless the commit actually resolves that issue:
+  GitHub auto-closes the issue when the push lands on `main`. Process
+  commits once silently closed #29 and #32 this way ("fixes #29 stall"
+  meant the stall, not the issue). Reference without closing via
+  `refs #N` / `see #N`.
 - Uncommitted work is unmergeable by definition. If a branch's
   checkout still holds WIP, merge the commits and leave the WIP for
   its owner — do not commit it for them, do not pop/apply stashes

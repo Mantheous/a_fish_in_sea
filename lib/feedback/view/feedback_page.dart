@@ -1,3 +1,5 @@
+import 'package:a_fish_in_sea/demo/demo_coordinator.dart';
+import 'package:a_fish_in_sea/demo/demo_mode.dart';
 import 'package:a_fish_in_sea/feedback/feedback_service.dart';
 import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
@@ -63,6 +65,19 @@ class _FeedbackPageState extends State<FeedbackPage> {
       _error = null;
     });
     try {
+      if (DemoMode.isActive) {
+        // Read-only demo content: the feedback endpoints need a signed-in
+        // session, which a demo tour doesn't have — never call the server.
+        final demo = DemoCoordinator.demoFeedback();
+        if (!mounted) return;
+        setState(() {
+          _status = demo.status;
+          _mine = demo.mine;
+          _pending = demo.pending;
+          _trusted = demo.trusted;
+        });
+        return;
+      }
       final status = await _service.status();
       final mine = await _service.mine();
       var pending = const <FeedbackReport>[];
@@ -87,6 +102,16 @@ class _FeedbackPageState extends State<FeedbackPage> {
   }
 
   Future<void> _submit() async {
+    if (DemoMode.isActive) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Read-only in demo mode — reports file on GitHub when signed in.'),
+        ),
+      );
+      return;
+    }
     final title = _title.text.trim();
     final description = _description.text.trim();
     if (title.isEmpty || description.isEmpty) {
@@ -240,14 +265,17 @@ class _FeedbackPageState extends State<FeedbackPage> {
         ],
       ),
     );
+    // Release the field once the dialog — including its exit transition —
+    // is fully gone (showDialog returns only after the pop finishes). Cancel
+    // must dispose too, or the controller leaks; never dispose mid-tap.
+    final reasonText = reason.text.trim();
+    reason.dispose();
     if (confirm != true || !mounted) return;
     try {
-      await _service.deny(report.id, reason.text.trim());
-      reason.dispose();
+      await _service.deny(report.id, reasonText);
       if (!mounted) return;
       await _refresh();
     } catch (e) {
-      reason.dispose();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Deny failed: $e')),
@@ -281,6 +309,8 @@ class _FeedbackPageState extends State<FeedbackPage> {
         ],
       ),
     );
+    // Read before releasing: the dialog (and its exit transition) is already
+    // gone when showDialog returns, so disposing here is safe and leak-free.
     final value = email.text.trim();
     email.dispose();
     if (confirm != true || value.isEmpty || !mounted) return;

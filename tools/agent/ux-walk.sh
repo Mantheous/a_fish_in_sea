@@ -14,6 +14,13 @@ set -euo pipefail
 REPO="$HOME/Repos/a_fish_in_sea"
 cd "$REPO"
 DIR="$REPO/tools/agent"
+
+# Serialized model quota: never stack a ux-walker LLM run on top of a live
+# builder/rework session (same guard build.sh/review.sh already use).
+loop_runs() {
+  tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^(agent-[0-9]|rework-[0-9])' || true
+}
+
 APP_URL="${UX_APP_URL:-http://127.0.0.1:8000/fish/}"
 BUILD_MARKER="build/web/.agent-build-desc"
 WALK_MARKER="build/web/.agent-ux-last"
@@ -53,6 +60,13 @@ if [ -z "$REASON" ]; then
 fi
 echo "[ux-walk] trigger: $REASON"
 
+# Don't stack a ux-walker LLM run on top of a live builder/rework session.
+RUNNING="$(loop_runs)"
+if [ "${RUNNING:-0}" -ge 1 ]; then
+  echo "[ux-walk] $RUNNING loop run(s) active — skipping ux walk this poll"
+  exit 0
+fi
+
 STAMP="$(date +%F-%H%M)"
 OUT="/tmp/opencode/ux-$STAMP"
 mkdir -p "$OUT"
@@ -84,22 +98,30 @@ SCOPE:
 $SCOPE
 Save every screenshot under SHOT_DIR, write the report to REPORT, then stop."
 
-if ! opencode run --agent ux-walker --title "ux-walk-$STAMP" "$PROMPT" >"$OUT/run.log" 2>&1; then
-  echo "[ux-walk] walker run failed (see $OUT/run.log)"
+# NOTE: `opencode run --agent` does NOT apply any frontmatter model (a
+# primary-agent session keeps the configured default, which resolves to a
+# free-tier model). Pin --model explicitly so the walk stays on opencode-go.
+if ! opencode run --agent ux-walker --model opencode-go/gpt-6-luna#xhigh --title "ux-walk-$STAMP" "$PROMPT" >"$OUT/run.log" 2>&1; then
+  echo "[ux-walk] walker run failed (see $OUT/run.log) — no report was written, so ux-walk labels stay on their issues and $WALK_MARKER is not refreshed; the request retries on the next trigger"
   tail -n 5 "$OUT/run.log" || true
-fi
-date -u +%FT%TZ >"$WALK_MARKER"
-rm -f "$FORCE_FILE"
+else
+  echo "[ux-walk] walker run finished — report: $REPORT"
+  date -u +%FT%TZ >"$WALK_MARKER"
+  rm -f "$FORCE_FILE"
 
-# Consume ux-walk labels: point requesters at the report.
-gh issue list --label ux-walk --state open --limit 10 --json number \
-  | python3 -c 'import json,sys; [print(i["number"]) for i in json.load(sys.stdin)]' \
-  | while read -r N; do
-  [ -z "$N" ] && continue
-  gh issue comment "$N" --body "UX walk $STAMP done (trigger: $REASON). Report: \`$REPORT\`, screenshots in \`$OUT/\` on the loop host." >/dev/null
-  gh issue edit "$N" --remove-label ux-walk >/dev/null
-  echo "[ux-walk] #$N labelled walk consumed"
-done
+  # Consume ux-walk labels only when a real report exists to point requesters at.
+  gh issue list --label ux-walk --state open --limit 10 --json number \
+    | python3 -c 'import json,sys; [print(i["number"]) for i in json.load(sys.stdin)]' \
+    | while read -r N; do
+    [ -z "$N" ] && continue
+    if ! gh issue comment "$N" --body "UX walk $STAMP done (trigger: $REASON). Report: \`$REPORT\`, screenshots in \`$OUT/\` on the loop host." >/dev/null \
+        || ! gh issue edit "$N" --remove-label ux-walk >/dev/null; then
+      echo "[ux-walk] #$N could not consume the label (gh hiccup) — retried next walk"
+      continue
+    fi
+    echo "[ux-walk] #$N labelled walk consumed"
+  done
+fi
 
 BLOCKERS=0; FINDINGS=0
 if [ -f "$REPORT" ]; then
@@ -107,10 +129,7 @@ if [ -f "$REPORT" ]; then
   FINDINGS="$(grep -ci '^## Finding' "$REPORT" || true)"
 fi
 VERDICT="$(grep -m1 '^Verdict:' "$REPORT" 2>/dev/null || echo "Verdict: (no report written)")"
-echo "[ux-walk] $STAMP findings=$FINDINGS blockers=$BLOCKERS"
-"$DIR/tg.sh" "👵 UX walk $STAMP ($REASON): $FINDINGS findings, $BLOCKERS blockers
-$VERDICT
-Report: $REPORT" || echo "[ux-walk] telegram ping failed"
+echo "[ux-walk] $STAMP findings=$FINDINGS blockers=$BLOCKERS (no telegram: notify-quiet — blockers re-enter as triage plans, which do text)"
 
 # Blockers re-enter the normal loop as one triageable issue (screenshots
 # live on the loop host, readable by the triage/builder agents).
@@ -120,7 +139,20 @@ if [ "$BLOCKERS" -gt 0 ] && [ -f "$REPORT" ]; then
 ---
 Walk: $STAMP, trigger: $REASON, build: $BUILD_DESC
 Screenshots: $OUT/ (loop host)"
-  gh issue create --title "$TITLE" --body "$BODY" --label agent-pending >/dev/null
-  echo "[ux-walk] blocker issue filed"
+  # Dedupe: comment on an already-open ux-walk blocker issue instead of
+  # filing a fresh agent-pending issue every walk (same one-open-issue
+  # pattern perf-walk.sh uses for perf-regression).
+  EXISTING="$(gh issue list --label agent-pending --state open --limit 10 \
+    --json number,title 2>/dev/null \
+    | python3 -c 'import json,sys; issues=json.load(sys.stdin); print(next((str(i["number"]) for i in issues if i.get("title","").startswith("[ux-walk ")), ""))' || true)"
+  if [ -n "${EXISTING:-}" ]; then
+    gh issue comment "$EXISTING" --body "Walk $STAMP re-tripped ($REASON):
+
+$BODY" >/dev/null
+    echo "[ux-walk] #$EXISTING already open — new blockers appended to existing blocker issue"
+  else
+    gh issue create --title "$TITLE" --body "$BODY" --label agent-pending >/dev/null
+    echo "[ux-walk] blocker issue filed"
+  fi
 fi
 echo "[ux-walk] done"

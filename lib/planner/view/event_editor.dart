@@ -8,13 +8,11 @@ import '../../common/undo/undo_cubit.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_event_link.dart';
+import '../../nodes/service/node_event_sync.dart';
 import '../../nodes/view/goal_picker.dart';
 import '../../nodes/view/node_checkbox.dart';
-import '../../nodes/view/node_finish_sheet.dart';
-import '../../nodes/view/timer_edit_sheet.dart';
 import '../../reporting/bloc/places_cubit.dart';
 import '../../reporting/model/place.dart';
-import '../../reporting/view/time_range_dial.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/feed_cubit.dart';
@@ -25,6 +23,8 @@ import '../model/planner_event.dart';
 import '../model/recurrence.dart';
 import '../model/task_assignee.dart';
 import '../service/event_reminders.dart';
+import 'event_editor_actions.dart';
+import 'event_time_sections.dart';
 import 'people_field.dart';
 import 'reminder_prompt.dart' show ReminderField, maybePromptForEventReminder;
 
@@ -248,6 +248,18 @@ class EventEditorFormState extends State<EventEditorForm> {
   @override
   void initState() {
     super.initState();
+    // A previous delete's undo bar draws above this sheet: without this,
+    // a tap aimed at Delete during rapid successive deletes can land on
+    // the stale Undo and resurrect the earlier event (refs #14). Retiring
+    // it on mount (post-frame: ScaffoldMessenger.of registers a
+    // dependency, which initState may not do) also guarantees the bar
+    // never covers this editor's actions. At most one delete bar is ever
+    // live: _delete clears before showing, so a mis-tap can only ever
+    // undo the most recent delete.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).clearSnackBars();
+    });
     _subject = TextEditingController();
     _notes = TextEditingController();
     _location = TextEditingController();
@@ -564,238 +576,221 @@ class EventEditorFormState extends State<EventEditorForm> {
     final existing = widget.existing;
     return SafeArea(
       top: false,
-      child: SingleChildScrollView(
-        controller: widget.scrollController,
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (widget.title != null) ...[
-              Text(widget.title!, style: theme.textTheme.titleMedium),
-              const SizedBox(height: 12),
-            ],
-            if (_isSeriesInstance)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Text(
-                  _loadingMaster
-                      ? 'Loading series details…'
-                      : 'Part of a repeating series — on save you can '
-                          'apply changes to just this occurrence or the '
-                          'entire series.',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            if (_masterFailed)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Text(
-                  'Couldn’t load the series — editing just this occurrence.',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.error,
-                  ),
-                ),
-              ),
-            _CalendarPicker(
-              existing: existing,
-              saveTargetFeedId: _saveTargetFeedId,
-              canChangeCalendar: (feeds) => existing == null
-                  ? true
-                  : _canChangeCalendar(existing, feeds),
-              onChanged: (value) =>
-                  setState(() => _saveTargetFeedId = value),
-            ),
-            TextField(
-              controller: _subject,
-              autofocus: widget.autofocusTitle,
-              decoration: const InputDecoration(
-                labelText: 'Title',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Row(
+      child: Stack(
+        children: [
+          SingleChildScrollView(
+            controller: widget.scrollController,
+            padding: const EdgeInsets.fromLTRB(16, 100, 16, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(
-                  flex: 5,
-                  child: _dateField(theme),
+                if (_isSeriesInstance)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      _loadingMaster
+                          ? 'Loading series details…'
+                          : 'Part of a repeating series — on save you can '
+                              'apply changes to just this occurrence or the '
+                              'entire series.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                if (_masterFailed)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      'Couldn’t load the series — editing just this occurrence.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.error,
+                      ),
+                    ),
+                  ),
+                _CalendarPicker(
+                  existing: existing,
+                  saveTargetFeedId: _saveTargetFeedId,
+                  canChangeCalendar: (feeds) => existing == null
+                      ? true
+                      : _canChangeCalendar(existing, feeds),
+                  onChanged: (value) =>
+                      setState(() => _saveTargetFeedId = value),
                 ),
-                const SizedBox(width: 8),
-                // Compact switch row instead of SwitchListTile: ListTile
-                // enforces its own min widths and overflows inside a tight
-                // Row on phones (~160px per side).
-                Expanded(
-                  flex: 4,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
+                TextField(
+                  controller: _subject,
+                  autofocus: widget.autofocusTitle,
+                  decoration: const InputDecoration(
+                    labelText: 'Title',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 5,
+                      child: _dateField(theme),
+                    ),
+                    const SizedBox(width: 8),
+                    // Compact switch row instead of SwitchListTile: ListTile
+                    // enforces its own min widths and overflows inside a tight
+                    // Row on phones (~160px per side).
+                    Expanded(
+                      flex: 4,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Flexible(
+                            child: Text(
+                              'All day',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          Switch(
+                            value: _allDay,
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                            onChanged: (value) {
+                              setState(() => _allDay = value);
+                              _emitDraft();
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                if (!_allDay)
+                  Row(
                     children: [
-                      const Flexible(
-                        child: Text(
-                          'All day',
-                          overflow: TextOverflow.ellipsis,
+                      Expanded(
+                        child: _timeField(
+                          label: 'Start',
+                          value: _startTime,
+                          onChanged: (value) {
+                            setState(() {
+                              _startTime = value;
+                              if (_toMinutes(_endTime) <= _toMinutes(_startTime)) {
+                                _endTime = TimeOfDay(
+                                  hour: (_startTime.hour + 1) % 24,
+                                  minute: _startTime.minute,
+                                );
+                              }
+                            });
+                            _emitDraft();
+                          },
                         ),
                       ),
-                      Switch(
-                        value: _allDay,
-                        materialTapTargetSize:
-                            MaterialTapTargetSize.shrinkWrap,
-                        onChanged: (value) {
-                          setState(() => _allDay = value);
-                          _emitDraft();
-                        },
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _timeField(
+                          label: 'End',
+                          value: _endTime,
+                          onChanged: (value) {
+                            setState(() => _endTime = value);
+                            _emitDraft();
+                          },
+                        ),
                       ),
                     ],
                   ),
+                const SizedBox(height: 12),
+                _DayConflictsSection(
+                  day: _date,
+                  allDay: _allDay,
+                  startTime: _startTime,
+                  endTime: _endTime,
+                  excludeId: widget.existing?.id,
                 ),
+                const SizedBox(height: 12),
+                _repeatSection(theme),
+                const SizedBox(height: 12),
+                ReminderField(
+                  value: _reminderMinutesBefore,
+                  onChanged: (value) {
+                    setState(() => _reminderMinutesBefore = value);
+                    _emitDraft();
+                  },
+                ),            const SizedBox(height: 12),
+                TextField(
+                  controller: _location,
+                  decoration: const InputDecoration(
+                    labelText: 'Location',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _PlaceField(
+                  value: _placeId,
+                  onChanged: (value) {
+                    setState(() => _placeId = value);
+                    _emitDraft();
+                  },
+                ),
+                const SizedBox(height: 12),
+                PeopleField(
+                  selected: _people,
+                  onChanged: (value) {
+                    setState(() => _people = value);
+                    _emitDraft();
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _notes,
+                  decoration: const InputDecoration(
+                    labelText: 'Notes',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLines: 2,
+                ),
+                const SizedBox(height: 4),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Task'),
+                  subtitle: const Text(
+                    'Tasks can be marked complete and show in the Tasks list',
+                  ),
+                  value: _isTask,
+                  onChanged: (value) {
+                    setState(() {
+                      _isTask = value;
+                      if (!value) _done = false;
+                    });
+                    _emitDraft();
+                  },
+                ),
+                if (_isTask)
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Completed'),
+                    value: _done,
+                    onChanged: (value) {
+                      setState(() => _done = value ?? false);
+                      _emitDraft();
+                    },
+                  ),
               ],
             ),
-            if (!_allDay)
-              Row(
-                children: [
-                  Expanded(
-                    child: _timeField(
-                      label: 'Start',
-                      value: _startTime,
-                      onChanged: (value) {
-                        setState(() {
-                          _startTime = value;
-                          if (_toMinutes(_endTime) <= _toMinutes(_startTime)) {
-                            _endTime = TimeOfDay(
-                              hour: (_startTime.hour + 1) % 24,
-                              minute: _startTime.minute,
-                            );
-                          }
-                        });
-                        _emitDraft();
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _timeField(
-                      label: 'End',
-                      value: _endTime,
-                      onChanged: (value) {
-                        setState(() => _endTime = value);
-                        _emitDraft();
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            const SizedBox(height: 12),
-            _DayConflictsSection(
-              day: _date,
-              allDay: _allDay,
-              startTime: _startTime,
-              endTime: _endTime,
-              excludeId: widget.existing?.id,
+          ),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: EventEditorActions(
+              title: widget.title,
+              hasExistingEvent: existing != null,
+              allowDelete: widget.allowDelete,
+              saving: _saving,
+              onDelete: () => _delete(context),
+              onCancel: widget.onCancelled,
+              onSave: () => _save(context),
+              saveLabel: existing == null ? 'Add' : 'Save',
             ),
-            const SizedBox(height: 12),
-            _repeatSection(theme),
-            const SizedBox(height: 12),
-            ReminderField(
-              value: _reminderMinutesBefore,
-              onChanged: (value) {
-                setState(() => _reminderMinutesBefore = value);
-                _emitDraft();
-              },
-            ),            const SizedBox(height: 12),
-            TextField(
-              controller: _location,
-              decoration: const InputDecoration(
-                labelText: 'Location',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            _PlaceField(
-              value: _placeId,
-              onChanged: (value) {
-                setState(() => _placeId = value);
-                _emitDraft();
-              },
-            ),
-            const SizedBox(height: 12),
-            PeopleField(
-              selected: _people,
-              onChanged: (value) {
-                setState(() => _people = value);
-                _emitDraft();
-              },
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _notes,
-              decoration: const InputDecoration(
-                labelText: 'Notes',
-                border: OutlineInputBorder(),
-              ),
-              maxLines: 2,
-            ),
-            const SizedBox(height: 4),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Task'),
-              subtitle: const Text(
-                'Tasks can be marked complete and show in the Tasks list',
-              ),
-              value: _isTask,
-              onChanged: (value) {
-                setState(() {
-                  _isTask = value;
-                  if (!value) _done = false;
-                });
-                _emitDraft();
-              },
-            ),
-            if (_isTask)
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Completed'),
-                value: _done,
-                onChanged: (value) {
-                  setState(() => _done = value ?? false);
-                  _emitDraft();
-                },
-              ),
-            const SizedBox(height: 8),
-            // Wrap instead of Row+Spacer: Delete + Cancel + Save never
-            // fit a 320px sheet in one tight Row without overflowing.
-            Wrap(
-              alignment: WrapAlignment.end,
-              spacing: 8,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                if (widget.existing != null && widget.allowDelete)
-                  TextButton(
-                    onPressed: _saving ? null : () => _delete(context),
-                    style: TextButton.styleFrom(
-                      foregroundColor: theme.colorScheme.error,
-                    ),
-                    child: const Text('Delete'),
-                  ),
-                TextButton(
-                  onPressed:
-                      _saving ? null : () => widget.onCancelled?.call(),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  onPressed: _saving ? null : () => _save(context),
-                  child: Text(
-                    _saving
-                        ? 'Saving…'
-                        : (widget.existing == null ? 'Add' : 'Save'),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -1788,6 +1783,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       {for (final e in targets) e.id},
       done: done,
       completedAt: completedAt,
+      taskIdsByEvent: {for (final e in targets) e.id: e.taskId},
     );
     nodes.removeNodesForEventIds(pastIds, silent: true);
   }
@@ -1873,6 +1869,9 @@ class EventEditorFormState extends State<EventEditorForm> {
       targetIds,
       done: done,
       completedAt: completedAt,
+      taskIdsByEvent: {
+        for (final id in targetIds) id: calendar.byId(id)?.taskId,
+      },
     );
     nodes.removeNodesForEventIds(
         {for (final e in past) e.id},
@@ -1909,6 +1908,7 @@ class EventEditorFormState extends State<EventEditorForm> {
         saved.id,
         done: saved.done,
         completedAt: saved.completedAt,
+        taskId: saved.taskId,
       );
       return;
     }
@@ -1918,6 +1918,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       saved.id,
       done: saved.done,
       completedAt: saved.completedAt,
+      taskId: saved.taskId ?? nodeId,
     );
   }
 
@@ -1966,9 +1967,16 @@ class EventEditorFormState extends State<EventEditorForm> {
     if (seeded != null && synced != null) {
       nodes.setScheduleBlock(seeded.id, synced.start, synced.end);
     }
-    if (_done) {
-      NodeEventLink.toggleEventDone(calendar, nodes, syncedId);
-    }
+    // Re-assert completion both ways: the re-sync can restore a stale
+    // done flag either direction, so an un-check must re-open the backing
+    // task just as a check must complete it (idempotent when already in
+    // agreement — see the task_tracking_link_test "sticks" cases).
+    NodeEventSync.setEventDone(
+      calendar,
+      nodes,
+      syncedId,
+      done: _done,
+    );
   }
 
   void _syncTaskLinkPostPush(String syncedId) =>
@@ -2020,6 +2028,7 @@ class EventEditorFormState extends State<EventEditorForm> {
 
   void _delete(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
+    final undoCubit = context.read<UndoCubit>();
     final feedCubit = context.read<FeedCubit>();
     final calendarCubit = context.read<CalendarCubit>();
     final existing = widget.existing;
@@ -2054,19 +2063,36 @@ class EventEditorFormState extends State<EventEditorForm> {
     }
 
     if (!feedCubit.isRemoteEditable(existing)) {
-      calendarCubit.deleteEvent(existing.id);
-      clearTaskLink();
+      NodeCubit? nodes;
+      try {
+        nodes = context.read<NodeCubit>();
+      } catch (_) {}
+      if (nodes == null) {
+        calendarCubit.deleteEvent(existing.id);
+      } else {
+        NodeEventLink.deleteEventAndNodes(calendarCubit, nodes, existing);
+      }
       await EventReminderService.cancelReminder(existing.id);
+      // Close the editor before showing the undo prompt: the bar draws
+      // above the sheet, so showing it first lets it cover the next
+      // editor's actions, and a stale bar's Undo can resurrect an event
+      // on a mis-tap (refs #14). Clearing first retires any earlier
+      // delete's bar before this one appears.
+      widget.onFinished?.call();
+      messenger.clearSnackBars();
       messenger.showSnackBar(
         SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+          persist: false,
+          dismissDirection: DismissDirection.horizontal,
           content: const Text('Event deleted'),
           action: SnackBarAction(
             label: 'Undo',
-            onPressed: () => context.read<UndoCubit>().undo(),
+            onPressed: undoCubit.undo,
           ),
         ),
       );
-      widget.onFinished?.call();
       return;
     }
     var series = false;
@@ -2255,6 +2281,12 @@ class _PlaceField extends StatelessWidget {
       return const SizedBox.shrink();
     }
     if (places.isEmpty) return const SizedBox.shrink();
+    // A stale placeId (place deleted after the event was saved) would crash
+    // DropdownButtonFormField because initialValue must match exactly one
+    // item. Surface it as an extra item so the edit form still mounts and
+    // Delete stays reachable; picking a new place replaces it.
+    final hasMatch =
+        value == null || places.any((place) => place.id == value);
     return DropdownButtonFormField<String?>(
       initialValue: value,
       isExpanded: true,
@@ -2264,6 +2296,11 @@ class _PlaceField extends StatelessWidget {
       ),
       items: [
         const DropdownMenuItem(value: null, child: Text('No place')),
+        if (!hasMatch)
+          DropdownMenuItem(
+            value: value,
+            child: const Text('Unknown place'),
+          ),
         for (final place in places)
           DropdownMenuItem(value: place.id, child: Text(place.name)),
       ],
@@ -2276,6 +2313,11 @@ class _PlaceField extends StatelessWidget {
 /// flipping back to the calendar behind the sheet. On narrow screens the
 /// sheet's scrim dims the calendar ("grayed out"), which is why synced
 /// calendars looked missing when scheduling from the task menu.
+///
+/// Conflict badges are same-granularity only: all-day marks the whole
+/// day, a timed event a window on it, so the two never overlap. All-day
+/// events conflict with other all-day events; timed events conflict when
+/// their intervals intersect.
 class _DayConflictsSection extends StatelessWidget {
   final DateTime day;
   final bool allDay;
@@ -2294,7 +2336,21 @@ class _DayConflictsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final dayStart = DateTime(day.year, day.month, day.day);
+    final dayEnd = dayStart.add(const Duration(days: 1));
+    final selStart = DateTime(
+        day.year, day.month, day.day, startTime.hour, startTime.minute);
+    var selEnd = DateTime(
+        day.year, day.month, day.day, endTime.hour, endTime.minute);
+    if (!selEnd.isAfter(selStart)) {
+      selEnd = selStart.add(const Duration(hours: 1));
+    }
     List<PlannerEvent> dayEvents;
+    // Same-granularity conflicts only, keyed by id. An all-day event and a
+    // timed event never clash: one marks a whole day, the other a window
+    // on it. Both all-day conflict on a shared day; two timed events
+    // conflict when their intervals intersect.
+    Set<String> conflictingIds;
     String? syncWarning;
     try {
       final calendar = context.watch<CalendarCubit>();
@@ -2306,6 +2362,27 @@ class _DayConflictsSection extends StatelessWidget {
               e.id != excludeId &&
               feeds.isFeedVisible(e.feedId))
           .toList();
+      conflictingIds = <String>{};
+      for (final event in dayEvents) {
+        if (event.allDay != allDay) continue;
+        if (allDay) {
+          // Both day-grained and both list for the picked day.
+          conflictingIds.add(event.id);
+          continue;
+        }
+        // Compare the occurrence on the picked day, not the series
+        // master: a weekly class's master sits weeks in the past, where
+        // an interval check against today's window never fires.
+        final duration = event.end.isAfter(event.start)
+            ? event.end.difference(event.start)
+            : const Duration(hours: 1);
+        for (final occ in calendar.occurrencesOf(event, dayStart, dayEnd)) {
+          if (occ.isBefore(selEnd) && selStart.isBefore(occ.add(duration))) {
+            conflictingIds.add(event.id);
+            break;
+          }
+        }
+      }
       final failing = feeds.state
           .where((f) =>
               f.enabled &&
@@ -2321,17 +2398,6 @@ class _DayConflictsSection extends StatelessWidget {
       return const SizedBox.shrink();
     }
     dayEvents.sort((a, b) => a.start.compareTo(b.start));
-    final selStart = DateTime(
-        day.year, day.month, day.day, startTime.hour, startTime.minute);
-    var selEnd = DateTime(
-        day.year, day.month, day.day, endTime.hour, endTime.minute);
-    if (!selEnd.isAfter(selStart)) {
-      selEnd = selStart.add(const Duration(hours: 1));
-    }
-    bool overlaps(PlannerEvent e) {
-      if (allDay) return false;
-      return e.start.isBefore(selEnd) && selStart.isBefore(e.end);
-    }
 
     final timeFormat = DateFormat('h:mm a');
     return Container(
@@ -2394,7 +2460,7 @@ class _DayConflictsSection extends StatelessWidget {
                         ],
                       ),
                     ),
-                    if (overlaps(event))
+                    if (conflictingIds.contains(event.id))
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 8, vertical: 2),
@@ -2612,7 +2678,7 @@ class EventDetailView extends StatelessWidget {
             const SizedBox(height: 8),
             _TaskStatusTile(event: event),
             const SizedBox(height: 8),
-            _TaskTimeSection(event: event),
+            TaskTimeSection(event: event),
             const SizedBox(height: 8),
             _GoalAssignmentSection(event: event),
           ] else if (!event.allDay) ...[
@@ -2620,7 +2686,7 @@ class EventDetailView extends StatelessWidget {
             // like in Toggl: one tap on Start records from now, Stop saves
             // the reported interval shown in the Plan + Report view.
             const SizedBox(height: 8),
-            _TimeReportSection(event: event),
+            TimeReportSection(event: event),
           ],
           const SizedBox(height: 8),
           if (event.isFromFeed)
@@ -2968,415 +3034,3 @@ class _GoalAssignmentSection extends StatelessWidget {
 }
 
 enum _GoalAssignScope { cancel, occurrence, series }
-
-class _TaskTimeSection extends StatelessWidget {
-  final PlannerEvent event;
-
-  const _TaskTimeSection({required this.event});
-
-  @override
-  Widget build(BuildContext context) {
-    Node? node;
-    try {
-      for (final n in context.watch<NodeCubit>().state) {
-        if (n.calendarEventId == event.id ||
-            n.sourceEventId == event.id ||
-            n.id == event.taskId) {
-          node = n;
-          break;
-        }
-      }
-    } catch (_) {}
-    if (node == null) {
-      if (event.allDay) return const SizedBox.shrink();
-      return _TimeReportSection(event: event);
-    }
-    final failed = node.status == NodeStatus.failed;
-    final theme = Theme.of(context);
-    final timeFormatter = DateFormat('h:mm a');
-    final plannedStart = node.schedule?.start ?? event.start;
-    final plannedEnd = node.schedule?.end ?? event.end;
-    final plannedMin = plannedEnd.isAfter(plannedStart)
-        ? plannedEnd.difference(plannedStart).inMinutes
-        : 0;
-    final reported = node.reportedDuration;
-    final lines = <String>[
-      'Planned ${timeFormatter.format(plannedStart)} – '
-          '${timeFormatter.format(plannedEnd)} (${plannedMin}m)',
-      if (node.isTracking && node.timerStartedAt != null)
-        'Recording since ${timeFormatter.format(node.timerStartedAt!)}',
-      if (reported != null &&
-          node.actualStart != null &&
-          node.actualEnd != null)
-        'Reported ${timeFormatter.format(node.actualStart!)} – '
-            '${timeFormatter.format(node.actualEnd!)} (${reported.inMinutes}m)',
-      if (failed) 'Marked as failed',
-    ];
-    final nodeId = node.id;
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        border: Border.all(color: theme.dividerColor),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Time tracking', style: theme.textTheme.labelLarge),
-          const SizedBox(height: 4),
-          for (final line in lines)
-            Text(
-              line,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: line.startsWith('Marked as failed')
-                    ? theme.colorScheme.error
-                    : null,
-                fontWeight: line.startsWith('Recording') ||
-                        line.startsWith('Marked as failed')
-                    ? FontWeight.w600
-                    : null,
-              ),
-            ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 4,
-            children: [
-              if (node.isTracking)
-                FilledButton.icon(
-                  onPressed: () => stopNodeAndFinish(context, nodeId),
-                  icon: const Icon(Icons.stop, size: 16),
-                  label: const Text('Stop'),
-                )
-              else
-                OutlinedButton.icon(
-                  onPressed: node.isDone
-                      ? null
-                      : () {
-                          try {
-                            context
-                                .read<NodeCubit>()
-                                .startTracking(nodeId);
-                          } catch (_) {}
-                        },
-                  icon: const Icon(Icons.play_arrow, size: 16),
-                  label: const Text('Start'),
-                ),
-              if (node.isTracking)
-                TextButton.icon(
-                  onPressed: () => showEditNodeTimerSheet(
-                    context,
-                    nodeId: nodeId,
-                  ),
-                  icon: const Icon(Icons.edit, size: 16),
-                  label: const Text('Edit start'),
-                ),
-              OutlinedButton(
-                onPressed: () {
-                  try {
-                    NodeEventLink.setNodeFailed(
-                      context.read<NodeCubit>(),
-                      context.read<CalendarCubit>(),
-                      nodeId,
-                      !failed,
-                    );
-                  } catch (_) {}
-                },
-                style: OutlinedButton.styleFrom(
-                  foregroundColor:
-                      failed ? null : theme.colorScheme.error,
-                ),
-                child: Text(failed ? 'Unfail' : 'Mark failed'),
-              ),
-              TextButton(
-                onPressed: () =>
-                    showFollowUpScheduler(context, nodeId: nodeId),
-                child: const Text('Follow-up'),
-              ),
-              if (node.hasReported && !node.isTracking)
-                TextButton(
-                  onPressed: () {
-                    try {
-                      context.read<NodeCubit>().clearReported(nodeId);
-                    } catch (_) {}
-                  },
-                  child: const Text('Clear reported'),
-                ),
-              if (node.hasReported && !node.isTracking)
-                TextButton.icon(
-                  onPressed: () => showEditNodeTimerSheet(
-                    context,
-                    nodeId: nodeId,
-                  ),
-                  icon: const Icon(Icons.tune, size: 16),
-                  label: const Text('Adjust'),
-                ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TimeReportSection extends StatelessWidget {
-  final PlannerEvent event;
-
-  const _TimeReportSection({required this.event});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    // Resolve the live event so Start/Stop reflect the current timer even
-    // when the parent sheet passes a stale snapshot.
-    PlannerEvent live = event;
-    try {
-      live = context.watch<CalendarCubit>().byId(event.id) ?? event;
-    } catch (_) {}
-    final timeFormatter = DateFormat('h:mm a');
-    final plannedMin = live.plannedDuration.inMinutes;
-    final reported = live.reportedDuration;
-    final lines = <String>[
-      'Planned ${timeFormatter.format(live.start)} – '
-          '${timeFormatter.format(live.end)} (${plannedMin}m)',
-      if (live.isTracking && live.timerStartedAt != null)
-        'Recording since ${timeFormatter.format(live.timerStartedAt!)}',
-      if (reported != null &&
-          live.actualStart != null &&
-          live.actualEnd != null)
-        'Reported ${timeFormatter.format(live.actualStart!)} – '
-            '${timeFormatter.format(live.actualEnd!)} (${reported.inMinutes}m)',
-      if (live.failed) 'Marked as failed',
-    ];
-    final eventId = live.id;
-    final isTracking = live.isTracking;
-    final failed = live.failed;
-    final hasReported = live.hasReported;
-    final isTask = live.isTask;
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        border: Border.all(color: theme.dividerColor),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Time tracking', style: theme.textTheme.labelLarge),
-          const SizedBox(height: 4),
-          for (final line in lines)
-            Text(
-              line,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: line.startsWith('Marked as failed')
-                    ? theme.colorScheme.error
-                    : null,
-                fontWeight: line.startsWith('Recording') ||
-                        line.startsWith('Marked as failed')
-                    ? FontWeight.w600
-                    : null,
-              ),
-            ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 4,
-            children: [
-              if (isTracking)
-                FilledButton.icon(
-                  onPressed: () => context
-                      .read<CalendarCubit>()
-                      .stopTracking(eventId),
-                  icon: const Icon(Icons.stop, size: 16),
-                  label: const Text('Stop'),
-                )
-              else
-                OutlinedButton.icon(
-                  onPressed: () => context
-                      .read<CalendarCubit>()
-                      .startTracking(eventId),
-                  icon: const Icon(Icons.play_arrow, size: 16),
-                  label: const Text('Start'),
-                ),
-              if (isTracking)
-                TextButton.icon(
-                  onPressed: () => showEditEventTimerSheet(
-                    context,
-                    eventId: eventId,
-                  ),
-                  icon: const Icon(Icons.edit, size: 16),
-                  label: const Text('Edit start'),
-                ),
-              // "Mark failed" only makes sense for task-events; plain
-              // calendar events just record time.
-              if (isTask)
-                OutlinedButton(
-                  onPressed: () => context
-                      .read<CalendarCubit>()
-                      .setFailed(eventId, !failed),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: failed
-                        ? null
-                        : theme.colorScheme.error,
-                  ),
-                  child: Text(failed ? 'Unfail' : 'Mark failed'),
-                ),
-              if (hasReported && !isTracking)
-                TextButton(
-                  onPressed: () => context
-                      .read<CalendarCubit>()
-                      .clearReported(eventId),
-                  child: const Text('Clear reported'),
-                ),
-              if (hasReported && !isTracking)
-                TextButton.icon(
-                  onPressed: () =>
-                      showAdjustTimerSheet(context, eventId: eventId),
-                  icon: const Icon(Icons.tune, size: 16),
-                  label: const Text('Adjust'),
-                ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Bottom sheet with the circular [TimeRangeDial] for correcting a
-/// timer-logged interval (`actualStart`/`actualEnd`) on a calendar event.
-/// Saves once via [CalendarCubit.updateEvent], so dragging the handles is
-/// a single undoable change.
-Future<void> showAdjustTimerSheet(
-  BuildContext context, {
-  required String eventId,
-}) {
-  return showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    builder: (sheetContext) => Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
-      ),
-      child: _AdjustTimerSheet(eventId: eventId),
-    ),
-  );
-}
-
-class _AdjustTimerSheet extends StatefulWidget {
-  final String eventId;
-
-  const _AdjustTimerSheet({required this.eventId});
-
-  @override
-  State<_AdjustTimerSheet> createState() => _AdjustTimerSheetState();
-}
-
-class _AdjustTimerSheetState extends State<_AdjustTimerSheet> {
-  late DateTime _day;
-  late int _dayOffset;
-  late TimeOfDay _start;
-  late TimeOfDay _end;
-  bool _ready = false;
-
-  @override
-  void initState() {
-    super.initState();
-    PlannerEvent? live;
-    try {
-      live = context.read<CalendarCubit>().byId(widget.eventId);
-    } catch (_) {}
-    final actualStart = live?.actualStart ?? live?.start;
-    final actualEnd = live?.actualEnd ?? live?.end;
-    if (actualStart == null || actualEnd == null) {
-      final now = DateTime.now();
-      _day = DateTime(now.year, now.month, now.day);
-      _dayOffset = 0;
-      _start = TimeOfDay.fromDateTime(now);
-      _end = TimeOfDay.fromDateTime(now.add(const Duration(hours: 1)));
-    } else {
-      _day = DateTime(
-        actualStart.year,
-        actualStart.month,
-        actualStart.day,
-      );
-      final endDay = DateTime(actualEnd.year, actualEnd.month, actualEnd.day);
-      _dayOffset = endDay.difference(_day).inDays.clamp(0, 1);
-      _start = TimeOfDay.fromDateTime(actualStart);
-      _end = TimeOfDay.fromDateTime(actualEnd);
-    }
-    _ready = true;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (!_ready) return const SizedBox.shrink();
-    var snap = 5;
-    try {
-      snap = context.read<SettingsCubit>().state.snapMinutes;
-    } catch (_) {}
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('Adjust reported time',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            Center(
-              child: TimeRangeDial(
-                start: _start,
-                end: _end,
-                snapMinutes: snap,
-                onStartChanged: (v) => setState(() => _start = v),
-                onEndChanged: (v) => setState(() => _end = v),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: () {
-                    CalendarCubit calendar;
-                    try {
-                      calendar = context.read<CalendarCubit>();
-                    } catch (_) {
-                      Navigator.of(context).pop();
-                      return;
-                    }
-                    final live = calendar.byId(widget.eventId);
-                    if (live == null || !live.hasReported) {
-                      Navigator.of(context).pop();
-                      return;
-                    }
-                    final start = DateTime(_day.year, _day.month, _day.day,
-                        _start.hour, _start.minute);
-                    var end = DateTime(_day.year, _day.month, _day.day,
-                            _end.hour, _end.minute)
-                        .add(Duration(days: _dayOffset));
-                    if (!end.isAfter(start)) {
-                      end = start.add(minEventDuration);
-                    }
-                    calendar.updateEvent(
-                      live.copyWith(actualStart: start, actualEnd: end),
-                    );
-                    Navigator.of(context).pop();
-                  },
-                  child: const Text('Save'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}

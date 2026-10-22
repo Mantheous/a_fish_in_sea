@@ -183,6 +183,10 @@ String? validateUnbounded(Node draft) {
     return 'An unbounded goal cannot have a time target. '
         'Remove the time target first.';
   }
+  if (draft.anki != null) {
+    return 'An unbounded goal cannot have a memorization target. '
+        'Remove the Anki target first.';
+  }
   if (draft.recurrence != null) {
     return 'An unbounded goal cannot repeat. '
         'Turn off repeats first.';

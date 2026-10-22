@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Approval handling: verified `approve` / `deny <reason>` comments on triaged
-# (agent-pending + plan marker) issues flip labels or close. Safe to re-run.
-# An approval is only valid when it comes AFTER the latest <!-- agent-plan -->
-# comment AND there is no unaddressed human feedback (tester follow-up that
-# triage.sh has not revised yet) — otherwise we wait so the plan conversation
-# (feedback -> revised plan -> re-approve) completes before the builder starts.
+# Approval handling: auto-ship mode (2026-10-17, per developer request).
+# Triaged (agent-pending + plan marker) issues are approved AUTOMATICALLY —
+# no human `approve` comment needed. An explicit `deny <reason>` comment
+# after the latest plan still stops the issue (it is closed instead).
+# An approval wait only remains when there is unaddressed human feedback
+# (tester follow-up that triage.sh has not revised yet) — otherwise we wait
+# so the plan conversation (feedback -> revised plan -> auto-approve)
+# completes before the builder starts. Safe to re-run.
 set -euo pipefail
 REPO="$HOME/Repos/a_fish_in_sea"
 cd "$REPO"
@@ -77,23 +79,32 @@ print(f'{kind}|{who}|{arg}|{feedback}')
     echo "[approve] #$N $FEEDBACK_COUNT unaddressed human comment(s) after latest plan — waiting for triage revision"
     continue
   fi
-  if [ -z "$KIND" ]; then
-    echo "[approve] #$N no decision comment after latest plan — waiting"
-    continue
-  fi
-  if [ "$KIND" = "approve" ]; then
-    echo "[approve] #$N approved by @$WHO"
-    gh issue edit "$N" --remove-label agent-pending --add-label agent-approved >/dev/null
-    gh issue comment "$N" --body "Approved by @$WHO — builder will pick this up automatically." >/dev/null
-    "$DIR/tg.sh" "✅ #$N approved (@$WHO) — builder starting: $TITLE
-$URL" || true
-  else
+  if [ "$KIND" = "deny" ]; then
     REASON="${ARG:-no reason given}"
     echo "[approve] #$N denied by @$WHO: $REASON"
-    gh issue comment "$N" --body "Denied by @$WHO: $REASON" >/dev/null
-    gh issue close "$N" >/dev/null
-    "$DIR/tg.sh" "🚫 #$N denied (@$WHO): $REASON
-$TITLE" || true
+    if ! gh issue comment "$N" --body "Denied by @$WHO: $REASON" >/dev/null \
+        || ! gh issue close "$N" >/dev/null; then
+      echo "[approve] #$N could not record the denial (gh hiccup) — retried next poll (no telegram: notify-quiet)"
+      continue
+    fi
+    echo "[approve] #$N denied (no telegram: notify-quiet)"
+    continue
   fi
+  # Auto-ship: anything not explicitly denied is approved — a human `approve`
+  # comment is accepted but no longer required. (Unaddressed feedback already
+  # continued above, so a question/correction still gets a revised plan first.)
+  if [ -n "$KIND" ]; then
+    echo "[approve] #$N approved by @$WHO"
+    APPROVE_NOTE="Approved by @$WHO"
+  else
+    echo "[approve] #$N no decision comment — auto-approving (auto-ship mode)"
+    APPROVE_NOTE="Auto-approved by the agent loop (auto-ship mode: no human approval needed; comment \`deny <reason>\` to stop an issue)"
+  fi
+  if ! gh issue edit "$N" --remove-label agent-pending --add-label agent-approved >/dev/null \
+      || ! gh issue comment "$N" --body "$APPROVE_NOTE — builder will pick this up automatically." >/dev/null; then
+    echo "[approve] #$N could not record the approval (gh hiccup) — retried next poll (no telegram: notify-quiet)"
+    continue
+  fi
+  echo "[approve] #$N approved — builder starting (no telegram: the triage 'working on' message already covered it)"
 done
 echo "[approve] done"

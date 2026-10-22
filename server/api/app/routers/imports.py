@@ -26,10 +26,11 @@ import datetime as dt
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import and_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import get_session
-from ..deps import get_current_user
+from ..db import dialect_insert, get_session
+from ..deps import check_token_scope, get_current_user
 from ..models import ImportBatch, ImportItem, SyncItem, User
 from ..schemas import (
     ImportApproveIn,
@@ -106,22 +107,28 @@ async def _existing_map(
     """
     if not rows:
         return {}
-    pairs = {(r.collection, r.item_id) for r in rows}
+    by_collection: dict[str, set[str]] = {}
+    for r in rows:
+        by_collection.setdefault(r.collection, set()).add(r.item_id)
     out: dict[tuple[str, str], tuple[dict, bool]] = {}
-    for collection, item_id in pairs:
-        row = (
+    for collection, item_ids in by_collection.items():
+        found = (
             await session.execute(
                 select(SyncItem).where(
                     and_(
                         SyncItem.user_id == user_id,
                         SyncItem.collection == collection,
-                        SyncItem.item_id == item_id,
+                        SyncItem.item_id.in_(sorted(item_ids)),
                     )
                 )
             )
-        ).scalar_one_or_none()
-        if row is not None and isinstance(row.data, dict):
-            out[(collection, item_id)] = (dict(row.data), bool(row.deleted))
+        ).scalars().all()
+        for row in found:
+            if isinstance(row.data, dict):
+                out[(row.collection, row.item_id)] = (
+                    dict(row.data),
+                    bool(row.deleted),
+                )
     return out
 
 
@@ -161,10 +168,59 @@ async def _upsert_sync_item(
     data: dict,
 ) -> SyncRecord:
     """Same envelope write as PUT /items: create-or-replace, rev bump,
-    un-delete. Approval paths must use this (never tombstones)."""
+    un-delete. Approval paths must use this (never tombstones).
+
+    Upserts via ON CONFLICT so two requests racing for the same
+    (user, collection, item_id) end with one success and one clean update
+    instead of a unique-constraint 500; IntegrityError is the fallback.
+    """
     now = _now()
     payload = dict(data)
-    payload.setdefault("id", item_id)
+    payload["id"] = item_id
+    stmt = (
+        dialect_insert(SyncItem.__table__)
+        .values(
+            user_id=user_id,
+            collection=collection,
+            item_id=item_id,
+            data=payload,
+            deleted=False,
+            rev=1,
+            updated_at=now,
+        )
+        .on_conflict_do_update(
+            index_elements=[
+                SyncItem.user_id,
+                SyncItem.collection,
+                SyncItem.item_id,
+            ],
+            set_=dict(
+                data=payload,
+                deleted=False,
+                rev=SyncItem.rev + 1,
+                updated_at=now,
+            ),
+        )
+    )
+    try:
+        await session.execute(stmt)
+    except IntegrityError:
+        await session.rollback()
+        row = (
+            await session.execute(
+                select(SyncItem).where(
+                    and_(
+                        SyncItem.user_id == user_id,
+                        SyncItem.collection == collection,
+                        SyncItem.item_id == item_id,
+                    )
+                )
+            )
+        ).scalar_one()
+        row.data = payload
+        row.deleted = False
+        row.rev += 1
+        row.updated_at = now
     row = (
         await session.execute(
             select(SyncItem).where(
@@ -175,23 +231,7 @@ async def _upsert_sync_item(
                 )
             )
         )
-    ).scalar_one_or_none()
-    if row is None:
-        row = SyncItem(
-            user_id=user_id,
-            collection=collection,
-            item_id=item_id,
-            data=payload,
-            rev=1,
-            updated_at=now,
-        )
-        session.add(row)
-    else:
-        row.data = payload
-        row.deleted = False
-        row.rev += 1
-        row.updated_at = now
-    await session.flush()
+    ).scalar_one()
     return SyncRecord(
         collection=row.collection,
         item_id=row.item_id,
@@ -228,6 +268,15 @@ async def submit_import(
                 detail=f"Collection not importable: {item.collection}"
                 f" (importable: {sorted(IMPORTABLE)})",
             )
+        if isinstance(item.data, dict):
+            payload_id = item.data.get("id")
+            if payload_id is not None and str(payload_id) != item.item_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"data.id {payload_id!r} != item_id {item.item_id!r}",
+                )
+    for c in sorted({item.collection for item in body.items}):
+        check_token_scope(user, f"{c}:write", allow_review=True)
     review = bool(getattr(user, "_token_review", False))
     if _is_jwt(user) or not review:
         # Trusted lane: direct envelope writes, same as PUT /items.
@@ -245,18 +294,70 @@ async def submit_import(
     session.add(batch)
     await session.flush()  # need batch.id for the item rows
     for item in body.items:
+        payload = dict(item.data)
+        payload["id"] = item.item_id
         session.add(
             ImportItem(
                 batch_id=batch.id,
                 collection=item.collection,
                 item_id=item.item_id,
-                data=dict(item.data),
+                data=payload,
                 status="pending",
             )
         )
     await session.commit()
     await session.refresh(batch)
     return ImportCreateOut(status="pending", batch_id=batch.id)
+
+
+def _match_wanted_pairs(
+    pending: list[ImportItem], raw_ids: list[str]
+) -> set[tuple[str, str]]:
+    """Resolve caller-supplied item identifiers to (collection, item_id) pairs.
+
+    Approve/discard are keyed by (collection, item_id): a qualified
+    'collection:item_id' matches exactly that row. A bare 'item_id' is
+    accepted only when it is unambiguous within the batch (exactly one
+    pending row carries it). A bare id shared across collections is
+    ambiguous and is rejected instead of silently acting on every
+    collection at once — that was the cross-collection approve/discard
+    collision.
+    """
+    known_pairs = {(r.collection, r.item_id) for r in pending}
+    by_bare: dict[str, set[tuple[str, str]]] = {}
+    for pair in known_pairs:
+        by_bare.setdefault(pair[1], set()).add(pair)
+    matched: set[tuple[str, str]] = set()
+    unknown: list[str] = []
+    ambiguous: list[str] = []
+    for raw in raw_ids:
+        if ":" in raw:
+            prefix, rest = raw.split(":", 1)
+            if prefix in IMPORTABLE and (prefix, rest) in known_pairs:
+                matched.add((prefix, rest))
+            else:
+                unknown.append(raw)
+            continue
+        candidates = by_bare.get(raw, set())
+        if not candidates:
+            unknown.append(raw)
+        elif len(candidates) == 1:
+            matched.update(candidates)
+        else:
+            ambiguous.append(raw)
+    if unknown:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown items: {sorted(set(unknown))}"
+        )
+    if ambiguous:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Ambiguous item id(s) exist in multiple collections; "
+                f"qualify with collection:item_id: {sorted(set(ambiguous))}"
+            ),
+        )
+    return matched
 
 
 @router.get("/pending", response_model=list[ImportBatchOut])
@@ -283,12 +384,28 @@ async def pending_batches(
         .scalars()
         .all()
     )
-    out: list[ImportBatchOut] = []
-    for batch in batches:
-        rows = await _batch_items(session, batch.id)
-        existing = await _existing_map(session, user.id, rows)
-        out.append(_to_out(batch, rows, existing))
-    return out
+    if not batches:
+        return []
+    batch_ids = [b.id for b in batches]
+    all_rows = list(
+        (
+            await session.execute(
+                select(ImportItem)
+                .where(ImportItem.batch_id.in_(batch_ids))
+                .order_by(ImportItem.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    existing = await _existing_map(session, user.id, all_rows)
+    rows_by_batch: dict[int, list[ImportItem]] = {b.id: [] for b in batches}
+    for r in all_rows:
+        rows_by_batch.setdefault(r.batch_id, []).append(r)
+    return [
+        _to_out(batch, rows_by_batch.get(batch.id, []), existing)
+        for batch in batches
+    ]
 
 
 @router.post("/{batch_id}/approve", response_model=ImportBatchOut)
@@ -306,22 +423,15 @@ async def approve_batch(
     pending = [r for r in rows if r.status == "pending"]
     if not pending:
         raise HTTPException(status_code=409, detail="Batch already decided")
-    wanted = (
-        {i for i in (body.item_ids or [])}
-        if body.item_ids is not None
-        else {r.item_id for r in pending}
-    )
-    if body.item_ids is not None and not wanted:
-        raise HTTPException(status_code=400, detail="item_ids is empty")
-    known = {(r.collection, r.item_id) for r in pending}
-    unknown = sorted(
-        i for i in wanted if not any(i == item_id for _, item_id in known)
-    )
-    if unknown:
-        raise HTTPException(status_code=400, detail=f"Unknown items: {unknown}")
+    if body.item_ids is not None:
+        if not body.item_ids:
+            raise HTTPException(status_code=400, detail="item_ids is empty")
+        wanted_pairs = _match_wanted_pairs(pending, body.item_ids)
+    else:
+        wanted_pairs = {(r.collection, r.item_id) for r in pending}
     now = _now()
     for row in pending:
-        if row.item_id in wanted:
+        if (row.collection, row.item_id) in wanted_pairs:
             await _upsert_sync_item(
                 session, user.id, row.collection, row.item_id, row.data
             )
@@ -331,7 +441,8 @@ async def approve_batch(
     await session.commit()
     await session.refresh(batch)
     rows = await _batch_items(session, batch.id)
-    return _to_out(batch, rows)
+    existing = await _existing_map(session, user.id, rows)
+    return _to_out(batch, rows, existing)
 
 
 @router.post("/{batch_id}/discard", response_model=ImportBatchOut)
@@ -348,20 +459,19 @@ async def discard_items(
     if batch.status != "pending":
         raise HTTPException(status_code=409, detail="Batch already decided")
     rows = await _batch_items(session, batch.id)
-    pending_ids = {r.item_id for r in rows if r.status == "pending"}
-    unknown = sorted(set(body.item_ids) - pending_ids)
-    if unknown:
-        raise HTTPException(status_code=400, detail=f"Unknown items: {unknown}")
+    pending = [r for r in rows if r.status == "pending"]
+    wanted_pairs = _match_wanted_pairs(pending, body.item_ids)
     now = _now()
     for row in rows:
-        if row.status == "pending" and row.item_id in set(body.item_ids):
+        if row.status == "pending" and (row.collection, row.item_id) in wanted_pairs:
             row.status = "rejected"
             row.decided_at = now
     await _resolve_batch(session, batch, rows)
     await session.commit()
     await session.refresh(batch)
     rows = await _batch_items(session, batch.id)
-    return _to_out(batch, rows)
+    existing = await _existing_map(session, user.id, rows)
+    return _to_out(batch, rows, existing)
 
 
 @router.post("/{batch_id}/reject", response_model=ImportBatchOut)
@@ -385,4 +495,5 @@ async def reject_batch(
     await session.commit()
     await session.refresh(batch)
     rows = await _batch_items(session, batch.id)
-    return _to_out(batch, rows)
+    existing = await _existing_map(session, user.id, rows)
+    return _to_out(batch, rows, existing)

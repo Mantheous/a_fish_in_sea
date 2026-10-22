@@ -7,8 +7,30 @@ Multiple agents share this clone. Before touching any checkout, read
 before editing (`git worktree list` / `status`), never work in a tree
 with someone else's uncommitted changes, one worktree + branch per
 writer (ad-hoc sessions too), commit WIP often, and `git stash` is
-banned in shared clones (commit instead). Merges happen in a
-throwaway worktree on `main`, verified before push.
+banned in shared clones (commit instead). Merges land on `main` only
+through PRs (`gh pr merge --merge`) — direct pushes to `main` are
+blocked by branch protection. Verify a conflicted or risky PR in a
+throwaway worktree on `main` before merging it.
+
+## File size: split on touch, don't bulk-refactor
+
+Long files cost agent context, merge conflicts, and untestable
+persistence even when human readability doesn't matter. Current hotspots:
+`lib/planner/view/event_editor.dart` (~3390 lines),
+`lib/planner/view/calendar_page.dart` (~2300),
+`lib/nodes/bloc/node_cubit.dart` (~2200).
+
+1. New files: keep under ~500 lines. Split view/widgets,
+   cubit/state/persistence, logic/tests up front.
+2. Existing files: never bulk-refactor for size alone. Split on touch
+   only — when a task already edits a file >500 lines, extract one
+   concern in the same branch (e.g. widget, helper, cubit slice).
+3. Keep persisted cubits small: persistence
+   (`fromJson`/`toJson`/migration) separate from business logic so
+   tolerance tests stay per-item.
+4. Each split must keep `flutter analyze` clean and extend/keep
+   round-trip + tolerance tests for any model touch. No behavior change
+   in a pure split.
 
 ## UX check: label it, don't walk it
 
@@ -86,7 +108,8 @@ Data safety is enforced in three layers — do not weaken any of them:
    the deliberate escape hatch — never set it to "fix" a blocked sync.
 3. `tools/agent/backup-db.sh` (also run by `deploy.sh`) snapshots
    `server/api/data/app.db` to `server/api/data/backups/` (gzipped;
-   32 recent + 14 daily). Restore: stop uvicorn, gunzip over `app.db`,
+   32 recent + 14 daily). Restore: stop uvicorn, remove any
+   `app.db-wal` / `app.db-shm` sidecars, gunzip over `app.db`,
    start uvicorn.
 
 When a persisted model changes, extend the per-item tolerance tests and
@@ -98,9 +121,13 @@ right.
 Two kinds of agents ship differently. Know which one you are:
 
 - **Loop builders** (`tools/agent/builder-run.sh`, `rework-run.sh`):
-  NEVER deploy, NEVER push to `main`, NEVER build the web bundle.
-  Finish with a pushed branch + PR — the loop (`poll.sh` → human merge
-  → `deploy.sh`) ships reviewed work to the funnel.
+  NEVER deploy, NEVER push to `main`, NEVER build the web bundle, NEVER
+  merge your own PR. Finish with a pushed branch + PR — the loop ships it
+  itself (`poll.sh`: review → data-guardian → security-guardian → `merge.sh`
+  auto-merges fully-gated PRs → `close.sh` closes the issue → `deploy.sh`
+  rebuilds the funnel bundle). No human merge or approval stands in the
+  path (auto-ship mode, 2026-10-17): triaged plans are built automatically,
+  and commenting `deny <reason>` on an issue is the only brake.
 - **Ad-hoc** (the user asked you directly in this session): YOU ship it.
   Do not report done until the user can see the change on the active
   target. "Run this build to see it" is not done.
@@ -112,7 +139,8 @@ not do both, do not ask unless the file is missing.
 
 ### Ad-hoc, web target: deploy to the Tailnet funnel
 
-The user views the web app at `https://alauris.tail088878.ts.net/fish/`.
+The user views the web app at the `/fish/` URL configured in gitignored
+`DEBUG_PREFS.md`.
 Tailscale serve maps `/fish` → `http://127.0.0.1:8000` (prefix stripped)
 and the FastAPI server (`server/api`, `_mount_web` in `app/main.py`)
 serves `<repo>/build/web` from disk — no server restart or copy step
@@ -120,10 +148,13 @@ needed after a rebuild. The funnel serves the main checkout's bundle,
 so building inside a worktree does NOT ship — get the change onto `main`
 first, then deploy from the main checkout:
 
-1. Commit your work on your branch and push it. Then land it on `main`
-   via a throwaway worktree per `tools/agent/CONVENTIONS.md` rule 4
-   (verify, then publish). Ad-hoc may merge to `main`; loop builders
-   must never.
+1. Commit your work on your branch and push it. Then open a PR against
+   `main` and merge it with `gh pr merge --merge` after verifying
+   per `tools/agent/CONVENTIONS.md` rule 4 (verify in a throwaway
+   worktree first if the PR is conflicted or risky). Branch protection
+   blocks every direct push to `main` — no exceptions, no
+   `git push origin HEAD:main`. Ad-hoc may merge its own PRs; loop
+   builders must never merge anything themselves.
 2. From the main checkout (`$HOME/Repos/a_fish_in_sea`), run
    `tools/agent/deploy.sh` — never a bare `flutter build web`. The script
    keeps the data-guardian gate, the DB backup, and the base-href checks
@@ -142,7 +173,7 @@ first, then deploy from the main checkout:
 
 Load the `wireless-debugging` skill and follow it (reconnect with
 `adb reconnect` / `adb connect` first — never re-pair unless auth fails;
-known device `mantheous-a16` via Tailscale). Then:
+resolve the target device via `tailscale status` or `DEBUG_PREFS.md`). Then:
 
 1. If a `flutter run` session already lives in tmux (`tmux capture-pane
    -p -t fish`), push a hot reload/restart: prefer the `dart` MCP

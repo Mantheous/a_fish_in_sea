@@ -21,12 +21,11 @@ Always try this before asking for a pairing code:
 2. If the list is empty/`offline`: run `adb reconnect`, then
    `adb devices -l` again.
 3. If still empty: `adb connect <last-IP>:<port>` using the last known
-   connect address. Known device: `mantheous-a16` (SM-A166U1) at
-   Tailscale IP `100.126.75.1` — resolve with `tailscale status`
-   (name `mantheous-a16`), port from the user (was `37005`; the
-   connect port rotates, so confirm if it refuses). Tailscale IPs are
-   stable across WiFi changes, so retry the same address first.
-   Then `adb devices -l`.
+   connect address — resolve the device's Tailscale IP with
+   `tailscale status` (or read gitignored `DEBUG_PREFS.md`), port from
+   the user (the connect port rotates, so confirm if it refuses).
+   Tailscale IPs are stable across WiFi changes, so retry the same
+   address first. Then `adb devices -l`.
 4. If the port is unknown/stale: ask the user for the MAIN Wireless
    debugging IP:port from Developer options → Wireless debugging
    (NOT "Pair device with pairing code"), then
@@ -42,8 +41,8 @@ Always try this before asking for a pairing code:
 2. Phone: Developer options → Wireless debugging ON → "Pair device with
    pairing code". It shows an `IP:PORT` plus a 6-digit code.
 3. Ask the user for IP, port, and code as THREE separate answers — users mash
-   `IP:PORT` into one string (e.g. `192.168.0.23342331` is really
-   `192.168.0.233:42331`). Never guess the split silently.
+   `IP:PORT` into one string (e.g. `<LAN-IP>42331` is really
+   `<LAN-IP>:42331`). Never guess the split silently.
 4. Pair non-interactively, code as argument:
    `adb pair <IP>:<PORT> <CODE>`
    Do NOT pipe via `echo <code> | adb pair ...` — that fails with

@@ -19,15 +19,15 @@ import re, sys
 text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
 urls: list[str] = []
 patterns = [
-    r'<img[^>]+src=["\']([^"\']+)["\']',
-    r'!\[[^\]]*\]\((https?://[^)\s]+)\)',
+    r'<img[^>]+src=["\'](https://[^"\']+)["\']',
+    r'!\[[^\]]*\]\((https://[^)\s]+)\)',
     r'(https://github\.com/user-attachments/assets/[A-Za-z0-9\-]+)',
     r'(https://[^\s)"\'<>]+\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s)"\'<>]*)?)',
 ]
 for pat in patterns:
     for m in re.findall(pat, text, flags=re.IGNORECASE):
         u = m.strip().rstrip(').,.')
-        if u and u not in urls:
+        if u.lower().startswith("https://") and u not in urls:
             urls.append(u)
 open(sys.argv[2], "w").write("\n".join(urls) + ("\n" if urls else ""))
 PY
@@ -46,7 +46,7 @@ while IFS= read -r URL; do
     echo "$DEST"
     continue
   fi
-  if curl -sL --max-time 30 "$URL" -o "$DEST" 2>/dev/null; then
+  if curl -sL --proto '=https' --proto-redir '=https' --max-time 30 "$URL" -o "$DEST" 2>/dev/null; then
     if file "$DEST" 2>/dev/null | grep -qiE 'image|PNG|JPEG|GIF|WebP'; then
       echo "$DEST"
     else

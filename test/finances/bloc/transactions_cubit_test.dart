@@ -63,6 +63,103 @@ void main() {
       expect(cubit.state.length, 1);
     });
 
+    test('syncFromPlaid updates same-ID settlement and keeps annotations', () {
+      final cubit = TransactionsCubit();
+      cubit.syncFromPlaid([
+        Transaction(
+          id: 'txn_1',
+          accountId: 'acc_1',
+          amount: -50,
+          date: DateTime(2025, 10, 1),
+          name: 'Pending Store',
+          pending: true,
+          assignedExpenseId: 'expense_1',
+          assignedNodeId: 'node_1',
+          tagIds: const ['tag_1'],
+        ),
+      ]);
+
+      cubit.syncFromPlaid([
+        Transaction(
+          id: 'txn_1',
+          accountId: 'acc_1',
+          amount: -57.5,
+          date: DateTime(2025, 10, 2),
+          name: 'Settled Store',
+          pending: false,
+        ),
+      ]);
+
+      final settled = cubit.state.single;
+      expect(settled.amount, -57.5);
+      expect(settled.date, DateTime(2025, 10, 2));
+      expect(settled.name, 'Settled Store');
+      expect(settled.pending, isFalse);
+      expect(settled.assignedExpenseId, 'expense_1');
+      expect(settled.assignedNodeId, 'node_1');
+      expect(settled.tagIds, ['tag_1']);
+    });
+
+    test('syncFromPlaid replaces linked pending row with posted ID', () {
+      final cubit = TransactionsCubit();
+      cubit.syncFromPlaid([
+        Transaction(
+          id: 'pending_1',
+          accountId: 'acc_1',
+          amount: -20,
+          date: DateTime(2025, 10, 1),
+          name: 'Coffee',
+          pending: true,
+          assignedNodeId: 'node_1',
+          tagIds: const ['tag_1'],
+        ),
+      ]);
+
+      cubit.syncFromPlaid([
+        Transaction.fromPlaid({
+          'transaction_id': 'posted_1',
+          'account_id': 'acc_1',
+          'amount': 23,
+          'date': '2025-10-02',
+          'name': 'Coffee Shop',
+          'pending': false,
+          'pending_transaction_id': 'pending_1',
+        }),
+      ]);
+
+      expect(cubit.state.map((t) => t.id), ['posted_1']);
+      expect(cubit.state.single.amount, -23);
+      expect(cubit.state.single.pending, isFalse);
+      expect(cubit.state.single.assignedNodeId, 'node_1');
+      expect(cubit.state.single.tagIds, ['tag_1']);
+    });
+
+    test('does not replace a pending row from another account', () {
+      final cubit = TransactionsCubit();
+      cubit.syncFromPlaid([
+        Transaction(
+          id: 'pending_1',
+          accountId: 'acc_1',
+          amount: -20,
+          date: DateTime(2025, 10, 1),
+          name: 'Coffee',
+          pending: true,
+        ),
+      ]);
+      cubit.syncFromPlaid([
+        Transaction(
+          id: 'posted_1',
+          accountId: 'acc_2',
+          amount: -23,
+          date: DateTime(2025, 10, 2),
+          name: 'Coffee Shop',
+          pendingTransactionId: 'pending_1',
+        ),
+      ]);
+
+      expect(cubit.state.map((t) => t.id).toSet(), {'pending_1', 'posted_1'});
+    });
+
     test('assignExpense sets the assignedExpenseId', () {
       final cubit = TransactionsCubit();
       cubit.syncFromPlaid([
@@ -121,6 +218,56 @@ void main() {
       expect(cubit.unassignedTransactions.first.name, 'Unassigned');
     });
 
+    test('deleted node cleanup clears only matching node assignments', () {
+      final cubit = TransactionsCubit();
+      cubit.syncFromPlaid([
+        Transaction(
+          id: 'one',
+          accountId: 'acc_1',
+          amount: -10,
+          date: DateTime(2025, 10, 1),
+          name: 'One',
+          assignedNodeId: 'deleted',
+        ),
+        Transaction(
+          id: 'two',
+          accountId: 'acc_1',
+          amount: -20,
+          date: DateTime(2025, 10, 2),
+          name: 'Two',
+          assignedNodeId: 'kept',
+        ),
+      ]);
+
+      expect(cubit.clearNodeAssignmentsFor({'deleted'}), 1);
+      expect(cubit.state[0].assignedNodeId, isNull);
+      expect(cubit.state[1].assignedNodeId, 'kept');
+    });
+
+    test('node suggestions choose the most recent matching transaction', () {
+      final cubit = TransactionsCubit();
+      cubit.syncFromPlaid([
+        Transaction(
+          id: 'older',
+          accountId: 'acc_1',
+          amount: -10,
+          date: DateTime(2025, 10, 1),
+          name: 'Coffee',
+          assignedNodeId: 'old-node',
+        ),
+        Transaction(
+          id: 'newer',
+          accountId: 'acc_1',
+          amount: -10,
+          date: DateTime(2025, 10, 2),
+          name: 'Coffee',
+          assignedNodeId: 'new-node',
+        ),
+      ]);
+
+      expect(cubit.suggestNodeForTransaction('coffee'), 'new-node');
+    });
+
     test('toJson/fromJson roundtrip', () {
       final cubit = TransactionsCubit();
       final tx = Transaction(
@@ -136,6 +283,25 @@ void main() {
       final restored = cubit.fromJson(json!);
       expect(restored?.length, 1);
       expect(restored?.first.id, 'txn_1');
+    });
+
+    test('restores transactions without settlement link field', () {
+      final cubit = TransactionsCubit();
+      final restored = cubit.fromJson({
+        'transactions': [
+          {
+            'id': 'legacy_txn',
+            'accountId': 'acc_1',
+            'amount': -10,
+            'date': '2025-10-01T00:00:00.000',
+            'name': 'Legacy',
+            'pending': true,
+          },
+        ],
+      });
+
+      expect(restored?.single.pendingTransactionId, isNull);
+      expect(restored?.single.pending, isTrue);
     });
   });
 }

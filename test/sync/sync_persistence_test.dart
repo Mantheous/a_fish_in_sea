@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
 import 'package:a_fish_in_sea/sync/sync_client.dart';
 import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
@@ -12,6 +15,40 @@ SyncClient _dummyClient() => SyncClient(
       accessToken: () => null,
       refreshAccessToken: () async => null,
     );
+
+class _RefreshStubClient extends SyncClient {
+  final Future<Map<String, dynamic>> Function() _onRefresh;
+  _RefreshStubClient(this._onRefresh)
+      : super(
+          serverBase: () => '',
+          accessToken: () => null,
+          refreshAccessToken: () async => null,
+        );
+
+  @override
+  Future<Map<String, dynamic>> refresh(String refreshToken) => _onRefresh();
+}
+
+class _SessionRaceClient extends SyncClient {
+  final Completer<Map<String, dynamic>> refreshResult = Completer();
+
+  _SessionRaceClient()
+      : super(
+          serverBase: () => '',
+          accessToken: () => null,
+          refreshAccessToken: () async => null,
+        );
+
+  @override
+  Future<Map<String, dynamic>> login(String email, String password) async => {
+        'access_token': 'access-$email',
+        'refresh_token': 'refresh-$email',
+      };
+
+  @override
+  Future<Map<String, dynamic>> refresh(String refreshToken) =>
+      refreshResult.future;
+}
 
 void main() {
   late Storage storage;
@@ -58,13 +95,118 @@ void main() {
     final cubit = SyncMetaCubit();
     cubit.save(
       cursor: '2026-09-12T00:00:00Z',
+      lastEmail: 'a@example.com',
       upsert: {
         'tasks/t1': const ItemMeta(hash: 'ab', serverTime: '2026-09-12T00:00:00Z')
       },
     );
     final restored = cubit.fromJson(cubit.toJson(cubit.state))!;
     expect(restored.cursor, '2026-09-12T00:00:00Z');
+    expect(restored.lastEmail, 'a@example.com');
     expect(restored.items['tasks/t1']?.hash, 'ab');
+
+    // Legacy payloads without lastEmail still load cleanly.
+    final legacy = cubit.fromJson({
+      'cursor': '2026-09-12T00:00:00Z',
+      'items': {
+        'tasks/t1': {'hash': 'ab', 'serverTime': '2026-09-12T00:00:00Z'},
+      },
+    })!;
+    expect(legacy.lastEmail, isNull);
+    expect(legacy.items['tasks/t1']?.hash, 'ab');
+  });
+
+  test('AuthCubit keeps tokens on transient refresh error and clears on 401',
+      () async {
+    var shouldThrow401 = false;
+    final client = _RefreshStubClient(() {
+      if (shouldThrow401) {
+        throw const SyncException(401, 'Invalid refresh token');
+      }
+      throw const SocketException('network unreachable');
+    });
+    final cubit = AuthCubit(client: () => client);
+    final hydrated = cubit.fromJson({
+      'status': 'signedIn',
+      'email': 'a@example.com',
+      'accessToken': 'at-1',
+      'refreshToken': 'rt-1',
+    })!;
+    cubit.emit(hydrated);
+
+    // Transient network error: stays signed in with tokens intact.
+    expect(await cubit.refreshAccessToken(), isNull);
+    expect(cubit.state.isSignedIn, isTrue);
+    expect(cubit.state.accessToken, 'at-1');
+    expect(cubit.state.refreshToken, 'rt-1');
+
+    // Explicit 401 from server: signs out and clears tokens.
+    shouldThrow401 = true;
+    expect(await cubit.refreshAccessToken(), isNull);
+    expect(cubit.state.isSignedIn, isFalse);
+    expect(cubit.state.accessToken, isNull);
+    expect(cubit.state.refreshToken, isNull);
+  });
+
+  test('AuthCubit working state recovers safely across restart', () {
+    final cubit = AuthCubit(client: _dummyClient);
+    const working = AuthState(
+      status: AuthStatus.working,
+      email: 'a@example.com',
+      accessToken: 'at-1',
+      refreshToken: 'rt-1',
+    );
+
+    // toJson is the persisted snapshot; a login/refresh interrupted while
+    // working must not restore into a permanently wedged working state.
+    final persisted = cubit.toJson(working);
+    expect(persisted['status'], AuthStatus.signedIn.name);
+    final restored = cubit.fromJson(persisted)!;
+    expect(restored.status, AuthStatus.signedIn);
+    expect(restored.accessToken, 'at-1');
+    expect(restored.refreshToken, 'rt-1');
+
+    // Also tolerate older snapshots that wrote `working` directly.
+    final legacyRestore = cubit.fromJson({
+      ...persisted,
+      'status': AuthStatus.working.name,
+    })!;
+    expect(legacyRestore.status, AuthStatus.signedIn);
+  });
+
+  test('AuthCubit signs out when restored session has no refresh token',
+      () async {
+    final cubit = AuthCubit(client: _dummyClient);
+    cubit.emit(cubit.fromJson({
+      'status': AuthStatus.signedIn.name,
+      'email': 'a@example.com',
+      'accessToken': 'at-1',
+    })!);
+
+    expect(await cubit.refreshAccessToken(), isNull);
+    expect(cubit.state.status, AuthStatus.signedOut);
+    expect(cubit.state.accessToken, isNull);
+    expect(cubit.state.refreshToken, isNull);
+  });
+
+  test('a refresh completing after account switch cannot restore old tokens',
+      () async {
+    final client = _SessionRaceClient();
+    final cubit = AuthCubit(client: () => client);
+    expect(await cubit.login('alice@example.com', 'password'), isTrue);
+
+    final oldRefresh = cubit.refreshAccessToken();
+    cubit.logout();
+    expect(await cubit.login('bob@example.com', 'password'), isTrue);
+
+    client.refreshResult.complete({
+      'access_token': 'stale-alice-access',
+      'refresh_token': 'stale-alice-refresh',
+    });
+    expect(await oldRefresh, isNull);
+    expect(cubit.state.email, 'bob@example.com');
+    expect(cubit.state.accessToken, 'access-bob@example.com');
+    expect(cubit.state.refreshToken, 'refresh-bob@example.com');
   });
 
   test('SyncMetaCubit tolerates corrupt entries', () {
@@ -81,5 +223,72 @@ void main() {
     expect(restored.items.keys, isNot(contains('bad')));
     // Wrong-typed entries are skipped per-item, never fatal.
     expect(restored.items.keys, isNot(contains('alsobad')));
+  });
+
+  test('SyncMetaCubit round-trips account snapshots and tolerates garbage',
+      () {
+    final cubit = SyncMetaCubit();
+    cubit.save(
+      cursor: '2026-09-12T00:00:00Z',
+      lastEmail: 'a@example.com',
+      upsert: {
+        'nodes/t1': const ItemMeta(hash: 'h1', serverTime: '2026-09-12T00:00:00Z'),
+      },
+    );
+    // Simulate a snapshot written by signOut/account-switch.
+    final snap = AccountSnapshot(
+      cursor: '2026-09-12T00:00:00Z',
+      items: {
+        'nodes/t1':
+            const ItemMeta(hash: 'h1', serverTime: '2026-09-12T00:00:00Z'),
+      },
+      collections: {
+        'nodes': {
+          't1': {'id': 't1', 'title': 'Offline draft'},
+        },
+      },
+    );
+    cubit.save(accountSnapshots: {'a@example.com': snap});
+    final json = cubit.toJson(cubit.state);
+    final restored = cubit.fromJson(json)!;
+    expect(restored.accountSnapshots['a@example.com']?.cursor,
+        '2026-09-12T00:00:00Z');
+    expect(restored.accountSnapshots['a@example.com']?.items['nodes/t1']?.hash,
+        'h1');
+    expect(
+        restored.accountSnapshots['a@example.com']?.collections['nodes']?['t1']
+            ?['title'],
+        'Offline draft');
+
+    // Malformed snapshots never throw and never wipe valid state.
+    final garbage = cubit.fromJson({
+      'cursor': 'x',
+      'items': const {},
+      'accountSnapshots': {
+        'a@example.com': 'not-a-map',
+        'b@example.com': {
+          'cursor': 42,
+          'items': {
+            'good': {'hash': 'h', 'serverTime': 't'},
+            'bad': 'nope',
+            'alsobad': {'hash': 42},
+          },
+          'collections': {
+            'nodes': {
+              't1': {'id': 't1', 'title': 'kept'},
+              't2': 'garbage-entry',
+            },
+            'broken-coll': 'not-a-map',
+          },
+        },
+      },
+    })!;
+    expect(garbage.accountSnapshots.keys, isNot(contains('a@example.com')));
+    final b = garbage.accountSnapshots['b@example.com']!;
+    expect(b.items.keys, contains('good'));
+    expect(b.items.keys, isNot(contains('bad')));
+    expect(b.items.keys, isNot(contains('alsobad')));
+    expect(b.collections['nodes']?['t1']?['title'], 'kept');
+    expect(b.collections['nodes']?.containsKey('t2'), isFalse);
   });
 }

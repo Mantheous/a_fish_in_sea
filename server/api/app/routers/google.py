@@ -12,6 +12,7 @@ request host).
 from __future__ import annotations
 
 import datetime as dt
+import html
 import secrets
 
 import jwt
@@ -23,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import google as g
 from ..config import get_settings
 from ..db import get_session
-from ..deps import get_current_user
+from ..deps import require_jwt_user
 from ..models import User
 from ..oauth_store import (
     clear_connection,
@@ -120,16 +121,25 @@ def _google_error(e: Exception, reconnect_statuses=(401, 403)):
         payload["needsReconnect"] = True
     elif err_status is None and isinstance(e, g.GoogleAuthError):
         # No-connection and refresh failures carry no upstream status, but
-        # the only fix is reconnecting the Google account.
+        # the only fix is reconnecting the Google account. Don't leak the
+        # raw upstream body (e.g. "Token refresh failed (400): ...
+        # Token has been expired or revoked") — the app surfaces
+        # `detail.error` verbatim, so keep it actionable.
         status = 401
         payload["needsReconnect"] = True
+        raw = str(e)
+        if "Token refresh failed" in raw:
+            payload["error"] = (
+                "Google connection needs renewal — please disconnect and "
+                "reconnect your Google account."
+            )
     return payload, status
 
 
 @router.get("/auth_url")
 async def auth_url(
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     try:
@@ -151,16 +161,34 @@ async def callback(
     error: str | None = None,
     session: AsyncSession = Depends(get_session),
 ):
+    csp = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"}
     if error:
-        return HTMLResponse(f"Google authorization failed: {error}", status_code=400)
+        return HTMLResponse(
+            f"Google authorization failed: {html.escape(error)}",
+            status_code=400,
+            headers=csp,
+        )
     if not code or not state:
-        return HTMLResponse("Missing code in Google callback", status_code=400)
+        return HTMLResponse(
+            "Missing code in Google callback",
+            status_code=400,
+            headers=csp,
+        )
     user_id = _oauth_state_user(state)
+    user = await session.get(User, user_id)
+    if user is None:
+        return HTMLResponse(
+            "Invalid OAuth state user", status_code=400, headers=csp
+        )
     redirect_uri = _redirect_uri(request)
     try:
         tokens = await g.redeem_code(code, redirect_uri)
     except g.GoogleAuthError as e:
-        return HTMLResponse(f"Google connect failed: {e}", status_code=500)
+        return HTMLResponse(
+            f"Google connect failed: {html.escape(str(e))}",
+            status_code=500,
+            headers=csp,
+        )
     refresh = tokens.get("refresh_token") or ""
     granted = tokens.get("scope") or g.GOOGLE_SCOPE
     if not refresh and tokens.get("_needs_merge"):
@@ -168,7 +196,9 @@ async def callback(
         refresh = decrypt_secret(row.refresh_token) if row else ""
     if not refresh:
         return HTMLResponse(
-            "Google did not return a refresh token; try again.", status_code=500
+            "Google did not return a refresh token; try again.",
+            status_code=500,
+            headers=csp,
         )
     await save_connection(
         session,
@@ -186,13 +216,14 @@ async def callback(
         "<body style='font-family:sans-serif;text-align:center;"
         "padding-top:4rem'><h2>Google Calendar connected</h2>"
         "<p>You can close this window and return to the app.</p>"
-        "</body></html>"
+        "</body></html>",
+        headers=csp,
     )
 
 
 @router.get("/status")
 async def status(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     row = await get_connection(session, user.id, _PROVIDER)
@@ -207,7 +238,7 @@ async def status(
 
 @router.post("/disconnect")
 async def disconnect(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     await clear_connection(session, user.id, _PROVIDER)
@@ -216,7 +247,7 @@ async def disconnect(
 
 @router.get("/calendars")
 async def calendars(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     try:
@@ -229,7 +260,7 @@ async def calendars(
 
 @router.get("/contacts")
 async def contacts(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     try:
@@ -245,7 +276,7 @@ async def events(
     calendarId: str | None = None,
     timeMin: str | None = None,
     timeMax: str | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     if not calendarId:
@@ -264,12 +295,27 @@ async def events(
     return {"events": found, "calendar": colors}
 
 
+_STR_FIELDS = ("calendarId", "eventId", "summary", "description", "location", "start", "end")
+
+
 def _write_payload(required: tuple[str, ...], data: dict):
-    missing = [k for k in required if not data.get(k)]
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Payload must be a JSON object")
+    missing = [
+        k
+        for k in required
+        if not isinstance(data.get(k), str) or not str(data.get(k)).strip()
+    ]
     if missing:
         raise HTTPException(
-            status_code=400, detail=f"Missing fields: {', '.join(missing)}"
+            status_code=400, detail=f"Missing or invalid fields: {', '.join(missing)}"
         )
+    for field in _STR_FIELDS:
+        val = data.get(field)
+        if val is not None and not isinstance(val, str):
+            raise HTTPException(
+                status_code=400, detail=f"Field '{field}' must be a string"
+            )
     return data
 
 
@@ -286,7 +332,7 @@ def _recurrence(data: dict):
 async def get_one(
     calendarId: str | None = None,
     eventId: str | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     if not calendarId or not eventId:
@@ -295,7 +341,7 @@ async def get_one(
         token = await _access_token(session, user.id)
         event = await g.get_event(token, calendarId, eventId)
     except (g.GoogleAuthError, httpx.HTTPError) as e:
-        payload, status = _google_error(e, reconnect_statuses=(403, 404))
+        payload, status = _google_error(e, reconnect_statuses=(401, 403, 404))
         if status == 404:
             raise HTTPException(status_code=404, detail=payload)
         raise HTTPException(status_code=status, detail=payload)
@@ -307,7 +353,7 @@ async def get_one(
 @router.post("/events")
 async def create(
     data: dict,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     _write_payload(("calendarId",), data)
@@ -327,7 +373,7 @@ async def create(
             ),
         )
     except (g.GoogleAuthError, httpx.HTTPError) as e:
-        payload, status = _google_error(e, reconnect_statuses=(403, 404))
+        payload, status = _google_error(e, reconnect_statuses=(401, 403, 404))
         raise HTTPException(status_code=status, detail=payload)
     return {"event": event}
 
@@ -335,7 +381,7 @@ async def create(
 @router.patch("/events")
 async def update(
     data: dict,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     _write_payload(("calendarId", "eventId"), data)
@@ -356,7 +402,7 @@ async def update(
             ),
         )
     except (g.GoogleAuthError, httpx.HTTPError) as e:
-        payload, status = _google_error(e, reconnect_statuses=(403, 404))
+        payload, status = _google_error(e, reconnect_statuses=(401, 403, 404))
         raise HTTPException(status_code=status, detail=payload)
     return {"event": event}
 
@@ -364,7 +410,7 @@ async def update(
 @router.delete("/events")
 async def delete(
     data: dict,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_jwt_user),
     session: AsyncSession = Depends(get_session),
 ):
     _write_payload(("calendarId", "eventId"), data)
@@ -372,6 +418,6 @@ async def delete(
         token = await _access_token(session, user.id)
         await g.delete_event(token, data["calendarId"], data["eventId"])
     except (g.GoogleAuthError, httpx.HTTPError) as e:
-        payload, status = _google_error(e, reconnect_statuses=(403, 404))
+        payload, status = _google_error(e, reconnect_statuses=(401, 403, 404))
         raise HTTPException(status_code=status, detail=payload)
     return {"deleted": True}

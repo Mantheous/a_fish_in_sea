@@ -7,11 +7,31 @@
 #      reply in-thread, so the human can converse until the plan is right.
 # Read-only except: GitHub comments/labels + Telegram sends + /tmp image
 # downloads. Never touches code.
+#
+# NOTE (2026-10-15): the plan comments below are the maintainer's primary
+# reading material, and model prose skews too technical to parse without
+# deep codebase context — hence the plain-words rules in the prompts. If
+# readability is still poor, route the commentary through longcat (clear
+# explanations, weak code): e.g. a second pass that rewrites the plan/PR
+# body in plain words before posting.
 set -euo pipefail
 REPO="$HOME/Repos/a_fish_in_sea"
 cd "$REPO"
 DIR="$REPO/tools/agent"
 MARKER='<!-- agent-plan -->'
+
+# Serialized model quota: triage spawns headless opencode runs, so it must
+# not stack LLM calls on top of a live builder/rework session (the quota
+# death spiral build.sh/review.sh already guard against). Skip this poll
+# when any loop run is active; the next poll retries.
+loop_runs() {
+  tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^(agent-[0-9]|rework-[0-9])' || true
+}
+RUNNING="$(loop_runs)"
+if [ "${RUNNING:-0}" -ge 1 ]; then
+  echo "[triage] $RUNNING loop run(s) already active — skipping triage this poll so builders are not starved"
+  exit 0
+fi
 
 ISSUES_JSON="$(gh issue list --label agent-pending --state open --limit 20 \
   --json number,title,author,url)"
@@ -27,8 +47,10 @@ echo "$ISSUES_JSON" | python3 -c 'import json,sys; [print(i["number"]) for i in 
 
   if ! python3 -c "import json,sys; sys.exit(0 if '$AUTHOR' in json.load(open('$REPO/tools/testers.json'))['testers'] else 1)"; then
     echo "[triage] #$N (@$AUTHOR) not a verified tester — commenting and unlabelling"
-    gh issue comment "$N" --body "Not a verified tester (see \`tools/testers.json\`). This issue will not be picked up by the agent loop." >/dev/null
-    gh issue edit "$N" --remove-label agent-pending >/dev/null
+    if ! gh issue comment "$N" --body "Not a verified tester (see \`tools/testers.json\`). This issue will not be picked up by the agent loop." >/dev/null \
+        || ! gh issue edit "$N" --remove-label agent-pending >/dev/null; then
+      echo "[triage] #$N could not unlabel (gh hiccup) — retried next poll"
+    fi
     continue
   fi
 
@@ -55,10 +77,15 @@ READ-ONLY task. Do NOT modify, create, delete, or commit any repo files. Do NOT 
    - If the issue body/comments mention /tmp/opencode/... paths (ux-walk screenshots/reports live on this loop host), read those files directly.
    - If you see any other image URL in the thread you have not viewed, download it with: curl -sL \"<url>\" -o /tmp/opencode/issue-$N-extra-<i>.png then READ it. Use what you see to name the exact screen and widget.
 3. Explore the repo read-only (read/grep/glob) to ground the plan. Read AGENTS.md first for persistence rules.
-4. Output ONLY the markdown below, no extra prose before or after:
+4. Write for the maintainer, who is NOT deep in the codebase: plain,
+concrete words — name the screen and the user-visible behavior, never a
+class or function name, and no unexplained jargon anywhere. The Summary
+lines especially must make sense without reading any code; technical
+detail belongs in the Files/Risk/Test fields only.
+5. Output ONLY the markdown below, no extra prose before or after:
 ## Triage plan #$N
 Severity: <critical|high|medium|low>
-Summary: <exactly 2 lines: line1 what is asked, line2 proposed approach>
+Summary: <exactly 2 lines in plain words: line1 what the user will notice, line2 proposed approach>
 Files to touch: <list of paths, or TBD with why>
 Risk: <low|high> — <one-line reason>
 Test idea: <one line: what test would prove it>
@@ -66,7 +93,9 @@ Persistence impact: <none | description + migration gating per AGENTS.md>
 UX check: <needed (touches user-visible UI — builder must add the ux-walk label + scope per AGENTS.md; the loop walks it post-deploy, never pre-merge) | not needed — <why>>
 Effort: <S|M|L>"
     PLAN_FILE="$(mktemp)"
-    if ! opencode run --title "triage-#$N" "$PROMPT" </dev/null >"$PLAN_FILE" 2>"$PLAN_FILE.err"; then
+    # NOTE: `opencode run` without --model keeps the configured default (a
+    # free-tier model). Pin --model explicitly so triage stays on opencode-go.
+    if ! opencode run --model opencode-go/muse-spark-1.3-contributor#xhigh --title "triage-#$N" "$PROMPT" </dev/null >"$PLAN_FILE" 2>"$PLAN_FILE.err"; then
       echo "[triage] #$N plan draft failed: $(tail -n 3 "$PLAN_FILE.err")"
       rm -f "$PLAN_FILE" "$PLAN_FILE.err"
       continue
@@ -77,11 +106,14 @@ Effort: <S|M|L>"
     COMMENT="$PLAN
 
 ---
-Approve: comment \`approve\` (or \`agent approved\`) on this issue (builder picks it up automatically).
-Deny: comment \`deny <reason>\` (issue is closed).
+The loop builds triaged plans automatically (auto-ship mode: no approval
+needed). To stop this issue, comment \`deny <reason>\` — the loop closes it.
 To question or correct the plan, just comment in-thread — the triage agent revises the plan on the next poll.
 $MARKER"
-    gh issue comment "$N" --body "$COMMENT" >/dev/null
+    if ! gh issue comment "$N" --body "$COMMENT" >/dev/null; then
+      echo "[triage] #$N plan comment failed (gh hiccup) — retried next poll"
+      continue
+    fi
     echo "[triage] #$N plan posted"
 
     SUMMARY="$(echo "$PLAN" | python3 -c "
@@ -95,11 +127,11 @@ for i, l in enumerate(lines):
         break
 " | head -n 2)"
     RISK="$(echo "$PLAN" | grep -m1 '^Risk:' || echo 'Risk: unknown')"
-    "$DIR/tg.sh" "🆕 Triage plan #$N: $TITLE
+    "$DIR/tg.sh" "🔨 Working on #$N: $TITLE
 $SUMMARY
 $RISK
 $URL
-Approve: comment \`approve\` (or \`agent approved\`) on the issue / Deny: comment \`deny <reason>\`" || echo "[triage] #$N telegram ping failed (plan comment still posted)"
+To stop it, comment \`deny <reason>\` on the issue." || echo "[triage] #$N telegram ping failed (plan comment still posted)"
     continue
   fi
 
@@ -162,11 +194,14 @@ READ-ONLY task. Do NOT modify, create, delete, or commit any repo files. Do NOT 
    - Any other image URL you have not viewed: curl -sL \"<url>\" -o /tmp/opencode/issue-$N-rev-<i>.png then READ it.
 3. Explore the repo read-only (read/grep/glob) as needed. Read AGENTS.md first for persistence rules.
 4. Address EVERY human follow-up point after the previous plan: answer questions, incorporate corrections into the revised scope. If feedback is ambiguous, pick the safest interpretation AND note the assumption plus what to confirm.
-5. Output ONLY the markdown below, no extra prose before or after:
+5. Write for the maintainer, who is NOT deep in the codebase: plain,
+concrete words — name the screen and the user-visible behavior, never a
+class or function name, and no unexplained jargon anywhere.
+6. Output ONLY the markdown below, no extra prose before or after:
 ## Triage plan #$N (rev)
-Replies: <one short line per follow-up point: what you changed or answered>
+Replies: <one short plain-words line per follow-up point: what you changed or answered>
 Severity: <critical|high|medium|low>
-Summary: <exactly 2 lines: line1 what is asked (as clarified), line2 revised approach>
+Summary: <exactly 2 lines in plain words: line1 what the user will notice (as clarified), line2 revised approach>
 Files to touch: <list of paths, or TBD with why>
 Risk: <low|high> — <one-line reason>
 Test idea: <one line: what test would prove it>
@@ -174,7 +209,7 @@ Persistence impact: <none | description + migration gating per AGENTS.md>
 UX check: <needed (touches user-visible UI — builder must add the ux-walk label + scope per AGENTS.md; the loop walks it post-deploy, never pre-merge) | not needed — <why>>
 Effort: <S|M|L>"
   REV_FILE="$(mktemp)"
-  if ! opencode run --title "triage-rev-#$N" "$REVPROMPT" </dev/null >"$REV_FILE" 2>"$REV_FILE.err"; then
+  if ! opencode run --model opencode-go/muse-spark-1.3-contributor#xhigh --title "triage-rev-#$N" "$REVPROMPT" </dev/null >"$REV_FILE" 2>"$REV_FILE.err"; then
     echo "[triage] #$N revision failed: $(tail -n 3 "$REV_FILE.err")"
     rm -f "$REV_FILE" "$REV_FILE.err"
     continue
@@ -184,14 +219,17 @@ Effort: <S|M|L>"
   REVCOMMENT="$REVPLAN
 
 ---
-Approve: comment \`approve\` when the latest plan looks right (builder picks it up automatically).
-Deny: comment \`deny <reason>\` (issue is closed).
+The loop builds triaged plans automatically (auto-ship mode: no approval
+needed). To stop this issue, comment \`deny <reason>\` — the loop closes it.
 Further feedback in-thread will be revised again on the next poll.
 $MARKER"
-  gh issue comment "$N" --body "$REVCOMMENT" >/dev/null
-  echo "[triage] #$N revised plan posted"
-  "$DIR/tg.sh" "🔄 Triage plan #$N revised after human feedback: $TITLE
+  if ! gh issue comment "$N" --body "$REVCOMMENT" >/dev/null; then
+    echo "[triage] #$N revised plan comment failed (gh hiccup) — retried next poll"
+  else
+    echo "[triage] #$N revised plan posted"
+    "$DIR/tg.sh" "🔄 Plan for #$N revised after feedback: $TITLE
 $URL
-Comment \`approve\` when the latest plan looks right" || echo "[triage] #$N telegram ping failed (revision still posted)"
+Working on the latest plan automatically — comment \`deny <reason>\` on the issue to stop it." || echo "[triage] #$N telegram ping failed (revision still posted)"
+  fi
 done
 echo "[triage] done"

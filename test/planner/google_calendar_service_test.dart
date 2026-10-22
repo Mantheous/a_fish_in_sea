@@ -164,7 +164,10 @@ void main() {
         userId: () => 'u',
         client: MockClient((request) async {
           expect(request.method, 'PATCH');
-          expect(request.url.path, '/fish/api/google/events');
+          expect(
+            request.url.path.replaceFirst(RegExp(r'^/fish'), ''),
+            '/api/google/events',
+          );
           capturedBody = request.body;
           return http.Response(
             jsonEncode({'event': eventJson(id: 'e1')}),

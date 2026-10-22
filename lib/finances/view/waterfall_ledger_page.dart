@@ -222,19 +222,32 @@ class _WaterfallLedgerPageState extends State<WaterfallLedgerPage> {
                     ),
                   ),
                 )
-              else
-                SliverList(
+              else () {
+                final rowItems = _flattenBucketItems(state);
+                return SliverList(
                   delegate: SliverChildBuilderDelegate(
                     (context, index) {
-                      // One widget per bucket, plus its member rows when
-                      // expanded. Built from state.buckets (already grouped
-                      // by the cubit) so scrolling never re-groups.
-                      final widgets = _bucketWidgets(context, state, theme);
-                      return widgets[index];
+                      final item = rowItems[index];
+                      if (item is _BucketHeaderItem) {
+                        return _buildBucketHeader(
+                          context,
+                          state,
+                          item.bucket,
+                          theme,
+                        );
+                      } else if (item is _EntryItem) {
+                        return _buildWaterfallRow(
+                          context,
+                          item.entry,
+                          theme,
+                        );
+                      }
+                      return const SizedBox.shrink();
                     },
-                    childCount: _bucketWidgetCount(state),
+                    childCount: rowItems.length,
                   ),
-                ),
+                );
+              }(),
             ],
           );
         },
@@ -313,32 +326,21 @@ class _WaterfallLedgerPageState extends State<WaterfallLedgerPage> {
   // and state.buckets holds references to the same LedgerEntry objects,
   // so nothing is ever lost — expanding rebuilds the list from the model.
 
-  /// Flattened widget list: a header per bucket, then the bucket's member
-  /// rows when it is expanded.
-  List<Widget> _bucketWidgets(
-      BuildContext context, WaterfallState state, ThemeData theme) {
-    final out = <Widget>[];
+  /// Flattened row items: a header per bucket, then the bucket's member
+  /// entries when expanded. Indexed in O(1) by the list delegate so scrolling
+  /// constructs only the visible rows instead of O(N^2) discarded widgets.
+  List<_LedgerRowItem> _flattenBucketItems(WaterfallState state) {
+    final out = <_LedgerRowItem>[];
     for (final bucket in state.buckets) {
-      out.add(_buildBucketHeader(context, state, bucket, theme));
-      if (!bucket.isCollapsible || _expandedBuckets.contains(bucketKey(bucket))) {
+      out.add(_BucketHeaderItem(bucket));
+      if (!bucket.isCollapsible ||
+          _expandedBuckets.contains(bucketKey(bucket))) {
         for (final entry in bucket.entries) {
-          out.add(_buildWaterfallRow(context, entry, theme));
+          out.add(_EntryItem(entry));
         }
       }
     }
     return out;
-  }
-
-  int _bucketWidgetCount(WaterfallState state) {
-    var count = 0;
-    for (final bucket in state.buckets) {
-      count += 1;
-      if (!bucket.isCollapsible ||
-          _expandedBuckets.contains(bucketKey(bucket))) {
-        count += bucket.entries.length;
-      }
-    }
-    return count;
   }
 
   /// Collapsed buckets read as one summary line carrying the whole bucket.
@@ -723,4 +725,16 @@ class _WaterfallLedgerPageState extends State<WaterfallLedgerPage> {
       ),
     );
   }
+}
+
+sealed class _LedgerRowItem {}
+
+class _BucketHeaderItem extends _LedgerRowItem {
+  final LedgerBucket bucket;
+  _BucketHeaderItem(this.bucket);
+}
+
+class _EntryItem extends _LedgerRowItem {
+  final LedgerEntry entry;
+  _EntryItem(this.entry);
 }

@@ -50,6 +50,24 @@ note() {
   echo "[close] $1"
 }
 
+# Sticky escalations ("kept ..." notes) describe state that never resolves
+# on its own. note() feeds the final Telegram ping, so calling it every
+# poll re-pings every 15 minutes (that is how one dirty worktree produced
+# ~100 pings). Log to the journal every time, but only escalate to
+# Telegram once per day per key.
+note_once_per_day() {
+  local key="$1"; shift
+  local msg="$1"
+  local f="/tmp/opencode/agent-loop-reported/close-$(echo "$key" | tr '/' '_')"
+  mkdir -p "$(dirname "$f")"
+  if [ -f "$f" ] && [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 86400 ]; then
+    echo "[close] $msg (last ping <24h ago) — not repeating"
+    return 0
+  fi
+  note "$msg"
+  touch "$f"
+}
+
 issue_state() {
   gh issue view "$1" --json state --jq .state 2>/dev/null || echo UNKNOWN
 }
@@ -65,7 +83,7 @@ tree_dirty() {
 
 # --- 1. issues resolved by merged PRs -------------------------------------
 MERGED_JSON="$(gh pr list --state merged --limit 50 \
-  --json number,title,headRefName,baseRefName,body,url)"
+  --json number,title,headRefName,baseRefName,body,url 2>/dev/null || echo '[]')"
 CANDIDATES="$(echo "$MERGED_JSON" | python3 -c "
 import json, re, sys
 prs = json.load(sys.stdin)
@@ -103,8 +121,13 @@ else
 fi
 
 # --- 2a. remote agent branches --------------------------------------------
-REMOTE_BRANCHES="$(git ls-remote --heads origin 'agent/*' \
-  | awk '{print $2}' | sed 's|refs/heads/||')"
+# NOTE: match both naming shapes. The loop's own glob 'agent/*' misses the
+# no-slash names (agent-24-scheduled-assignment-disappears,
+# agent-task-conflict-granularity, ...) — those branches were invisible to
+# cleanup AND to the no-PR report, which is how a finished feature sat
+# unmerged on origin for two days with zero pings.
+REMOTE_BRANCHES="$(git ls-remote --heads origin 'agent/*' 'agent-*' 2>/dev/null \
+  | awk '{print $2}' | sed 's|refs/heads/||' | sort -u)"
 if [ -n "$REMOTE_BRANCHES" ]; then
   while read -r RB; do
     [ -z "$RB" ] && continue
@@ -122,7 +145,29 @@ if [ -n "$REMOTE_BRANCHES" ]; then
       if [ -z "$(git log --oneline "origin/main..origin/$RB" 2>/dev/null | head -n 3)" ]; then
         echo "[close] remote branch $RB is empty with no PR — leaving it (its issue may still be open; the builder reuses it)"
       else
-        note "remote branch $RB has NO PR and unmerged work — needs a human (open a PR or delete it)"
+        # Report ONCE per branch per day. Re-pinging every 15 minutes read
+        # as "the loop expects me to open the PRs myself" and trained the
+        # human to ignore the channel — the opposite of what an escalation
+        # is for. build.sh now auto-opens the PR for approved issues; this
+        # only fires for branches the dispatcher can't handle.
+        REPORTED_DIR="/tmp/opencode/agent-loop-reported"
+        mkdir -p "$REPORTED_DIR"
+        KEY="$REPORTED_DIR/$(echo "$RB" | tr '/' '_').no-pr"
+        if [ -f "$KEY" ] && [ $(( $(date +%s) - $(stat -c %Y "$KEY") )) -lt 86400 ]; then
+          echo "[close] remote branch $RB still needs a PR (last ping <24h ago) — not repeating"
+        else
+          COMMITS="$(git log --oneline "origin/main..origin/$RB" 2>/dev/null | head -n 5 || true)"
+          [ -n "${COMMITS:-}" ] || COMMITS="(could not list — see the loop host)"
+          RNUM="$(echo "$RB" | sed -n -e 's|^agent/\([0-9]\+\)-.*|\1|p' -e 's|^agent-\([0-9]\+\)-.*|\1|p')"
+          RLINK=""
+          [ -n "${RNUM:-}" ] && RLINK="Possible issue: #$RNUM (gh issue view $RNUM)"
+          note "remote branch $RB has NO PR and unmerged work — human decision needed (loop never force-opens PRs for branches it cannot link to an approved issue; build.sh auto-PRs only dispatcher-known approved issues):
+commits past origin/main:
+$COMMITS
+$RLINK
+fix: gh pr create --base main --head \"$RB\" ... (open a PR) OR git push origin --delete \"$RB\" (drop the branch)"
+          touch "$KEY"
+        fi
       fi
     fi
   done <<< "$REMOTE_BRANCHES"
@@ -131,15 +176,18 @@ fi
 # --- 2b. local agent branches ---------------------------------------------
 # Delete only when the linked issue is CLOSED or the head PR merged into
 # main; never touch ad-hoc branches or branches of open issues.
-LOCAL_BRANCHES="$(git branch --list 'agent/*' | sed 's/^[*+ ]*//')"
+# NOTE: match both naming shapes like the remote cleanup above (agent/* and
+# agent-*); non-numeric names only delete when their PR merged and the tip
+# matches the merged head.
+LOCAL_BRANCHES="$(git branch --list 'agent/*' 'agent-*' 2>/dev/null | sed 's/^[*+ ]*//' | sort -u)"
 if [ -n "$LOCAL_BRANCHES" ]; then
   while read -r LB; do
     [ -z "$LB" ] && continue
-    case "$LB" in agent/adhoc-*) continue;; esac
+    case "$LB" in agent/adhoc-*|agent-adhoc-*) continue;; esac
     MERGED_HEAD="$(gh pr list --head "$LB" --state merged --limit 5 \
       --json headRefOid,baseRefName \
       --jq '.[] | select(.baseRefName=="main") | .headRefOid' 2>/dev/null | head -n 1 || true)"
-    NUM="$(echo "$LB" | sed -n 's|^agent/\([0-9]\+\)-.*|\1|p')"
+    NUM="$(echo "$LB" | sed -n -e 's|^agent/\([0-9]\+\)-.*|\1|p' -e 's|^agent-\([0-9]\+\)-.*|\1|p')"
     ISSUE_CLOSED=0
     if [ -n "$NUM" ] && [ "$(issue_state "$NUM")" = "CLOSED" ]; then
       ISSUE_CLOSED=1
@@ -153,7 +201,11 @@ if [ -n "$LOCAL_BRANCHES" ]; then
         continue  # closed issue but unmerged local work — human decides
       fi
       if [ "$(git rev-parse "$LB" 2>/dev/null)" != "$MERGED_HEAD" ]; then
-        note "kept local branch $LB: tip differs from its merged PR head — needs a human"
+        TIP="$(git rev-parse --short "$LB" 2>/dev/null || echo unknown)"
+        MH_SHORT="$(echo "${MERGED_HEAD:-unknown}" | cut -c1-7)"
+        note_once_per_day "$LB.tip" "kept local branch $LB: tip $TIP differs from its merged PR head $MH_SHORT — human decision needed (squash/rebase merge already landed, but the local tip holds extra commits the PR does not — the loop will not delete unique work):
+inspect: git log --oneline origin/main..$LB | head; git diff $MH_SHORT..$LB --stat | head
+fix: keep it (do nothing — loop keeps skipping) OR delete it: git branch -D \"$LB\" (remove its worktree first if one exists)"
         continue
       fi
       # Tip matches the merge: squash/rebase leftovers, PR keeps the history.
@@ -164,7 +216,12 @@ if [ -n "$LOCAL_BRANCHES" ]; then
         run git worktree prune
         note "pruned stale worktree metadata for $LB"
       elif tree_dirty "$WT"; then
-        note "kept worktree $WT ($LB): uncommitted changes — needs a human"
+        DIRTY="$(git -C "$WT" status --porcelain 2>/dev/null | head -n 10 || true)"
+        [ -n "${DIRTY:-}" ] || DIRTY="(unreadable — see the loop host)"
+        note_once_per_day "$LB.dirty" "kept worktree $WT ($LB): uncommitted changes — human decision needed (loop never deletes a dirty tree; it may hold your work — often these are just disposable test artifacts like test/goldens/failures/*.png):
+$DIRTY
+inspect: git -C \"$WT\" status --short; git -C \"$WT\" diff --stat | tail -n 5
+fix: commit or discard the changes inside $WT, then remove it: git worktree remove \"$WT\" --force (only when clean or deliberately discarded)"
         continue
       else
         run git worktree remove "$WT" --force
@@ -181,9 +238,5 @@ fi
 if [ "$ACTIONS" = "0" ]; then
   echo "[close] done — nothing to close or clean"
 else
-  echo "[close] done — $ACTIONS action(s)"
-  if [ "$DRY_RUN" = "0" ]; then
-    "$DIR/tg.sh" "🧹 Agent loop closed/cleaned $ACTIONS item(s):
-$REPORT" || echo "[close] telegram ping failed (actions still applied)"
-  fi
+  echo "[close] done — $ACTIONS action(s) (no telegram: notify-quiet)"
 fi

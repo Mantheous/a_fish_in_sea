@@ -194,8 +194,12 @@ String? describeCadence(double? medianGapDays) {
 // storing any extra per-node state.
 
 /// Base due for an imported window: Learning Suite open..due windows
-/// (all-day, span > 1 day) are due at the window end, everything else at
-/// the start. Mirrors NodeCubit.importFromFeed.
+/// (all-day, span > 1 day) are due at the inclusive end of the window,
+/// everything else at the start. Mirrors NodeCubit.importFromFeed.
+///
+/// All-day VEVENT DTENDs are exclusive per RFC 5545 (a window
+/// DTSTART:20261012 DTEND:20261015 covers Oct 12–14, due Oct 14), so the
+/// base is end minus one day. Timed windows keep the exact end instant.
 DateTime? assignmentBaseDue({
   required DateTime? start,
   required DateTime? end,
@@ -204,7 +208,8 @@ DateTime? assignmentBaseDue({
   if (start == null || end == null) return null;
   final isWindow =
       allDay && end.difference(start) > const Duration(days: 1);
-  return isWindow ? end : start;
+  if (!isWindow) return start;
+  return end.subtract(const Duration(days: 1));
 }
 
 /// How far [due] sits from [base], in whole days. Null when unknown.

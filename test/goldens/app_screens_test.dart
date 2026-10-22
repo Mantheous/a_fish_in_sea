@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/feedback/view/feedback_page.dart';
 import 'package:a_fish_in_sea/navigation/view/finances_hub.dart';
 import 'package:a_fish_in_sea/navigation/view/home_page.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_page.dart';
@@ -53,6 +54,14 @@ void main() {
     await expectLater(
       find.byType(SettingsPage),
       matchesGoldenFile('app_screens_test.settings.png'),
+    );
+  });
+
+  testWidgets('feedback page empty state', (tester) async {
+    await pumpGoldenPage(tester, const FeedbackPage());
+    await expectLater(
+      find.byType(FeedbackPage),
+      matchesGoldenFile('app_screens_test.feedback.png'),
     );
   });
 }

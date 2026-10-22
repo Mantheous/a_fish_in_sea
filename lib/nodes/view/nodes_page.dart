@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:a_fish_in_sea/common/undo/undo_bar.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
+import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
@@ -12,13 +13,15 @@ import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/service/node_legacy_migration.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
 import 'package:a_fish_in_sea/nodes/service/node_tree_ops.dart';
+import 'package:a_fish_in_sea/finances/service/node_transaction_cleanup.dart';
 import 'package:a_fish_in_sea/nodes/view/goal_picker.dart';
 import 'package:a_fish_in_sea/nodes/view/node_checkbox.dart';
 import 'package:a_fish_in_sea/nodes/view/node_editor.dart';
+import 'package:a_fish_in_sea/nodes/view/node_graph_view.dart';
 import 'package:a_fish_in_sea/nodes/view/node_finish_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 
-enum _NodeView { leaves, all, due, scheduled, money, habits }
+enum _NodeView { leaves, all, favorites, graph, due, scheduled, money, habits }
 
 final _nodesDateFormat = DateFormat('EEE, MMM d');
 
@@ -36,10 +39,90 @@ class _NodesPageState extends State<NodesPage> {
   bool _expandAll = false;
   int _expandToken = 0;
 
+  /// Pending "Show in goals" reveal from [NavigationCubit]: the target is
+  /// shown in the All tree with its ancestor chain expanded and itself
+  /// highlighted. Transient UI state only — never persisted.
+  String? _focusNodeId;
+  int _consumedRevision = -1;
+  Set<String> _expandedIds = const {};
+  final GlobalKey _focusKey = GlobalKey();
+  NavigationCubit? _nav;
+  VoidCallback? _focusListener;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    NavigationCubit? nav;
+    try {
+      nav = context.read<NavigationCubit>();
+    } catch (_) {
+      nav = null;
+    }
+    if (!identical(nav, _nav)) {
+      if (_nav != null && _focusListener != null) {
+        _nav!.focusRevision.removeListener(_focusListener!);
+      }
+      _nav = nav;
+      if (nav != null) {
+        _focusListener = _onFocusRevision;
+        nav.focusRevision.addListener(_onFocusRevision);
+      } else {
+        _focusListener = null;
+      }
+    }
+    _onFocusRevision();
+  }
+
   @override
   void dispose() {
+    if (_nav != null && _focusListener != null) {
+      _nav!.focusRevision.removeListener(_focusListener!);
+    }
     _search.dispose();
     super.dispose();
+  }
+
+  /// Applies a fresh [NavigationCubit] focus request: land on the All tree,
+  /// expand the target's ancestors, highlight the target, and scroll it
+  /// into view. Keyed off [NavigationCubit.focusRevision] (not the page)
+  /// so a request while already on Nodes still applies — [Cubit.emit]
+  /// suppresses duplicate page states.
+  void _onFocusRevision() {
+    final nav = _nav;
+    if (nav == null || !mounted) return;
+    if (nav.focusRevision.value == _consumedRevision) return;
+    _consumedRevision = nav.focusRevision.value;
+    final id = nav.focusedNodeId;
+    if (id == null) {
+      if (_focusNodeId == null) return;
+      setState(() {
+        _focusNodeId = null;
+        _expandedIds = const {};
+      });
+      return;
+    }
+    Set<String> ancestors = const {};
+    try {
+      ancestors = ancestorIds(id, context.read<NodeCubit>().state);
+    } catch (_) {}
+    setState(() {
+      _focusNodeId = id;
+      _expandedIds = ancestors;
+      _view = _NodeView.all;
+      _expandToken++;
+      _query = '';
+      _search.clear();
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ctx = _focusKey.currentContext;
+      if (ctx == null) return;
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 300),
+        alignment: 0.5,
+      );
+    });
   }
 
   @override
@@ -66,8 +149,7 @@ class _NodesPageState extends State<NodesPage> {
       body: Column(
         children: [
           Padding(
-            padding:
-                const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
             child: Row(
               children: [
                 Expanded(
@@ -79,19 +161,16 @@ class _NodesPageState extends State<NodesPage> {
                       border: OutlineInputBorder(),
                       isDense: true,
                     ),
-                    onChanged: (v) =>
-                        setState(() => _query = v),
+                    onChanged: (v) => setState(() => _query = v),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Tooltip(
-                  message: _expandAll
-                      ? 'Collapse all'
-                      : 'Expand all',
+                  message: _expandAll ? 'Collapse all' : 'Expand all',
                   child: IconButton(
-                    icon: Icon(_expandAll
-                        ? Icons.unfold_less
-                        : Icons.unfold_more),
+                    icon: Icon(
+                      _expandAll ? Icons.unfold_less : Icons.unfold_more,
+                    ),
                     onPressed: () => setState(() {
                       _expandAll = !_expandAll;
                       _expandToken++;
@@ -101,17 +180,18 @@ class _NodesPageState extends State<NodesPage> {
               ],
             ),
           ),
-          _ViewRow(
-            view: _view,
-            onView: (v) => setState(() => _view = v),
-          ),
+          _ViewRow(view: _view, onView: (v) => setState(() => _view = v)),
           Expanded(
-              child: _NodeBody(
-            view: _view,
-            query: _query,
-            expandAll: _expandAll,
-            expandToken: _expandToken,
-          )),
+            child: _NodeBody(
+              view: _view,
+              query: _query,
+              expandAll: _expandAll,
+              expandToken: _expandToken,
+              focusNodeId: _focusNodeId,
+              expandedIds: _expandedIds,
+              focusKey: _focusKey,
+            ),
+          ),
         ],
       ),
     );
@@ -146,13 +226,15 @@ class _ViewRow extends StatelessWidget {
   }
 
   static String _label(_NodeView v) => switch (v) {
-        _NodeView.leaves => 'Leaves',
-        _NodeView.all => 'All',
-        _NodeView.due => 'Due',
-        _NodeView.scheduled => 'Scheduled',
-        _NodeView.money => 'Money',
-        _NodeView.habits => 'Repeating',
-      };
+    _NodeView.leaves => 'Leaves',
+    _NodeView.all => 'All',
+    _NodeView.favorites => 'Favorites',
+    _NodeView.graph => 'Graph',
+    _NodeView.due => 'Due',
+    _NodeView.scheduled => 'Scheduled',
+    _NodeView.money => 'Money',
+    _NodeView.habits => 'Repeating',
+  };
 }
 
 class _NodeBody extends StatelessWidget {
@@ -161,11 +243,22 @@ class _NodeBody extends StatelessWidget {
   final bool expandAll;
   final int expandToken;
 
-  const _NodeBody(
-      {required this.view,
-      this.query = '',
-      this.expandAll = false,
-      this.expandToken = 0});
+  /// "Show in goals" reveal: target highlighted in the All tree with
+  /// [expandedIds] (its ancestor chain) force-expanded and [focusKey]
+  /// scrolled into view. Other views ignore the reveal.
+  final String? focusNodeId;
+  final Set<String> expandedIds;
+  final GlobalKey? focusKey;
+
+  const _NodeBody({
+    required this.view,
+    this.query = '',
+    this.expandAll = false,
+    this.expandToken = 0,
+    this.focusNodeId,
+    this.expandedIds = const {},
+    this.focusKey,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -177,14 +270,9 @@ class _NodeBody extends StatelessWidget {
         if (goals.isEmpty) return const _EmptyNodes();
         final txns = context.watch<TransactionsCubit>().state;
         final txnAmounts = {for (final t in txns) t.id: t.amount};
-        final progress = progressForest(
-          goals,
-          moneyActualByNodeId: txnAmounts,
-        );
+        final progress = progressForest(goals, moneyActualByNodeId: txnAmounts);
         final trimmed = query.trim();
-        final visible = trimmed.isEmpty
-            ? null
-            : filterTreeIds(nodes, trimmed);
+        final visible = trimmed.isEmpty ? null : filterTreeIds(nodes, trimmed);
         List<Node> matching(List<Node> items) => visible == null
             ? items
             : items.where((n) => visible.contains(n.id)).toList();
@@ -196,12 +284,8 @@ class _NodeBody extends StatelessWidget {
         final byParent = indexes.byParent;
         final now = DateTime.now();
         HomeworkAheadResult? homeworkAhead;
-        HomeworkAheadResult getHomeworkAhead() =>
-            homeworkAhead ??= evaluateHomeworkAhead(
-              all: nodes,
-              now: now,
-              horizonDays: 3,
-            );
+        HomeworkAheadResult getHomeworkAhead() => homeworkAhead ??=
+            evaluateHomeworkAhead(all: nodes, now: now, horizonDays: 3);
         Widget flatList(List<Node> items) {
           return ListView.builder(
             padding: const EdgeInsets.only(bottom: 80),
@@ -246,6 +330,29 @@ class _NodeBody extends StatelessWidget {
               byParent: byParent,
               now: now,
               homeworkAhead: getHomeworkAhead(),
+              focusNodeId: focusNodeId,
+              expandedIds: expandedIds,
+              focusKey: focusKey,
+            );
+          case _NodeView.favorites:
+            final items = matching(goals.where((n) => n.isFavorite).toList());
+            if (items.isEmpty) {
+              return const Center(
+                child: Text(
+                  'No favorite goals yet.\nStar a goal to pin it here.',
+                  textAlign: TextAlign.center,
+                ),
+              );
+            }
+            return flatList(items);
+          case _NodeView.graph:
+            return NodeGraphView(
+              nodes: goals,
+              progress: progress,
+              visibleIds: visible,
+              query: trimmed,
+              expandAll: expandAll,
+              expandToken: expandToken,
             );
           case _NodeView.due:
             final queue = matching(priorityQueue(goals, now));
@@ -267,12 +374,13 @@ class _NodeBody extends StatelessWidget {
             }
             return flatList(items);
           case _NodeView.habits:
-            final items = matching(
-                goals.where((n) => n.isTemplate).toList());
+            final items = matching(goals.where((n) => n.isTemplate).toList());
             if (items.isEmpty) {
               return const Center(
-                  child: Text(
-                      'No repeating templates yet.\nEnable Repeats in the editor.'));
+                child: Text(
+                  'No repeating templates yet.\nEnable Repeats in the editor.',
+                ),
+              );
             }
             return ListView.builder(
               padding: const EdgeInsets.only(bottom: 80),
@@ -319,6 +427,9 @@ class _NodeTree extends StatelessWidget {
   final Set<String>? visible;
   final bool expandAll;
   final int expandToken;
+  final String? focusNodeId;
+  final Set<String> expandedIds;
+  final GlobalKey? focusKey;
 
   const _NodeTree({
     required this.nodes,
@@ -331,6 +442,9 @@ class _NodeTree extends StatelessWidget {
     this.visible,
     this.expandAll = false,
     this.expandToken = 0,
+    this.focusNodeId,
+    this.expandedIds = const {},
+    this.focusKey,
   });
 
   @override
@@ -339,18 +453,15 @@ class _NodeTree extends StatelessWidget {
         ? nodes
         : nodes.where((n) => visible!.contains(n.id)).toList();
     if (inView.isEmpty) {
-      return const Center(
-          child: Text('No goals match the search.'));
+      return const Center(child: Text('No goals match the search.'));
     }
-    final visibleIds =
-        visible ?? {for (final n in nodes) n.id};
+    final visibleIds = visible ?? {for (final n in nodes) n.id};
     // Filtered roots: visible nodes with no visible parent.
-    final roots = inView
-        .where((n) => n.parentIds
-            .where(visibleIds.contains)
-            .isEmpty)
-        .toList()
-      ..sort(_compareRoots);
+    final roots =
+        inView
+            .where((n) => n.parentIds.where(visibleIds.contains).isEmpty)
+            .toList()
+          ..sort(_compareRoots);
     if (roots.isEmpty) {
       // DAG cycle fallback (shouldn't happen): show everything flat.
       return ListView.builder(
@@ -372,6 +483,8 @@ class _NodeTree extends StatelessWidget {
             byParent: byParent,
             now: now,
             homeworkAhead: homeworkAhead,
+            focusNodeId: focusNodeId,
+            focusKey: focusKey,
           );
         },
       );
@@ -396,6 +509,9 @@ class _NodeTree extends StatelessWidget {
           byParent: byParent,
           now: now,
           homeworkAhead: homeworkAhead,
+          focusNodeId: focusNodeId,
+          expandedIds: expandedIds,
+          focusKey: focusKey,
         );
       },
     );
@@ -431,6 +547,14 @@ class _NodeTile extends StatelessWidget {
   final bool expandAll;
   final int expandToken;
 
+  /// Reveal target from "Show in goals": this tile is highlighted when its
+  /// id matches, and [expandedIds] (the target's ancestor chain)
+  /// force-expands parents. [focusKey] is attached to the target for the
+  /// post-frame scroll into view.
+  final String? focusNodeId;
+  final Set<String> expandedIds;
+  final GlobalKey? focusKey;
+
   const _NodeTile({
     required this.node,
     required this.nodes,
@@ -446,6 +570,9 @@ class _NodeTile extends StatelessWidget {
     this.visible,
     this.expandAll = false,
     this.expandToken = 0,
+    this.focusNodeId,
+    this.expandedIds = const {},
+    this.focusKey,
   });
 
   @override
@@ -460,22 +587,31 @@ class _NodeTile extends StatelessWidget {
     final value = progress[live.id] ?? 0;
     final theme = Theme.of(context);
     final subtitle = _subtitle(context, live, value, kids.length);
+    final focused = live.id == focusNodeId;
+    Widget wrapFocus(Widget child) {
+      if (!focused) return child;
+      // Material (not ColoredBox): ListTile paints its background and ink
+      // on the nearest Material, which a plain color wrapper would hide.
+      return Material(
+        key: focusKey,
+        color: theme.colorScheme.secondaryContainer,
+        child: child,
+      );
+    }
     final tile = ListTile(
-      contentPadding:
-          EdgeInsets.only(left: 16 + depth * 20, right: 8),
+      contentPadding: EdgeInsets.only(left: 16 + depth * 20, right: 8),
       leading: _leading(context, live),
       title: Text(
         live.title,
         style: TextStyle(
-          decoration: live.isDone ||
-                  live.status == NodeStatus.failed
+          decoration: live.isDone || live.status == NodeStatus.failed
               ? TextDecoration.lineThrough
               : null,
           color: live.status == NodeStatus.failed
               ? theme.colorScheme.error
               : live.isDone
-                  ? theme.colorScheme.outline
-                  : null,
+              ? theme.colorScheme.outline
+              : null,
         ),
       ),
       subtitle: _subtitleWidget(context, subtitle, value, live.isUnbounded),
@@ -485,51 +621,53 @@ class _NodeTile extends StatelessWidget {
       ),
       onTap: () => showNodeEditor(context, existing: live),
     );
-    if (kids.isEmpty) return tile;
-    return _ParentTile(
-      key: ValueKey('${live.id}:$expandToken:$expandAll'),
-      tilePadding:
-          EdgeInsets.only(left: 16 + depth * 20, right: 8),
-      leading: _leading(context, live),
-      title: Text(
-        live.title,
-        style: TextStyle(
-          decoration: live.isDone ||
-                  live.status == NodeStatus.failed
-              ? TextDecoration.lineThrough
-              : null,
-          color: live.status == NodeStatus.failed
-              ? theme.colorScheme.error
-              : live.isDone
-                  ? theme.colorScheme.outline
-                  : null,
-        ),
-      ),
-      subtitle:
-          _subtitleWidget(context, subtitle, value, live.isUnbounded),
-      trailingActions: _trailingActions(context, live, theme),
-      initiallyExpanded: expandAll,
-      expandToken: expandToken,
-      onTap: () => showNodeEditor(context, existing: live),
-      children: [
-        for (final k in kids)
-          _NodeTile(
-            node: k,
-            nodes: nodes,
-            progress: progress,
-            txnAmounts: txnAmounts,
-            depth: depth + 1,
-            flat: false,
-            visited: {...visited, k.id},
-            visible: visible,
-            expandAll: expandAll,
-            expandToken: expandToken,
-            nodeById: nodeById,
-            byParent: byParent,
-            now: now,
-            homeworkAhead: homeworkAhead,
+    if (kids.isEmpty) return wrapFocus(tile);
+    return wrapFocus(
+      _ParentTile(
+        key: ValueKey('${live.id}:$expandToken:$expandAll'),
+        tilePadding: EdgeInsets.only(left: 16 + depth * 20, right: 8),
+        leading: _leading(context, live),
+        title: Text(
+          live.title,
+          style: TextStyle(
+            decoration: live.isDone || live.status == NodeStatus.failed
+                ? TextDecoration.lineThrough
+                : null,
+            color: live.status == NodeStatus.failed
+                ? theme.colorScheme.error
+                : live.isDone
+                ? theme.colorScheme.outline
+                : null,
           ),
-      ],
+        ),
+        subtitle: _subtitleWidget(context, subtitle, value, live.isUnbounded),
+        trailingActions: _trailingActions(context, live, theme),
+        initiallyExpanded: expandAll || expandedIds.contains(live.id),
+        expandToken: expandToken,
+        onTap: () => showNodeEditor(context, existing: live),
+        children: [
+          for (final k in kids)
+            _NodeTile(
+              node: k,
+              nodes: nodes,
+              progress: progress,
+              txnAmounts: txnAmounts,
+              depth: depth + 1,
+              flat: false,
+              visited: {...visited, k.id},
+              visible: visible,
+              expandAll: expandAll,
+              expandToken: expandToken,
+              nodeById: nodeById,
+              byParent: byParent,
+              now: now,
+              homeworkAhead: homeworkAhead,
+              focusNodeId: focusNodeId,
+              expandedIds: expandedIds,
+              focusKey: focusKey,
+            ),
+        ],
+      ),
     );
   }
 
@@ -540,13 +678,23 @@ class _NodeTile extends StatelessWidget {
   /// Unbounded goals get no tracking buttons and no toggle/fail items:
   /// they are ongoing directions, never completed.
   List<Widget> _trailingActions(
-      BuildContext context, Node live, ThemeData theme) {
+    BuildContext context,
+    Node live,
+    ThemeData theme,
+  ) {
     return [
+      IconButton(
+        tooltip: live.isFavorite ? 'Unstar' : 'Star',
+        icon: Icon(
+          live.isFavorite ? Icons.star : Icons.star_border,
+          color: live.isFavorite ? theme.colorScheme.primary : null,
+        ),
+        onPressed: () => context.read<NodeCubit>().toggleFavorite(live.id),
+      ),
       if (!live.isUnbounded && live.isTracking)
         IconButton(
           tooltip: 'Stop recording',
-          icon: Icon(Icons.stop,
-              color: theme.colorScheme.primary),
+          icon: Icon(Icons.stop, color: theme.colorScheme.primary),
           onPressed: () => stopNodeAndFinish(context, live.id),
         )
       else if (!live.isUnbounded && live.isOpen)
@@ -555,7 +703,11 @@ class _NodeTile extends StatelessWidget {
           icon: const Icon(Icons.play_arrow),
           onPressed: () {
             try {
-              context.read<NodeCubit>().startTracking(live.id);
+              NodeEventLink.startNodeTracking(
+                context.read<NodeCubit>(),
+                context.read<CalendarCubit>(),
+                live.id,
+              );
             } catch (_) {}
           },
         ),
@@ -565,47 +717,53 @@ class _NodeTile extends StatelessWidget {
         onPressed: () => _onMenu(context, live, 'subgoal'),
       ),
       PopupMenuButton<String>(
-        onSelected: (choice) =>
-            _onMenu(context, live, choice),
+        tooltip: 'More actions',
+        icon: const Icon(Icons.more_vert),
+        onSelected: (choice) => _onMenu(context, live, choice),
         itemBuilder: (context) => [
+          const PopupMenuItem(value: 'subgoal', child: Text('Add subgoal')),
+          const PopupMenuItem(value: 'edit', child: Text('Edit')),
           const PopupMenuItem(
-              value: 'subgoal', child: Text('Add subgoal')),
+            value: 'add-child',
+            child: Text('Add child step'),
+          ),
           const PopupMenuItem(
-              value: 'edit', child: Text('Edit')),
+            value: 'breakdown',
+            child: Text('Auto-breakdown into steps…'),
+          ),
           const PopupMenuItem(
-              value: 'add-child', child: Text('Add child step')),
-          const PopupMenuItem(
-              value: 'breakdown',
-              child: Text('Auto-breakdown into steps…')),
-          const PopupMenuItem(
-              value: 'duplicate',
-              child: Text('Duplicate subtree')),
+            value: 'duplicate',
+            child: Text('Duplicate subtree'),
+          ),
           if (!live.isUnbounded)
-            const PopupMenuItem(
-                value: 'toggle', child: Text('Toggle done')),
+            const PopupMenuItem(value: 'toggle', child: Text('Toggle done')),
           if (!live.isUnbounded)
             PopupMenuItem(
-                value: 'fail',
-                child: Text(live.status == NodeStatus.failed
+              value: 'fail',
+              child: Text(
+                live.status == NodeStatus.failed
                     ? 'Unmark failed'
-                    : 'Mark failed')),
+                    : 'Mark failed',
+              ),
+            ),
           if (live.isTemplate)
             const PopupMenuItem(
-                value: 'generate',
-                child: Text('Generate schedule')),
+              value: 'generate',
+              child: Text('Generate schedule'),
+            ),
           const PopupMenuItem(
-              value: 'assign-event',
-              child: Text('Assign repeating event…')),
+            value: 'assign-event',
+            child: Text('Assign repeating event…'),
+          ),
           if (live.money != null) ...[
-            const PopupMenuItem(
-                value: 'subdivide', child: Text('Subdivide')),
+            const PopupMenuItem(value: 'subdivide', child: Text('Subdivide')),
             if (live.money!.isRecurring)
               const PopupMenuItem(
-                  value: 'rollover',
-                  child: Text('Rollover period')),
+                value: 'rollover',
+                child: Text('Rollover period'),
+              ),
           ],
-          const PopupMenuItem(
-              value: 'delete', child: Text('Delete')),
+          const PopupMenuItem(value: 'delete', child: Text('Delete')),
         ],
       ),
     ];
@@ -665,13 +823,20 @@ class _NodeTile extends StatelessWidget {
     if (live.effort != null || live.hasCalendarBlock) {
       return const Icon(Icons.timer_outlined);
     }
+    if (live.anki != null) {
+      return const Icon(Icons.school_outlined);
+    }
     return NodeCheckbox(node: live);
   }
 
   /// Subtitle area: unbounded goals show text only (no bar, no percent);
   /// everything else keeps the progress bar underneath.
   Widget _subtitleWidget(
-      BuildContext context, String subtitle, double value, bool unbounded) {
+    BuildContext context,
+    String subtitle,
+    double value,
+    bool unbounded,
+  ) {
     final theme = Theme.of(context);
     if (unbounded) {
       return Text(subtitle, style: theme.textTheme.labelSmall);
@@ -686,8 +851,12 @@ class _NodeTile extends StatelessWidget {
     );
   }
 
-  String _subtitle(BuildContext context, Node live, double value,
-      int childCount) {
+  String _subtitle(
+    BuildContext context,
+    Node live,
+    double value,
+    int childCount,
+  ) {
     // Unbounded goals never show dates, targets, or a percent — just the
     // ongoing marker plus how many concrete steps hang underneath.
     if (live.isUnbounded) {
@@ -713,26 +882,39 @@ class _NodeTile extends StatelessWidget {
             )
           : moneyActualForNode(live, nodes, txnAmountsById: txnAmounts);
       parts.add(
-          '\$${actual.toStringAsFixed(2)} / \$${m.effectiveTarget.toStringAsFixed(2)}');
+        '\$${actual.toStringAsFixed(2)} / \$${m.effectiveTarget.toStringAsFixed(2)}',
+      );
     } else if (live.effort != null) {
       final actual = byParent != null && nodeById != null
-          ? timeActualForNodeIndexed(
-              live, byId: nodeById!, byParent: byParent!)
+          ? timeActualForNodeIndexed(live, byId: nodeById!, byParent: byParent!)
           : timeActualForNode(live, nodes);
       parts.add(
-          '${actual.toStringAsFixed(0)}m / ${live.effort!.targetMinutes}m');
+        '${actual.toStringAsFixed(0)}m / ${live.effort!.targetMinutes}m',
+      );
+    } else if (live.anki != null) {
+      final actual = byParent != null && nodeById != null
+          ? ankiActualForNodeIndexed(live, byId: nodeById!, byParent: byParent!)
+          : ankiActualForNode(live, nodes);
+      final deck = live.anki!.deckName == null
+          ? ''
+          : ' (${live.anki!.deckName})';
+      parts.add(
+        '${actual.toStringAsFixed(0)} / ${live.anki!.targetReviews} reviews$deck',
+      );
     }
-    if (live.rule != null &&
-        live.rule!.kind == NodeRuleKind.homeworkAhead) {
-      final r = homeworkAhead ??
+    if (live.rule != null && live.rule!.kind == NodeRuleKind.homeworkAhead) {
+      final r =
+          homeworkAhead ??
           evaluateHomeworkAhead(
             all: context.read<NodeCubit>().state,
             now: effectiveNow,
             horizonDays: live.rule!.horizonDays,
           );
-      parts.add(r.satisfied
-          ? 'ahead ✓ (${r.dueSoon.length} due soon)'
-          : '${r.doneCount}/${r.dueSoon.length} ready');
+      parts.add(
+        r.satisfied
+            ? 'ahead ✓ (${r.dueSoon.length} due soon)'
+            : '${r.doneCount}/${r.dueSoon.length} ready',
+      );
     }
     final due = live.schedule?.due;
     if (due != null) {
@@ -741,12 +923,10 @@ class _NodeTile extends StatelessWidget {
           : 'due ${_nodesDateFormat.format(due)}';
       parts.add(label);
     } else if (live.hasCalendarBlock) {
-      parts.add(
-          'scheduled ${_nodesDateFormat.format(live.schedule!.start!)}');
+      parts.add('scheduled ${_nodesDateFormat.format(live.schedule!.start!)}');
     }
     if (live.isInstance) parts.add('instance');
-    if ((live.schedule?.isFixed ?? false) ||
-        (live.money?.isFixed ?? false)) {
+    if ((live.schedule?.isFixed ?? false) || (live.money?.isFixed ?? false)) {
       parts.add('fixed');
     }
     parts.add('${(value * 100).round()}%');
@@ -768,26 +948,43 @@ class _NodeTile extends StatelessWidget {
       case 'duplicate':
         final error = cubit.duplicateSubtree(live.id);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text(error ?? 'Duplicated “${live.title}”')),
+          SnackBar(content: Text(error ?? 'Duplicated “${live.title}”')),
         );
       case 'toggle':
-        cubit.toggleDone(live.id);
+        try {
+          NodeEventLink.toggleNodeDone(
+            cubit,
+            context.read<CalendarCubit>(),
+            live.id,
+          );
+        } catch (_) {
+          cubit.toggleDone(live.id);
+        }
       case 'fail':
-        cubit.setStatus(
+        try {
+          NodeEventLink.setNodeFailed(
+            cubit,
+            context.read<CalendarCubit>(),
+            live.id,
+            live.status != NodeStatus.failed,
+          );
+        } catch (_) {
+          cubit.setStatus(
             live.id,
             live.status == NodeStatus.failed
                 ? NodeStatus.open
-                : NodeStatus.failed);
+                : NodeStatus.failed,
+          );
+        }
       case 'generate':
         final made = cubit.generateInstances(
           templateId: live.id,
           from: DateTime.now(),
           horizon: DateTime.now().add(const Duration(days: 365)),
         );
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Generated $made instance(s)')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Generated $made instance(s)')));
       case 'assign-event':
         _assignRepeatingEvent(context, live);
       case 'subdivide':
@@ -800,20 +997,46 @@ class _NodeTile extends StatelessWidget {
                 byParent: byParent!,
                 txnAmountsById: txnAmounts,
               )
-            : moneyActualForNode(live, nodes,
-                txnAmountsById: txnAmounts);
+            : moneyActualForNode(live, nodes, txnAmountsById: txnAmounts);
         cubit.applyRollover(live.id, spent);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Rolled over to next period')),
         );
       case 'delete':
-        final eventId =
-            live.calendarEventId ?? live.sourceEventId;
-        cubit.deleteNode(live.id);
-        if (eventId != null) {
-          try {
-            context.read<CalendarCubit>().clearTaskLink(eventId);
-          } catch (_) {}
+        final undoCubit = context.read<UndoCubit>();
+        CalendarCubit? calendar;
+        try {
+          calendar = context.read<CalendarCubit>();
+        } catch (_) {}
+        TransactionsCubit? transactions;
+        try {
+          transactions = context.read<TransactionsCubit>();
+        } catch (_) {}
+        try {
+          if (transactions == null) {
+            if (calendar == null) {
+              cubit.deleteNode(live.id);
+            } else {
+              NodeEventLink.deleteNodesAndUnlink(cubit, calendar, {live.id});
+            }
+          } else {
+            deleteNodesAndClearAssignments(
+              nodes: cubit,
+              transactions: transactions,
+              delete: () {
+                if (calendar == null) {
+                  cubit.deleteNode(live.id);
+                } else {
+                  NodeEventLink.deleteNodesAndUnlink(cubit, calendar, {
+                    live.id,
+                  });
+                }
+                return null;
+              },
+            );
+          }
+        } catch (_) {
+          cubit.deleteNode(live.id);
         }
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
@@ -823,10 +1046,7 @@ class _NodeTile extends StatelessWidget {
               duration: const Duration(seconds: 4),
               // Action snackbars persist forever by default; this one must go.
               persist: false,
-              action: SnackBarAction(
-                label: 'Undo',
-                onPressed: () => context.read<UndoCubit>().undo(),
-              ),
+              action: SnackBarAction(label: 'Undo', onPressed: undoCubit.undo),
             ),
           );
     }
@@ -834,6 +1054,7 @@ class _NodeTile extends StatelessWidget {
 
   void _assignRepeatingEvent(BuildContext context, Node live) async {
     final messenger = ScaffoldMessenger.of(context);
+    final undoCubit = context.read<UndoCubit>();
     CalendarCubit calendar;
     NodeCubit nodes;
     try {
@@ -871,15 +1092,12 @@ class _NodeTile extends StatelessWidget {
             result.error != null
                 ? 'Assigned ${result.assigned} item(s) to “${goal.title}”; ${result.error}'
                 : result.assigned == 1
-                    ? 'Assigned to “${goal.title}”'
-                    : 'Assigned ${result.assigned} items to “${goal.title}”',
+                ? 'Assigned to “${goal.title}”'
+                : 'Assigned ${result.assigned} items to “${goal.title}”',
           ),
           duration: const Duration(seconds: 4),
           persist: false,
-          action: SnackBarAction(
-            label: 'Undo',
-            onPressed: () => context.read<UndoCubit>().undo(),
-          ),
+          action: SnackBarAction(label: 'Undo', onPressed: undoCubit.undo),
         ),
       );
   }
@@ -956,31 +1174,30 @@ class _NodeTile extends StatelessWidget {
             ),
             FilledButton(
               onPressed: () {
-                final count =
-                    int.tryParse(countCtrl.text.trim()) ?? 0;
+                final count = int.tryParse(countCtrl.text.trim()) ?? 0;
                 if (count < 2 || count > 30) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content: Text('Enter 2–30 steps')),
+                    const SnackBar(content: Text('Enter 2–30 steps')),
                   );
                   return;
                 }
-                final result =
-                    context.read<NodeCubit>().breakdownGoal(
-                          live.id,
-                          count: count,
-                          stepPrefix: prefixCtrl.text.trim().isEmpty
-                              ? 'Step'
-                              : prefixCtrl.text.trim(),
-                          splitMoney: splitMoney,
-                          splitEffort: splitEffort,
-                          spreadDates: spreadDates,
-                        );
+                final result = context.read<NodeCubit>().breakdownGoal(
+                  live.id,
+                  count: count,
+                  stepPrefix: prefixCtrl.text.trim().isEmpty
+                      ? 'Step'
+                      : prefixCtrl.text.trim(),
+                  splitMoney: splitMoney,
+                  splitEffort: splitEffort,
+                  spreadDates: spreadDates,
+                );
                 Navigator.pop(ctx);
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                      content: Text(result.error ??
-                          'Created ${result.ids.length} step(s)')),
+                    content: Text(
+                      result.error ?? 'Created ${result.ids.length} step(s)',
+                    ),
+                  ),
                 );
               },
               child: const Text('Create steps'),
@@ -999,10 +1216,11 @@ class _NodeTile extends StatelessWidget {
         title: const Text('Subdivide'),
         content: TextField(
           controller: ctrl,
-          keyboardType:
-              const TextInputType.numberWithOptions(decimal: true),
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
           decoration: const InputDecoration(
-              labelText: 'Keep amount', prefixText: '\$ '),
+            labelText: 'Keep amount',
+            prefixText: '\$ ',
+          ),
           autofocus: true,
         ),
         actions: [
@@ -1014,9 +1232,7 @@ class _NodeTile extends StatelessWidget {
             onPressed: () {
               final amount = double.tryParse(ctrl.text.trim());
               if (amount != null && amount > 0) {
-                context
-                    .read<NodeCubit>()
-                    .subdivideNode(live.id, amount);
+                context.read<NodeCubit>().subdivideNode(live.id, amount);
                 Navigator.pop(ctx);
               }
             },
@@ -1094,8 +1310,7 @@ class _ParentTileState extends State<_ParentTile> {
                   duration: const Duration(milliseconds: 200),
                   child: const Icon(Icons.expand_more),
                 ),
-                onPressed: () =>
-                    setState(() => _expanded = !_expanded),
+                onPressed: () => setState(() => _expanded = !_expanded),
               ),
             ],
           ),
@@ -1133,8 +1348,10 @@ class _EmptyNodesState extends State<_EmptyNodes> {
               children: [
                 const Icon(Icons.hub_outlined, size: 48),
                 const SizedBox(height: 8),
-                Text('No nodes yet',
-                    style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  'No nodes yet',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const SizedBox(height: 4),
                 const Text(
                   'Build your goal tree here.\n'
@@ -1160,9 +1377,7 @@ class _EmptyNodesState extends State<_EmptyNodes> {
 
   Future<void> _import(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
-    messenger.showSnackBar(
-      const SnackBar(content: Text('Importing…')),
-    );
+    messenger.showSnackBar(const SnackBar(content: Text('Importing…')));
     try {
       final result = await NodeLegacyMigration.importAll(
         context.read<NodeCubit>(),
@@ -1171,14 +1386,14 @@ class _EmptyNodesState extends State<_EmptyNodes> {
       if (!context.mounted) return;
       messenger.showSnackBar(
         SnackBar(
-            content: Text(
-                'Imported ${result.nodes} node(s), linked ${result.txns} transaction(s)')),
+          content: Text(
+            'Imported ${result.nodes} node(s), linked ${result.txns} transaction(s)',
+          ),
+        ),
       );
     } catch (e) {
       if (!context.mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Import failed: $e')),
-      );
+      messenger.showSnackBar(SnackBar(content: Text('Import failed: $e')));
     }
   }
 }

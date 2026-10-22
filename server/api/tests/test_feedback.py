@@ -173,7 +173,7 @@ def test_issue_body_matches_templates():
     bug = github_issues.build_issue_body(
         kind="bug",
         description="It crashes",
-        device="Android mantheous-a16",
+        device="Android phone",
         extra="log here",
         reporter_email="u@example.com",
     )

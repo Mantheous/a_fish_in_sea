@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import urllib.parse
 from typing import Any
 
 import httpx
@@ -171,9 +172,17 @@ async def list_planner_items(
                 )
                 if normalized is not None:
                     out.append(normalized)
-            url = _next_link(resp.headers.get("Link"))
-            if not url:
+            next_url = _next_link(resp.headers.get("Link"))
+            if not next_url:
                 break
+            parsed_next = urllib.parse.urlparse(next_url)
+            if parsed_next.scheme.lower() != "https" or validate_host(
+                parsed_next.hostname or ""
+            ) != validated:
+                raise CanvasAuthError(
+                    "Canvas pagination Link pointed outside the validated host."
+                )
+            url = next_url
     return out
 
 
@@ -184,3 +193,94 @@ def default_sync_window() -> tuple[str, str]:
     time_min = (now - dt.timedelta(days=180)).strftime("%Y-%m-%d")
     time_max = (now + dt.timedelta(days=30)).strftime("%Y-%m-%d")
     return time_min, time_max
+
+
+async def get_assignment(
+    host: str,
+    token: str,
+    assignment_id: int,
+    course_id: int | None = None,
+) -> dict[str, Any]:
+    """Fetch one Canvas assignment's details (description, link, due).
+
+    ``course_id`` is optional: the importer only keeps the assignment id
+    (iCal UID ``event-assignment-<id>``), so when it is missing the
+    student's courses are walked until the assignment is found. The
+    token never leaves the server — callers pass the stored per-user
+    token straight through to the validated *.instructure.com host.
+    """
+    if not (token or "").strip():
+        raise CanvasAuthError("Canvas account not connected")
+    validated = validate_host(host)
+    headers = {"Authorization": f"Bearer {token}"}
+    base = f"https://{validated}"
+    async with httpx.AsyncClient(timeout=30) as c:
+        if course_id is not None:
+            resp = await c.get(
+                f"{base}/api/v1/courses/{course_id}/assignments/{assignment_id}",
+                headers=headers,
+            )
+            if resp.status_code in (401, 403):
+                raise CanvasAuthError(
+                    "Canvas rejected the token (invalid or revoked).",
+                    status=resp.status_code,
+                )
+            if resp.status_code == 404:
+                raise CanvasAuthError("Assignment not found", status=404)
+            if resp.status_code != 200:
+                raise CanvasAuthError(
+                    f"Canvas assignment call failed ({resp.status_code}): "
+                    f"{resp.text[:200]}",
+                    status=resp.status_code,
+                )
+            data = resp.json()
+            resolved_course: int | None = course_id
+        else:
+            # No course stored on the node: find the owning course first.
+            data = None
+            resolved_course = None
+            courses_resp = await c.get(
+                f"{base}/api/v1/courses",
+                headers=headers,
+                params={"per_page": 100},
+            )
+            if courses_resp.status_code in (401, 403):
+                raise CanvasAuthError(
+                    "Canvas rejected the token (invalid or revoked).",
+                    status=courses_resp.status_code,
+                )
+            courses = (
+                courses_resp.json() if courses_resp.status_code == 200 else []
+            )
+            if isinstance(courses, list):
+                for course in courses:
+                    if not isinstance(course, dict):
+                        continue
+                    try:
+                        cid = int(course.get("id"))  # type: ignore[arg-type]
+                    except (TypeError, ValueError):
+                        continue
+                    r = await c.get(
+                        f"{base}/api/v1/courses/{cid}/assignments/"
+                        f"{assignment_id}",
+                        headers=headers,
+                    )
+                    if r.status_code == 200:
+                        data = r.json()
+                        resolved_course = cid
+                        break
+            if data is None:
+                raise CanvasAuthError("Assignment not found", status=404)
+        if not isinstance(data, dict):
+            raise CanvasAuthError("Canvas returned an unexpected response.")
+        return {
+            "assignment_id": data.get("id", assignment_id),
+            "course_id": resolved_course
+            if resolved_course is not None
+            else data.get("course_id"),
+            "title": data.get("name"),
+            "description": data.get("description"),
+            "html_url": data.get("html_url"),
+            "due_at": data.get("due_at"),
+            "points_possible": data.get("points_possible"),
+        }
