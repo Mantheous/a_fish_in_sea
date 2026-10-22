@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -12,6 +14,7 @@ import '../../planner/bloc/calendar_cubit.dart';
 import '../../planner/bloc/feed_cubit.dart';
 import '../../planner/model/assignment_estimate.dart';
 import '../../planner/model/assignment_rule.dart';
+import '../../planner/service/weekly_time_report.dart';
 import '../bloc/places_cubit.dart';
 import '../bloc/reporting_cubit.dart';
 import '../bloc/tracking_cubit.dart';
@@ -21,9 +24,20 @@ import '../service/location_service.dart';
 import '../stats_logic.dart';
 import 'day_review_screen.dart';
 import 'places_sheet.dart';
+import 'time_by_goal_card.dart';
 
 class StatsPage extends StatelessWidget {
-  const StatsPage({super.key});
+  /// Test seam for the running-timer clock; production uses the wall clock.
+  final DateTime Function()? now;
+
+  /// How often a visible running timer refreshes the report.
+  final Duration liveTick;
+
+  const StatsPage({
+    super.key,
+    this.now,
+    this.liveTick = const Duration(seconds: 30),
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -33,13 +47,16 @@ class StatsPage extends StatelessWidget {
         actions: const [UndoRedoActions()],
       ),
       drawer: const AppDrawer(),
-      body: const _StatsBody(),
+      body: _StatsBody(now: now, liveTick: liveTick),
     );
   }
 }
 
 class _StatsBody extends StatefulWidget {
-  const _StatsBody();
+  final DateTime Function()? now;
+  final Duration liveTick;
+
+  const _StatsBody({this.now, required this.liveTick});
 
   @override
   State<_StatsBody> createState() => _StatsBodyState();
@@ -49,9 +66,35 @@ class _StatsBodyState extends State<_StatsBody> {
   DateTime _day = DateTime.now();
   StatsRangePreset _preset = StatsRangePreset.thisWeek;
 
+  /// Running timers have no cubit emission of their own, so the report is
+  /// rebuilt on a slow tick while anything is recording. Only ticks when
+  /// the last build found a live entry, and is cancelled on dispose.
+  Timer? _liveTicker;
+  bool _hasLiveEntries = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _liveTicker = Timer.periodic(widget.liveTick, (_) {
+      if (mounted && _hasLiveEntries) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _liveTicker?.cancel();
+    super.dispose();
+  }
+
+  /// Local-midnight Monday of the week containing [_day].
+  DateTime get _weekStart => weekStartFor(_day);
+
   List<DateTime> get _weekDays {
-    final monday = _day.subtract(Duration(days: _day.weekday - 1));
-    return [for (var i = 0; i < 7; i++) monday.add(Duration(days: i))];
+    final start = _weekStart;
+    return [
+      for (var i = 0; i < 7; i++)
+        DateTime(start.year, start.month, start.day + i),
+    ];
   }
 
   @override
@@ -126,6 +169,18 @@ class _StatsBodyState extends State<_StatsBody> {
     final todayStats = weekStats[_day.weekday - 1];
     final weekAttended = weekStats.fold<int>(0, (sum, s) => sum + s.attendedMin);
     final weekPlanned = weekStats.fold<int>(0, (sum, s) => sum + s.plannedMin);
+    // Toggl-style week totals by goal: every stopped/running timer and
+    // accepted manual entry in the week, credited to the root goal above
+    // its backing node (or "(no goal)"). Pure read of existing timer
+    // fields — no new state.
+    final weekTimeReport = buildWeeklyTimeReport(
+      nodes: nodes,
+      events: calendar.state,
+      reportsByDay: reported,
+      weekStart: _weekStart,
+      now: widget.now?.call(),
+    );
+    _hasLiveEntries = weekTimeReport.entries.any((e) => e.live);
 
     return ListView(
       padding: const EdgeInsets.all(12),
@@ -180,6 +235,7 @@ class _StatsBodyState extends State<_StatsBody> {
           weekAttended: weekAttended,
           weekPlanned: weekPlanned,
         ),
+        TimeByGoalCard(report: weekTimeReport),
         if (!LocationService.supported)
           const Card(
             child: Padding(
