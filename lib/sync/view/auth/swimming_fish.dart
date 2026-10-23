@@ -147,10 +147,11 @@ class _FishPainter extends CustomPainter {
       ..close();
     canvas.drawPath(dorsal, finPaint);
 
+    // The pelvic fin sweeps back toward the tail, like the dorsal one.
     final pelvic = Path()
-      ..moveTo(102, 90)
-      ..cubicTo(102, 110, 114, 120, 126, 118)
-      ..cubicTo(121, 106, 120, 94, 123, 86)
+      ..moveTo(126, 90)
+      ..cubicTo(126, 110, 114, 120, 102, 118)
+      ..cubicTo(107, 106, 108, 94, 105, 86)
       ..close();
     canvas.drawPath(pelvic, finPaint);
 
@@ -163,10 +164,11 @@ class _FishPainter extends CustomPainter {
       ..close();
     canvas.drawPath(body, bodyPaint);
 
-    // Gill crease.
+    // Gill crease: bows back toward the tail and tucks under the pectoral
+    // fin, just behind the eye.
     final gill = Path()
       ..moveTo(128, 30)
-      ..cubicTo(143, 46, 143, 76, 128, 92);
+      ..cubicTo(110, 44, 108, 68, 122, 80);
     canvas.drawPath(
       gill,
       Paint()
