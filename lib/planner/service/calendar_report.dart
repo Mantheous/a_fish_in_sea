@@ -1,8 +1,13 @@
 import '../../nodes/model/node.dart';
 import '../../reporting/model/reported_entry.dart';
+import '../model/event_reschedule.dart';
 import '../model/planner_event.dart';
 
 enum ReportBlockKind { live, timer, accepted }
+
+const String reportDisplayIdPrefix = 'report:';
+const String reportLiveDisplayIdPrefix = '${reportDisplayIdPrefix}live:';
+const String reportTimerDisplayIdPrefix = '${reportDisplayIdPrefix}timer:';
 
 class ReportBlock {
   final String displayId;
@@ -24,9 +29,38 @@ class ReportBlock {
     this.entryId,
     this.status,
   });
+
+  ReportBlock copyWith({String? title, DateTime? start, DateTime? end}) =>
+      ReportBlock(
+        displayId: displayId,
+        title: title ?? this.title,
+        start: start ?? this.start,
+        end: end ?? this.end,
+        kind: kind,
+        eventId: eventId,
+        entryId: entryId,
+        status: status,
+      );
 }
 
-bool isReportDisplayId(String id) => id.startsWith('report:');
+/// Applies a drag on a report chip's start or end edge. Snaps to
+/// [snapMinutes] and never collapses the interval below one minute, matching
+/// the calendar's event resize handles.
+ReportBlock resizedReportBlock(
+  ReportBlock block, {
+  DateTime? newStart,
+  DateTime? newEnd,
+  int snapMinutes = 1,
+}) {
+  final start = newStart == null
+      ? block.start
+      : snapToInterval(newStart, snapMinutes);
+  var end = newEnd == null ? block.end : snapToInterval(newEnd, snapMinutes);
+  if (!end.isAfter(start)) end = start.add(const Duration(minutes: 1));
+  return block.copyWith(start: start, end: end);
+}
+
+bool isReportDisplayId(String id) => id.startsWith(reportDisplayIdPrefix);
 
 /// Finds an existing reported entry linked to [eventId], preferring a
 /// manual (accepted) entry over an auto-generated one.
@@ -54,7 +88,7 @@ ReportedEntry? findReportEntryByDisplayId(
 ) {
   for (final entries in reportsByDay.values) {
     for (final entry in entries) {
-      if ('report:${entry.id}' == displayId) return entry;
+      if ('$reportDisplayIdPrefix${entry.id}' == displayId) return entry;
     }
   }
   return null;
@@ -155,7 +189,7 @@ List<ReportBlock> buildReportBlocks({
       }
       blocks.add(
         ReportBlock(
-          displayId: 'report:live:${event.id}',
+          displayId: '$reportLiveDisplayIdPrefix${event.id}',
           title: event.subject,
           start: liveStart,
           end: end,
@@ -170,7 +204,7 @@ List<ReportBlock> buildReportBlocks({
     if (reported != null) {
       blocks.add(
         ReportBlock(
-          displayId: 'report:timer:${event.id}',
+          displayId: '$reportTimerDisplayIdPrefix${event.id}',
           title: event.subject,
           start: reported.start,
           end: reported.end,
@@ -189,7 +223,7 @@ List<ReportBlock> buildReportBlocks({
             : entry.start.add(const Duration(hours: 1));
         blocks.add(
           ReportBlock(
-            displayId: 'report:${entry.id}',
+            displayId: '$reportDisplayIdPrefix${entry.id}',
             title: entry.title,
             start: entry.start,
             end: end,
@@ -225,7 +259,7 @@ List<ReportBlock> buildReportBlocks({
       }
       blocks.add(
         ReportBlock(
-          displayId: 'report:live:${node.id}',
+          displayId: '$reportLiveDisplayIdPrefix${node.id}',
           title: node.title,
           start: liveStart,
           end: end,
@@ -244,7 +278,7 @@ List<ReportBlock> buildReportBlocks({
       }
       blocks.add(
         ReportBlock(
-          displayId: 'report:timer:${node.id}',
+          displayId: '$reportTimerDisplayIdPrefix${node.id}',
           title: node.title,
           start: actualStart,
           end: end,
@@ -261,7 +295,7 @@ List<ReportBlock> buildReportBlocks({
         : entry.start.add(const Duration(hours: 1));
     blocks.add(
       ReportBlock(
-        displayId: 'report:${entry.id}',
+        displayId: '$reportDisplayIdPrefix${entry.id}',
         title: entry.title,
         start: entry.start,
         end: end,

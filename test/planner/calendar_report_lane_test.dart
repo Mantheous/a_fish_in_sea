@@ -432,5 +432,135 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       expect(find.text('Event details'), findsOneWidget);
     });
+
+    Finder reportHandle(String label) => find.byWidgetPredicate(
+      (w) => w is Semantics && w.properties.label == label,
+    );
+
+    testWidgets('selected report chip resizes the reported entry', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final reporting = context.read<ReportingCubit>();
+      final now = DateTime.now();
+      final day = DateTime(now.year, now.month, now.day);
+      final start = DateTime(now.year, now.month, now.day, 9);
+      final reportedStart = start.add(const Duration(minutes: 5));
+      final reportedEnd = start.add(const Duration(minutes: 50));
+      calendar.addEvent(_event('e1', start));
+      reporting.upsertEntry(
+        day,
+        _accepted(
+          id: 'r1',
+          eventId: 'e1',
+          start: reportedStart,
+          end: reportedEnd,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      // Reporting a chip's selection is what reveals its resize circles.
+      expect(reportHandle('Drag to adjust report start'), findsNothing);
+      expect(reportHandle('Drag to adjust report end'), findsNothing);
+
+      await tester.tap(find.text('Report r1'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('Event details'), findsOneWidget);
+      expect(reportHandle('Drag to adjust report start'), findsOneWidget);
+      expect(reportHandle('Drag to adjust report end'), findsOneWidget);
+
+      await tester.drag(
+        reportHandle('Drag to adjust report end'),
+        const Offset(0, 80),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final updated = reporting.entriesForDay(day).single;
+      expect(updated.start, reportedStart);
+      expect(updated.end.isAfter(reportedEnd), isTrue);
+      // The chip stays selected after the drag so it can be adjusted again.
+      expect(reportHandle('Drag to adjust report end'), findsOneWidget);
+    });
+
+    testWidgets('top handle moves the reported start earlier', (tester) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final reporting = context.read<ReportingCubit>();
+      final now = DateTime.now();
+      final day = DateTime(now.year, now.month, now.day);
+      final start = DateTime(now.year, now.month, now.day, 9, 5);
+      final end = start.add(const Duration(minutes: 45));
+      calendar.addEvent(
+        PlannerEvent(id: 'e1', subject: 'Event e1', start: start, end: end),
+      );
+      reporting.upsertEntry(
+        day,
+        _accepted(id: 'r1', eventId: 'e1', start: start, end: end),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      await tester.tap(find.text('Report r1'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.drag(
+        reportHandle('Drag to adjust report start'),
+        const Offset(0, -40),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final updated = reporting.entriesForDay(day).single;
+      expect(updated.start.isBefore(start), isTrue);
+      expect(updated.end, end);
+    });
+
+    testWidgets('live report has no resize handles while recording', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final now = DateTime.now();
+      final start = DateTime(now.year, now.month, now.day, 9);
+      calendar.addEvent(
+        PlannerEvent(
+          id: 'e1',
+          subject: 'Event e1',
+          start: start,
+          end: start.add(const Duration(hours: 1)),
+          timerStartedAt: start,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final liveChip = find.byKey(
+        const ValueKey('report-chip:report:live:e1'),
+      );
+      final liveRect = tester.getRect(liveChip);
+      await tester.tapAt(Offset(liveRect.center.dx, liveRect.top + 8));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('Event details'), findsOneWidget);
+
+      expect(reportHandle('Drag to adjust report start'), findsNothing);
+      expect(reportHandle('Drag to adjust report end'), findsNothing);
+    });
   });
 }

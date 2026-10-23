@@ -29,6 +29,7 @@ import '../model/planner_event.dart';
 import '../bloc/settings_cubit.dart';
 import '../service/calendar_report.dart';
 import '../service/event_reminders.dart';
+import '../service/report_adjustment.dart';
 import 'calendar_data_source.dart';
 import 'calendar_projection.dart';
 import 'calendar_filter_sheet.dart';
@@ -67,6 +68,11 @@ class _CalendarPageState extends State<CalendarPage> {
   final CalendarController _controller = CalendarController();
   CalendarView _view = platformDefaultCalendarView;
   String? _selectedEventId;
+
+  /// Report chip the user tapped in the Plan + Report lane. Its white
+  /// resize circles adjust the reported interval; null when the selection
+  /// belongs to a plan tile instead.
+  String? _selectedReportId;
 
   /// What the side panel shows while open. [CalendarPanelMode.tasks] with
   /// nothing selected is the panel's resting state.
@@ -283,6 +289,7 @@ class _CalendarPageState extends State<CalendarPage> {
         details,
         settings.dayStartHour,
         settings.dayEndHour,
+        settings.snapMinutes,
       ),
       onTap: _onRailTap,
       timeSlotViewSettings: _railSlotSettings(
@@ -315,6 +322,7 @@ class _CalendarPageState extends State<CalendarPage> {
     CalendarAppointmentDetails details,
     double startHour,
     double endHour,
+    int snapMinutes,
   ) {
     if (details.isMoreAppointmentRegion) return const SizedBox.shrink();
     final raw = details.appointments.isNotEmpty
@@ -344,11 +352,15 @@ class _CalendarPageState extends State<CalendarPage> {
       child: SizedBox(
         width: details.bounds.width / 2,
         child: ReportLaneView(
+          key: ValueKey('report-lane:${event.id}'),
           blocks: blocks,
           day: reportLaneDayOf(event.id) ?? event.start,
           startHour: startHour,
           endHour: endHour,
           isRtl: isRtl,
+          selectedId: _selectedReportId,
+          snapMinutes: snapMinutes,
+          onIntervalChanged: _adjustReportedInterval,
           colorFor: (block) =>
               _projection.reportColorById[block.displayId] ??
               const Color(defaultPersonalEventColor),
@@ -613,7 +625,8 @@ class _CalendarPageState extends State<CalendarPage> {
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
                 child: Text(
                   'Each day: plan on the left, report right beside it · '
-                  'red = recording now · ▶ starts recording',
+                  'tap a report, then drag its circles to adjust · '
+                  'red = recording now',
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
@@ -1729,10 +1742,13 @@ class _CalendarPageState extends State<CalendarPage> {
     showNodeEditor(context, existing: node);
   }
 
-  void _openDetail(PlannerEvent event) {
+  void _openDetail(PlannerEvent event, {String? reportId}) {
     if (!_isWide) {
-      if (_selectedEventId != null) {
-        setState(() => _selectedEventId = null);
+      if (_selectedEventId != null || _selectedReportId != reportId) {
+        setState(() {
+          _selectedEventId = null;
+          _selectedReportId = reportId;
+        });
       }
       showEventDetail(
         context,
@@ -1746,6 +1762,7 @@ class _CalendarPageState extends State<CalendarPage> {
     final preCreate = _preCreateSelectedDate;
     setState(() {
       _selectedEventId = event.id;
+      _selectedReportId = reportId;
       _panelMode = CalendarPanelMode.detail;
       _panelOpen = true;
       _editPreview = null;
@@ -1821,6 +1838,7 @@ class _CalendarPageState extends State<CalendarPage> {
     final start = target?.start ?? blockStart!;
     setState(() {
       _selectedEventId = target?.id ?? nodeBlockId(node.id);
+      _selectedReportId = null;
       _editPreview = null;
     });
     _controller.displayDate = start;
@@ -1867,6 +1885,9 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   void _openReport(String displayId) {
+    if (mounted && _selectedReportId != displayId) {
+      setState(() => _selectedReportId = displayId);
+    }
     final calendar = context.read<CalendarCubit>();
     ReportedEntry? entry;
     try {
@@ -1877,18 +1898,16 @@ class _CalendarPageState extends State<CalendarPage> {
     } catch (_) {}
     var eventId = entry?.eventId;
     if (eventId == null) {
-      const timerPrefix = 'report:timer:';
-      const livePrefix = 'report:live:';
-      if (displayId.startsWith(timerPrefix)) {
-        eventId = displayId.substring(timerPrefix.length);
-      } else if (displayId.startsWith(livePrefix)) {
-        eventId = displayId.substring(livePrefix.length);
+      if (displayId.startsWith(reportTimerDisplayIdPrefix)) {
+        eventId = displayId.substring(reportTimerDisplayIdPrefix.length);
+      } else if (displayId.startsWith(reportLiveDisplayIdPrefix)) {
+        eventId = displayId.substring(reportLiveDisplayIdPrefix.length);
       }
     }
     if (eventId != null) {
       final event = calendar.byId(eventId);
       if (event != null) {
-        _openDetail(event);
+        _openDetail(event, reportId: displayId);
         return;
       }
     }
@@ -1898,6 +1917,48 @@ class _CalendarPageState extends State<CalendarPage> {
         context,
         day: DateTime(start.year, start.month, start.day),
         entry: entry,
+      );
+    }
+  }
+
+  /// Commits a report chip resize. Manual entries, timer-logged events, and
+  /// node-only reports each write back to their own store, so the drag
+  /// feels like moving the report itself rather than editing the plan.
+  void _adjustReportedInterval(
+    ReportBlock block,
+    DateTime start,
+    DateTime end,
+  ) {
+    var adjusted = false;
+    try {
+      adjusted = applyReportedInterval(
+        reporting: context.read<ReportingCubit>(),
+        calendar: context.read<CalendarCubit>(),
+        nodes: context.read<NodeCubit>(),
+        block: block,
+        start: start,
+        end: end,
+      );
+      if (adjusted) {
+        final undo = context.read<UndoCubit>();
+        final messenger = ScaffoldMessenger.of(context);
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Reported time updated · '
+              '${_calendarTimeFormat.format(start)} – '
+              '${_calendarTimeFormat.format(end)}',
+            ),
+            action: SnackBarAction(label: 'Undo', onPressed: undo.undo),
+          ),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Couldn’t adjust that report — please try again.'),
+        ),
       );
     }
   }
@@ -1998,6 +2059,7 @@ class _CalendarPageState extends State<CalendarPage> {
     }
     setState(() {
       _selectedEventId = null;
+      _selectedReportId = null;
       _panelMode = CalendarPanelMode.creating;
       _panelOpen = true;
       _draftEvent = draft;
@@ -2012,6 +2074,7 @@ class _CalendarPageState extends State<CalendarPage> {
   Future<void> _openSheetCreator(PlannerEvent draft) async {
     setState(() {
       _selectedEventId = null;
+      _selectedReportId = null;
       _panelMode = CalendarPanelMode.creating;
       _draftEvent = draft;
       _draftSeedSubject = draft.subject.isEmpty ? null : draft.subject;
@@ -2090,6 +2153,7 @@ class _CalendarPageState extends State<CalendarPage> {
       _panelOpen = false;
       _panelMode = CalendarPanelMode.tasks;
       _selectedEventId = null;
+      _selectedReportId = null;
       _editPreview = null;
       _seedFromPageMount = false;
       _clearDraft();
@@ -2130,6 +2194,7 @@ class _CalendarPageState extends State<CalendarPage> {
         setState(() {
           _panelMode = CalendarPanelMode.tasks;
           _selectedEventId = null;
+          _selectedReportId = null;
           _editPreview = null;
           _clearDraft();
         });
@@ -2149,6 +2214,7 @@ class _CalendarPageState extends State<CalendarPage> {
       setState(() {
         _panelMode = CalendarPanelMode.tasks;
         _selectedEventId = null;
+        _selectedReportId = null;
         _editPreview = null;
         _clearDraft();
       });
@@ -2179,6 +2245,7 @@ class _CalendarPageState extends State<CalendarPage> {
     setState(() {
       _panelMode = CalendarPanelMode.tasks;
       _selectedEventId = null;
+      _selectedReportId = null;
       _editPreview = null;
       _clearDraft();
       if (!saved && captured) {

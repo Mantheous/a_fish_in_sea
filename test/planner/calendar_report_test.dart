@@ -187,6 +187,48 @@ void main() {
     });
   });
 
+  group('resizedReportBlock', () {
+    final block = ReportBlock(
+      displayId: 'report:r1',
+      title: 'Report r1',
+      start: DateTime(2026, 9, 4, 9, 5),
+      end: DateTime(2026, 9, 4, 9, 50),
+      kind: ReportBlockKind.accepted,
+      eventId: 'e1',
+      entryId: 'r1',
+      status: ReportStatus.attended,
+    );
+
+    test('drags the end edge and snaps to the grid', () {
+      final resized = resizedReportBlock(
+        block,
+        newEnd: DateTime(2026, 9, 4, 10, 2),
+        snapMinutes: 5,
+      );
+      expect(resized.start, block.start);
+      expect(resized.end, DateTime(2026, 9, 4, 10));
+      expect(resized.displayId, block.displayId);
+      expect(resized.entryId, 'r1');
+    });
+
+    test('drags the start edge and keeps a positive interval', () {
+      final resized = resizedReportBlock(
+        block,
+        newStart: DateTime(2026, 9, 4, 9, 3),
+        snapMinutes: 5,
+      );
+      expect(resized.start, DateTime(2026, 9, 4, 9, 5));
+      expect(resized.end, block.end);
+
+      final collapsed = resizedReportBlock(
+        block,
+        newStart: DateTime(2026, 9, 4, 10),
+        snapMinutes: 5,
+      );
+      expect(collapsed.end, collapsed.start.add(const Duration(minutes: 1)));
+    });
+  });
+
   group('reportBlockToDisplayEvent', () {
     test('keeps the template look so plan/report pairs match', () {
       final template = event('e1', DateTime(2026, 9, 4, 9));
