@@ -84,29 +84,34 @@ class _AuthPageState extends State<AuthPage> {
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   return SingleChildScrollView(
-                    padding: const EdgeInsets.only(top: 30, bottom: 26),
                     child: ConstrainedBox(
                       constraints: BoxConstraints(
                         minHeight: constraints.maxHeight,
                       ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 24),
-                            child: _Wordmark(),
-                          ),
-                          const SizedBox(height: 10),
-                          const SwimmingFish(),
-                          const SizedBox(height: 20),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 20),
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 430),
-                              child: _buildCard(auth),
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 30, bottom: 26),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 24),
+                              child: _Wordmark(),
                             ),
-                          ),
-                        ],
+                            const SizedBox(height: 10),
+                            const SwimmingFish(),
+                            const SizedBox(height: 20),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 20),
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(maxWidth: 430),
+                                child: SizedBox(
+                                  width: double.infinity,
+                                  child: _buildCard(auth),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   );
@@ -224,7 +229,10 @@ class _AuthPageState extends State<AuthPage> {
                     ? const SizedBox(
                         height: 18,
                         width: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
                       )
                     : const Text('Sign in'),
               ),

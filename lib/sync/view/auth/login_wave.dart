@@ -47,12 +47,13 @@ class WaveGeometry {
 
   double _xAt(int step) => size.width * step / _steps;
 
-  /// Everything at or below the ribbon (the log-in page lives here while the
-  /// sea falls past it).
-  Path clipPath() {
-    final path = Path()..moveTo(0, topAt(0));
+  /// Everything at or below the foam (the sign-in page lives here while the
+  /// sea falls past it). The [padding] keeps the soft shadow under the foam
+  /// visible instead of slicing it off.
+  Path pageClipPath({double padding = 18}) {
+    final path = Path()..moveTo(0, bottomAt(0) + padding);
     for (var i = 1; i <= _steps; i++) {
-      path.lineTo(_xAt(i), topAt(_xAt(i)));
+      path.lineTo(_xAt(i), bottomAt(_xAt(i)) + padding);
     }
     path
       ..lineTo(size.width, size.height)
@@ -106,17 +107,18 @@ class WaveGeometry {
   }
 }
 
-/// Clips the login page to the part the falling sea still covers.
-class WaveClipClipper extends CustomClipper<Path> {
-  const WaveClipClipper(this.geometry);
+/// Clips the sign-in page to the water still on screen, so the page rides
+/// the back of the falling wave instead of vanishing on the first frame.
+class WavePageClipper extends CustomClipper<Path> {
+  const WavePageClipper(this.geometry);
 
   final WaveGeometry geometry;
 
   @override
-  Path getClip(Size size) => geometry.clipPath();
+  Path getClip(Size size) => geometry.pageClipPath();
 
   @override
-  bool shouldReclip(WaveClipClipper oldClipper) =>
+  bool shouldReclip(WavePageClipper oldClipper) =>
       oldClipper.geometry.progress != geometry.progress ||
       oldClipper.geometry.size != geometry.size;
 }

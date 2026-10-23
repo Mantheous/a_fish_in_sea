@@ -12,7 +12,7 @@ import 'login_wave.dart';
 ///
 /// The whole thing is one [Stack] with stable slots, so the [AuthPage]'s
 /// state (focus, typed text) survives the moment the auth state flips. The
-/// wave accelerates with [Curves.easeInCubic] — it gathers, then falls.
+/// wave accelerates with [Curves.easeInQuad] — it gathers, then falls.
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key, required this.child});
 
@@ -25,7 +25,7 @@ class AuthGate extends StatefulWidget {
 
 class _AuthGateState extends State<AuthGate>
     with SingleTickerProviderStateMixin {
-  static const Duration _waveDuration = Duration(milliseconds: 1100);
+  static const Duration _waveDuration = Duration(milliseconds: 1150);
 
   late final AnimationController _controller = AnimationController(
     vsync: this,
@@ -33,7 +33,7 @@ class _AuthGateState extends State<AuthGate>
   )..addStatusListener(_onWaveStatus);
   late final Animation<double> _fall = CurvedAnimation(
     parent: _controller,
-    curve: Curves.easeInCubic,
+    curve: Curves.easeInQuad,
   );
 
   late bool _signedIn;
@@ -111,12 +111,25 @@ class _AuthGateState extends State<AuthGate>
                 Positioned.fill(
                   child: _signedIn ? widget.child : const SizedBox.shrink(),
                 ),
-                // Slot 1: the sign-in scene, clipped to the water still on
-                // screen. Same slot while leaving, so its state is preserved.
+                // Slot 1: the falling sea. Transparent above the crest, so
+                // the app shows through there.
+                Positioned.fill(
+                  child: _waving
+                      ? IgnorePointer(
+                          child: CustomPaint(
+                            key: loginWaveOverlayKey,
+                            painter: LoginWavePainter(geometry: geometry),
+                          ),
+                        )
+                      : const SizedBox.shrink(),
+                ),
+                // Slot 2: the sign-in scene, clipped to the water still on
+                // screen so it rides the back of the wave. Kept in the same
+                // slot while leaving, so its state is preserved.
                 Positioned.fill(
                   child: _showLogin
                       ? ClipPath(
-                          clipper: WaveClipClipper(geometry),
+                          clipper: WavePageClipper(geometry),
                           child: IgnorePointer(
                             ignoring: _waving,
                             child: const AuthPage(),
@@ -124,16 +137,6 @@ class _AuthGateState extends State<AuthGate>
                         )
                       : const SizedBox.shrink(),
                 ),
-                // Slot 2: the falling wave itself.
-                if (_waving)
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: CustomPaint(
-                        key: loginWaveOverlayKey,
-                        painter: LoginWavePainter(geometry: geometry),
-                      ),
-                    ),
-                  ),
               ],
             );
           },

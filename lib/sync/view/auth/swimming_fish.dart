@@ -34,7 +34,7 @@ class _SwimmingFishState extends State<SwimmingFish>
     vsync: this,
     duration: widget.duration,
   );
-  bool _reduceMotion = false;
+  bool? _reduceMotion;
 
   @override
   void didChangeDependencies() {
@@ -42,7 +42,7 @@ class _SwimmingFishState extends State<SwimmingFish>
     final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     if (reduceMotion == _reduceMotion) return;
     _reduceMotion = reduceMotion;
-    if (_reduceMotion) {
+    if (reduceMotion) {
       _controller.stop();
     } else {
       _controller.repeat();
@@ -70,7 +70,7 @@ class _SwimmingFishState extends State<SwimmingFish>
                 animation: _controller,
                 builder: (context, _) {
                   // Static, parked mid-lane when animations are disabled.
-                  final t = _reduceMotion ? 0.33 : _controller.value;
+                  final t = (_reduceMotion ?? false) ? 0.33 : _controller.value;
                   final x = -widget.fishWidth + travel * t;
                   // Four gentle bobs and a slight nose tilt per crossing;
                   // the tail swishes about once a second.

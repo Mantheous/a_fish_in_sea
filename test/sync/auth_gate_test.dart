@@ -88,7 +88,7 @@ void main() {
     expect(find.byKey(loginWaveOverlayKey), findsOneWidget);
 
     // 1100ms fall plus a frame to remove the overlay.
-    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 1300));
     await tester.pump();
 
     expect(find.byKey(loginWaveOverlayKey), findsNothing);
@@ -104,7 +104,7 @@ void main() {
     expect(find.text('APP HOME'), findsOneWidget);
     expect(find.byKey(loginWaveOverlayKey), findsOneWidget);
 
-    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 1300));
     await tester.pump();
     expect(find.byKey(loginWaveOverlayKey), findsNothing);
     expect(find.byType(AuthPage), findsNothing);
@@ -114,7 +114,7 @@ void main() {
     await pumpGate(tester);
     signIn();
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 1300));
     await tester.pump();
     expect(find.byType(AuthPage), findsNothing);
 
