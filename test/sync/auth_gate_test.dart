@@ -129,6 +129,44 @@ void main() {
     expect(find.byKey(loginWaveOverlayKey), findsNothing);
   });
 
+  testWidgets('a stored session boots straight into the app, no wave',
+      (tester) async {
+    final storage = _Storage();
+    when(() => storage.read(any())).thenAnswer((invocation) {
+      final key = invocation.positionalArguments.first as String;
+      if (key != 'AuthCubit') return null;
+      return {
+        'status': 'signedIn',
+        'email': 'sea@example.com',
+        'accessToken': 'token',
+        'refreshToken': 'refresh',
+      };
+    });
+    when(() => storage.write(any(), any())).thenAnswer((_) async {});
+    when(() => storage.delete(any())).thenAnswer((_) async {});
+    when(() => storage.clear()).thenAnswer((_) async {});
+    HydratedBloc.storage = storage;
+
+    final hydratedAuth = AuthCubit(client: () => _StubClient());
+    addTearDown(hydratedAuth.close);
+    expect(hydratedAuth.state.isSignedIn, isTrue);
+
+    await tester.pumpWidget(
+      MultiBlocProvider(
+        providers: [
+          BlocProvider<AuthCubit>.value(value: hydratedAuth),
+          BlocProvider<DemoCubit>.value(value: demo),
+        ],
+        child: const MaterialApp(home: AuthGate(child: Text('APP HOME'))),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('APP HOME'), findsOneWidget);
+    expect(find.byType(AuthPage), findsNothing);
+    expect(find.byKey(loginWaveOverlayKey), findsNothing);
+  });
+
   test('wave starts above the screen and ends below it', () {
     const size = Size(420, 820);
     final start = const WaveGeometry(size: size, progress: 0).topAt(210);
