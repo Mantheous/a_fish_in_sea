@@ -2,6 +2,8 @@ import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
+import 'package:a_fish_in_sea/fitness/bloc/fitness_cubit.dart';
+import 'package:a_fish_in_sea/fitness/fitness_service.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
@@ -79,6 +81,14 @@ Future<SyncEngine> pumpGoldenPage(WidgetTester tester, Widget page) async {
   final auth = AuthCubit(client: () => syncClient);
   final meta = SyncMetaCubit();
   final nodes = NodeCubit();
+  final fitness = FitnessCubit(
+    service: FitnessService(
+      baseUrl: () => 'http://localhost:1',
+      authToken: () => null,
+      client: mockClient,
+    ),
+    nodes: nodes,
+  );
   final transactions = TransactionsCubit();
   final plaid = PlaidCubit();
   final waterfall = WaterfallCubit(
@@ -134,6 +144,7 @@ Future<SyncEngine> pumpGoldenPage(WidgetTester tester, Widget page) async {
     plaid,
     transactions,
     nodes,
+    fitness,
     meta,
     auth,
     settings,
@@ -165,6 +176,7 @@ Future<SyncEngine> pumpGoldenPage(WidgetTester tester, Widget page) async {
           BlocProvider<AuthCubit>.value(value: auth),
           BlocProvider<SyncMetaCubit>.value(value: meta),
           BlocProvider<NodeCubit>.value(value: nodes),
+          BlocProvider<FitnessCubit>.value(value: fitness),
           BlocProvider<TransactionsCubit>.value(value: transactions),
           BlocProvider<PlaidCubit>.value(value: plaid),
           BlocProvider<WaterfallCubit>.value(value: waterfall),

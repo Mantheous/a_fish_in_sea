@@ -2,6 +2,8 @@ import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
+import 'package:a_fish_in_sea/fitness/bloc/fitness_cubit.dart';
+import 'package:a_fish_in_sea/fitness/fitness_service.dart';
 import 'package:a_fish_in_sea/demo/demo_cubit.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/planner_shell.dart';
@@ -80,6 +82,21 @@ class MyApp extends StatelessWidget {
         }),
         BlocProvider(create: (_) => SyncMetaCubit()),
         BlocProvider(create: (_) => NodeCubit()),
+        // Strava fitness connector: status + synced activities. Created
+        // lazily; the Goals page and Settings trigger the first check.
+        BlocProvider(
+          create: (context) => FitnessCubit(
+            service: FitnessService(
+              baseUrl: () =>
+                  context.read<SettingsCubit>().state.icalProxyBase,
+              authToken: () =>
+                  context.read<AuthCubit>().state.accessToken,
+              refreshAccessToken: () =>
+                  context.read<AuthCubit>().refreshAccessToken(),
+            ),
+            nodes: context.read<NodeCubit>(),
+          ),
+        ),
         BlocProvider(create: (_) => TransactionsCubit()),
         BlocProvider(create: (_) => PlaidCubit()),
         BlocProvider(
@@ -229,6 +246,12 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
           listenWhen: (a, b) => !identical(a, b),
           listener: (context, nodes) {
             _scheduleEstimatesRebuild();
+          },
+        ),
+        BlocListener<AuthCubit, AuthState>(
+          listenWhen: (a, b) => a.isSignedIn != b.isSignedIn,
+          listener: (context, state) {
+            if (!state.isSignedIn) context.read<FitnessCubit>().reset();
           },
         ),
       ],

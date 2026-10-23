@@ -92,7 +92,8 @@ void main() {
     );
     await tester.pump();
     expect(find.text('Fitness watches'), findsOneWidget);
-    expect(find.text('Garmin (first provider)'), findsOneWidget);
+    expect(find.text('Not connected'), findsOneWidget);
+    expect(find.text('Connect Strava'), findsOneWidget);
   });
 
   testWidgets('blank fitness target blocks save instead of persisting 0',

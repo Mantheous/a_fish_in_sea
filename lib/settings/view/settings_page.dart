@@ -14,6 +14,7 @@ import 'package:a_fish_in_sea/reporting/bloc/tracking_cubit.dart';
 import 'package:a_fish_in_sea/reporting/service/location_service.dart';
 import 'package:a_fish_in_sea/reporting/view/places_sheet.dart';
 import 'package:a_fish_in_sea/settings/view/api_tokens_section.dart';
+import 'package:a_fish_in_sea/settings/view/fitness_section.dart';
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
 import 'package:a_fish_in_sea/sync/sync_engine.dart';
 import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
@@ -127,9 +128,10 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const _SettingsSection(
             title: 'Fitness watches',
-            subtitle: 'Garmin first: sleep hours and activity time/count '
-                'feed workout tasks and fitness goals.',
-            child: _FitnessSection(),
+            subtitle: 'Connect Strava (Garmin, Coros, Wahoo, and Polar all '
+                'push their workouts there) to fill workout tasks and '
+                'activity goals.',
+            child: FitnessSection(),
           ),
         ],
       ),
@@ -816,55 +818,6 @@ class _AnkiSectionState extends State<_AnkiSection> {
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
-      ],
-    );
-  }
-}
-
-/// Fitness-watch connection card. Garmin is the first provider; the
-/// server proxy (POST /api/fitness/connect) holds the OAuth tokens, so
-/// the client only shows status here. Mark a task as a workout (or add
-/// a fitness target to a goal) and synced watch values fill progress.
-class _FitnessSection extends StatelessWidget {
-  const _FitnessSection();
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: Icon(Icons.watch_outlined),
-          title: Text('Garmin (first provider)'),
-          subtitle: Text(
-            'Not connected yet — connect from the sync server, then '
-            'workout tasks auto-report and sleep/activity goals track.',
-          ),
-        ),
-        OutlinedButton.icon(
-          onPressed: () => showDialog<void>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: const Text('Connect Garmin'),
-              content: const Text(
-                'Garmin OAuth lives on the sync server '
-                '(GET /api/fitness/status, POST /api/fitness/connect). '
-                'Once connected, mark a task as a workout in its editor '
-                'and watch activities fill its reported time; add a '
-                'fitness target to a goal to track sleep or activity.',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(),
-                  child: const Text('Close'),
-                ),
-              ],
-            ),
-          ),
-          icon: const Icon(Icons.link_outlined),
-          label: const Text('How to connect'),
-        ),
       ],
     );
   }

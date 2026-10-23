@@ -2,7 +2,7 @@ import '../nodes/model/node.dart';
 import 'fitness_models.dart';
 
 /// Pure helpers that feed synced watch values into goal progress.
-/// No I/O here: the server proxy fetches from Garmin, and callers pass
+/// No I/O here: the server proxy fetches from Strava, and callers pass
 /// the samples in. Kept pure so unit tests can use mocked samples.
 
 /// Measured value for [node]'s fitness target from synced samples.
@@ -24,6 +24,62 @@ double fitnessActualForNode(
       return activities.length.toDouble();
   }
 }
+
+/// Local calendar-day start for [value].
+DateTime fitnessDayStart(DateTime value) =>
+    DateTime(value.year, value.month, value.day);
+
+/// The day a goal measures: its due day (or start day) when scheduled,
+/// else today. Mirrors [applyWorkoutActivity]'s day choice so a workout
+/// auto-report and its goal agree on which day they belong to.
+DateTime fitnessGoalDay(Node node, {DateTime? now}) {
+  final day = node.schedule?.due ??
+      node.schedule?.start ??
+      (now ?? DateTime.now());
+  return fitnessDayStart(day);
+}
+
+/// Measured value for [node] on the day it tracks (see [fitnessGoalDay]).
+/// Activity goals sum/count only that day's activities; sleep goals take
+/// the night whose morning is that day.
+double fitnessActualForNodeOnDay(
+  Node node,
+  List<FitnessActivity> activities, {
+  List<SleepSample> sleep = const [],
+  DateTime? now,
+}) {
+  final day = fitnessGoalDay(node, now: now);
+  return fitnessActualForNode(
+    node,
+    [
+      for (final a in activities)
+        if (fitnessDayStart(a.start) == day) a,
+    ],
+    sleep: [
+      for (final s in sleep)
+        if (fitnessDayStart(s.date) == day) s,
+    ],
+  );
+}
+
+/// Per-node measured values for every fitness-backed node in [nodes],
+/// ready for `progressForest(fitnessActualByNodeId: ...)`.
+Map<String, double> fitnessActualsByNodeId(
+  List<Node> nodes,
+  List<FitnessActivity> activities, {
+  List<SleepSample> sleep = const [],
+  DateTime? now,
+}) =>
+    {
+      for (final n in nodes)
+        if (n.fitness != null)
+          n.id: fitnessActualForNodeOnDay(
+            n,
+            activities,
+            sleep: sleep,
+            now: now,
+          ),
+    };
 
 /// Auto-report for workout-marked tasks: the first watch activity on the
 /// node's due/calendar day fills [actualStart]/[actualEnd]. Returns the
