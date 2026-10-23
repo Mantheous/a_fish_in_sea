@@ -301,7 +301,13 @@ class _SetupSteps extends StatelessWidget {
           ),
           if (redirectUri != null && redirectUri!.isNotEmpty) ...[
             const SizedBox(height: 8),
-            Text('3. Use this Authorization Callback Domain/URL:', style: small),
+            Text('3. Fill Strava’s app form with:', style: small),
+            const SizedBox(height: 4),
+            Text(
+              'Authorization Callback Domain: ${_hostOf(redirectUri!)}',
+              style: small?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 2),
             Row(
               children: [
                 Expanded(
@@ -325,9 +331,20 @@ class _SetupSteps extends StatelessWidget {
                 ),
               ],
             ),
+            Text(
+              'Keep the domain field to just the host; the app sends the '
+              'full callback URL above.',
+              style: small,
+            ),
           ],
         ],
       ),
     );
+  }
+
+  static String _hostOf(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null || uri.host.isEmpty) return url;
+    return uri.host;
   }
 }
