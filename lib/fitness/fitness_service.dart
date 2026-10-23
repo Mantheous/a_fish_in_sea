@@ -124,11 +124,16 @@ class FitnessService {
           _uri('/api/fitness/auth_url'),
           headers: _headers,
         )));
-    final url = data['url'];
-    if (url is! String || url.isEmpty) {
+    // The server returns the /start path (it sets the browser-bound nonce
+    // cookie, then redirects to Strava). Prefix this app's base so the
+    // funnel's `/fish` prefix survives.
+    final startPath = data['startPath'];
+    if (startPath is! String || startPath.isEmpty) {
       throw const FitnessException('Server did not return a Strava sign-in link');
     }
-    return url;
+    if (startPath.startsWith('http')) return startPath;
+    final base = resolveAppServerBase(baseUrl());
+    return '$base$startPath';
   }
 
   Future<void> disconnect() async {

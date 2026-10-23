@@ -18,7 +18,7 @@ import secrets
 import httpx
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import strava as s
@@ -43,16 +43,24 @@ _DEFAULT_DAYS = 30
 _MAX_DAYS = 365
 
 
-def _oauth_state_token(user_id: int) -> str:
+# Cookie binding the browser that STARTED the flow to the browser that
+# approves it. Without it, an attacker could mint a consent link on their
+# own account, have a victim approve it, and end up holding the victim's
+# Strava tokens (including private activities).
+_COOKIE = "fitness_oauth_nonce"
+_COOKIE_TTL = 10 * 60
+
+
+def _state_token(user_id: int, nonce: str, *, kind: str, ttl: dt.timedelta) -> str:
     cfg = get_settings()
     now = dt.datetime.now(dt.timezone.utc)
     return jwt.encode(
         {
-            "type": "oauth_state",
+            "type": kind,
             "provider": _PROVIDER,
             "sub": str(user_id),
-            "nonce": secrets.token_hex(8),
-            "exp": now + dt.timedelta(minutes=10),
+            "nonce": nonce,
+            "exp": now + ttl,
             "iat": now,
         },
         cfg.jwt_secret,
@@ -60,7 +68,7 @@ def _oauth_state_token(user_id: int) -> str:
     )
 
 
-def _oauth_state_user(raw: str) -> int:
+def _decode_state(raw: str, *, kind: str) -> tuple[int, str]:
     cfg = get_settings()
     try:
         payload = jwt.decode(
@@ -68,9 +76,19 @@ def _oauth_state_user(raw: str) -> int:
         )
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
-    if payload.get("type") != "oauth_state" or payload.get("provider") != _PROVIDER:
+    if payload.get("type") != kind or payload.get("provider") != _PROVIDER:
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
-    return int(payload["sub"])
+    nonce = payload.get("nonce")
+    if not isinstance(nonce, str) or not nonce:
+        raise HTTPException(status_code=400, detail="Invalid OAuth state")
+    return int(payload["sub"]), nonce
+
+
+def _secure_request(request: Request) -> bool:
+    proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+    if proto:
+        return proto == "https"
+    return request.url.scheme == "https"
 
 
 def _redirect_uri(request: Request) -> str:
@@ -167,11 +185,78 @@ async def auth_url(
                 "redirectUri": _redirect_uri(request),
             },
         )
-    redirect_uri = _redirect_uri(request)
+    # The browser must open /start itself: that response sets the nonce
+    # cookie which /callback then requires, proving the same browser both
+    # started and approved the flow.
+    nonce = secrets.token_hex(16)
+    start = _state_token(
+        user.id, nonce, kind="fitness_start", ttl=dt.timedelta(minutes=5)
+    )
     return {
-        "url": s.strava_auth_url(redirect_uri, _oauth_state_token(user.id)),
-        "redirect_uri": redirect_uri,
+        "startPath": "/api/fitness/start?token=" + start,
+        "redirect_uri": _redirect_uri(request),
     }
+
+
+@router.get("/start")
+async def start(request: Request, token: str | None = None):
+    """Browser entry point: bind the nonce cookie, then go to Strava.
+
+    A top-level browser navigation can't carry the app's Bearer JWT, so
+    the short-lived signed [token] stands in for it. Reaching this route
+    directly without it does nothing but bounce back to the app.
+    """
+    csp = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"}
+    if not token:
+        return HTMLResponse(
+            _page(
+                "Strava connection failed",
+                "Start the connection from the app's Settings page.",
+                ok=False,
+            ),
+            status_code=400,
+            headers=csp,
+        )
+    try:
+        user_id, nonce = _decode_state(token, kind="fitness_start")
+    except HTTPException:
+        return HTMLResponse(
+            _page(
+                "Strava connection failed",
+                "This connection link expired — start again from Settings.",
+                ok=False,
+            ),
+            status_code=400,
+            headers=csp,
+        )
+    redirect_uri = _redirect_uri(request)
+    try:
+        url = s.strava_auth_url(
+            redirect_uri,
+            _state_token(
+                user_id,
+                nonce,
+                kind="oauth_state",
+                ttl=dt.timedelta(minutes=10),
+            ),
+        )
+    except s.StravaAuthError as e:
+        return HTMLResponse(
+            _page("Strava connection failed", html.escape(str(e)), ok=False),
+            status_code=503,
+            headers=csp,
+        )
+    response = RedirectResponse(url, status_code=302)
+    response.set_cookie(
+        _COOKIE,
+        nonce,
+        max_age=_COOKIE_TTL,
+        httponly=True,
+        samesite="lax",
+        secure=_secure_request(request),
+        path="/",
+    )
+    return response
 
 
 @router.get("/callback", response_class=HTMLResponse)
@@ -203,10 +288,29 @@ async def callback(
             headers=csp,
         )
     try:
-        user_id = _oauth_state_user(state)
+        user_id, state_nonce = _decode_state(state, kind="oauth_state")
     except HTTPException:
         return HTMLResponse(
-            _page("Strava connection failed", "This link expired — try again from Settings.", ok=False),
+            _page(
+                "Strava connection failed",
+                "This link expired — try again from Settings.",
+                ok=False,
+            ),
+            status_code=400,
+            headers=csp,
+        )
+    cookie_nonce = request.cookies.get(_COOKIE, "")
+    if not cookie_nonce or not secrets.compare_digest(cookie_nonce, state_nonce):
+        # No (or wrong) browser binding: someone else started this consent
+        # URL. Never bind their Strava account to this app user.
+        return HTMLResponse(
+            _page(
+                "Strava connection failed",
+                "This consent link was opened in a different browser than "
+                "the one that started it. Go back to Settings and press "
+                "Connect Strava again.",
+                ok=False,
+            ),
             status_code=400,
             headers=csp,
         )
@@ -253,7 +357,7 @@ async def callback(
         expires_at=_expires_at(tokens.get("expires_at")),
     )
     await session.commit()
-    return HTMLResponse(
+    response = HTMLResponse(
         _page(
             "Strava connected",
             "You can close this tab and return to the app.",
@@ -261,6 +365,8 @@ async def callback(
         ),
         headers=csp,
     )
+    response.delete_cookie(_COOKIE, path="/")
+    return response
 
 
 def _page(title: str, message: str, *, ok: bool) -> str:

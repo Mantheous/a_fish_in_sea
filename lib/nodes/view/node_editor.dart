@@ -899,6 +899,9 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         return;
       }
       fitness = FitnessFacet(
+        // Preserve the stored provider: old goals saved as garmin must not
+        // flip just because the connector is Strava now.
+        provider: existing?.fitness?.provider ?? FitnessProvider.strava,
         metric: _fitnessMetric,
         targetValue: parsed,
       );

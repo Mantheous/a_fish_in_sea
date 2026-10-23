@@ -89,7 +89,14 @@ Node applyWorkoutActivity(
   Node node,
   List<FitnessActivity> activities,
 ) {
-  if (!node.isWorkout || node.hasReported || activities.isEmpty) return node;
+  // A running timer means the user is reporting this workout themselves:
+  // never stamp watch times under live tracking.
+  if (!node.isWorkout ||
+      node.hasReported ||
+      node.timerStartedAt != null ||
+      activities.isEmpty) {
+    return node;
+  }
   final day = node.schedule?.due ??
       node.schedule?.start ??
       node.actualStart ??

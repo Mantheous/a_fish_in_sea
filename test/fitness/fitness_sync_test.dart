@@ -94,6 +94,28 @@ void main() {
     expect(applyWorkoutActivity(task, const []).hasReported, isFalse);
   });
 
+  test('workout with a running timer stays unreported', () {
+    final task = Node(
+      id: 'n2c',
+      title: 'Live run',
+      createdAt: _day,
+      schedule: ScheduleFacet(due: _day),
+      isWorkout: true,
+      timerStartedAt: DateTime(2026, 10, 5, 6, 55),
+    );
+    final activity = FitnessActivity(
+      id: 'a2c',
+      type: 'run',
+      start: DateTime(2026, 10, 5, 7),
+      end: DateTime(2026, 10, 5, 7, 30),
+    );
+    // The user is tracking this themselves; a sync must not stamp the
+    // watch window underneath the live timer.
+    final untouched = applyWorkoutActivity(task, [activity]);
+    expect(untouched.hasReported, isFalse);
+    expect(untouched.actualStart, isNull);
+  });
+
   test('mocked sleep sample drives a sleep goal progress', () {
     final node = Node(
       id: 'n3',

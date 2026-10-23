@@ -52,11 +52,21 @@ def _mint(
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
-def _auth_url_state(client: TestClient, h: dict) -> str:
+def _start_flow(client: TestClient, h: dict) -> str:
+    """Run /auth_url -> /start and return the Strava `state` param.
+
+    /start is a top-level browser navigation: the test client keeps its
+    cookie jar, which is exactly the browser binding /callback checks.
+    """
     r = client.get("/api/fitness/auth_url", headers=h)
     assert r.status_code == 200, r.text
-    url = urllib.parse.urlparse(r.json()["url"])
-    return urllib.parse.parse_qs(url.query)["state"][0]
+    start_path = r.json()["startPath"]
+
+    started = client.get(start_path, follow_redirects=False)
+    assert started.status_code == 302, started.text
+    location = started.headers["location"]
+    assert location.startswith("https://www.strava.com/oauth/authorize?")
+    return urllib.parse.parse_qs(urllib.parse.urlparse(location).query)["state"][0]
 
 
 def test_review_token_cannot_touch_fitness(client: TestClient):
@@ -126,7 +136,7 @@ def test_connect_flow_stores_tokens_and_disconnects(
     )
     h = _register(client, "fit-jwt@example.com")
 
-    state = _auth_url_state(client, h)
+    state = _start_flow(client, h)
 
     async def fake_redeem(code: str, redirect_uri: str) -> dict:
         assert code == "the-code"
@@ -170,13 +180,69 @@ def test_callback_rejects_forged_state(client: TestClient, monkeypatch):
     monkeypatch.setenv("STRAVA_CLIENT_ID", "1234")
     monkeypatch.setenv("STRAVA_CLIENT_SECRET", "shh")
     h = _register(client, "fit-forged@example.com")
-    _auth_url_state(client, h)  # ensures credentials look fine
+    _start_flow(client, h)  # ensures credentials look fine
+    client.cookies.clear()
 
     cb = client.get(
         "/api/fitness/callback", params={"code": "x", "state": "not-a-jwt"}
     )
     assert cb.status_code == 400
     assert "expired" in cb.text.lower()
+
+
+def test_callback_requires_the_browser_that_started_the_flow(
+    client: TestClient, monkeypatch
+):
+    """An attacker-started consent link must not bind a victim's Strava.
+
+    Attacker mints a start URL on their own account and sends it to the
+    victim: the victim's browser approves in Strava, but the callback
+    arrives without the attacker's browser cookie, so nothing is stored.
+    """
+    monkeypatch.setenv("STRAVA_CLIENT_ID", "1234")
+    monkeypatch.setenv("STRAVA_CLIENT_SECRET", "shh")
+    victim = _register(client, "fit-victim@example.com")
+    attacker = _register(client, "fit-attacker@example.com")
+
+    # Attacker's start URL; the victim's browser is a different jar.
+    r = client.get("/api/fitness/auth_url", headers=attacker)
+    start_path = r.json()["startPath"]
+    started = client.get(start_path, follow_redirects=False)
+    state = urllib.parse.parse_qs(
+        urllib.parse.urlparse(started.headers["location"]).query
+    )["state"][0]
+
+    redeemed = {"called": False}
+
+    async def fake_redeem(code: str, redirect_uri: str) -> dict:
+        redeemed["called"] = True
+        return {"access_token": "at", "refresh_token": "rt"}
+
+    monkeypatch.setattr(strava, "redeem_code", fake_redeem)
+
+    # Victim's browser has no binding cookie.
+    client.cookies.clear()
+    cb = client.get(
+        "/api/fitness/callback", params={"code": "victim-code", "state": state}
+    )
+    assert cb.status_code == 400
+    assert "different browser" in cb.text.lower()
+    assert redeemed["called"] is False
+
+    assert client.get("/api/fitness/status", headers=victim).json()["connected"] is False
+    assert client.get("/api/fitness/status", headers=attacker).json()["connected"] is False
+
+
+def test_start_rejects_a_forged_token(client: TestClient):
+    r = client.get("/api/fitness/start", params={"token": "not-a-jwt"})
+    assert r.status_code == 400
+    assert "expired" in r.text.lower()
+
+
+def test_start_requires_a_token(client: TestClient):
+    r = client.get("/api/fitness/start")
+    assert r.status_code == 400
+    assert "settings" in r.text.lower()
 
 
 def test_activities_map_strava_payloads(client: TestClient, monkeypatch):
