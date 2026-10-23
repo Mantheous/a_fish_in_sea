@@ -481,6 +481,41 @@ void main() {
           FitnessMetric.activityMinutes);
     });
 
+    test('fitness provider tolerates old and unknown values', () {
+      final cubit = NodeCubit();
+      // Payload written by the old Garmin scaffold: stays garmin, never
+      // silently rewritten to the new connector on load.
+      final legacy = Node(
+        id: 'n5',
+        title: 'Run 30 min',
+        createdAt: _day,
+        fitness: const FitnessFacet(
+          provider: FitnessProvider.garmin,
+          metric: FitnessMetric.activityMinutes,
+          targetValue: 30,
+        ),
+      ).toJson();
+      expect(
+        cubit.fromJson({
+          'nodes': [legacy],
+        })?.single.fitness?.provider,
+        FitnessProvider.garmin,
+      );
+      // Unknown provider strings fall back instead of throwing.
+      final unknown = Map<String, dynamic>.from(legacy)
+        ..['fitness'] = {
+          'metric': 'activityMinutes',
+          'targetValue': 30,
+          'provider': 'renamed-watch',
+        };
+      expect(
+        cubit.fromJson({
+          'nodes': [unknown],
+        })?.single.fitness?.provider,
+        FitnessProvider.strava,
+      );
+    });
+
     test('applyJson with garbage does not throw', () {
       final cubit = NodeCubit();
       expect(() => cubit.applyJson({'nodes': 'not-a-list'}), returnsNormally);

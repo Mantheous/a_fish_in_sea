@@ -35,7 +35,7 @@ void main() {
     };
     final facet = FitnessFacet.fromJson(bad);
     expect(facet.metric, FitnessMetric.activityMinutes);
-    expect(facet.provider, FitnessProvider.garmin);
+    expect(facet.provider, FitnessProvider.strava);
   });
 
   test('mocked watch activity auto-reports a workout task', () {
@@ -94,6 +94,28 @@ void main() {
     expect(applyWorkoutActivity(task, const []).hasReported, isFalse);
   });
 
+  test('workout with a running timer stays unreported', () {
+    final task = Node(
+      id: 'n2c',
+      title: 'Live run',
+      createdAt: _day,
+      schedule: ScheduleFacet(due: _day),
+      isWorkout: true,
+      timerStartedAt: DateTime(2026, 10, 5, 6, 55),
+    );
+    final activity = FitnessActivity(
+      id: 'a2c',
+      type: 'run',
+      start: DateTime(2026, 10, 5, 7),
+      end: DateTime(2026, 10, 5, 7, 30),
+    );
+    // The user is tracking this themselves; a sync must not stamp the
+    // watch window underneath the live timer.
+    final untouched = applyWorkoutActivity(task, [activity]);
+    expect(untouched.hasReported, isFalse);
+    expect(untouched.actualStart, isNull);
+  });
+
   test('mocked sleep sample drives a sleep goal progress', () {
     final node = Node(
       id: 'n3',
@@ -150,6 +172,83 @@ void main() {
         fitnessActualByNodeId: {node.id: actual},
       )[node.id],
       closeTo(2 / 3, 1e-9),
+    );
+  });
+
+  test('goal actuals only count the goal day, not the whole window', () {
+    final goal = Node(
+      id: 'n5',
+      title: 'Run 30 min today',
+      createdAt: _day,
+      schedule: ScheduleFacet(due: _day),
+      fitness: const FitnessFacet(
+        metric: FitnessMetric.activityMinutes,
+        targetValue: 30,
+      ),
+    );
+    final activities = [
+      FitnessActivity(
+        id: 'today',
+        type: 'run',
+        start: DateTime(2026, 10, 5, 7),
+        end: DateTime(2026, 10, 5, 7, 30),
+      ),
+      FitnessActivity(
+        id: 'yesterday',
+        type: 'run',
+        start: DateTime(2026, 10, 4, 7),
+        end: DateTime(2026, 10, 4, 8),
+      ),
+    ];
+    expect(
+      fitnessActualForNodeOnDay(goal, activities, now: _day),
+      30,
+    );
+    // The loose helper still sums whatever it is handed.
+    expect(fitnessActualForNode(goal, activities), 90);
+
+    // Two goals on different days read different slices of the window.
+    final yesterdayGoal = Node(
+      id: 'n6',
+      title: 'Run 60 min',
+      createdAt: _day,
+      schedule: ScheduleFacet(due: DateTime(2026, 10, 4, 9)),
+      fitness: const FitnessFacet(
+        metric: FitnessMetric.activityMinutes,
+        targetValue: 60,
+      ),
+    );
+    final byId = fitnessActualsByNodeId(
+      [goal, yesterdayGoal],
+      activities,
+      now: _day,
+    );
+    expect(byId['n5'], 30);
+    expect(byId['n6'], 60);
+  });
+
+  test('sleep actuals match the goal day', () {
+    final goal = Node(
+      id: 'n7',
+      title: 'Sleep 8h',
+      createdAt: _day,
+      schedule: ScheduleFacet(due: _day),
+      fitness: const FitnessFacet(
+        metric: FitnessMetric.sleepMinutes,
+        targetValue: 480,
+      ),
+    );
+    expect(
+      fitnessActualsByNodeId(
+        [goal],
+        const [],
+        sleep: [
+          SleepSample(date: _day, minutes: 420),
+          SleepSample(date: DateTime(2026, 10, 4, 9), minutes: 300),
+        ],
+        now: _day,
+      )[goal.id],
+      420,
     );
   });
 }

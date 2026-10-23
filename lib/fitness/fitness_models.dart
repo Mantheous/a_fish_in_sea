@@ -1,8 +1,10 @@
 import 'package:equatable/equatable.dart';
 
-/// Watch provider. Garmin is the first (and currently only) provider;
-/// the enum leaves room for other watches without a schema break.
-enum FitnessProvider { garmin }
+/// Watch provider. Strava is the connector the server speaks: Garmin,
+/// Coros, Wahoo and Polar all push their workouts into Strava, and any
+/// Strava user can register a free API app. Garmin stays in the enum so
+/// facets stored by the old scaffold payloads still load.
+enum FitnessProvider { garmin, strava }
 
 /// What a fitness-backed goal measures. Sleep and activity were the two
 /// metrics the issue asked for: hours of sleep and counts/time of
@@ -21,7 +23,7 @@ class FitnessFacet extends Equatable {
   const FitnessFacet({
     required this.metric,
     required this.targetValue,
-    this.provider = FitnessProvider.garmin,
+    this.provider = FitnessProvider.strava,
   });
 
   FitnessFacet copyWith({
@@ -43,7 +45,7 @@ class FitnessFacet extends Equatable {
         targetValue: (json['targetValue'] as num?)?.toDouble() ?? 0.0,
         provider: FitnessProvider.values.firstWhere(
           (e) => e.name == json['provider'],
-          orElse: () => FitnessProvider.garmin,
+          orElse: () => FitnessProvider.strava,
         ),
       );
 
@@ -71,7 +73,7 @@ class FitnessActivity extends Equatable {
     required this.type,
     required this.start,
     required this.end,
-    this.provider = FitnessProvider.garmin,
+    this.provider = FitnessProvider.strava,
   });
 
   double get minutes =>
@@ -87,7 +89,7 @@ class FitnessActivity extends Equatable {
             DateTime.fromMillisecondsSinceEpoch(0),
         provider: FitnessProvider.values.firstWhere(
           (e) => e.name == json['provider'],
-          orElse: () => FitnessProvider.garmin,
+          orElse: () => FitnessProvider.strava,
         ),
       );
 

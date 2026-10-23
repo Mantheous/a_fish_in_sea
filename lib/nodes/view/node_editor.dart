@@ -531,7 +531,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                 dense: true,
                 title: const Text('Workout'),
                 subtitle: const Text(
-                    'Auto-report duration from the fitness app'),
+                    'Auto-report duration from synced Strava activities'),
                 value: _isWorkout,
                 onChanged: (v) => setState(() => _isWorkout = v),
               ),
@@ -540,7 +540,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                 dense: true,
                 title: const Text('Has fitness target'),
                 subtitle: const Text(
-                    'Sleep hours or activity time/count via Garmin'),
+                    'Activity time/count from Strava'),
                 value: _hasFitness,
                 onChanged: (v) => setState(() => _hasFitness = v),
               ),
@@ -550,9 +550,12 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                   decoration:
                       const InputDecoration(labelText: 'Measures'),
                   items: const [
+                    // Kept so goals saved by the old Garmin scaffold still
+                    // display their metric; Strava exposes no sleep data.
                     DropdownMenuItem(
                         value: FitnessMetric.sleepMinutes,
-                        child: Text('Sleep minutes')),
+                        enabled: false,
+                        child: Text('Sleep minutes (not available)')),
                     DropdownMenuItem(
                         value: FitnessMetric.activityMinutes,
                         child: Text('Activity minutes')),
@@ -896,6 +899,9 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         return;
       }
       fitness = FitnessFacet(
+        // Preserve the stored provider: old goals saved as garmin must not
+        // flip just because the connector is Strava now.
+        provider: existing?.fitness?.provider ?? FitnessProvider.strava,
         metric: _fitnessMetric,
         targetValue: parsed,
       );

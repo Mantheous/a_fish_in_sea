@@ -147,7 +147,7 @@ def create_app() -> FastAPI:
     app.include_router(plaid.router, prefix="/api")
     # Syllabus LLM extract (same open-proxy contract as Flask /api/ical).
     app.include_router(syllabus.router, prefix="/api")
-    # Garmin fitness proxy (first watch provider): /api/fitness/*.
+    # Strava fitness connector (watch workouts): /api/fitness/*.
     app.include_router(fitness.router, prefix="/api")
 
     _mount_web(app)
