@@ -76,43 +76,25 @@ void main() {
 
     test('the report column replaces report appointments in `shown`', () {
       update(visibleDays: [day]);
-      // Plans keep the grid to themselves: no report tiles, no lanes.
+      // Plans keep the grid to themselves: no report tiles.
       expect(projection.shown.map((e) => e.id), ['e1', 'allday-1']);
-      expect(projection.reportRails.map((e) => e.id), [
-        reportLaneIdForDay(day),
-        '${reportPlaceholderIdPrefix}allday-1',
-      ]);
-      expect(
-        projection.reportBlocksByLaneId[reportLaneIdForDay(day)],
-        hasLength(1),
-      );
+      expect(projection.reportBlocksByDay.keys, [day]);
+      expect(projection.reportBlocksByDay[day], hasLength(1));
       expect(projection.reportById.keys, ['report:r1']);
       expect(projection.reportColorById, hasLength(1));
       expect(projection.shown.any((e) => isReportDisplayId(e.id)), isFalse);
     });
 
-    test('one lane per visible day', () {
+    test('one lane per visible day, even when a day has no reports', () {
       update(
         visibleDays: [
           for (var i = 0; i < 7; i++)
             DateTime(2026, 10, 5).add(Duration(days: i)),
         ],
       );
-      expect(
-        projection.reportRails.where((e) => isReportLaneId(e.id)),
-        hasLength(7),
-      );
-    });
-
-    test('all-day copies keep the rail header as tall as the plan one', () {
-      update(visibleDays: [day]);
-      final placeholders = projection.reportRails.where(
-        (e) => isReportPlaceholderId(e.id),
-      );
-      expect(placeholders, hasLength(1));
-      expect(placeholders.single.allDay, isTrue);
-      expect(placeholders.single.start, allDay.start);
-      expect(placeholders.single.end, allDay.end);
+      expect(projection.reportBlocksByDay, hasLength(7));
+      expect(projection.reportBlocksByDay[DateTime(2026, 10, 5)], hasLength(1));
+      expect(projection.reportBlocksByDay[DateTime(2026, 10, 6)], isEmpty);
     });
 
     test('month-style mode keeps report blocks as appointments', () {
@@ -122,8 +104,7 @@ void main() {
         'allday-1',
         'report:r1',
       ]);
-      expect(projection.reportBlocksByLaneId, isEmpty);
-      expect(projection.reportRails, isEmpty);
+      expect(projection.reportBlocksByDay, isEmpty);
     });
 
     test('blocks outside the visible grid hours are not placed in a lane', () {
@@ -150,11 +131,8 @@ void main() {
         visibleEndHour: 24,
         now: DateTime(2026, 10, 5, 12),
       );
-      expect(
-        projection.reportRails.where((e) => isReportLaneId(e.id)),
-        hasLength(1),
-      );
-      expect(projection.reportBlocksByLaneId[reportLaneIdForDay(day)], isEmpty);
+      expect(projection.reportBlocksByDay.keys, [day]);
+      expect(projection.reportBlocksByDay[day], isEmpty);
       expect(projection.reportById, isNotEmpty);
     });
   });

@@ -1,77 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
-/// Pairs the plan and report tracks inside each day cell while leaving the
-/// calendar's own headers and time grid in one shared position.
-class CalendarReportLayout extends StatefulWidget {
-  const CalendarReportLayout({
-    super.key,
-    required this.plans,
-    required this.reports,
-    required this.reportTopInset,
-    required this.dayCount,
-    required this.timeRulerWidth,
-    required this.isRtl,
-  });
-
-  final Widget plans;
-  final Widget? reports;
-  final double reportTopInset;
-  final int dayCount;
-  final double timeRulerWidth;
-  final bool isRtl;
-
-  @override
-  State<CalendarReportLayout> createState() => _CalendarReportLayoutState();
-}
-
-class _CalendarReportLayoutState extends State<CalendarReportLayout> {
-  late final OverlayEntry _calendarEntry = OverlayEntry(
-    builder: _calendarStack,
-  );
-
-  @override
-  void didUpdateWidget(CalendarReportLayout oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    _calendarEntry.markNeedsBuild();
-  }
-
-  @override
-  Widget build(BuildContext context) =>
-      Overlay(initialEntries: [_calendarEntry], clipBehavior: Clip.hardEdge);
-
-  Widget _calendarStack(BuildContext context) {
-    return Stack(
-      clipBehavior: Clip.hardEdge,
-      children: [
-        Positioned.fill(child: widget.plans),
-        if (widget.reports != null)
-          Positioned(
-            top: widget.reportTopInset,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: ClipPath(
-              clipper: _ReportColumnClipper(
-                dayCount: widget.dayCount,
-                timeRulerWidth: widget.timeRulerWidth,
-                isRtl: widget.isRtl,
-              ),
-              child: widget.reports!,
-            ),
-          ),
-      ],
-    );
-  }
-
-  @override
-  void dispose() {
-    _calendarEntry
-      ..remove()
-      ..dispose();
-    super.dispose();
-  }
-}
+import 'calendar_grid_tracker.dart';
 
 /// Compresses a plan appointment into the leading half of its day cell. The
 /// appointment's own collision layout is preserved, so overlapping plans
@@ -85,7 +15,7 @@ Widget planAppointmentInTrack({
   required double timeRulerWidth,
   required bool isRtl,
   required String eventId,
-  required Rect? timeGridViewportGlobal,
+  required PlanGridTracker? tracker,
   VoidCallback? onTap,
   ValueChanged<PointerSignalEvent>? onPointerSignal,
   GestureDragUpdateCallback? onVerticalDragUpdate,
@@ -97,15 +27,26 @@ Widget planAppointmentInTrack({
   if (visibleDays.isEmpty || !calendarWidth.isFinite || bounds.width <= 0) {
     return child;
   }
+  final cellWidth = (calendarWidth - timeRulerWidth) / visibleDays.length;
+  if (cellWidth <= 0) return child;
+  if (bounds.width > cellWidth + 2) {
+    // A multi-day appointment is one tile across several cells, so it
+    // can't be narrowed as a whole. Clip it to the plan half of every day
+    // it crosses instead: the report half of each day stays clear (and
+    // untappable as a plan), exactly as if each day had its own tile.
+    return ClipPath(
+      clipper: _PlanTrackClipper(
+        tileLeft: bounds.left,
+        dayCount: visibleDays.length,
+        cellWidth: cellWidth,
+        timeRulerWidth: timeRulerWidth,
+        isRtl: isRtl,
+      ),
+      child: child,
+    );
+  }
   final dayIndex = visibleDays.indexWhere((visible) => _sameDay(visible, day));
   if (dayIndex < 0) return child;
-
-  final cellWidth = (calendarWidth - timeRulerWidth) / visibleDays.length;
-  if (cellWidth <= 0 || bounds.width > cellWidth + 2) {
-    // A multi-day appointment can't be narrowed safely as one tile; the
-    // report half still masks its trailing half in the paired calendar.
-    return child;
-  }
   final column = isRtl ? visibleDays.length - 1 - dayIndex : dayIndex;
   final cellLeft = (isRtl ? 0.0 : timeRulerWidth) + column * cellWidth;
   final tileOffset = bounds.left - cellLeft;
@@ -124,7 +65,7 @@ Widget planAppointmentInTrack({
     shift: shift,
     width: bounds.width / 2,
     height: bounds.height,
-    timeGridViewportGlobal: timeGridViewportGlobal,
+    tracker: tracker,
     onTap: onTap,
     onPointerSignal: onPointerSignal,
     onVerticalDragUpdate: onVerticalDragUpdate,
@@ -143,7 +84,7 @@ class _PlanAppointmentOverlay extends StatefulWidget {
     required this.shift,
     required this.width,
     required this.height,
-    required this.timeGridViewportGlobal,
+    required this.tracker,
     required this.child,
     required this.onTap,
     required this.onPointerSignal,
@@ -158,7 +99,11 @@ class _PlanAppointmentOverlay extends StatefulWidget {
   final double shift;
   final double width;
   final double height;
-  final Rect? timeGridViewportGlobal;
+
+  /// Source of the grid viewport the shifted tile is clipped to. Listening
+  /// to it keeps the clip right when the viewport is first measured or the
+  /// window/panel resizes.
+  final PlanGridTracker? tracker;
   final Widget child;
   final VoidCallback? onTap;
   final ValueChanged<PointerSignalEvent>? onPointerSignal;
@@ -184,57 +129,63 @@ class _PlanAppointmentOverlayState extends State<_PlanAppointmentOverlay> {
       child: OverlayPortal(
         controller: _controller,
         overlayChildBuilder: (context) {
-          final overlayBox = Overlay.of(context).context.findRenderObject();
-          final viewport = widget.timeGridViewportGlobal;
-          final Rect? localViewport;
-          if (overlayBox is RenderBox &&
-              overlayBox.hasSize &&
-              viewport != null) {
-            final overlayOrigin = overlayBox.localToGlobal(Offset.zero);
-            localViewport = viewport.shift(-overlayOrigin);
-          } else {
-            localViewport = null;
-          }
-          return Positioned.fill(
-            child: ClipRect(
-              clipper: _TimeGridViewportClipper(localViewport),
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Positioned(
-                    left: 0,
-                    top: 0,
-                    child: CompositedTransformFollower(
-                      link: widget.link,
-                      showWhenUnlinked: false,
-                      targetAnchor: Alignment.topLeft,
-                      followerAnchor: Alignment.topLeft,
-                      offset: Offset(widget.shift, 0),
-                      child: SizedBox(
-                        width: widget.width,
-                        height: widget.height,
-                        child: Listener(
-                          onPointerSignal: widget.onPointerSignal,
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: widget.onTap,
-                            onVerticalDragUpdate: widget.onVerticalDragUpdate,
-                            onLongPressStart: widget.onLongPressStart,
-                            onLongPressMoveUpdate: widget.onLongPressMoveUpdate,
-                            onLongPressEnd: widget.onLongPressEnd,
-                            onLongPressCancel: widget.onLongPressCancel,
-                            child: widget.child,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          return AnimatedBuilder(
+            animation:
+                widget.tracker ?? const AlwaysStoppedAnimation<double>(0),
+            builder: (context, _) => _clippedTile(context),
           );
         },
         child: const SizedBox.expand(),
+      ),
+    );
+  }
+
+  Widget _clippedTile(BuildContext context) {
+    final overlayBox = Overlay.of(context).context.findRenderObject();
+    final viewport = widget.tracker?.viewportGlobal;
+    final Rect? localViewport;
+    if (overlayBox is RenderBox && overlayBox.hasSize && viewport != null) {
+      final overlayOrigin = overlayBox.localToGlobal(Offset.zero);
+      localViewport = viewport.shift(-overlayOrigin);
+    } else {
+      localViewport = null;
+    }
+    return Positioned.fill(
+      child: ClipRect(
+        clipper: _TimeGridViewportClipper(localViewport),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: 0,
+              top: 0,
+              child: CompositedTransformFollower(
+                link: widget.link,
+                showWhenUnlinked: false,
+                targetAnchor: Alignment.topLeft,
+                followerAnchor: Alignment.topLeft,
+                offset: Offset(widget.shift, 0),
+                child: SizedBox(
+                  width: widget.width,
+                  height: widget.height,
+                  child: Listener(
+                    onPointerSignal: widget.onPointerSignal,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: widget.onTap,
+                      onVerticalDragUpdate: widget.onVerticalDragUpdate,
+                      onLongPressStart: widget.onLongPressStart,
+                      onLongPressMoveUpdate: widget.onLongPressMoveUpdate,
+                      onLongPressEnd: widget.onLongPressEnd,
+                      onLongPressCancel: widget.onLongPressCancel,
+                      child: widget.child,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -254,41 +205,43 @@ class _TimeGridViewportClipper extends CustomClipper<Rect> {
       viewport != oldClipper.viewport;
 }
 
-class _ReportColumnClipper extends CustomClipper<Path> {
-  const _ReportColumnClipper({
+class _PlanTrackClipper extends CustomClipper<Path> {
+  const _PlanTrackClipper({
+    required this.tileLeft,
     required this.dayCount,
+    required this.cellWidth,
     required this.timeRulerWidth,
     required this.isRtl,
   });
 
+  /// Left edge of the appointment tile in calendar coordinates. The clip
+  /// path is in the tile's own coordinate space, so every column rect is
+  /// shifted by it.
+  final double tileLeft;
   final int dayCount;
+  final double cellWidth;
   final double timeRulerWidth;
   final bool isRtl;
 
   @override
   Path getClip(Size size) {
-    final gridWidth = size.width - timeRulerWidth;
-    if (dayCount <= 0 || gridWidth <= 0) return Path();
-    final cellWidth = gridWidth / dayCount;
     final path = Path();
     for (var index = 0; index < dayCount; index++) {
       final column = isRtl ? dayCount - 1 - index : index;
       final cellLeft = (isRtl ? 0.0 : timeRulerWidth) + column * cellWidth;
+      final trackLeft = isRtl ? cellLeft + cellWidth / 2 : cellLeft;
       path.addRect(
-        Rect.fromLTWH(
-          isRtl ? cellLeft : cellLeft + cellWidth / 2,
-          0,
-          cellWidth / 2,
-          size.height,
-        ),
+        Rect.fromLTWH(trackLeft - tileLeft, 0, cellWidth / 2, size.height),
       );
     }
     return path;
   }
 
   @override
-  bool shouldReclip(_ReportColumnClipper oldClipper) =>
+  bool shouldReclip(_PlanTrackClipper oldClipper) =>
+      tileLeft != oldClipper.tileLeft ||
       dayCount != oldClipper.dayCount ||
+      cellWidth != oldClipper.cellWidth ||
       timeRulerWidth != oldClipper.timeRulerWidth ||
       isRtl != oldClipper.isRtl;
 }

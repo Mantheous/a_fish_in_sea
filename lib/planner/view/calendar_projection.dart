@@ -26,26 +26,12 @@ class CalendarProjection {
   Map<String, List<ReportedEntry>>? _reportSource;
   DateTime? _reportTime;
   List<PlannerEvent> _reportEvents = const [];
-  List<PlannerEvent> _reportLanes = const [];
-  List<PlannerEvent> _reportPlaceholders = const [];
   Map<String, ReportBlock> reportById = const {};
   Map<String, Color> reportColorById = const {};
 
-  /// The report overlay's calendar (Plan + Report view, day/week): one lane
-  /// per visible day plus all-day copies that align the all-day row and mask
-  /// the report half of spanning plan tiles.
-  List<PlannerEvent> reportRails = const [];
-
-  /// All-day copies of visible all-day events, to keep the report calendar's
-  /// all-day row aligned and paint its trailing-half mask.
-  List<PlannerEvent> get reportPlaceholders => _reportPlaceholders;
-
-  List<PlannerEvent>? _railsLanes;
-  List<PlannerEvent>? _railsPlaceholders;
-
-  /// Report blocks per report-lane id: what the lane's tile renders as
-  /// time-positioned chips.
-  Map<String, List<ReportBlock>> reportBlocksByLaneId = const {};
+  /// Report blocks per visible day (keyed by midnight), for the Plan +
+  /// Report overlay: each day's lane paints its own list beside the plans.
+  Map<DateTime, List<ReportBlock>> reportBlocksByDay = const {};
   bool _laneMode = false;
   bool _reportModeOn = false;
   List<DateTime>? _laneDays;
@@ -187,25 +173,12 @@ class CalendarProjection {
             node: _nodeFor(event),
           ),
       };
-      _rebuildReportLanes(
+      _rebuildReportDays(
         blocks: blocks,
         days: visibleDays,
         startHour: visibleStartHour,
         endHour: visibleEndHour,
       );
-      // The report calendar keeps invisible copies of all-day events so its
-      // all-day row stays aligned with the plan calendar.
-      _reportPlaceholders = [
-        for (final event in _visible)
-          if (event.allDay)
-            PlannerEvent(
-              id: '$reportPlaceholderIdPrefix${event.id}',
-              subject: '',
-              start: event.start,
-              end: event.end,
-              allDay: true,
-            ),
-      ];
       _laneMode = laneMode;
       _reportModeOn = showReports;
       _laneDays = List<DateTime>.of(visibleDays);
@@ -216,19 +189,11 @@ class CalendarProjection {
       _reportSource = reports;
       _reportTime = now;
     }
-    // In lane mode the report calendar owns report blocks and lanes, so they
-    // stay out of `shown`; the month view keeps them as ordinary agenda chips.
+    // In lane mode the overlay owns report blocks, so they stay out of
+    // `shown`; the month view keeps them as ordinary agenda chips.
     final reportEvents = !showReports || _laneMode
         ? const <PlannerEvent>[]
         : _reportEvents;
-    if (!identical(_railsLanes, _reportLanes) ||
-        !identical(_railsPlaceholders, _reportPlaceholders)) {
-      _railsLanes = _reportLanes;
-      _railsPlaceholders = _reportPlaceholders;
-      reportRails = _laneMode
-          ? <PlannerEvent>[..._reportLanes, ..._reportPlaceholders]
-          : const <PlannerEvent>[];
-    }
     if (identical(_shownVisible, _visible) &&
         identical(_shownNodes, _nodeBlocks) &&
         identical(_shownReports, reportEvents) &&
@@ -266,7 +231,8 @@ class CalendarProjection {
     final tracking = <String>{};
     final assignees = <String, String>{};
     for (final event in shown) {
-      final color = _eventColors[event] ??
+      final color =
+          _eventColors[event] ??
           calendarEventColor(
             event,
             feedColors,
@@ -312,40 +278,33 @@ class CalendarProjection {
         !visibility.isHidden(groupIdForLeaf(leaf, feed));
   }
 
-  /// One report lane per visible day: a full-day placeholder appointment
-  /// whose tile the calendar page paints in the report half of the day cell.
-  ///
-  /// Blocks outside the grid's hour range are dropped from the lane (they
-  /// would paint nothing); the lane itself stays so every day in the report
-  /// view reads the same way.
-  void _rebuildReportLanes({
+  /// Groups report blocks by the visible days the overlay paints, dropping
+  /// blocks that fall entirely outside the grid's hour range (they would
+  /// paint nothing). Every visible day gets an entry — empty when it has no
+  /// reports — so the overlay always covers each day cell.
+  void _rebuildReportDays({
     required List<ReportBlock> blocks,
     required List<DateTime> days,
     required double startHour,
     required double endHour,
   }) {
     if (days.isEmpty) {
-      _reportLanes = const [];
-      reportBlocksByLaneId = const {};
+      reportBlocksByDay = const {};
       return;
     }
     final grouped = groupReportBlocksByDay(blocks);
-    final lanes = <PlannerEvent>[];
-    final byLane = <String, List<ReportBlock>>{};
+    final byDay = <DateTime, List<ReportBlock>>{};
     for (final visible in days) {
       final day = DateTime(visible.year, visible.month, visible.day);
-      final lane = buildReportLaneEvent(day);
-      lanes.add(lane);
       final gridStart = day.add(Duration(minutes: (startHour * 60).round()));
       final gridEnd = day.add(Duration(minutes: (endHour * 60).round()));
-      byLane[lane.id] = [
+      byDay[day] = [
         for (final block in grouped[day] ?? const <ReportBlock>[])
           if (block.end.isAfter(gridStart) && block.start.isBefore(gridEnd))
             block,
       ];
     }
-    _reportLanes = lanes;
-    reportBlocksByLaneId = byLane;
+    reportBlocksByDay = byDay;
   }
 
   bool _sameDays(List<DateTime> days, List<DateTime>? previous) {
@@ -362,5 +321,4 @@ Color calendarEventColor(
   Map<String, Color> feedColors, {
   ColorPrefs prefs = const ColorPrefs(),
   Node? node,
-}) =>
-    resolveEventColor(event, feedColors, prefs, node: node);
+}) => resolveEventColor(event, feedColors, prefs, node: node);
