@@ -742,6 +742,41 @@ void main() {
     expect(d.nodes.byId('t1')?.title, 'v1');
   });
 
+  test('signOut(clearLocalData: true) wipes local cubits; re-login restores',
+      () async {
+    final server = FakeSyncClient();
+    final d = _Device(server);
+    await d.auth.login('a@example.com', 'password123');
+    d.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
+    await d.engine.syncNow();
+    expect(server.store['nodes']?.containsKey('t1'), isTrue);
+
+    // Unsynced offline item, then sign out removing on-device data.
+    d.nodes.addNode(
+      Node(id: 't2', title: 'offline only', createdAt: DateTime(2026)),
+    );
+    d.engine.signOut(clearLocalData: true);
+    expect(d.nodes.byId('t1'), isNull);
+    expect(d.nodes.byId('t2'), isNull);
+    expect(d.plaid.state.isConnected, isFalse);
+    expect(d.meta.state.items, isEmpty);
+    expect(d.meta.state.lastEmail, isNull);
+    expect(
+      d.meta.state.accountSnapshots.containsKey('a@example.com'),
+      isTrue,
+    );
+
+    // Same account signs back in (AuthPage resets cursor/items): the
+    // sign-out snapshot backfills local state and the previously-unsynced
+    // item uploads instead of being lost with the wipe.
+    await d.auth.login('a@example.com', 'password123');
+    d.meta.reset();
+    await d.engine.syncNow();
+    expect(d.nodes.byId('t1')?.title, 'v1');
+    expect(d.nodes.byId('t2')?.title, 'offline only');
+    expect(server.store['nodes']?.containsKey('t2'), isTrue);
+  });
+
   test('returning to account A reseeds meta so conflicts merge instead of clobber',
       () async {
     final server = FakeSyncClient();

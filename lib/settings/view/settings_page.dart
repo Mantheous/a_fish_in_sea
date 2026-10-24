@@ -253,16 +253,46 @@ class _SyncSection extends StatelessWidget {
               },
             ),
             OutlinedButton.icon(
-              onPressed: () {
-                context.read<SyncEngine>().signOut();
-              },
+              onPressed: () => _confirmSignOut(context),
               icon: const Icon(Icons.logout),
-              label: const Text('Sign out (keeps on-device data)'),
+              label: const Text('Sign out…'),
             ),
           ],
         );
       },
     );
+  }
+
+  /// Explicit choice the account-switch fix needs: keeping leaves this
+  /// account's data on the device (isolated per account, restored on
+  /// re-login); removing wipes it locally (the cloud copy stays and
+  /// re-downloads on next sign-in).
+  Future<void> _confirmSignOut(BuildContext context) async {
+    final engine = context.read<SyncEngine>();
+    final choice = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Sign out?'),
+        content: const Text(
+          'Your tasks, events, finances and location history stay saved '
+          'in your cloud account either way. On a shared device, also '
+          'remove them from this device — signing back in downloads '
+          'them again.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Keep on this device'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Remove from this device'),
+          ),
+        ],
+      ),
+    );
+    if (choice == null) return;
+    engine.signOut(clearLocalData: choice);
   }
 
   String _formatAgo(DateTime t) {
