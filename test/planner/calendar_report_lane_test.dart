@@ -527,6 +527,140 @@ void main() {
       expect(updated.end, end);
     });
 
+    testWidgets('bottom handle of a report past midnight moves the visible edge', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final reporting = context.read<ReportingCubit>();
+      final now = DateTime.now();
+      final day = DateTime(now.year, now.month, now.day);
+      final start = DateTime(now.year, now.month, now.day, 23);
+      // The tracked session ran into the next morning: the lane draws the
+      // chip clipped at midnight, so its real end is off-grid.
+      final reportedEnd = DateTime(now.year, now.month, now.day + 1, 1, 30);
+      calendar.addEvent(
+        PlannerEvent(
+          id: 'e1',
+          subject: 'Event e1',
+          start: start,
+          end: start.add(const Duration(minutes: 30)),
+        ),
+      );
+      reporting.upsertEntry(
+        day,
+        _accepted(
+          id: 'r1',
+          eventId: 'e1',
+          start: start,
+          end: reportedEnd,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final rail = find.byType(ReportLaneView);
+      final railScroll = Scrollable.maybeOf(tester.element(rail))!;
+      railScroll.position.jumpTo(railScroll.position.maxScrollExtent);
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final chip = find.byKey(const ValueKey('report-chip:report:r1'));
+      await tester.tap(chip);
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      final before = tester.getRect(chip);
+
+      await tester.drag(
+        reportHandle('Drag to adjust report end'),
+        const Offset(0, -40),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final updated = reporting.entriesForDay(day).single;
+      expect(updated.start, start);
+      expect(updated.end.isBefore(reportedEnd), isTrue);
+      // The chip must shrink with the committed value instead of staying
+      // pinned at the grid bottom.
+      final after = tester.getRect(chip);
+      expect(after.bottom, lessThan(before.bottom - 10));
+      expect(after.top, closeTo(before.top, 1));
+
+      // Repeated adjustments can't pile up Undo prompts: the prompt is gone
+      // a couple of seconds after it appears.
+      expect(find.textContaining('Reported time updated'), findsOneWidget);
+      expect(
+        tester.widget<SnackBar>(find.byType(SnackBar)).duration,
+        const Duration(seconds: 2),
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.textContaining('Reported time updated'), findsNothing);
+    });
+
+    testWidgets('dragging a clipped report end outward commits nothing', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final reporting = context.read<ReportingCubit>();
+      final now = DateTime.now();
+      final day = DateTime(now.year, now.month, now.day);
+      final start = DateTime(now.year, now.month, now.day, 23);
+      final reportedEnd = DateTime(now.year, now.month, now.day + 1, 1, 30);
+      calendar.addEvent(
+        PlannerEvent(
+          id: 'e1',
+          subject: 'Event e1',
+          start: start,
+          end: start.add(const Duration(minutes: 30)),
+        ),
+      );
+      reporting.upsertEntry(
+        day,
+        _accepted(
+          id: 'r1',
+          eventId: 'e1',
+          start: start,
+          end: reportedEnd,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final rail = find.byType(ReportLaneView);
+      final railScroll = Scrollable.maybeOf(tester.element(rail))!;
+      railScroll.position.jumpTo(railScroll.position.maxScrollExtent);
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final chip = find.byKey(const ValueKey('report-chip:report:r1'));
+      await tester.tap(chip);
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      await tester.drag(
+        reportHandle('Drag to adjust report end'),
+        const Offset(0, 60),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      // The chip already stops at midnight; extending past it is invisible,
+      // so it must not silently rewrite the stored end or claim an update.
+      final updated = reporting.entriesForDay(day).single;
+      expect(updated.end, reportedEnd);
+      expect(find.textContaining('Reported time updated'), findsNothing);
+    });
+
     testWidgets('live report has no resize handles while recording', (
       tester,
     ) async {

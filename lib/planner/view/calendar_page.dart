@@ -37,6 +37,7 @@ import 'calendar_report_layout.dart';
 import 'calendar_report_lane.dart';
 import 'calendar_scroll_sync.dart';
 import 'calendar_side_panel.dart';
+import 'calendar_snackbars.dart';
 import 'calendar_tile_metrics.dart';
 import 'event_editor.dart';
 import 'feed_manager.dart';
@@ -1547,6 +1548,7 @@ class _CalendarPageState extends State<CalendarPage> {
       return;
     }
     final undoCubit = context.read<UndoCubit>();
+    final messenger = ScaffoldMessenger.of(context);
     // A committed move is newer than the open edit form (native drag path):
     // drop its stale preview so the tile shows the committed times.
     // Callers repaint after this returns.
@@ -1569,28 +1571,25 @@ class _CalendarPageState extends State<CalendarPage> {
           ),
         ),
       );
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_movedText(updated)),
-          action: SnackBarAction(label: 'Undo', onPressed: undoCubit.undo),
-        ),
+      showCalendarUndoSnackBar(
+        messenger: messenger,
+        message: _movedText(updated),
+        onUndo: undoCubit.undo,
       );
       return;
     }
     final calendarCubit = context.read<CalendarCubit>();
     final nodesCubit = context.read<NodeCubit>();
-    final messenger = ScaffoldMessenger.of(context);
     NodeEventSync.rescheduleLinkedEvent(calendarCubit, nodesCubit, updated);
     if (updated.reminderMinutesBefore == null) {
       unawaited(EventReminderService.cancelReminder(updated.id));
     } else {
       unawaited(EventReminderService.scheduleReminder(updated));
     }
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(_movedText(updated)),
-        action: SnackBarAction(label: 'Undo', onPressed: undoCubit.undo),
-      ),
+    showCalendarUndoSnackBar(
+      messenger: messenger,
+      message: _movedText(updated),
+      onUndo: undoCubit.undo,
     );
     if (!previous.isFromFeed) return;
     // Optimistic: the new time is already applied above so the drop
@@ -1942,24 +1941,25 @@ class _CalendarPageState extends State<CalendarPage> {
       if (adjusted) {
         final undo = context.read<UndoCubit>();
         final messenger = ScaffoldMessenger.of(context);
-        messenger.showSnackBar(
-          SnackBar(
-            content: Text(
+        showCalendarUndoSnackBar(
+          messenger: messenger,
+          message:
               'Reported time updated · '
               '${_calendarTimeFormat.format(start)} – '
               '${_calendarTimeFormat.format(end)}',
-            ),
-            action: SnackBarAction(label: 'Undo', onPressed: undo.undo),
-          ),
+          onUndo: undo.undo,
         );
       }
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Couldn’t adjust that report — please try again.'),
-        ),
-      );
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Couldn’t adjust that report — please try again.'),
+            duration: Duration(seconds: 2),
+          ),
+        );
     }
   }
 
