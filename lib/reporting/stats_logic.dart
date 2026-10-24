@@ -332,7 +332,7 @@ class GoalRangeReport {
   final int ankiGoalCount;
 
   /// Automated goals present in the range. Their readings need the task,
-  /// transaction, and fitness stores, so the range report only counts
+  /// and transaction stores, so the range report only counts
   /// them instead of folding them into the checklist ratio.
   final int automatedGoalCount;
 

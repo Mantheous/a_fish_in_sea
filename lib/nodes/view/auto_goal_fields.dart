@@ -14,11 +14,10 @@ class AutoGoalFields extends StatefulWidget {
   final AutoFacet? value;
   final ValueChanged<AutoFacet?> onChanged;
 
-  /// Existing homework classes, activity types, and transaction
-  /// categories, offered as chips. Members missing from the options are
-  /// still rendered so a stale selection never disappears silently.
+  /// Existing homework classes and transaction categories, offered as
+  /// chips. Members missing from the options are still rendered so a stale
+  /// selection never disappears silently.
   final List<String> classOptions;
-  final List<String> activityOptions;
   final List<String> moneyCategoryOptions;
 
   const AutoGoalFields({
@@ -26,7 +25,6 @@ class AutoGoalFields extends StatefulWidget {
     required this.value,
     required this.onChanged,
     this.classOptions = const [],
-    this.activityOptions = const [],
     this.moneyCategoryOptions = const [],
   });
 
@@ -119,7 +117,7 @@ class _AutoGoalFieldsState extends State<AutoGoalFields> {
           dense: true,
           title: const Text('Automated goal'),
           subtitle: const Text(
-            'Measure progress from tasks, calendar, fitness, or money '
+            'Measure progress from tasks, calendar, or money '
             'instead of only checking it off.',
           ),
           value: facet != null,
@@ -304,14 +302,6 @@ class _AutoGoalFieldsState extends State<AutoGoalFields> {
               ),
             ],
           ],
-          if (facet.source == AutoSource.activities)
-            _ChipPicker(
-              label: 'Activity types',
-              emptyLabel: 'Sync Strava to pick activity types.',
-              options: widget.activityOptions,
-              selected: facet.activityTypes,
-              onChanged: (types) => _emit(facet.copyWith(activityTypes: types)),
-            ),
           if (facet.source == AutoSource.money)
             _ChipPicker(
               label: 'Categories',

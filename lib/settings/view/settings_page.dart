@@ -15,7 +15,6 @@ import 'package:a_fish_in_sea/reporting/service/location_service.dart';
 import 'package:a_fish_in_sea/reporting/view/places_sheet.dart';
 import 'package:a_fish_in_sea/settings/view/api_tokens_section.dart';
 import 'package:a_fish_in_sea/settings/view/colors_page.dart';
-import 'package:a_fish_in_sea/settings/view/fitness_section.dart';
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
 import 'package:a_fish_in_sea/sync/sync_engine.dart';
 import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
@@ -144,13 +143,6 @@ class _SettingsPageState extends State<SettingsPage> {
                 'add-on; browsers go through the app server instead — '
                 'sign in, then test below.',
             child: _AnkiSection(),
-          ),
-          const _SettingsSection(
-            title: 'Fitness watches',
-            subtitle: 'Connect Strava (Garmin, Coros, Wahoo, and Polar all '
-                'push their workouts there) to fill workout tasks and '
-                'activity goals.',
-            child: FitnessSection(),
           ),
         ],
       ),

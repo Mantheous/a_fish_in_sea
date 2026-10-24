@@ -4,7 +4,7 @@ import '../model/node.dart';
 
 /// Human wording for automated-goal readings. Kept apart from the
 /// evaluator so tiles, the editor, and tests share one vocabulary without
-/// pulling transaction/fitness types into the formatting path.
+/// pulling transaction types into the formatting path.
 String autoPeriodLabel(AutoFacet facet) => switch (facet.period) {
   TimeScale.daily => 'today',
   TimeScale.weekly => 'this week',
@@ -46,9 +46,6 @@ String describeAutoGoal(AutoFacet facet) {
   }
   if (facet.source == AutoSource.tasks && facet.classKeys.isNotEmpty) {
     parts.add(facet.classKeys.join(', '));
-  }
-  if (facet.source == AutoSource.activities && facet.activityTypes.isNotEmpty) {
-    parts.add(facet.activityTypes.join(', '));
   }
   if (facet.source == AutoSource.money && facet.moneyCategories.isNotEmpty) {
     parts.add(facet.moneyCategories.join(', '));

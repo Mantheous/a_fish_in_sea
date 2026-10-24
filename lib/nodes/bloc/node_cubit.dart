@@ -692,8 +692,6 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
           ),
           recurrence: n.recurrence,
           auto: n.auto,
-          fitness: n.fitness,
-          isWorkout: n.isWorkout,
           rule: n.rule,
           instanceOfId: n.instanceOfId == null
               ? null

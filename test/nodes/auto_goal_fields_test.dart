@@ -17,7 +17,6 @@ void main() {
               child: AutoGoalFields(
                 value: value,
                 classOptions: const ['Physics'],
-                activityOptions: const ['Run'],
                 moneyCategoryOptions: const ['Food'],
                 onChanged: (next) => setState(() => value = next),
               ),
@@ -56,10 +55,11 @@ void main() {
 
   testWidgets('source swap keeps only compatible metrics', (tester) async {
     AutoFacet? value = const AutoFacet(
-      source: AutoSource.activities,
-      metric: AutoMetric.days,
-      target: 5,
-      activityTypes: ['Run'],
+      source: AutoSource.tasks,
+      metric: AutoMetric.percentDone,
+      target: 100,
+      homeworkOnly: true,
+      classKeys: ['Physics'],
     );
     await tester.pumpWidget(
       MaterialApp(
@@ -68,6 +68,7 @@ void main() {
             builder: (context, setState) => SingleChildScrollView(
               child: AutoGoalFields(
                 value: value,
+                classOptions: const ['Physics'],
                 onChanged: (next) => setState(() => value = next),
               ),
             ),
@@ -76,12 +77,12 @@ void main() {
       ),
     );
 
-    expect(find.text('Run'), findsOneWidget);
-    expect(find.textContaining('Activities (Strava)'), findsWidgets);
+    expect(find.text('Physics'), findsOneWidget);
+    expect(find.textContaining('Tasks & calendar'), findsWidgets);
 
-    // Switch to money: amount is offered and the stale activity type is
-    // irrelevant to the new selector.
-    await tester.tap(find.text('Activities (Strava)'));
+    // Switch to money: amount is offered and the task-only filters are
+    // dropped from the visible form.
+    await tester.tap(find.text('Tasks & calendar'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Money (transactions)').last);
     await tester.pumpAndSettle();

@@ -1,6 +1,5 @@
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
-import 'package:a_fish_in_sea/fitness/fitness_models.dart';
 
 import '../model/node.dart';
 import 'auto_goal_format.dart';
@@ -103,7 +102,7 @@ class AutoGoalReading {
   /// Whether the target direction is met.
   final bool satisfied;
 
-  /// Contributing rows: tasks, activities, nights, or transactions.
+  /// Contributing rows: tasks or transactions.
   final int matched;
 
   final DateTime windowStart;
@@ -131,8 +130,6 @@ class AutoGoalReading {
     if (matched <= 0) return '';
     final noun = switch (facet.source) {
       AutoSource.tasks => matched == 1 ? 'task' : 'tasks',
-      AutoSource.activities => matched == 1 ? 'activity' : 'activities',
-      AutoSource.sleep => matched == 1 ? 'night' : 'nights',
       AutoSource.money => matched == 1 ? 'transaction' : 'transactions',
     };
     return '$matched $noun';
@@ -150,8 +147,6 @@ AutoGoalReading evaluateAutoGoal(
   required DateTime now,
   required List<Node> nodes,
   List<Transaction> transactions = const [],
-  List<FitnessActivity> activities = const [],
-  List<SleepSample> sleep = const [],
   DateTime? at,
 }) {
   final facet = goal.auto;
@@ -216,51 +211,6 @@ AutoGoalReading evaluateAutoGoal(
           // silently reading money.
           actual = 0;
       }
-    case AutoSource.activities:
-      final matching = [
-        for (final activity in activities)
-          if (window.contains(activity.start) &&
-              _activityMatches(facet, activity))
-            activity,
-      ];
-      matched = matching.length;
-      final days = {for (final a in matching) autoDay(a.start)};
-      switch (facet.metric) {
-        case AutoMetric.minutes:
-          actual = matching.fold<double>(0, (sum, a) => sum + a.minutes);
-        case AutoMetric.averageMinutes:
-          actual = days.isEmpty
-              ? 0
-              : matching.fold<double>(0, (sum, a) => sum + a.minutes) /
-                    days.length;
-        case AutoMetric.count:
-          actual = matching.length.toDouble();
-        case AutoMetric.days:
-          actual = days.length.toDouble();
-        case AutoMetric.percentDone:
-        case AutoMetric.amount:
-          actual = 0;
-      }
-    case AutoSource.sleep:
-      final nights = [
-        for (final sample in sleep)
-          if (window.contains(autoDay(sample.date))) sample,
-      ];
-      matched = nights.length;
-      final total = nights.fold<double>(0, (sum, s) => sum + s.minutes);
-      switch (facet.metric) {
-        case AutoMetric.minutes:
-          actual = total;
-        case AutoMetric.averageMinutes:
-          actual = nights.isEmpty ? 0 : total / nights.length;
-        case AutoMetric.count:
-          actual = nights.length.toDouble();
-        case AutoMetric.days:
-          actual = nights.map((s) => autoDay(s.date)).toSet().length.toDouble();
-        case AutoMetric.percentDone:
-        case AutoMetric.amount:
-          actual = 0;
-      }
     case AutoSource.money:
       final ids = facet.scope == AutoScope.subtree
           ? (_subtreeIds(goal.id, nodes)..add(goal.id))
@@ -312,8 +262,6 @@ Map<String, AutoGoalReading> autoReadingsForNodes(
   List<Node> nodes, {
   required DateTime now,
   List<Transaction> transactions = const [],
-  List<FitnessActivity> activities = const [],
-  List<SleepSample> sleep = const [],
 }) {
   return {
     for (final node in nodes)
@@ -323,8 +271,6 @@ Map<String, AutoGoalReading> autoReadingsForNodes(
           now: now,
           nodes: nodes,
           transactions: transactions,
-          activities: activities,
-          sleep: sleep,
         ),
   };
 }
@@ -416,14 +362,6 @@ List<Node> _tasksDueInCheckWindow(
           node.schedule!.due!.isBefore(end))
         node,
   ];
-}
-
-bool _activityMatches(AutoFacet facet, FitnessActivity activity) {
-  if (facet.activityTypes.isEmpty) return true;
-  final type = activity.type.toLowerCase();
-  return facet.activityTypes.any(
-    (raw) => type.contains(raw.trim().toLowerCase()),
-  );
 }
 
 bool _moneyMatches(AutoFacet facet, Transaction txn) {

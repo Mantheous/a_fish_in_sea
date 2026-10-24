@@ -5,8 +5,6 @@ import 'package:intl/intl.dart';
 import 'package:a_fish_in_sea/common/undo/undo_bar.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
-import 'package:a_fish_in_sea/fitness/bloc/fitness_cubit.dart';
-import 'package:a_fish_in_sea/fitness/fitness_sync.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
@@ -43,8 +41,8 @@ final _nodesDateFormat = DateFormat('EEE, MMM d');
 ///
 /// Generated occurrences always roll up (a daily habit otherwise shows a
 /// year of rows), and so does an unspecialized leaf carrying a due date or
-/// calendar block. Automated, financial, time-target, Anki, fitness,
-/// repeating, and legacy-derived nodes stay visible as goals. The rollup
+/// calendar block. Automated, financial, time-target, Anki, repeating,
+/// and legacy-derived nodes stay visible as goals. The rollup
 /// only collapses rendering — every task keeps its checkbox and editor.
 bool _isPlainTask(Node n) {
   if (n.isUnbounded) return false;
@@ -53,7 +51,6 @@ bool _isPlainTask(Node n) {
       n.money != null ||
       n.effort != null ||
       n.anki != null ||
-      n.fitness != null ||
       n.recurrence != null ||
       n.calendarLink != null ||
       (n.rule != null && n.rule!.kind != NodeRuleKind.none)) {
@@ -87,17 +84,6 @@ class _NodesPageState extends State<NodesPage> {
   final GlobalKey _focusKey = GlobalKey();
   NavigationCubit? _nav;
   VoidCallback? _focusListener;
-
-  @override
-  void initState() {
-    super.initState();
-    // Fitness goals read synced Strava activities; check the connection
-    // once per session (the cubit no-ops after the first call).
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      context.read<FitnessCubit?>()?.refreshOnce();
-    });
-  }
 
   @override
   void didChangeDependencies() {
@@ -366,9 +352,6 @@ class _NodeBody extends StatelessWidget {
             if (n.reportedDuration != null)
               n.id: n.reportedDuration!.inMinutes.toDouble(),
         };
-        final fitness =
-            context.watch<FitnessCubit?>()?.state ?? const FitnessState();
-        final hasFitnessGoals = goals.any((n) => n.fitness != null);
         final now = DateTime.now();
         // Automated goals read the whole store, not just goal nodes:
         // homework imports are exactly what a homework goal must see.
@@ -376,20 +359,11 @@ class _NodeBody extends StatelessWidget {
           nodes,
           now: now,
           transactions: txns,
-          activities: fitness.activities,
-          sleep: fitness.sleep,
         );
         final progress = progressForest(
           goals,
           moneyActualByNodeId: moneyActualByNodeId,
           timeActualByNodeId: timeActualByNodeId,
-          fitnessActualByNodeId: hasFitnessGoals
-              ? fitnessActualsByNodeId(
-                  goals,
-                  fitness.activities,
-                  sleep: fitness.sleep,
-                )
-              : const {},
           autoProgressByNodeId: {
             for (final entry in autoReadings.entries)
               entry.key: entry.value.progress,

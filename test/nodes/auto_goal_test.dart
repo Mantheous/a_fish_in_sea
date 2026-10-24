@@ -1,6 +1,5 @@
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
-import 'package:a_fish_in_sea/fitness/fitness_models.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/model/node_relations.dart';
 import 'package:a_fish_in_sea/nodes/service/auto_goal.dart';
@@ -52,7 +51,6 @@ void main() {
         scope: AutoScope.all,
         homeworkOnly: true,
         classKeys: ['Physics', 'CS 101'],
-        activityTypes: ['Run'],
         moneyCategories: ['Food'],
         horizonDays: 2,
       );
@@ -345,40 +343,35 @@ void main() {
     });
   });
 
-  group('fitness, money, and sleep goals', () {
-    test('counts distinct run days, not activities', () {
+  group('completion and money goals', () {
+    test('counts distinct completed run days', () {
       final goal = _node(
         'runs',
         auto: const AutoFacet(
-          source: AutoSource.activities,
           metric: AutoMetric.days,
           target: 5,
-          activityTypes: ['Run'],
         ),
       );
-      final activities = [
-        for (final day in [12, 13, 14, 15, 16, 16])
-          FitnessActivity(
-            id: 'a$day',
-            type: day == 16 ? 'TrailRun' : 'Run',
-            start: _monday.add(Duration(days: day - 12, hours: 7)),
-            end: _monday.add(Duration(days: day - 12, hours: 8)),
+      // Five completed run occurrences, two on one day: the goal counts
+      // days, not duplicate activities.
+      final runs = [
+        for (final (i, day) in [12, 13, 14, 15, 16, 16].indexed)
+          _node(
+            'run$i',
+            parents: const ['runs'],
+            status: NodeStatus.done,
+            completedAt: _monday.add(Duration(days: day - 12, hours: 7)),
+            schedule: ScheduleFacet(
+              due: _monday.add(Duration(days: day - 12)),
+            ),
           ),
-        FitnessActivity(
-          id: 'ride',
-          type: 'Ride',
-          start: _monday.add(const Duration(days: 3, hours: 9)),
-          end: _monday.add(const Duration(days: 3, hours: 10)),
-        ),
       ];
       final reading = evaluateAutoGoal(
         goal,
         now: _sunday,
-        nodes: [goal],
-        activities: activities,
+        nodes: [goal, ...runs],
       );
       expect(reading.actual, 5);
-      expect(reading.matched, 6);
       expect(reading.progress, 1.0);
     });
 
@@ -440,29 +433,6 @@ void main() {
       expect(reading.progress, 1.0);
     });
 
-    test('sleep target is nightly, not weekly', () {
-      final goal = _node(
-        'sleep',
-        auto: const AutoFacet(
-          source: AutoSource.sleep,
-          metric: AutoMetric.minutes,
-          target: 480,
-          period: TimeScale.daily,
-        ),
-      );
-      final reading = evaluateAutoGoal(
-        goal,
-        now: DateTime(2026, 10, 14, 9),
-        nodes: [goal],
-        sleep: [
-          SleepSample(date: DateTime(2026, 10, 13), minutes: 450),
-          SleepSample(date: DateTime(2026, 10, 14), minutes: 430),
-        ],
-      );
-      expect(reading.actual, 430);
-      expect(reading.progress, closeTo(430 / 480, 1e-9));
-      expect(reading.satisfied, isFalse);
-    });
   });
 
   group('progress integration', () {

@@ -1,7 +1,6 @@
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
-import 'package:a_fish_in_sea/fitness/fitness_models.dart';
 import 'package:a_fish_in_sea/goals/model/goal.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/budget.dart';
@@ -498,66 +497,37 @@ void main() {
       expect(restoredStarred?.single.isFavorite, isTrue);
     });
 
-    test('NodeCubit loads pre-fitness nodes as plain non-workouts', () {
+    test('NodeCubit ignores retired workout/fitness payload keys', () {
       final cubit = NodeCubit();
-      final preFitness = Node(
+      // Payload written while the Strava/watch connector existed. The
+      // keys are gone from the model now, but loading an old device must
+      // still keep the node and every field it still understands.
+      final legacy = Node(
         id: 'n4',
         title: 'Sleep 8h',
         createdAt: _day,
-        fitness: const FitnessFacet(
-          metric: FitnessMetric.sleepMinutes,
-          targetValue: 480,
-        ),
-        isWorkout: true,
+        effort: const EffortFacet(targetMinutes: 60),
       ).toJson()
-        ..remove('fitness')
-        ..remove('isWorkout');
-      final restored = cubit.fromJson({
-        'nodes': [preFitness],
-      });
-      expect(restored?.single.fitness, isNull);
-      expect(restored?.single.isWorkout, isFalse);
-      final corrupt = Map<String, dynamic>.from(preFitness)
-        ..['fitness'] = {'metric': 'renamed-value', 'targetValue': 60};
-      final restoredCorrupt = cubit.fromJson({
-        'nodes': [corrupt],
-      });
-      expect(restoredCorrupt?.single.fitness?.metric,
-          FitnessMetric.activityMinutes);
-    });
-
-    test('fitness provider tolerates old and unknown values', () {
-      final cubit = NodeCubit();
-      // Payload written by the old Garmin scaffold: stays garmin, never
-      // silently rewritten to the new connector on load.
-      final legacy = Node(
-        id: 'n5',
-        title: 'Run 30 min',
-        createdAt: _day,
-        fitness: const FitnessFacet(
-          provider: FitnessProvider.garmin,
-          metric: FitnessMetric.activityMinutes,
-          targetValue: 30,
-        ),
-      ).toJson();
-      expect(
-        cubit.fromJson({
-          'nodes': [legacy],
-        })?.single.fitness?.provider,
-        FitnessProvider.garmin,
-      );
-      // Unknown provider strings fall back instead of throwing.
-      final unknown = Map<String, dynamic>.from(legacy)
+        ..['isWorkout'] = true
         ..['fitness'] = {
-          'metric': 'activityMinutes',
-          'targetValue': 30,
-          'provider': 'renamed-watch',
+          'metric': 'sleepMinutes',
+          'targetValue': 480,
+          'provider': 'garmin',
         };
+      final restored = cubit.fromJson({
+        'nodes': [legacy],
+      });
+      expect(restored?.single.id, 'n4');
+      expect(restored?.single.title, 'Sleep 8h');
+      expect(restored?.single.effort?.targetMinutes, 60);
+      // A corrupt retired payload is ignored just as safely.
+      final corrupt = Map<String, dynamic>.from(legacy)
+        ..['fitness'] = 'not-a-map';
       expect(
         cubit.fromJson({
-          'nodes': [unknown],
-        })?.single.fitness?.provider,
-        FitnessProvider.strava,
+          'nodes': [corrupt],
+        })?.single.id,
+        'n4',
       );
     });
 

@@ -4,24 +4,27 @@ import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 
 /// Where an automated goal's numbers come from.
 ///
-/// One facet covers every integration instead of adding a new
-/// `NodeRuleKind` (or a new facet) per metric: [tasks] reads the node DAG
-/// and its recorded/calendar time, [activities] and [sleep] read the
-/// fitness integration, and [money] reads imported transactions.
-enum AutoSource { tasks, activities, sleep, money }
+/// One facet covers every source instead of adding a new `NodeRuleKind`
+/// (or a new facet) per metric: [tasks] reads the node DAG and its
+/// recorded/calendar time, and [money] reads imported transactions.
+///
+/// A future health/watch integration plugs in here as another source; the
+/// evaluator's inputs are already injected, so adding one does not change
+/// persisted goals.
+enum AutoSource { tasks, money }
 
 /// How [AutoSource] rows are combined inside a period.
 enum AutoMetric {
   /// Sum of minutes (recorded time, else elapsed calendar-block time).
   minutes,
 
-  /// Mean minutes per active day / night in the period.
+  /// Mean minutes per active day in the period.
   averageMinutes,
 
-  /// Completed tasks, matching activities, or matching transactions.
+  /// Completed tasks or matching transactions.
   count,
 
-  /// Distinct local days with a completion or activity.
+  /// Distinct local days with a completion.
   days,
 
   /// Tasks source only: share of matching tasks that are done, 0–100.
@@ -53,9 +56,8 @@ enum AutoScope { subtree, all }
 /// - 15 h work / week: same with a work calendar series under the goal
 /// - under 30 h homework / week: tasks, minutes, weekly, all, homework
 /// - class-scoped homework: add [classKeys]
-/// - run 5 days / week: activities, days, weekly, [activityTypes] = Run
+/// - run 5 days / week: tasks, days, weekly, run occurrences under it
 /// - spend under $20 / week: money, amount, weekly, [moneyCategories]
-/// - 8 h sleep / night: sleep, minutes, daily
 /// - finish Monday's homework by Saturday: tasks, percentDone, weekly,
 ///   [horizonDays] = 2
 class AutoFacet extends Equatable {
@@ -66,7 +68,7 @@ class AutoFacet extends Equatable {
   final TimeScale period;
   final int? customPeriodDays;
 
-  /// Task/money scope; ignored by fitness sources.
+  /// Task/money scope.
   final AutoScope scope;
 
   /// Tasks source: keep only imported homework. [classKeys] narrows it
@@ -74,10 +76,6 @@ class AutoFacet extends Equatable {
   /// key them (`classLabel` first, then `classId`).
   final bool homeworkOnly;
   final List<String> classKeys;
-
-  /// Activities source: case-insensitive substrings matched against the
-  /// activity type (`run` matches Run, TrailRun and VirtualRun).
-  final List<String> activityTypes;
 
   /// Money source: case-insensitive substrings matched against the
   /// transaction category. Empty means every spending transaction.
@@ -97,7 +95,6 @@ class AutoFacet extends Equatable {
     this.scope = AutoScope.subtree,
     this.homeworkOnly = false,
     this.classKeys = const [],
-    this.activityTypes = const [],
     this.moneyCategories = const [],
     this.horizonDays,
   });
@@ -123,7 +120,6 @@ class AutoFacet extends Equatable {
     AutoScope? scope,
     bool? homeworkOnly,
     List<String>? classKeys,
-    List<String>? activityTypes,
     List<String>? moneyCategories,
     int? horizonDays,
     bool clearHorizonDays = false,
@@ -139,7 +135,6 @@ class AutoFacet extends Equatable {
     scope: scope ?? this.scope,
     homeworkOnly: homeworkOnly ?? this.homeworkOnly,
     classKeys: classKeys ?? this.classKeys,
-    activityTypes: activityTypes ?? this.activityTypes,
     moneyCategories: moneyCategories ?? this.moneyCategories,
     horizonDays: clearHorizonDays ? null : (horizonDays ?? this.horizonDays),
   );
@@ -168,7 +163,6 @@ class AutoFacet extends Equatable {
       scope: _enumOr(AutoScope.values, json['scope'], AutoScope.subtree),
       homeworkOnly: json['homeworkOnly'] == true,
       classKeys: _stringList(json['classKeys']),
-      activityTypes: _stringList(json['activityTypes']),
       moneyCategories: _stringList(json['moneyCategories']),
       horizonDays: rawHorizon is num ? rawHorizon.toInt().clamp(1, 3650) : null,
     );
@@ -184,7 +178,6 @@ class AutoFacet extends Equatable {
     'scope': scope.name,
     'homeworkOnly': homeworkOnly,
     'classKeys': classKeys,
-    'activityTypes': activityTypes,
     'moneyCategories': moneyCategories,
     'horizonDays': horizonDays,
   };
@@ -201,7 +194,6 @@ class AutoFacet extends Equatable {
     homeworkOnly,
     // Sorted for stable equality across restores.
     [...classKeys]..sort(),
-    [...activityTypes]..sort(),
     [...moneyCategories]..sort(),
     horizonDays,
   ];
@@ -210,8 +202,6 @@ class AutoFacet extends Equatable {
 /// Default metric when switching source in the editor.
 AutoMetric defaultMetricFor(AutoSource source) => switch (source) {
   AutoSource.tasks => AutoMetric.minutes,
-  AutoSource.activities => AutoMetric.days,
-  AutoSource.sleep => AutoMetric.minutes,
   AutoSource.money => AutoMetric.amount,
 };
 
@@ -224,25 +214,12 @@ List<AutoMetric> autoMetricsFor(AutoSource source) => switch (source) {
     AutoMetric.days,
     AutoMetric.percentDone,
   ],
-  AutoSource.activities => const [
-    AutoMetric.days,
-    AutoMetric.count,
-    AutoMetric.minutes,
-    AutoMetric.averageMinutes,
-  ],
-  AutoSource.sleep => const [
-    AutoMetric.minutes,
-    AutoMetric.averageMinutes,
-    AutoMetric.count,
-  ],
   AutoSource.money => const [AutoMetric.amount, AutoMetric.count],
 };
 
 /// Human labels shared by the editor and goal tiles.
 String autoSourceLabel(AutoSource source) => switch (source) {
   AutoSource.tasks => 'Tasks & calendar',
-  AutoSource.activities => 'Activities (Strava)',
-  AutoSource.sleep => 'Sleep (Strava)',
   AutoSource.money => 'Money (transactions)',
 };
 
