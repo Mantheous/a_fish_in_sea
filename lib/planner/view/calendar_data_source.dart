@@ -4,17 +4,24 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
-import '../model/feed.dart';
+import '../model/color_prefs.dart';
 import '../model/planner_event.dart';
-
-const int defaultPersonalEventColor = 0xFF6B8F8A;
+import 'event_colors.dart';
 
 class PlannerCalendarDataSource extends CalendarDataSource {
   List<PlannerEvent> _events;
   Map<String, Color> feedColors;
   Map<String, Color>? colorCache;
 
-  PlannerCalendarDataSource(this._events, this.feedColors, [this.colorCache]) {
+  /// Fallback color choices when an appointment has no cached color.
+  final ColorPrefs prefs;
+
+  PlannerCalendarDataSource(
+    this._events,
+    this.feedColors, [
+    this.colorCache,
+    this.prefs = const ColorPrefs(),
+  ]) {
     _events = _IndexedAppointments(_events);
     appointments = _events;
   }
@@ -129,20 +136,10 @@ class PlannerCalendarDataSource extends CalendarDataSource {
 
   @override
   Color getColor(int index) {
-    final cached = colorCache;
-    if (cached != null) {
-      final event = _events[index];
-      final hit = cached[event.id];
-      if (hit != null) return hit;
-    }
     final event = _events[index];
-    final label = event.classLabel;
-    if (label != null && label.isNotEmpty) return courseColor(label);
-    final eventColor = event.colorValue;
-    if (eventColor != null) return mutedCalendarColor(Color(eventColor));
-    final feedColor = feedColors[event.feedId];
-    if (feedColor != null) return mutedCalendarColor(feedColor);
-    return const Color(defaultPersonalEventColor);
+    final hit = colorCache?[event.id];
+    if (hit != null) return hit;
+    return resolveEventColor(event, feedColors, prefs);
   }
 }
 

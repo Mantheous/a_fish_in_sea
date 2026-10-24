@@ -3,6 +3,7 @@ import 'package:a_fish_in_sea/navigation/view/finances_hub.dart';
 import 'package:a_fish_in_sea/navigation/view/home_page.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_page.dart';
 import 'package:a_fish_in_sea/planner/view/tasks_page.dart';
+import 'package:a_fish_in_sea/settings/view/colors_page.dart';
 import 'package:a_fish_in_sea/settings/view/settings_page.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -54,6 +55,14 @@ void main() {
     await expectLater(
       find.byType(SettingsPage),
       matchesGoldenFile('app_screens_test.settings.png'),
+    );
+  });
+
+  testWidgets('colors page', (tester) async {
+    await pumpGoldenPage(tester, const ColorsPage());
+    await expectLater(
+      find.byType(ColorsPage),
+      matchesGoldenFile('app_screens_test.colors.png'),
     );
   });
 

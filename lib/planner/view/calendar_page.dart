@@ -24,6 +24,7 @@ import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/calendar_visibility_cubit.dart';
 import '../bloc/feed_cubit.dart';
+import '../model/color_prefs.dart';
 import '../model/event_reschedule.dart';
 import '../model/planner_event.dart';
 import '../bloc/settings_cubit.dart';
@@ -38,6 +39,7 @@ import 'calendar_report_lane.dart';
 import 'calendar_scroll_sync.dart';
 import 'calendar_side_panel.dart';
 import 'calendar_tile_metrics.dart';
+import 'event_colors.dart';
 import 'event_editor.dart';
 import 'feed_manager.dart';
 import 'task_tile_helpers.dart';
@@ -669,6 +671,7 @@ class _CalendarPageState extends State<CalendarPage> {
                     visibleStartHour: settings.dayStartHour,
                     visibleEndHour: settings.dayEndHour,
                     now: DateTime.now(),
+                    colorPrefs: settings.colors,
                     draft: wide && _panelMode == CalendarPanelMode.creating
                         ? _draftEvent
                         : null,
@@ -688,6 +691,7 @@ class _CalendarPageState extends State<CalendarPage> {
                       shown,
                       feedColors,
                       colorById,
+                      settings.colors,
                     );
                   } else if (!_dataSource!.matches(
                     shown,
@@ -763,6 +767,7 @@ class _CalendarPageState extends State<CalendarPage> {
                             details,
                             reportById: reportById,
                             colorById: colorById,
+                            colorPrefs: settings.colors,
                             remoteEditableFeedIds:
                                 _projection.remoteEditableFeedIds,
                             nodeById: _projection.nodeById,
@@ -916,6 +921,7 @@ class _CalendarPageState extends State<CalendarPage> {
     CalendarAppointmentDetails details, {
     required Map<String, ReportBlock> reportById,
     Map<String, Color>? colorById,
+    ColorPrefs colorPrefs = const ColorPrefs(),
     Set<String>? remoteEditableFeedIds,
     Map<String, Node>? nodeById,
     Map<String, Node>? nodeByEventId,
@@ -947,7 +953,8 @@ class _CalendarPageState extends State<CalendarPage> {
     );
     final report = reportById[event.id];
     final isDraft = event.id == calendarDraftEventId;
-    final baseColor = colorById?[event.id] ?? _eventColor(event, feedColors);
+    final baseColor =
+        colorById?[event.id] ?? _eventColor(event, feedColors, colorPrefs);
     var color = isDraft ? baseColor.withValues(alpha: 0.55) : baseColor;
     if (event.isTask && event.done) {
       color = color.withValues(alpha: 0.55);
@@ -1692,9 +1699,12 @@ class _CalendarPageState extends State<CalendarPage> {
     );
   }
 
-  Color _eventColor(PlannerEvent event, Map<String, Color> feedColors) {
-    return calendarEventColor(event, feedColors);
-  }
+  Color _eventColor(
+    PlannerEvent event,
+    Map<String, Color> feedColors, [
+    ColorPrefs prefs = const ColorPrefs(),
+  ]) =>
+      resolveEventColor(event, feedColors, prefs);
 
   Widget _buildSidePanel(int snap) {
     return CalendarSidePanel(

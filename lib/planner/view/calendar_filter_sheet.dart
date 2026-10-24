@@ -5,6 +5,7 @@ import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_visibility_cubit.dart';
 import '../bloc/feed_cubit.dart';
 import '../model/calendar_source.dart';
+import 'event_colors.dart';
 
 Future<void> showCalendarFilterSheet(BuildContext context) {
   return showModalBottomSheet<void>(
@@ -73,7 +74,11 @@ class _CalendarFilterBody extends StatelessWidget {
     final visibility = context.watch<CalendarVisibilityCubit>().state;
     final cubit = context.read<CalendarVisibilityCubit>();
 
-    final groups = buildCalendarTree(feeds: feeds, events: events);
+    final groups = buildCalendarTree(
+      feeds: feeds,
+      events: events,
+      prefs: colorPrefsOf(context),
+    );
     final feedById = {for (final f in feeds) f.id: f};
     final hiddenCount = events
         .where((e) => !cubit.isEventVisible(e, feedById))
