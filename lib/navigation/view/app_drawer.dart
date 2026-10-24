@@ -34,7 +34,7 @@ class AppDrawer extends StatelessWidget {
             NavigationDrawerDestination(
               icon: Icon(Icons.hub_outlined),
               selectedIcon: Icon(Icons.hub),
-              label: Text('Nodes'),
+              label: Text('Goals'),
             ),
             NavigationDrawerDestination(
               icon: Icon(Icons.bar_chart_outlined),

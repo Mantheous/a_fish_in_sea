@@ -12,7 +12,11 @@ double leafProgress(
   double timeActualMinutes = 0,
   double moneyActual = 0,
   double fitnessActual = 0,
+  double? autoProgress,
 }) {
+  // Automated goals report through their own evaluator; when the caller
+  // did not supply a reading the goal is unconfigured for this build.
+  if (node.auto != null) return (autoProgress ?? 0).clamp(0.0, 1.0);
   if (node.money != null) {
     final target = node.money!.effectiveTarget;
     if (target <= 0) return node.isDone ? 1.0 : 0.0;
@@ -74,6 +78,7 @@ Map<String, double> progressForest(
   Map<String, double> timeActualByNodeId = const {},
   Map<String, double> moneyActualByNodeId = const {},
   Map<String, double> fitnessActualByNodeId = const {},
+  Map<String, double> autoProgressByNodeId = const {},
 }) {
   final byId = {for (final n in nodes) n.id: n};
   final byParent = <String, List<Node>>{};
@@ -91,6 +96,11 @@ Map<String, double> progressForest(
     if (node.status == NodeStatus.failed ||
         node.status == NodeStatus.skipped) {
       return 0.0;
+    }
+    // An automated goal's value is a query, not its children: explicit
+    // automation wins over both leaf facets and subtree aggregation.
+    if (node.auto != null) {
+      return (autoProgressByNodeId[node.id] ?? 0).clamp(0.0, 1.0);
     }
     final kids = byParent[node.id] ?? const <Node>[];
     if (kids.isEmpty) {

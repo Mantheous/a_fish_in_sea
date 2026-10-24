@@ -273,9 +273,10 @@ class AssignmentTimeReport {
 // ── Non-time goals ─────────────────────────────────────────────────────
 
 /// What kind of goal a node is, for the goals summary.
-enum GoalKind { checklist, money, time, anki }
+enum GoalKind { checklist, automated, money, time, anki }
 
 GoalKind goalKindOf(Node node) {
+  if (node.auto != null) return GoalKind.automated;
   if (node.money != null) return GoalKind.money;
   if (node.effort != null) return GoalKind.time;
   if (node.anki != null) return GoalKind.anki;
@@ -284,6 +285,7 @@ GoalKind goalKindOf(Node node) {
 
 String goalKindLabel(GoalKind kind) => switch (kind) {
       GoalKind.checklist => 'Checklist',
+      GoalKind.automated => 'Automated',
       GoalKind.money => 'Money',
       GoalKind.time => 'Time',
       GoalKind.anki => 'Review',
@@ -329,6 +331,11 @@ class GoalRangeReport {
   final int ankiTarget;
   final int ankiGoalCount;
 
+  /// Automated goals present in the range. Their readings need the task,
+  /// transaction, and fitness stores, so the range report only counts
+  /// them instead of folding them into the checklist ratio.
+  final int automatedGoalCount;
+
   const GoalRangeReport({
     this.completed = const [],
     this.failed = 0,
@@ -345,6 +352,7 @@ class GoalRangeReport {
     this.ankiReviews = 0,
     this.ankiTarget = 0,
     this.ankiGoalCount = 0,
+    this.automatedGoalCount = 0,
   });
 
   double get checklistPct =>
@@ -362,7 +370,8 @@ class GoalRangeReport {
       checklistTotal > 0 ||
       effortGoalCount > 0 ||
       moneyGoalCount > 0 ||
-      ankiGoalCount > 0;
+      ankiGoalCount > 0 ||
+      automatedGoalCount > 0;
 }
 
 // ── Aggregation ────────────────────────────────────────────────────────
@@ -820,6 +829,7 @@ GoalRangeReport buildGoalRangeReport({
   var ankiReviews = 0;
   var ankiTarget = 0;
   var ankiGoalCount = 0;
+  var automatedGoalCount = 0;
 
   // A leaf is a node nothing else points at — "no children", not "no
   // parents". Building the parent set once keeps that O(n) instead of a
@@ -836,7 +846,9 @@ GoalRangeReport buildGoalRangeReport({
     // Finished goals keep their targets and logged progress: accumulate
     // before the done-skip below, so marking a goal Done does not erase
     // it from the totals.
-    if (kind == GoalKind.money) {
+    if (kind == GoalKind.automated) {
+      automatedGoalCount++;
+    } else if (kind == GoalKind.money) {
       final money = node.money!;
       moneyTarget += money.effectiveTarget;
       moneyActual += money.actualAmount ?? 0;
@@ -907,5 +919,6 @@ GoalRangeReport buildGoalRangeReport({
     ankiReviews: ankiReviews,
     ankiTarget: ankiTarget,
     ankiGoalCount: ankiGoalCount,
+    automatedGoalCount: automatedGoalCount,
   );
 }

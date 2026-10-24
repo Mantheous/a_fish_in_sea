@@ -402,6 +402,49 @@ void main() {
       expect(restored?[2].anki, isNull);
     });
 
+    test('NodeCubit keeps automated goals, tolerates corrupt auto facets', () {
+      final cubit = NodeCubit();
+      final good = Node(
+        id: 'auto1',
+        title: 'Scripture study',
+        createdAt: _day,
+        auto: const AutoFacet(
+          target: 420,
+          period: TimeScale.weekly,
+          homeworkOnly: true,
+        ),
+      ).toJson();
+      final restored = cubit.fromJson({
+        'nodes': [
+          good,
+          {...good, 'id': 'auto2', 'auto': 'garbage'},
+          {
+            ...good,
+            'id': 'auto3',
+            'auto': {'source': 'telepathy', 'target': 'lots'},
+          },
+          Map<String, dynamic>.from(good)
+            ..['id'] = 'auto4'
+            ..remove('auto'),
+        ],
+      });
+      expect(
+        restored?.map((n) => n.id),
+        ['auto1', 'auto2', 'auto3', 'auto4'],
+      );
+      expect(restored?[0].auto?.target, 420);
+      expect(restored?[0].auto?.homeworkOnly, isTrue);
+      // A wrong-shaped facet drops only itself; the node survives — a
+      // schema typo must never wipe the goal.
+      expect(restored?[1].auto, isNull);
+      expect(restored?[1].title, 'Scripture study');
+      // Unknown enum names and wrong-typed numbers fall back to defaults.
+      expect(restored?[2].auto?.source, AutoSource.tasks);
+      expect(restored?[2].auto?.target, 0);
+      // Payloads written before automation existed load as plain goals.
+      expect(restored?[3].auto, isNull);
+    });
+
     test('NodeCubit loads pre-flag nodes as bounded', () {
       final cubit = NodeCubit();
       final preFlag = Node(

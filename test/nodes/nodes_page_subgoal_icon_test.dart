@@ -56,7 +56,7 @@ void main() {
     await tester.pump();
 
     // Parent goals render as expandable rows in the All view.
-    await tester.tap(find.text('All'));
+    await tester.tap(find.text('Goal tree'));
     await tester.pump();
     expect(find.text('Parent'), findsOneWidget);
 
@@ -100,7 +100,7 @@ void main() {
     await tester.pump();
 
     // Parent goals render as expandable rows in the All view.
-    await tester.tap(find.text('All'));
+    await tester.tap(find.text('Goal tree'));
     await tester.pump();
     expect(find.text('Parent'), findsOneWidget);
 

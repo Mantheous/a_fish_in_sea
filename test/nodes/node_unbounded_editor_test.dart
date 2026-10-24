@@ -117,7 +117,7 @@ void main() {
     expect(saved.isUnbounded, isTrue);
     expect(saved.schedule, isNull);
     // Unbounded goals live in the tree, not the Leaves view.
-    await tester.tap(find.widgetWithText(ChoiceChip, 'All'));
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Goal tree'));
     await tester.pumpAndSettle();
     expect(find.text('unbounded'), findsOneWidget);
   });

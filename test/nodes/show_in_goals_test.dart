@@ -137,7 +137,7 @@ void main() {
 
       // Baseline: in the All tree the child hides inside its collapsed
       // parent until something expands it.
-      await tester.tap(find.text('All'));
+      await tester.tap(find.text('Goal tree'));
       await tester.pump();
       expect(find.text('Parent goal'), findsOneWidget);
       expect(find.text('Child task'), findsNothing);
@@ -173,7 +173,7 @@ void main() {
 
     expect(find.text('Child task'), findsOneWidget);
     final allChip = find.ancestor(
-      of: find.text('All'),
+      of: find.text('Goal tree'),
       matching: find.byType(ChoiceChip),
     );
     expect(allChip, findsOneWidget);
