@@ -3,6 +3,7 @@ import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/service/calendar_report.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_page.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_report_lane.dart';
+import 'package:a_fish_in_sea/planner/view/report_chip.dart';
 import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
 import 'package:a_fish_in_sea/reporting/model/reported_entry.dart';
 import 'package:flutter/gestures.dart';
@@ -488,6 +489,67 @@ void main() {
       expect(updated.end.isAfter(reportedEnd), isTrue);
       // The chip stays selected after the drag so it can be adjusted again.
       expect(reportHandle('Drag to adjust report end'), findsOneWidget);
+    });
+
+    testWidgets('a very short report chip stays tappable and grows handles', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final reporting = context.read<ReportingCubit>();
+      final now = DateTime.now();
+      final day = DateTime(now.year, now.month, now.day);
+      final start = DateTime(now.year, now.month, now.day, 9, 5);
+      calendar.addEvent(_event('e1', start));
+      // A two-minute report paints under one grid pixel: the chip must still
+      // keep a tappable hit area and grow its resize circles when selected.
+      reporting.upsertEntry(
+        day,
+        _accepted(
+          id: 'r1',
+          eventId: 'e1',
+          start: start,
+          end: start.add(const Duration(minutes: 2)),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final chip = find.byKey(const ValueKey('report-chip:report:r1'));
+      expect(chip, findsOneWidget);
+      // The painted bar stays proportional to the report…
+      expect(
+        tester.getSize(chip).height,
+        lessThan(reportChipMinHitHeight),
+      );
+      // …while the chip itself reserves a tappable, adjustable hit area.
+      expect(
+        tester.getSize(find.byType(ReportChip)).height,
+        greaterThanOrEqualTo(reportChipMinHitHeight),
+      );
+      expect(reportHandle('Drag to adjust report end'), findsNothing);
+
+      await tester.tap(chip);
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('Event details'), findsOneWidget);
+      expect(reportHandle('Drag to adjust report start'), findsOneWidget);
+      expect(reportHandle('Drag to adjust report end'), findsOneWidget);
+
+      await tester.drag(
+        reportHandle('Drag to adjust report end'),
+        const Offset(0, 80),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final updated = reporting.entriesForDay(day).single;
+      expect(updated.start, start);
+      expect(updated.end.isAfter(start), isTrue);
     });
 
     testWidgets('top handle moves the reported start earlier', (tester) async {

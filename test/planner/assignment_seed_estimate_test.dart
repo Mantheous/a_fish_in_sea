@@ -257,6 +257,7 @@ void main() {
           feedId: 'math290',
           schedule: ScheduleFacet(due: DateTime(2026, 10, 16, 23)),
         ),
+        now: DateTime(2026, 10, 16, 8),
         estimate: learned(45),
       );
       expect(seed.id, calendarDraftEventId);
@@ -283,6 +284,39 @@ void main() {
       expect(seed.start.isBefore(now), isFalse);
       expect(seed.start, DateTime(2026, 10, 16, 12));
       expect(seed.end, DateTime(2026, 10, 16, 12, 30));
+    });
+
+    test('an overdue due date still seeds a future follow-up', () {
+      final now = DateTime(2026, 10, 16, 8);
+      final seed = draftSeedForFollowUp(
+        Node(
+          id: 'n1',
+          title: 'Overdue quiz',
+          createdAt: DateTime(2026),
+          schedule: ScheduleFacet(due: DateTime(2026, 10, 11, 23)),
+        ),
+        now: now,
+        estimate: learned(30),
+      );
+      expect(seed.start.isBefore(now), isFalse);
+      expect(seed.start, DateTime(2026, 10, 16, 12));
+      expect(seed.end, DateTime(2026, 10, 16, 12, 30));
+    });
+
+    test('an overdue due date after noon rolls to tomorrow', () {
+      final now = DateTime(2026, 10, 16, 15);
+      final seed = draftSeedForFollowUp(
+        Node(
+          id: 'n1',
+          title: 'Overdue quiz',
+          createdAt: DateTime(2026),
+          schedule: ScheduleFacet(due: DateTime(2026, 10, 11, 23)),
+        ),
+        now: now,
+        estimate: learned(30),
+      );
+      expect(seed.start, DateTime(2026, 10, 17, 12));
+      expect(seed.end, DateTime(2026, 10, 17, 12, 30));
     });
 
     test('a zero-length block is not carried forward', () {

@@ -35,6 +35,7 @@ import 'calendar_data_source.dart';
 import 'calendar_projection.dart';
 import 'calendar_filter_sheet.dart';
 import 'calendar_report_layout.dart';
+import 'calendar_recording_banner.dart';
 import 'calendar_report_lane.dart';
 import 'calendar_scroll_sync.dart';
 import 'calendar_side_panel.dart';
@@ -212,14 +213,32 @@ class _CalendarPageState extends State<CalendarPage> {
     _view = context.read<SettingsCubit>().state.defaultCalendarView;
     _controller.view = _view;
     _controller.addPropertyChangedListener(_onCalendarControllerChanged);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final pending = context.read<CalendarDraftCubit>().takePending();
-      if (pending != null) {
-        _seedFromPageMount = true;
-        _openCreator(seed: pending);
-      }
-    });
+    // Claim a pending seed before the first build. The projection only puts
+    // a draft into the data source while the create flow is active, and a
+    // post-frame claim added the ghost through an incremental
+    // CalendarDataSourceAction.add after Syncfusion's initial layout — the
+    // appointment existed in the data source but never got painted, so a
+    // "schedule follow-up" landed on the calendar with no visible ghost.
+    final pending = _takePendingDraft();
+    if (pending != null) {
+      _seedFromPageMount = true;
+      final draft = _asDraft(pending);
+      _applyCreatorState(draft, seed: pending);
+      // The narrow-screen editor sheet needs a mounted Navigator; wide
+      // screens show the create panel from the first frame.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _isWide) return;
+        _openSheetCreator(_draftEvent ?? draft);
+      });
+    }
+  }
+
+  PlannerEvent? _takePendingDraft() {
+    try {
+      return context.read<CalendarDraftCubit>().takePending();
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
@@ -235,7 +254,11 @@ class _CalendarPageState extends State<CalendarPage> {
     }
     if (!_appliedPanelDefault) {
       _appliedPanelDefault = true;
-      _panelOpen = MediaQuery.of(context).size.width >= _panelDefaultBreakpoint;
+      // A pending seed claims the create flow in initState; the panel
+      // default must not close it on the first dependency pass.
+      _panelOpen =
+          _panelMode == CalendarPanelMode.creating ||
+          MediaQuery.of(context).size.width >= _panelDefaultBreakpoint;
     }
   }
 
@@ -638,7 +661,7 @@ class _CalendarPageState extends State<CalendarPage> {
               ),
             // Toggl-style running-entry bar: always visible while an event
             // timer is recording, with elapsed time and Stop.
-            _RecordingBannerSlot(
+            RecordingBannerSlot(
               onOpen: (event) {
                 PlannerEvent? live;
                 try {
@@ -2047,14 +2070,10 @@ class _CalendarPageState extends State<CalendarPage> {
     _controller.selectedDate = date;
   }
 
-  void _openCreator({
-    DateTime? initialDate,
-    TimeOfDay? initialTime,
-    PlannerEvent? seed,
-  }) {
-    final draft = seed != null
-        ? _asDraft(seed)
-        : _initialDraft(initialDate: initialDate, initialTime: initialTime);
+  /// Mutates the create-flow fields without a `setState`, so [initState] can
+  /// claim a pending seed before the first build (a setState there would be
+  /// redundant) while [_openCreator] can wrap it for the live-seed path.
+  void _applyCreatorState(PlannerEvent draft, {PlannerEvent? seed}) {
     // Remember the slot the user had selected before this create flow
     // took over the calendar selection, so a cancel can put it back.
     if (!_preCreateSelectionCaptured &&
@@ -2063,22 +2082,32 @@ class _CalendarPageState extends State<CalendarPage> {
       _preCreateSelectionCaptured = true;
     }
     _focusOnDraft(draft.start);
+    _selectedEventId = null;
+    _selectedReportId = null;
+    _panelMode = CalendarPanelMode.creating;
+    _panelOpen = true;
+    _draftEvent = draft;
+    _draftSeedSubject = seed?.subject;
+    _draftSeedNotes = seed?.notes;
+    _draftSeedLocation = seed?.location;
+    _draftSeedClassLabel = seed?.classLabel;
+    _draftSeedTaskId = seed?.taskId;
+  }
+
+  void _openCreator({
+    DateTime? initialDate,
+    TimeOfDay? initialTime,
+    PlannerEvent? seed,
+  }) {
+    final draft = seed != null
+        ? _asDraft(seed)
+        : _initialDraft(initialDate: initialDate, initialTime: initialTime);
     if (!_isWide) {
+      _applyCreatorState(draft, seed: seed);
       _openSheetCreator(draft);
       return;
     }
-    setState(() {
-      _selectedEventId = null;
-      _selectedReportId = null;
-      _panelMode = CalendarPanelMode.creating;
-      _panelOpen = true;
-      _draftEvent = draft;
-      _draftSeedSubject = seed?.subject;
-      _draftSeedNotes = seed?.notes;
-      _draftSeedLocation = seed?.location;
-      _draftSeedClassLabel = seed?.classLabel;
-      _draftSeedTaskId = seed?.taskId;
-    });
+    setState(() => _applyCreatorState(draft, seed: seed));
   }
 
   Future<void> _openSheetCreator(PlannerEvent draft) async {
@@ -2565,144 +2594,5 @@ class _CalendarPageState extends State<CalendarPage> {
       if (candidates.length == 1) return candidates.first;
     }
     return null;
-  }
-}
-
-/// Watches for a running event timer and shows [_RecordingBanner] while
-/// one is active. Collapses to nothing otherwise.
-class _RecordingBannerSlot extends StatelessWidget {
-  final ValueChanged<PlannerEvent> onOpen;
-
-  const _RecordingBannerSlot({required this.onOpen});
-
-  @override
-  Widget build(BuildContext context) {
-    // Select only the active tracking event: rebuilds only when it changes,
-    // not on every calendar emit (the old watch rebuilt on any event edit).
-    return BlocSelector<CalendarCubit, List<PlannerEvent>, PlannerEvent?>(
-      selector: (events) {
-        for (final e in events) {
-          if (e.isTracking) return e;
-        }
-        return null;
-      },
-      builder: (context, active) {
-        if (active == null || active.timerStartedAt == null) {
-          return const SizedBox.shrink();
-        }
-        return _RecordingBanner(event: active, onOpen: onOpen);
-      },
-    );
-  }
-}
-
-class _RecordingBanner extends StatefulWidget {
-  final PlannerEvent event;
-  final ValueChanged<PlannerEvent> onOpen;
-
-  const _RecordingBanner({required this.event, required this.onOpen});
-
-  @override
-  State<_RecordingBanner> createState() => _RecordingBannerState();
-}
-
-class _RecordingBannerState extends State<_RecordingBanner> {
-  Timer? _ticker;
-
-  @override
-  void initState() {
-    super.initState();
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() {});
-    });
-  }
-
-  @override
-  void dispose() {
-    _ticker?.cancel();
-    super.dispose();
-  }
-
-  static String _elapsed(DateTime since) {
-    final d = DateTime.now().difference(since);
-    final total = d.inSeconds < 0 ? 0 : d.inSeconds;
-    final h = total ~/ 3600;
-    final m = (total % 3600) ~/ 60;
-    final s = total % 60;
-    final mm = m.toString().padLeft(h > 0 ? 2 : 1, '0');
-    final ss = s.toString().padLeft(2, '0');
-    return h > 0 ? '$h:$mm:$ss' : '$mm:$ss';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final startedAt = widget.event.timerStartedAt ?? widget.event.start;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(10),
-        onTap: () => widget.onOpen(widget.event),
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-          decoration: BoxDecoration(
-            color: scheme.errorContainer,
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(
-            children: [
-              const Icon(
-                Icons.fiber_manual_record,
-                size: 14,
-                color: Color(0xFFFF5252),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Recording · ${_elapsed(startedAt)}',
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: scheme.onErrorContainer,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    Text(
-                      widget.event.subject,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: scheme.onErrorContainer,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              FilledButton.icon(
-                onPressed: () {
-                  try {
-                    NodeEventLink.stopEventTrackingAligned(
-                      context.read<NodeCubit>(),
-                      context.read<CalendarCubit>(),
-                      widget.event.id,
-                    );
-                  } catch (_) {}
-                },
-                style: FilledButton.styleFrom(
-                  backgroundColor: scheme.error,
-                  foregroundColor: scheme.onError,
-                  visualDensity: VisualDensity.compact,
-                ),
-                icon: const Icon(Icons.stop, size: 16),
-                label: const Text('Stop'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }

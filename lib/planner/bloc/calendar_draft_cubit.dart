@@ -193,19 +193,43 @@ PlannerEvent draftSeedForFollowUp(
     final unplaced = node.copyWith(
       schedule: existing.copyWith(clearStart: true, clearEnd: true),
     );
-    return draftSeedFromNode(
-      unplaced,
+    return _futureFollowUp(
+      draftSeedFromNode(
+        unplaced,
+        now: ref,
+        estimate: estimate,
+        snapMinutes: snapMinutes,
+      ),
+      ref,
+    );
+  }
+  return _futureFollowUp(
+    draftSeedFromNode(
+      node,
       now: ref,
       estimate: estimate,
       snapMinutes: snapMinutes,
-    );
-  }
-  return draftSeedFromNode(
-    node,
-    now: ref,
-    estimate: estimate,
-    snapMinutes: snapMinutes,
+    ),
+    ref,
   );
+}
+
+/// [draftSeedFromNode] anchors an unplaced seed on the node's due date, and
+/// an overdue assignment keeps that past date. A follow-up is by definition
+/// work scheduled next, so keep the seed's time-of-day and duration but move
+/// it onto the first day that is still ahead of [ref].
+PlannerEvent _futureFollowUp(PlannerEvent seed, DateTime ref) {
+  if (!seed.start.isBefore(ref)) return seed;
+  final duration = seed.end.difference(seed.start);
+  var start = DateTime(
+    ref.year,
+    ref.month,
+    ref.day,
+    seed.start.hour,
+    seed.start.minute,
+  );
+  if (start.isBefore(ref)) start = start.add(const Duration(days: 1));
+  return seed.copyWith(start: start, end: start.add(duration));
 }
 
 DateTime _atMinuteOfDay(DateTime day, int minute) =>

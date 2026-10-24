@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -250,18 +252,24 @@ class _ReportLaneViewState extends State<ReportLaneView> {
             final bottom = rawEnd.clamp(0, minutes).toDouble() * pxPerMinute;
             final visible = bottom - top;
             final chipHeight = visible < 3 ? 3.0 : visible;
+            // A very short report paints a thin bar, but its hit area stays
+            // tall enough to tap and to hold two resize circles. The bar
+            // stays centered on its real interval; only the grab area grows.
+            final hitHeight = math.max(chipHeight, reportChipMinHitHeight);
+            final hitTop = top - (hitHeight - chipHeight) / 2;
             chips.add(
               Positioned(
-                top: top,
+                top: hitTop,
                 left: lane * 8.0,
                 right: 0,
-                height: chipHeight,
+                height: hitHeight,
                 child: ReportChip(
                   block: block,
                   color: widget.colorFor(block),
                   timeLabel: reportChipTimeLabel(block),
                   selected: block.displayId == widget.selectedId,
                   adjustable: block.kind != ReportBlockKind.live,
+                  visualHeight: chipHeight,
                   onTap: () => widget.onTap(block),
                   onResizeStart: (top) =>
                       _beginHandleDrag(block, top, pxPerMinute),
