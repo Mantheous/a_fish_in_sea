@@ -5,8 +5,6 @@ import 'package:intl/intl.dart';
 import 'package:a_fish_in_sea/common/undo/undo_bar.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
-import 'package:a_fish_in_sea/fitness/bloc/fitness_cubit.dart';
-import 'package:a_fish_in_sea/fitness/fitness_sync.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
@@ -50,17 +48,6 @@ class _NodesPageState extends State<NodesPage> {
   final GlobalKey _focusKey = GlobalKey();
   NavigationCubit? _nav;
   VoidCallback? _focusListener;
-
-  @override
-  void initState() {
-    super.initState();
-    // Fitness goals read synced Strava activities; check the connection
-    // once per session (the cubit no-ops after the first call).
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      context.read<FitnessCubit?>()?.refreshOnce();
-    });
-  }
 
   @override
   void didChangeDependencies() {
@@ -328,20 +315,10 @@ class _NodeBody extends StatelessWidget {
             if (n.reportedDuration != null)
               n.id: n.reportedDuration!.inMinutes.toDouble(),
         };
-        final fitness =
-            context.watch<FitnessCubit?>()?.state ?? const FitnessState();
-        final hasFitnessGoals = goals.any((n) => n.fitness != null);
         final progress = progressForest(
           goals,
           moneyActualByNodeId: moneyActualByNodeId,
           timeActualByNodeId: timeActualByNodeId,
-          fitnessActualByNodeId: hasFitnessGoals
-              ? fitnessActualsByNodeId(
-                  goals,
-                  fitness.activities,
-                  sleep: fitness.sleep,
-                )
-              : const {},
         );
         final trimmed = query.trim();
         final visible = trimmed.isEmpty ? null : filterTreeIds(nodes, trimmed);

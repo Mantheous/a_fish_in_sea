@@ -8,7 +8,6 @@ export 'node_recurrence.dart';
 
 import 'package:a_fish_in_sea/common/time/planned_actual.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
-import 'package:a_fish_in_sea/fitness/fitness_models.dart';
 import 'package:a_fish_in_sea/planner/model/task_assignee.dart';
 
 /// Lifecycle of a node. Replaces the `done`/`failed` bool pairs on
@@ -502,15 +501,6 @@ class Node extends Equatable {
   final DateTime? timerStartedAt;
   final List<TaskAssignee> assignees;
 
-  /// Manual flag: a workout node auto-reports its duration from the
-  /// fitness app. Additive, defaults to false so old payloads load as
-  /// non-workouts.
-  final bool isWorkout;
-
-  /// Watch-backed target (sleep hours, activity time/count). Null means
-  /// untracked; old payloads without the key load as untracked.
-  final FitnessFacet? fitness;
-
   const Node({
     required this.id,
     required this.title,
@@ -540,8 +530,6 @@ class Node extends Equatable {
     this.actualEnd,
     this.timerStartedAt,
     this.assignees = const [],
-    this.isWorkout = false,
-    this.fitness,
   });
 
   bool get isTemplate => recurrence != null && instanceOfId == null;
@@ -639,9 +627,6 @@ class Node extends Equatable {
     DateTime? timerStartedAt,
     bool clearTimerStartedAt = false,
     List<TaskAssignee>? assignees,
-    bool? isWorkout,
-    FitnessFacet? fitness,
-    bool clearFitness = false,
   }) =>
       Node(
         id: id,
@@ -683,8 +668,6 @@ class Node extends Equatable {
             ? null
             : (timerStartedAt ?? this.timerStartedAt),
         assignees: assignees ?? this.assignees,
-        isWorkout: isWorkout ?? this.isWorkout,
-        fitness: clearFitness ? null : (fitness ?? this.fitness),
       );
 
   /// Mark one field as owned by this node (stops inheriting it from the
@@ -766,12 +749,6 @@ class Node extends Equatable {
       actualEnd: _tryTimerDate(json['actualEnd']),
       timerStartedAt: _tryTimerDate(json['timerStartedAt']),
       assignees: _assigneesFromJson(json['assignees']),
-      // Missing (pre-workout payloads) reads as a plain non-workout node.
-      isWorkout: json['isWorkout'] == true,
-      fitness: json['fitness'] is Map
-          ? _facetOrNull(() => FitnessFacet.fromJson(
-              Map<String, dynamic>.from(json['fitness'] as Map)))
-          : null,
     );
   }
 
@@ -806,8 +783,6 @@ class Node extends Equatable {
         'actualEnd': actualEnd?.toUtc().toIso8601String(),
         'timerStartedAt': timerStartedAt?.toUtc().toIso8601String(),
         'assignees': assignees.map((a) => a.toJson()).toList(),
-        'isWorkout': isWorkout,
-        'fitness': fitness?.toJson(),
       };
 
   @override
@@ -840,8 +815,6 @@ class Node extends Equatable {
         actualEnd,
         timerStartedAt,
         assignees,
-        isWorkout,
-        fitness,
       ];
 }
 

@@ -681,7 +681,6 @@ class DemoData {
 class DemoMocks {
   static bool googleConnected = true;
   static bool canvasConnected = true;
-  static bool stravaConnected = true;
   static String canvasHost = 'demo.instructure.com';
 
   /// User-created/edited Google events layered over [DemoData.feedEvents].
@@ -697,7 +696,6 @@ class DemoMocks {
   static void reset() {
     googleConnected = true;
     canvasConnected = true;
-    stravaConnected = true;
     canvasHost = 'demo.instructure.com';
     googleOverlay.clear();
     googleTombstones.clear();
