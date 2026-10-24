@@ -274,6 +274,27 @@ void main() {
       expect(calendar.byId('e1')?.isTracking, isFalse);
     });
 
+    test('completed task starts only when extra recording is allowed', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      calendar.addEvent(evt('e1', taskId: 'n1'));
+      nodes.addNode(taskNode('n1', calendarEventId: 'e1'));
+      NodeEventLink.toggleNodeDone(nodes, calendar, 'n1');
+      expect(nodes.byId('n1')?.isDone, isTrue);
+
+      NodeEventLink.startEventTracking(nodes, calendar, 'e1',
+          now: DateTime(2026, 10, 13, 8));
+      expect(nodes.byId('n1')?.isTracking, isFalse,
+          reason: 'the regular Start button stays disabled once done');
+
+      NodeEventLink.startEventTracking(nodes, calendar, 'e1',
+          now: DateTime(2026, 10, 13, 8, 5), allowCompleted: true);
+      expect(nodes.byId('n1')?.isTracking, isTrue,
+          reason: 'a report play records extra time on the finished task');
+      expect(nodes.byId('n1')?.isDone, isTrue,
+          reason: 'recording extra time must not reopen the task');
+    });
+
     test('plain events still record on the event', () {
       final nodes = NodeCubit();
       final calendar = CalendarCubit();

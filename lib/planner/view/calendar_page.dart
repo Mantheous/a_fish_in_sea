@@ -384,9 +384,10 @@ class _CalendarPageState extends State<CalendarPage> {
           startHour: startHour,
           endHour: endHour,
           isRtl: isRtl,
-          selectedId: _selectedReportId,
+          selectedId: _selectedReportBlock()?.displayId ?? _selectedReportId,
           snapMinutes: snapMinutes,
           onIntervalChanged: _adjustReportedInterval,
+          onRecord: _recordReport,
           colorFor: (block) =>
               _projection.reportColorById[block.displayId] ??
               const Color(defaultPersonalEventColor),
@@ -651,8 +652,8 @@ class _CalendarPageState extends State<CalendarPage> {
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
                 child: Text(
                   'Each day: plan on the left, report right beside it · '
-                  'tap a report, then drag its circles to adjust · '
-                  'red = recording now',
+                  'tap a report for details and ▶ to record it again · '
+                  'drag its circles to adjust · red = recording now',
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
@@ -1728,11 +1729,28 @@ class _CalendarPageState extends State<CalendarPage> {
   ]) =>
       resolveEventColor(event, feedColors, prefs);
 
+  /// Report block the panel should show: the selected chip, or — after a
+  /// recording starts/stops and the chip's display id changes kind — the
+  /// current block for the selected event.
+  ReportBlock? _selectedReportBlock() {
+    final reportId = _selectedReportId;
+    if (reportId == null) return null;
+    final direct = _projection.reportById[reportId];
+    if (direct != null) return direct;
+    final eventId = _selectedEventId;
+    if (eventId == null) return null;
+    for (final block in _projection.reportById.values) {
+      if (block.eventId == eventId) return block;
+    }
+    return null;
+  }
+
   Widget _buildSidePanel(int snap) {
     return CalendarSidePanel(
       mode: _panelMode,
       snapMinutes: snap,
       selectedEventId: _selectedEventId,
+      selectedReport: _selectedReportBlock(),
       draft: _draftEvent,
       seedSubject: _draftSeedSubject,
       seedNotes: _draftSeedNotes,
@@ -1753,6 +1771,7 @@ class _CalendarPageState extends State<CalendarPage> {
       onBack: _backFromPanel,
       onClose: _closeDrawer,
       onReport: _reportEvent,
+      onRecordReport: _recordReport,
     );
   }
 
@@ -1782,10 +1801,20 @@ class _CalendarPageState extends State<CalendarPage> {
           _selectedReportId = reportId;
         });
       }
+      final selectedReport = reportId == null
+          ? null
+          : _projection.reportById[reportId];
       showEventDetail(
         context,
         event: event,
         onReport: event.isTask ? () => _reportEvent(event) : null,
+        report: selectedReport,
+        onRecordReport: selectedReport == null
+            ? null
+            : () {
+                _recordReport(selectedReport);
+                Navigator.of(context).pop();
+              },
       );
       return;
     }
@@ -1929,13 +1958,7 @@ class _CalendarPageState extends State<CalendarPage> {
       );
     } catch (_) {}
     var eventId = entry?.eventId;
-    if (eventId == null) {
-      if (displayId.startsWith(reportTimerDisplayIdPrefix)) {
-        eventId = displayId.substring(reportTimerDisplayIdPrefix.length);
-      } else if (displayId.startsWith(reportLiveDisplayIdPrefix)) {
-        eventId = displayId.substring(reportLiveDisplayIdPrefix.length);
-      }
-    }
+    eventId ??= reportOwnerIdForDisplayId(displayId);
     if (eventId != null) {
       final event = calendar.byId(eventId);
       if (event != null) {
@@ -1994,6 +2017,77 @@ class _CalendarPageState extends State<CalendarPage> {
           ),
         );
     }
+  }
+
+  /// Starts another recording for the task behind a report chip. Works from
+  /// the chip's ▶ and from the selected-report card in the side panel; a
+  /// completed task records extra time without being reopened.
+  void _recordReport(ReportBlock block) {
+    if (block.kind == ReportBlockKind.live || !block.recordable) return;
+    final calendar = context.read<CalendarCubit>();
+    final ownerId = block.eventId ?? reportOwnerIdForDisplayId(block.displayId);
+    if (ownerId == null) return;
+    final event = calendar.byId(ownerId);
+    NodeCubit? nodes;
+    try {
+      nodes = context.read<NodeCubit>();
+    } catch (_) {}
+    String? nodeId = event == null ? ownerId : null;
+    if (event == null &&
+        (nodeId == null || nodes == null || nodes.byId(nodeId) == null)) {
+      return;
+    }
+
+    var started = false;
+    if (nodes != null && event != null) {
+      NodeEventLink.startEventTracking(
+        nodes,
+        calendar,
+        event.id,
+        allowCompleted: true,
+      );
+      final backing = event.isTask
+          ? NodeEventLink.backingNodeFor(nodes, calendar, event.id)
+          : null;
+      nodeId = backing?.id;
+      started =
+          (calendar.byId(event.id)?.isTracking ?? false) ||
+          (backing?.isTracking ?? false);
+    } else if (nodes != null) {
+      NodeEventLink.startNodeTracking(
+        nodes,
+        calendar,
+        nodeId!,
+        allowCompleted: true,
+      );
+      started = nodes.byId(nodeId)?.isTracking ?? false;
+    } else {
+      calendar.startTracking(ownerId);
+      started = calendar.byId(ownerId)?.isTracking ?? false;
+    }
+    if (!started || !mounted) return;
+
+    // Keep the panel's report card live when it was showing this report.
+    if (event != null && _selectedEventId == event.id) {
+      // Event-backed blocks keep their event id in the live display id even
+      // when the timer runs on the backing node.
+      final liveId = '$reportLiveDisplayIdPrefix${event.id}';
+      if (_selectedReportId != liveId) {
+        setState(() => _selectedReportId = liveId);
+      }
+    }
+    final title = block.title.trim().isEmpty
+        ? event?.subject.trim() ?? ''
+        : block.title.trim();
+    final messenger = ScaffoldMessenger.of(context);
+    final undo = context.read<UndoCubit>();
+    showCalendarUndoSnackBar(
+      messenger: messenger,
+      message: title.isEmpty
+          ? 'Recording another report…'
+          : 'Recording another report · $title',
+      onUndo: undo.undo,
+    );
   }
 
   PlannerEvent _asDraft(PlannerEvent event) => PlannerEvent(
