@@ -4,10 +4,17 @@ import '../service/calendar_report.dart';
 
 const _liveColor = Color(0xFFFF5252);
 
-/// One time-positioned report chip in the Plan + Report lane.
+/// Smallest vertical hit area a report chip gets. A short report (a few
+/// seconds, a zero-minute entry) otherwise paints a 1–3px bar that is
+/// impossible to tap, and the resize circles never appear because the chip
+/// measures shorter than their 12px floor.
+const double reportChipMinHitHeight = 20;
+
+/// One report block inside the Plan + Report lane.
 ///
-/// A selected (tapped) chip shows the same white resize circles as calendar
-/// events; dragging them adjusts the reported interval directly.
+/// [visualHeight] is the painted bar height (the reported duration); the
+/// widget's own layout height can be taller so the chip stays tappable and
+/// its resize circles have room even when the report is only a few minutes.
 class ReportChip extends StatelessWidget {
   const ReportChip({
     super.key,
@@ -16,6 +23,7 @@ class ReportChip extends StatelessWidget {
     required this.timeLabel,
     required this.selected,
     required this.adjustable,
+    required this.visualHeight,
     required this.onTap,
     this.onResizeStart,
     this.onResizeUpdate,
@@ -28,6 +36,7 @@ class ReportChip extends StatelessWidget {
   final String timeLabel;
   final bool selected;
   final bool adjustable;
+  final double visualHeight;
   final VoidCallback onTap;
   final ValueChanged<bool>? onResizeStart;
   final GestureDragUpdateCallback? onResizeUpdate;
@@ -51,164 +60,182 @@ class ReportChip extends StatelessWidget {
               '$timeLabel'
               '${selected && adjustable ? '\nDrag the white circles to adjust the time' : ''}',
           waitDuration: const Duration(milliseconds: 500),
-          child: Container(
-            key: ValueKey('report-chip:${block.displayId}'),
-            margin: const EdgeInsets.symmetric(vertical: 1),
-            decoration: BoxDecoration(
-              color: live ? color : color.withValues(alpha: 0.75),
-              borderRadius: BorderRadius.circular(6),
-              border: live
-                  ? Border.all(color: _liveColor, width: 2)
-                  : selected
-                  ? Border.all(color: Colors.white, width: 2)
-                  : null,
-              boxShadow: selected
-                  ? const [
-                      BoxShadow(
-                        color: Colors.black38,
-                        blurRadius: 4,
-                        offset: Offset(0, 1),
-                      ),
-                    ]
-                  : null,
-            ),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final height = constraints.maxHeight;
-                final width = constraints.maxWidth;
-                // Week view gives each report track half of a day cell. Keep
-                // the title visible in that narrow column; only collapse to
-                // a color bar when it can't fit even a short label.
-                final compact = width.isFinite && width < 44;
-                final showText =
-                    !compact && (height.isInfinite || height >= 20);
-                final showTime =
-                    !compact &&
-                    (width.isInfinite || width >= 100) &&
-                    (height.isInfinite || height >= 34);
-                // The same threshold as event tiles: below ~12px there is no
-                // room for two grabbable circles.
-                final showHandles =
-                    selected &&
-                    adjustable &&
-                    height.isFinite &&
-                    height >= 12 &&
-                    width.isFinite &&
-                    width >= 24;
-                final compactHandles =
-                    compact || (height.isFinite && height < 58);
-                final tightHandles =
-                    compactHandles && height.isFinite && height < 40;
-                Widget? content;
-                if (showText) {
-                  content = Padding(
-                    padding: const EdgeInsets.fromLTRB(6, 3, 6, 3),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (live)
-                              const Padding(
-                                padding: EdgeInsets.only(right: 3),
-                                child: Icon(
-                                  Icons.fiber_manual_record,
-                                  size: 12,
-                                  color: _liveColor,
-                                ),
-                              ),
-                            if (block.kind == ReportBlockKind.timer)
-                              const Padding(
-                                padding: EdgeInsets.only(right: 3),
-                                child: Icon(
-                                  Icons.timer_outlined,
-                                  size: 12,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            if (block.kind == ReportBlockKind.accepted)
-                              const Padding(
-                                padding: EdgeInsets.only(right: 3),
-                                child: Icon(
-                                  Icons.fact_check,
-                                  size: 12,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            Flexible(
-                              child: Text(
-                                block.title.isEmpty ? 'Report' : block.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final hitHeight = constraints.maxHeight;
+              final width = constraints.maxWidth;
+              final visual = visualHeight.isFinite ? visualHeight : hitHeight;
+              // Week view gives each report track half of a day cell. Keep
+              // the title visible in that narrow column; only collapse to
+              // a color bar when it can't fit even a short label.
+              final compact = width.isFinite && width < 44;
+              // Text decisions follow the painted bar, not the expanded hit
+              // area: a zero-minute report gets circles, but no room for text.
+              final showText = !compact && (visual.isInfinite || visual >= 20);
+              final showTime =
+                  !compact &&
+                  (width.isInfinite || width >= 100) &&
+                  (visual.isInfinite || visual >= 34);
+              // The same threshold as event tiles: below ~12px there is no
+              // room for two grabbable circles. Short report chips now carry
+              // a taller hit area, so they pass this check too.
+              final showHandles =
+                  selected &&
+                  adjustable &&
+                  hitHeight.isFinite &&
+                  hitHeight >= 12 &&
+                  width.isFinite &&
+                  width >= 24;
+              final compactHandles =
+                  compact || (hitHeight.isFinite && hitHeight < 58);
+              final tightHandles =
+                  compactHandles && hitHeight.isFinite && hitHeight < 40;
+              // Center the painted bar inside a taller hit area so the bar
+              // still starts exactly at the reported time.
+              final visualTop = hitHeight.isFinite && visual.isFinite
+                  ? ((hitHeight - visual) / 2).clamp(0.0, hitHeight)
+                  : 0.0;
+              Widget? content;
+              if (showText) {
+                content = Padding(
+                  padding: const EdgeInsets.fromLTRB(6, 3, 6, 3),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (live)
+                            const Padding(
+                              padding: EdgeInsets.only(right: 3),
+                              child: Icon(
+                                Icons.fiber_manual_record,
+                                size: 12,
+                                color: _liveColor,
                               ),
                             ),
-                          ],
-                        ),
-                        if (showTime) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            timeLabel,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
+                          if (block.kind == ReportBlockKind.timer)
+                            const Padding(
+                              padding: EdgeInsets.only(right: 3),
+                              child: Icon(
+                                Icons.timer_outlined,
+                                size: 12,
+                                color: Colors.white,
+                              ),
+                            ),
+                          if (block.kind == ReportBlockKind.accepted)
+                            const Padding(
+                              padding: EdgeInsets.only(right: 3),
+                              child: Icon(
+                                Icons.fact_check,
+                                size: 12,
+                                color: Colors.white,
+                              ),
+                            ),
+                          Flexible(
+                            child: Text(
+                              block.title.isEmpty ? 'Report' : block.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                         ],
+                      ),
+                      if (showTime) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          timeLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                          ),
+                        ),
                       ],
-                    ),
-                  );
-                }
-                return Stack(
-                  // Nothing (the circles included) may paint outside the
-                  // chip's rounded body.
-                  clipBehavior: Clip.hardEdge,
-                  children: [
-                    if (content != null) content,
-                    if (showHandles)
-                      Positioned(
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        child: Center(
-                          child: SizedBox(
-                            width: compactHandles ? 40 : 48,
-                            child: _resizeHandle(
-                              top: true,
-                              compact: compactHandles,
-                              tight: tightHandles,
-                            ),
-                          ),
-                        ),
-                      ),
-                    if (showHandles)
-                      Positioned(
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        child: Center(
-                          child: SizedBox(
-                            width: compactHandles ? 40 : 48,
-                            child: _resizeHandle(
-                              top: false,
-                              compact: compactHandles,
-                              tight: tightHandles,
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
+                    ],
+                  ),
                 );
-              },
-            ),
+              }
+              return Stack(
+                // Nothing (the circles included) may paint outside the
+                // chip's hit area.
+                clipBehavior: Clip.hardEdge,
+                children: [
+                  Positioned(
+                    top: visualTop,
+                    left: 0,
+                    right: 0,
+                    height: visual.isFinite ? visual : null,
+                    child: Container(
+                      key: ValueKey('report-chip:${block.displayId}'),
+                      margin: EdgeInsets.symmetric(
+                        vertical: visual >= 6 ? 1 : 0,
+                      ),
+                      decoration: BoxDecoration(
+                        color: live ? color : color.withValues(alpha: 0.75),
+                        borderRadius: BorderRadius.circular(6),
+                        border: live
+                            ? Border.all(color: _liveColor, width: 2)
+                            : selected
+                            ? Border.all(color: Colors.white, width: 2)
+                            : null,
+                        boxShadow: selected
+                            ? const [
+                                BoxShadow(
+                                  color: Colors.black38,
+                                  blurRadius: 4,
+                                  offset: Offset(0, 1),
+                                ),
+                              ]
+                            : null,
+                      ),
+                      child: content == null
+                          ? const SizedBox.shrink()
+                          : ClipRect(child: content),
+                    ),
+                  ),
+                  if (showHandles)
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: SizedBox(
+                          width: compactHandles ? 40 : 48,
+                          child: _resizeHandle(
+                            top: true,
+                            compact: compactHandles,
+                            tight: tightHandles,
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (showHandles)
+                    Positioned(
+                      bottom: 0,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: SizedBox(
+                          width: compactHandles ? 40 : 48,
+                          child: _resizeHandle(
+                            top: false,
+                            compact: compactHandles,
+                            tight: tightHandles,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
           ),
         ),
       ),
