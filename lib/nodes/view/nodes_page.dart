@@ -9,6 +9,7 @@ import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/auto_goal.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/service/node_legacy_migration.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
@@ -19,11 +20,44 @@ import 'package:a_fish_in_sea/nodes/view/node_checkbox.dart';
 import 'package:a_fish_in_sea/nodes/view/node_editor.dart';
 import 'package:a_fish_in_sea/nodes/view/node_graph_view.dart';
 import 'package:a_fish_in_sea/nodes/view/node_finish_sheet.dart';
+import 'package:a_fish_in_sea/nodes/view/task_rollup_tile.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 
-enum _NodeView { leaves, all, favorites, graph, due, scheduled, money, habits }
+enum _NodeView {
+  leaves,
+  all,
+  automated,
+  favorites,
+  graph,
+  due,
+  scheduled,
+  money,
+  habits,
+}
 
 final _nodesDateFormat = DateFormat('EEE, MMM d');
+
+/// A plain scheduled leaf: work, not a goal.
+///
+/// Generated occurrences always roll up (a daily habit otherwise shows a
+/// year of rows), and so does an unspecialized leaf carrying a due date or
+/// calendar block. Automated, financial, time-target, Anki, repeating,
+/// and legacy-derived nodes stay visible as goals. The rollup
+/// only collapses rendering — every task keeps its checkbox and editor.
+bool _isPlainTask(Node n) {
+  if (n.isUnbounded) return false;
+  if (n.instanceOfId != null) return true;
+  if (n.auto != null ||
+      n.money != null ||
+      n.effort != null ||
+      n.anki != null ||
+      n.recurrence != null ||
+      n.calendarLink != null ||
+      (n.rule != null && n.rule!.kind != NodeRuleKind.none)) {
+    return false;
+  }
+  return n.hasDue || n.hasCalendarBlock;
+}
 
 class NodesPage extends StatefulWidget {
   const NodesPage({super.key});
@@ -33,7 +67,9 @@ class NodesPage extends StatefulWidget {
 }
 
 class _NodesPageState extends State<NodesPage> {
-  _NodeView _view = _NodeView.leaves;
+  // The goal tree is the landing view: a collapsed tree reads as goals,
+  // while the old flat Leaves list buried them under every open task.
+  _NodeView _view = _NodeView.all;
   final TextEditingController _search = TextEditingController();
   String _query = '';
   bool _expandAll = false;
@@ -129,7 +165,7 @@ class _NodesPageState extends State<NodesPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Nodes'),
+        title: const Text('Goals'),
         actions: const [UndoRedoActions()],
       ),
       drawer: const AppDrawer(),
@@ -226,8 +262,9 @@ class _ViewRow extends StatelessWidget {
   }
 
   static String _label(_NodeView v) => switch (v) {
-    _NodeView.leaves => 'Leaves',
-    _NodeView.all => 'All',
+    _NodeView.leaves => 'Open list',
+    _NodeView.all => 'Goal tree',
+    _NodeView.automated => 'Automated',
     _NodeView.favorites => 'Favorites',
     _NodeView.graph => 'Graph',
     _NodeView.due => 'Due',
@@ -315,10 +352,22 @@ class _NodeBody extends StatelessWidget {
             if (n.reportedDuration != null)
               n.id: n.reportedDuration!.inMinutes.toDouble(),
         };
+        final now = DateTime.now();
+        // Automated goals read the whole store, not just goal nodes:
+        // homework imports are exactly what a homework goal must see.
+        final autoReadings = autoReadingsForNodes(
+          nodes,
+          now: now,
+          transactions: txns,
+        );
         final progress = progressForest(
           goals,
           moneyActualByNodeId: moneyActualByNodeId,
           timeActualByNodeId: timeActualByNodeId,
+          autoProgressByNodeId: {
+            for (final entry in autoReadings.entries)
+              entry.key: entry.value.progress,
+          },
         );
         final trimmed = query.trim();
         final visible = trimmed.isEmpty ? null : filterTreeIds(nodes, trimmed);
@@ -326,12 +375,11 @@ class _NodeBody extends StatelessWidget {
             ? items
             : items.where((n) => visible.contains(n.id)).toList();
         // Hoisted once per body build (not per tile): shared DAG indexes,
-        // liveness map, one `now`, and one homework-ahead evaluation
-        // (the old code re-ran it O(n) per rule tile).
+        // liveness map, and one homework-ahead evaluation (the old code
+        // re-ran it O(n) per rule tile).
         final indexes = buildNodeIndexes(goals);
         final nodeById = indexes.byId;
         final byParent = indexes.byParent;
-        final now = DateTime.now();
         HomeworkAheadResult? homeworkAhead;
         HomeworkAheadResult getHomeworkAhead() => homeworkAhead ??=
             evaluateHomeworkAhead(all: nodes, now: now, horizonDays: 3);
@@ -346,6 +394,7 @@ class _NodeBody extends StatelessWidget {
                 nodes: goals,
                 progress: progress,
                 txnAmounts: txnAmounts,
+                autoReadings: autoReadings,
                 depth: 0,
                 flat: true,
                 visible: visible,
@@ -372,6 +421,7 @@ class _NodeBody extends StatelessWidget {
               nodes: goals,
               progress: progress,
               txnAmounts: txnAmounts,
+              autoReadings: autoReadings,
               visible: visible,
               expandAll: expandAll,
               expandToken: expandToken,
@@ -383,6 +433,20 @@ class _NodeBody extends StatelessWidget {
               expandedIds: expandedIds,
               focusKey: focusKey,
             );
+          case _NodeView.automated:
+            final items = matching(
+              goals.where((n) => n.isAutomatedGoal).toList(),
+            );
+            if (items.isEmpty) {
+              return const Center(
+                child: Text(
+                  'No automated goals yet.\n'
+                  'Edit a goal and turn on Automated goal.',
+                  textAlign: TextAlign.center,
+                ),
+              );
+            }
+            return flatList(items);
           case _NodeView.favorites:
             final items = matching(goals.where((n) => n.isFavorite).toList());
             if (items.isEmpty) {
@@ -441,6 +505,7 @@ class _NodeBody extends StatelessWidget {
                   nodes: goals,
                   progress: progress,
                   txnAmounts: txnAmounts,
+                  autoReadings: autoReadings,
                   depth: 0,
                   flat: false,
                   visible: visible,
@@ -469,6 +534,7 @@ class _NodeTree extends StatelessWidget {
   final List<Node> nodes;
   final Map<String, double> progress;
   final Map<String, double> txnAmounts;
+  final Map<String, AutoGoalReading> autoReadings;
   final Map<String, Node>? nodeById;
   final Map<String, List<Node>>? byParent;
   final DateTime? now;
@@ -484,6 +550,7 @@ class _NodeTree extends StatelessWidget {
     required this.nodes,
     required this.progress,
     required this.txnAmounts,
+    this.autoReadings = const {},
     this.nodeById,
     this.byParent,
     this.now,
@@ -523,6 +590,7 @@ class _NodeTree extends StatelessWidget {
             nodes: nodes,
             progress: progress,
             txnAmounts: txnAmounts,
+            autoReadings: autoReadings,
             depth: 0,
             flat: true,
             visible: visible,
@@ -548,6 +616,7 @@ class _NodeTree extends StatelessWidget {
           nodes: nodes,
           progress: progress,
           txnAmounts: txnAmounts,
+          autoReadings: autoReadings,
           depth: 0,
           flat: false,
           visited: {n.id},
@@ -583,6 +652,7 @@ class _NodeTile extends StatelessWidget {
   final List<Node> nodes;
   final Map<String, double> progress;
   final Map<String, double> txnAmounts;
+  final Map<String, AutoGoalReading> autoReadings;
   final int depth;
   final bool flat;
   final Set<String> visited;
@@ -609,6 +679,7 @@ class _NodeTile extends StatelessWidget {
     required this.nodes,
     required this.progress,
     required this.txnAmounts,
+    this.autoReadings = const {},
     required this.depth,
     required this.flat,
     this.visited = const {},
@@ -633,9 +704,24 @@ class _NodeTile extends StatelessWidget {
     final kids = flat
         ? const <Node>[]
         : (_children(live)..sort((a, b) => _compareKids(a, b)));
+    final goalKids = <Node>[];
+    final taskKids = <Node>[];
+    for (final kid in kids) {
+      if (_isPlainTask(kid) && !_hasChildren(kid)) {
+        taskKids.add(kid);
+      } else {
+        goalKids.add(kid);
+      }
+    }
     final value = progress[live.id] ?? 0;
     final theme = Theme.of(context);
-    final subtitle = _subtitle(context, live, value, kids.length);
+    final subtitle = _subtitle(
+      context,
+      live,
+      value,
+      kids.length,
+      autoReadings[live.id],
+    );
     final focused = live.id == focusNodeId;
     Widget wrapFocus(Widget child) {
       if (!focused) return child;
@@ -695,12 +781,13 @@ class _NodeTile extends StatelessWidget {
         expandToken: expandToken,
         onTap: () => showNodeEditor(context, existing: live),
         children: [
-          for (final k in kids)
+          for (final k in goalKids)
             _NodeTile(
               node: k,
               nodes: nodes,
               progress: progress,
               txnAmounts: txnAmounts,
+              autoReadings: autoReadings,
               depth: depth + 1,
               flat: false,
               visited: {...visited, k.id},
@@ -715,9 +802,45 @@ class _NodeTile extends StatelessWidget {
               expandedIds: expandedIds,
               focusKey: focusKey,
             ),
+          if (taskKids.isNotEmpty)
+            TaskRollupTile(
+              tilePadding: EdgeInsets.only(
+                left: 16 + (depth + 1) * 20,
+                right: 8,
+              ),
+              openCount: taskKids.where((n) => n.isOpen).length,
+              doneCount: taskKids.where((n) => n.isDone).length,
+              initiallyExpanded: expandAll,
+              expandToken: expandToken,
+              children: [
+                for (final k in taskKids)
+                  _NodeTile(
+                    node: k,
+                    nodes: nodes,
+                    progress: progress,
+                    txnAmounts: txnAmounts,
+                    autoReadings: autoReadings,
+                    depth: depth + 2,
+                    flat: true,
+                    visible: visible,
+                    expandAll: expandAll,
+                    expandToken: expandToken,
+                    nodeById: nodeById,
+                    byParent: byParent,
+                    now: now,
+                    homeworkAhead: homeworkAhead,
+                  ),
+              ],
+            ),
         ],
       ),
     );
+  }
+
+  bool _hasChildren(Node node) {
+    final map = byParent;
+    if (map != null) return (map[node.id] ?? const <Node>[]).isNotEmpty;
+    return nodes.any((n) => n.parentIds.contains(node.id));
   }
 
   /// Action buttons shared by leaf rows ([ListTile]) and parent rows
@@ -860,6 +983,12 @@ class _NodeTile extends StatelessWidget {
         child: Icon(Icons.all_inclusive),
       );
     }
+    if (live.isAutomatedGoal) {
+      return const Tooltip(
+        message: 'Automated goal — measured from your data',
+        child: Icon(Icons.auto_graph),
+      );
+    }
     if (live.isTemplate) {
       return const Icon(Icons.repeat_outlined);
     }
@@ -905,6 +1034,7 @@ class _NodeTile extends StatelessWidget {
     Node live,
     double value,
     int childCount,
+    AutoGoalReading? autoReading,
   ) {
     // Unbounded goals never show dates, targets, or a percent — just the
     // ongoing marker plus how many concrete steps hang underneath.
@@ -920,7 +1050,16 @@ class _NodeTile extends StatelessWidget {
     if (childCount > 0) {
       parts.add('$childCount step${childCount == 1 ? '' : 's'}');
     }
-    if (live.money != null) {
+    if (autoReading != null) {
+      parts.add(autoReading.summary);
+      parts.add(autoReading.windowLabel);
+      if (autoReading.matchedLabel.isNotEmpty) {
+        parts.add(autoReading.matchedLabel);
+      }
+      if (autoReading.satisfied) parts.add('on track ✓');
+    } else if (live.isAutomatedGoal) {
+      parts.add('automated goal');
+    } else if (live.money != null) {
       final m = live.money!;
       final actual = byParent != null && nodeById != null
           ? moneyActualForNodeIndexed(
@@ -978,7 +1117,7 @@ class _NodeTile extends StatelessWidget {
     if ((live.schedule?.isFixed ?? false) || (live.money?.isFixed ?? false)) {
       parts.add('fixed');
     }
-    parts.add('${(value * 100).round()}%');
+    if (autoReading == null) parts.add('${(value * 100).round()}%');
     if (parts.isEmpty) return 'note';
     return parts.join(' · ');
   }

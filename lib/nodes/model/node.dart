@@ -1,8 +1,10 @@
 import 'package:equatable/equatable.dart';
 
+import 'auto_goal.dart';
 import 'node_calendar_link.dart';
 import 'node_recurrence.dart';
 
+export 'auto_goal.dart';
 export 'node_calendar_link.dart';
 export 'node_recurrence.dart';
 
@@ -477,6 +479,10 @@ class Node extends Equatable {
   final AnkiFacet? anki;
   final NodeRecurrence? recurrence;
 
+  /// Generic automated-goal definition. Additive and nullable: payloads
+  /// written before it existed load as plain (non-automated) goals.
+  final AutoFacet? auto;
+
   /// Calendar series binding and lossless snapshots of reconciled records.
   final NodeCalendarLink? calendarLink;
   final RuleFacet? rule;
@@ -517,6 +523,7 @@ class Node extends Equatable {
     this.effort,
     this.anki,
     this.recurrence,
+    this.auto,
     this.calendarLink,
     this.rule,
     this.instanceOfId,
@@ -549,6 +556,7 @@ class Node extends Equatable {
   bool get hasMoney => money != null;
   bool get hasEffort => effort != null;
   bool get hasAnki => anki != null;
+  bool get isAutomatedGoal => auto != null;
 
   Duration? get reportedDuration {
     final s = actualStart;
@@ -602,6 +610,8 @@ class Node extends Equatable {
     AnkiFacet? anki,
     bool clearAnki = false,
     NodeRecurrence? recurrence,
+    AutoFacet? auto,
+    bool clearAuto = false,
     NodeCalendarLink? calendarLink,
     bool clearCalendarLink = false,
     bool clearRecurrence = false,
@@ -645,6 +655,7 @@ class Node extends Equatable {
         effort: clearEffort ? null : (effort ?? this.effort),
         anki: clearAnki ? null : (anki ?? this.anki),
         recurrence: clearRecurrence ? null : (recurrence ?? this.recurrence),
+        auto: clearAuto ? null : (auto ?? this.auto),
         calendarLink: clearCalendarLink
             ? null : (calendarLink ?? this.calendarLink),
         rule: clearRule ? null : (rule ?? this.rule),
@@ -734,6 +745,10 @@ class Node extends Equatable {
           ? _facetOrNull(() => NodeRecurrence.fromJson(
               Map<String, dynamic>.from(json['recurrence'] as Map)))
           : null,
+      auto: json['auto'] is Map
+          ? _facetOrNull(() => AutoFacet.fromJson(
+              Map<String, dynamic>.from(json['auto'] as Map)))
+          : null,
       rule: json['rule'] is Map
           ? _facetOrNull(() => RuleFacet.fromJson(
               Map<String, dynamic>.from(json['rule'] as Map)))
@@ -770,6 +785,7 @@ class Node extends Equatable {
         'effort': effort?.toJson(),
         'anki': anki?.toJson(),
         'recurrence': recurrence?.toJson(),
+        'auto': auto?.toJson(),
         'calendarLink': calendarLink?.toJson(),
         'rule': rule?.toJson(),
         'instanceOfId': instanceOfId,
@@ -802,6 +818,7 @@ class Node extends Equatable {
         effort,
         anki,
         recurrence,
+        auto,
         calendarLink,
         rule,
         instanceOfId,

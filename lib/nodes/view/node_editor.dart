@@ -16,6 +16,7 @@ import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_editor_schedule.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
+import 'package:a_fish_in_sea/nodes/view/auto_goal_fields.dart';
 import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
@@ -101,6 +102,8 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   TimeScale _frequency = TimeScale.daily;
   DateTime? _recurEnd;
 
+  AutoFacet? _auto;
+
   NodeRuleKind _ruleKind = NodeRuleKind.none;
   late final TextEditingController _horizon;
   late final TextEditingController _minBalance;
@@ -155,6 +158,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _hasRecurrence = e?.recurrence != null || widget.enableRecurrence;
     _frequency = e?.recurrence?.frequency ?? TimeScale.daily;
     _recurEnd = e?.recurrence?.endDate;
+    _auto = e?.auto;
     _ruleKind = e?.rule?.kind ?? NodeRuleKind.none;
     _horizon = TextEditingController(
       text: (e?.rule?.horizonDays ?? 3).toString(),
@@ -280,6 +284,24 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
+              const SizedBox(height: 8),
+              _sectionTitle(context, 'Automated goal'),
+              AutoGoalFields(
+                value: _auto,
+                onChanged: (value) => setState(() => _auto = value),
+                classOptions: _classOptions(context),
+                moneyCategoryOptions: _moneyCategoryOptions(context),
+              ),
+              if (_auto != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'This goal is measured automatically; manual targets '
+                    'below are hidden.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              if (_auto == null) ...[
               const SizedBox(height: 8),
               _sectionTitle(context, 'Money'),
               SwitchListTile(
@@ -557,9 +579,11 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                       : () => setState(() => _recurEnd = null),
                 ),
               ],
-              const SizedBox(height: 8),
-              _sectionTitle(context, 'Rule'),
-              DropdownButtonFormField<NodeRuleKind>(
+              ], // end if (_auto == null): manual targets and repeats
+              if (e?.rule != null) ...[
+                const SizedBox(height: 8),
+                _sectionTitle(context, 'Legacy rule'),
+                DropdownButtonFormField<NodeRuleKind>(
                 initialValue: _ruleKind,
                 decoration: const InputDecoration(
                   labelText: 'Derived goal (optional)',
@@ -604,6 +628,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                   ),
                 ),
               ],
+              ], // end if (e?.rule != null): legacy rule
             ], // end if (!_isUnbounded): dates, targets, repeats, rules
             if (_isUnbounded) ...[
               const SizedBox(height: 8),
@@ -704,6 +729,42 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     );
   }
 
+  /// Homework classes already imported, used as automation chips. Reading
+  /// cubits defensively keeps the editor usable in previews/tests where a
+  /// provider is intentionally absent.
+  List<String> _classOptions(BuildContext context) {
+    try {
+      final keys = <String>{};
+      for (final node in context.read<NodeCubit>().state) {
+        if (!node.isHomework) continue;
+        final label = node.classLabel?.trim();
+        final id = node.classId?.trim();
+        final key = label != null && label.isNotEmpty ? label : id;
+        if (key != null && key.isNotEmpty) keys.add(key);
+      }
+      return _sorted(keys);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  List<String> _moneyCategoryOptions(BuildContext context) {
+    try {
+      final categories = {
+        for (final txn in context.read<TransactionsCubit>().state)
+          if (txn.category != null && txn.category!.trim().isNotEmpty)
+            txn.category!.trim(),
+      };
+      return _sorted(categories);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static List<String> _sorted(Iterable<String> values) =>
+      values.toList()
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
   Widget _sectionTitle(BuildContext context, String text) => Padding(
     padding: const EdgeInsets.only(bottom: 4),
     child: Text(
@@ -742,6 +803,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       if (_hasEffort) dropping.add('time target');
       if (_hasAnki) dropping.add('memorization target');
       if (_hasRecurrence) dropping.add('repeats');
+      if (_auto != null) dropping.add('automated goal');
       if (_ruleKind != NodeRuleKind.none) dropping.add('rule');
       if (dropping.isNotEmpty) {
         final drop = await _confirmDropFacets(context, dropping);
@@ -830,8 +892,11 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       );
     }
 
-    // Unbounded goals carry no dates, targets, repeats, or rules — the
-    // hidden sections' stale state is dropped so the save validates.
+    var auto = _auto;
+
+    // Unbounded goals carry no dates, targets, repeats, rules, or
+    // automation — the hidden sections' stale state is dropped so the save
+    // validates.
     final isUnbounded = _isUnbounded;
     if (isUnbounded) {
       schedule = null;
@@ -839,6 +904,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       effort = null;
       anki = null;
       recurrence = null;
+      auto = null;
       rule = null;
     }
 
@@ -858,6 +924,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         effort: effort,
         anki: anki,
         recurrence: recurrence,
+        auto: auto,
         rule: rule,
         assignees: _people,
       );
@@ -893,6 +960,8 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         clearAnki: anki == null,
         recurrence: recurrence,
         clearRecurrence: recurrence == null,
+        auto: auto,
+        clearAuto: auto == null,
         rule: rule,
         clearRule: rule == null,
         assignees: _people,
