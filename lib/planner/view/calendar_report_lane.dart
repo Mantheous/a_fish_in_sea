@@ -48,6 +48,7 @@ class ReportLaneView extends StatefulWidget {
     this.selectedId,
     this.snapMinutes = 5,
     this.onIntervalChanged,
+    this.onRecord,
     this.isRtl = false,
   });
 
@@ -72,6 +73,10 @@ class ReportLaneView extends StatefulWidget {
 
   /// Commits a dragged interval. Live recordings never call this.
   final ReportIntervalChanged? onIntervalChanged;
+
+  /// Starts another recording for the report's task. Null hides the chip's
+  /// play button; live chips never show it.
+  final ValueChanged<ReportBlock>? onRecord;
 
   final bool isRtl;
 
@@ -276,6 +281,9 @@ class _ReportLaneViewState extends State<ReportLaneView> {
                   onResizeUpdate: _updateHandleDrag,
                   onResizeEnd: _endDrag,
                   onResizeCancel: _cancelDrag,
+                  onRecord: widget.onRecord == null || !block.recordable
+                      ? null
+                      : () => widget.onRecord!(block),
                 ),
               ),
             );

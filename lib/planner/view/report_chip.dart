@@ -25,6 +25,7 @@ class ReportChip extends StatelessWidget {
     required this.adjustable,
     required this.visualHeight,
     required this.onTap,
+    this.onRecord,
     this.onResizeStart,
     this.onResizeUpdate,
     this.onResizeEnd,
@@ -38,6 +39,10 @@ class ReportChip extends StatelessWidget {
   final bool adjustable;
   final double visualHeight;
   final VoidCallback onTap;
+
+  /// Starts another recording for the report's task. Null hides the chip's
+  /// play button; live chips never show it.
+  final VoidCallback? onRecord;
   final ValueChanged<bool>? onResizeStart;
   final GestureDragUpdateCallback? onResizeUpdate;
   final VoidCallback? onResizeEnd;
@@ -58,7 +63,9 @@ class ReportChip extends StatelessWidget {
           message:
               '$title\n'
               '$timeLabel'
-              '${selected && adjustable ? '\nDrag the white circles to adjust the time' : ''}',
+              '${selected && adjustable ? '\nDrag the white circles to adjust the time' : ''}'
+              '${!selected && onRecord != null && !live ? '\nPress ▶ to record another report for this task' : ''}'
+              '${selected && onRecord != null && !live ? '\nUse Record again in the report details to record another report' : ''}',
           waitDuration: const Duration(milliseconds: 500),
           child: LayoutBuilder(
             builder: (context, constraints) {
@@ -71,11 +78,13 @@ class ReportChip extends StatelessWidget {
               final compact = width.isFinite && width < 44;
               // Text decisions follow the painted bar, not the expanded hit
               // area: a zero-minute report gets circles, but no room for text.
-              final showText = !compact && (visual.isInfinite || visual >= 20);
+              // A 12px title line plus the 3px top/bottom padding needs
+              // ~22px; a second (time) line adds ~17px.
+              final showText = !compact && (visual.isInfinite || visual >= 24);
               final showTime =
                   !compact &&
                   (width.isInfinite || width >= 100) &&
-                  (visual.isInfinite || visual >= 34);
+                  (visual.isInfinite || visual >= 42);
               // The same threshold as event tiles: below ~12px there is no
               // room for two grabbable circles. Short report chips now carry
               // a taller hit area, so they pass this check too.
@@ -86,6 +95,15 @@ class ReportChip extends StatelessWidget {
                   hitHeight >= 12 &&
                   width.isFinite &&
                   width >= 24;
+              // Selected chips hide the play badge: their resize handles own
+              // the top edge, and the panel card offers a full Record again
+              // button for the report that is now open.
+              final showRecord =
+                  !live &&
+                  block.recordable &&
+                  onRecord != null &&
+                  !showHandles &&
+                  (visual.isInfinite || visual >= 24);
               final compactHandles =
                   compact || (hitHeight.isFinite && hitHeight < 58);
               final tightHandles =
@@ -114,6 +132,11 @@ class ReportChip extends StatelessWidget {
                                 size: 12,
                                 color: _liveColor,
                               ),
+                            )
+                          else if (showRecord)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: _playBadge(),
                             ),
                           if (block.kind == ReportBlockKind.timer)
                             const Padding(
@@ -236,6 +259,36 @@ class ReportChip extends StatelessWidget {
                 ],
               );
             },
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Plain white play triangle on a report chip, matching the event tiles'
+  /// chromeless record badge. Tapping it starts another recording for the
+  /// same task without opening the report's detail.
+  Widget _playBadge() {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onRecord,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Tooltip(
+          message: 'Record another report',
+          child: Semantics(
+            button: true,
+            label: 'Record another report for this task',
+            child: SizedBox(
+              key: ValueKey('report-play:${block.displayId}'),
+              width: 16,
+              height: 16,
+              child: const Icon(
+                Icons.play_arrow,
+                size: 16,
+                color: Colors.white,
+              ),
+            ),
           ),
         ),
       ),

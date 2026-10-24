@@ -372,16 +372,18 @@ class NodeEventLink {
     CalendarCubit calendar,
     String nodeId, {
     DateTime? now,
+    bool allowCompleted = false,
   }) {
     final node = nodes.byId(nodeId);
-    if (node == null || node.isDone || node.isTracking) return;
+    if (node == null || node.isTracking) return;
+    if (node.isDone && !allowCompleted) return;
     final at = now ?? DateTime.now();
     RevertableHydratedCubit.atomic([nodes, calendar], () {
       final activeEvent = calendar.activeTrackingEvent;
       if (activeEvent != null) {
         calendar.stopTracking(activeEvent.id, now: at);
       }
-      nodes.startTracking(nodeId, now: at);
+      nodes.startTracking(nodeId, now: at, allowCompleted: allowCompleted);
     });
   }
 
@@ -393,6 +395,7 @@ class NodeEventLink {
     CalendarCubit calendar,
     String eventId, {
     DateTime? now,
+    bool allowCompleted = false,
   }) {
     final event = calendar.byId(eventId);
     if (event == null || event.allDay || event.isTracking) return;
@@ -400,7 +403,13 @@ class NodeEventLink {
         ? backingNodeFor(nodes, calendar, eventId)
         : null;
     if (backing != null) {
-      startNodeTracking(nodes, calendar, backing.id, now: now);
+      startNodeTracking(
+        nodes,
+        calendar,
+        backing.id,
+        now: now,
+        allowCompleted: allowCompleted,
+      );
       return;
     }
     final at = now ?? DateTime.now();

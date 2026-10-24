@@ -1005,9 +1005,18 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     return null;
   }
 
-  void startTracking(String id, {DateTime? now}) {
+  /// Starts [id]'s timer. Completed nodes are skipped unless
+  /// [allowCompleted] is set: the report lane's play button deliberately
+  /// records extra work on a task that already has reports, without
+  /// reopening it.
+  void startTracking(
+    String id, {
+    DateTime? now,
+    bool allowCompleted = false,
+  }) {
     final target = byId(id);
-    if (target == null || target.isDone || target.isTracking) return;
+    if (target == null || target.isTracking) return;
+    if (target.isDone && !allowCompleted) return;
     final at = now ?? DateTime.now();
     var next = state;
     final activeId = activeTrackingId;

@@ -22,12 +22,14 @@ import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../model/recurrence.dart';
 import '../model/task_assignee.dart';
+import '../service/calendar_report.dart';
 import '../service/event_reminders.dart';
 import 'event_editor_actions.dart';
 import 'event_colors.dart';
 import 'event_time_sections.dart';
 import 'people_field.dart';
 import 'reminder_prompt.dart' show ReminderField, maybePromptForEventReminder;
+import 'report_detail_card.dart';
 
 Future<bool?> showEventEditor(
   BuildContext context, {
@@ -80,11 +82,17 @@ Future<void> showEventDetail(
   BuildContext context, {
   required PlannerEvent event,
   VoidCallback? onReport,
+  ReportBlock? report,
+  VoidCallback? onRecordReport,
 }) {
   return showModalBottomSheet<void>(
     context: context,
-    builder: (sheetContext) =>
-        _EventDetailSheet(event: event, onReport: onReport),
+    builder: (sheetContext) => _EventDetailSheet(
+      event: event,
+      onReport: onReport,
+      report: report,
+      onRecordReport: onRecordReport,
+    ),
   );
 }
 
@@ -2522,8 +2530,15 @@ Color _eventDotColor(BuildContext context, PlannerEvent event) {
 class _EventDetailSheet extends StatelessWidget {
   final PlannerEvent event;
   final VoidCallback? onReport;
+  final ReportBlock? report;
+  final VoidCallback? onRecordReport;
 
-  const _EventDetailSheet({required this.event, this.onReport});
+  const _EventDetailSheet({
+    required this.event,
+    this.onReport,
+    this.report,
+    this.onRecordReport,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -2551,6 +2566,8 @@ class _EventDetailSheet extends StatelessWidget {
                     Future.microtask(report);
                   },
             onClose: () => Navigator.of(context).pop(),
+            report: this.report,
+            onRecordReport: onRecordReport,
           );
         },
       ),
@@ -2564,12 +2581,21 @@ class EventDetailView extends StatelessWidget {
   final VoidCallback? onReport;
   final VoidCallback? onClose;
 
+  /// Report chip selected in the Plan + Report lane, shown as a detail card
+  /// above the event so the tapped report's interval is visible.
+  final ReportBlock? report;
+
+  /// Starts another recording for the report's task.
+  final VoidCallback? onRecordReport;
+
   const EventDetailView({
     super.key,
     required this.event,
     this.onEdit,
     this.onReport,
     this.onClose,
+    this.report,
+    this.onRecordReport,
   });
 
   @override
@@ -2605,6 +2631,16 @@ class EventDetailView extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (report != null) ...[
+            SelectedReportCard(
+              report: report!,
+              eventSubject: event.subject,
+              onRecord: onRecordReport,
+            ),
+            const SizedBox(height: 12),
+            const Divider(height: 1),
+            const SizedBox(height: 12),
+          ],
           Row(
             children: [
               Container(

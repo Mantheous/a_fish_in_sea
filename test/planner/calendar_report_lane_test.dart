@@ -1,3 +1,6 @@
+import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
+import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/service/calendar_report.dart';
@@ -51,6 +54,14 @@ void main() {
       expect(reportLaneDayOf('reportlane:not-a-date'), isNull);
       expect(reportLaneDayOf('reportlane:2026-13-45'), isNull);
       expect(reportLaneDayOf('reportlane:2026-02-29'), isNull);
+    });
+
+    test('timer and live ids expose their owner; manual ids do not', () {
+      expect(reportOwnerIdForDisplayId('report:timer:e1'), 'e1');
+      expect(reportOwnerIdForDisplayId('report:live:node-7'), 'node-7');
+      expect(reportOwnerIdForDisplayId('report:r1'), isNull);
+      expect(reportOwnerIdForDisplayId('event:e1'), isNull);
+      expect(reportOwnerIdForDisplayId('report:timer:'), isNull);
     });
 
     test('placeholder ids are recognised and never read as lanes', () {
@@ -432,6 +443,133 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
       expect(find.text('Event details'), findsOneWidget);
+      // The panel leads with the tapped report, not just the event.
+      expect(
+        find.byKey(const ValueKey('selected-report:report:r1')),
+        findsOneWidget,
+      );
+      expect(find.text('9:05 AM – 9:50 AM · 45m'), findsOneWidget);
+    });
+
+    testWidgets('play on a report chip records another report for the task', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final now = DateTime.now();
+      final start = DateTime(now.year, now.month, now.day, 9);
+      calendar.addEvent(_event('e1', start));
+      context.read<ReportingCubit>().upsertEntry(
+        DateTime(now.year, now.month, now.day),
+        _accepted(
+          id: 'r1',
+          eventId: 'e1',
+          start: start.add(const Duration(minutes: 5)),
+          end: start.add(const Duration(minutes: 50)),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      await tester.tap(find.byKey(const ValueKey('report-play:report:r1')));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(calendar.byId('e1')?.isTracking, isTrue);
+      expect(find.textContaining('Recording another report'), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(
+        find.byKey(const ValueKey('report-chip:report:live:e1')),
+        findsOneWidget,
+        reason: 'the new recording takes over the report lane',
+      );
+    });
+
+    testWidgets('play on a node-only report starts that node timer', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final nodes = context.read<NodeCubit>();
+      final now = DateTime.now();
+      final start = DateTime(now.year, now.month, now.day, 9);
+      nodes.addNode(
+        Node(
+          id: 'n1',
+          title: 'Off-calendar task',
+          createdAt: DateTime(now.year, now.month, now.day),
+        ),
+      );
+      nodes.setReported('n1', start, start.add(const Duration(minutes: 30)));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      await tester.tap(
+        find.byKey(const ValueKey('report-play:report:timer:n1')),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(nodes.byId('n1')?.isTracking, isTrue);
+      expect(find.textContaining('Recording another report'), findsOneWidget);
+    });
+
+    testWidgets('panel report card records again for the same event', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final now = DateTime.now();
+      final start = DateTime(now.year, now.month, now.day, 9);
+      calendar.addEvent(_event('e1', start));
+      context.read<ReportingCubit>().upsertEntry(
+        DateTime(now.year, now.month, now.day),
+        _accepted(
+          id: 'r1',
+          eventId: 'e1',
+          start: start.add(const Duration(minutes: 5)),
+          end: start.add(const Duration(minutes: 50)),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Report r1'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      await tester.tap(find.byKey(const ValueKey('report-record:report:r1')));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(calendar.byId('e1')?.isTracking, isTrue);
+      expect(
+        find.byKey(const ValueKey('selected-report:report:live:e1')),
+        findsOneWidget,
+        reason: 'the panel card follows the new live recording',
+      );
+      expect(find.text('Recording now'), findsOneWidget);
+
+      NodeEventLink.stopEventTrackingAligned(
+        context.read<NodeCubit>(),
+        calendar,
+        'e1',
+        now: start.add(const Duration(minutes: 5)),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(
+        find.byKey(const ValueKey('selected-report:report:timer:e1')),
+        findsOneWidget,
+        reason: 'the card follows the block kind change after Stop',
+      );
+      expect(find.text('Timer report'), findsOneWidget);
     });
 
     Finder reportHandle(String label) => find.byWidgetPredicate(
@@ -749,8 +887,7 @@ void main() {
       final liveChip = find.byKey(
         const ValueKey('report-chip:report:live:e1'),
       );
-      final liveRect = tester.getRect(liveChip);
-      await tester.tapAt(Offset(liveRect.center.dx, liveRect.top + 8));
+      await tester.tap(liveChip);
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
       expect(find.text('Event details'), findsOneWidget);

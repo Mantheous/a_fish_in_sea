@@ -19,6 +19,11 @@ class ReportBlock {
   final String? entryId;
   final ReportStatus? status;
 
+  /// True when the block resolves to an event or task node, so the lane can
+  /// offer a play button that records another report for it. Ownerless
+  /// manual entries (reports typed in without a linked task) stay false.
+  final bool recordable;
+
   const ReportBlock({
     required this.displayId,
     required this.title,
@@ -28,6 +33,7 @@ class ReportBlock {
     this.eventId,
     this.entryId,
     this.status,
+    this.recordable = false,
   });
 
   ReportBlock copyWith({String? title, DateTime? start, DateTime? end}) =>
@@ -40,6 +46,7 @@ class ReportBlock {
         eventId: eventId,
         entryId: entryId,
         status: status,
+        recordable: recordable,
       );
 }
 
@@ -61,6 +68,19 @@ ReportBlock resizedReportBlock(
 }
 
 bool isReportDisplayId(String id) => id.startsWith(reportDisplayIdPrefix);
+
+/// Owner id encoded in a timer/live display id (`report:timer:<id>` or
+/// `report:live:<id>`), which is an event id for event-backed blocks and a
+/// node id for node-only blocks. Null for manual entry ids and non-reports.
+String? reportOwnerIdForDisplayId(String displayId) {
+  for (final prefix in [reportTimerDisplayIdPrefix, reportLiveDisplayIdPrefix]) {
+    if (displayId.startsWith(prefix)) {
+      final id = displayId.substring(prefix.length);
+      return id.isEmpty ? null : id;
+    }
+  }
+  return null;
+}
 
 /// Finds an existing reported entry linked to [eventId], preferring a
 /// manual (accepted) entry over an auto-generated one.
@@ -195,6 +215,7 @@ List<ReportBlock> buildReportBlocks({
           end: end,
           kind: ReportBlockKind.live,
           eventId: event.id,
+          recordable: true,
         ),
       );
       continue;
@@ -210,6 +231,7 @@ List<ReportBlock> buildReportBlocks({
           end: reported.end,
           kind: ReportBlockKind.timer,
           eventId: event.id,
+          recordable: true,
         ),
       );
       continue;
@@ -231,6 +253,7 @@ List<ReportBlock> buildReportBlocks({
             eventId: event.id,
             entryId: entry.id,
             status: entry.status,
+            recordable: true,
           ),
         );
       }
@@ -265,6 +288,7 @@ List<ReportBlock> buildReportBlocks({
           end: end,
           kind: ReportBlockKind.live,
           eventId: null,
+          recordable: true,
         ),
       );
       continue;
@@ -284,6 +308,7 @@ List<ReportBlock> buildReportBlocks({
           end: end,
           kind: ReportBlockKind.timer,
           eventId: null,
+          recordable: true,
         ),
       );
     }
