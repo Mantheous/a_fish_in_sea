@@ -13,6 +13,7 @@ import '../bloc/feed_cubit.dart';
 import '../model/assignment_template.dart';
 import '../model/feed.dart';
 import 'assignment_rules_sheet.dart';
+import 'event_colors.dart';
 import 'feed_manager.dart';
 import 'task_list_parts.dart';
 import 'tasks_view_filtering.dart';
@@ -58,6 +59,7 @@ class _HomeworkTaskListState extends State<HomeworkTaskList>
     super.build(context);
     final nodeCubit = context.watch<NodeCubit>();
     final feedCubit = context.watch<FeedCubit>();
+    final colorPrefs = colorPrefsOf(context);
     final viewOptions = viewOptionsOf(context);
     final now = DateTime.now();
     // One calendar pass per build: the counts drive the schedule tint and,
@@ -150,7 +152,11 @@ class _HomeworkTaskListState extends State<HomeworkTaskList>
       final labeled = !list.every((node) => node.classLabel == null);
       if (labeled) {
         groupMeta[key] = (
-          color: courseColor(key),
+          color: resolveClassColor(
+            key,
+            colorPrefs,
+            useOverrides: colorPrefs.applyToTaskLists,
+          ),
           name: key,
           removable: false,
         );

@@ -5,10 +5,11 @@ import '../../nodes/service/node_calendar.dart';
 import '../../reporting/model/reported_entry.dart';
 import '../bloc/calendar_visibility_cubit.dart';
 import '../model/calendar_source.dart';
+import '../model/color_prefs.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../service/calendar_report.dart';
-import 'calendar_data_source.dart';
+import 'event_colors.dart';
 
 /// Page-owned derived state. Draft keystrokes, selection and resize frames
 /// reuse unchanged store projections instead of rebuilding the entire store.
@@ -67,6 +68,7 @@ class CalendarProjection {
   Set<String> trackingEventIds = const {};
   Map<String, String> assigneeLabelById = const {};
   Map<PlannerEvent, Color> _eventColors = Map.identity();
+  ColorPrefs _colorPrefs = const ColorPrefs();
 
   void update({
     required List<PlannerEvent> events,
@@ -80,6 +82,7 @@ class CalendarProjection {
     List<DateTime> visibleDays = const <DateTime>[],
     double visibleStartHour = 0,
     double visibleEndHour = 24,
+    ColorPrefs colorPrefs = const ColorPrefs(),
     PlannerEvent? draft,
     PlannerEvent? edit,
     PlannerEvent? resize,
@@ -87,6 +90,8 @@ class CalendarProjection {
     final feedsChanged = !identical(feeds, _feedSource);
     final eventsChanged = !identical(events, _eventSource);
     final nodesChanged = !identical(nodes, _nodeSource);
+    final colorPrefsChanged = colorPrefs != _colorPrefs;
+    _colorPrefs = colorPrefs;
     // Lane mode needs the visible day(s) to place one report lane per day.
     // Without them (and in the month view) report blocks stay appointments.
     final laneMode = showReportLanes && visibleDays.isNotEmpty;
@@ -99,6 +104,10 @@ class CalendarProjection {
               feed.calendarId!.isNotEmpty)
             feed.id,
       };
+    }
+    // Homework detection reads the linked node, and color choices can
+    // change on any settings edit, so both invalidate cached tile colors.
+    if (feedsChanged || nodesChanged || colorPrefsChanged) {
       _eventColors = Map.identity();
     }
     if (eventsChanged ||
@@ -144,6 +153,7 @@ class CalendarProjection {
             !identical(_visible, _reportVisible) ||
             !identical(nodes, _reportNodes) ||
             !identical(reports, _reportSource) ||
+            colorPrefsChanged ||
             laneMode != _laneMode ||
             (laneMode &&
                 (!_sameDays(visibleDays, _laneDays) ||
@@ -170,7 +180,12 @@ class CalendarProjection {
       // colorById, which only covers appointments in `shown`.
       reportColorById = {
         for (final event in _reportEvents)
-          event.id: calendarEventColor(event, feedColors),
+          event.id: calendarEventColor(
+            event,
+            feedColors,
+            prefs: _colorPrefs,
+            node: _nodeFor(event),
+          ),
       };
       _rebuildReportLanes(
         blocks: blocks,
@@ -219,7 +234,8 @@ class CalendarProjection {
         identical(_shownReports, reportEvents) &&
         identical(_shownDraft, draft) &&
         identical(_shownEdit, edit) &&
-        identical(_shownResize, resize)) {
+        identical(_shownResize, resize) &&
+        !colorPrefsChanged) {
       return;
     }
     _shownVisible = _visible;
@@ -250,8 +266,13 @@ class CalendarProjection {
     final tracking = <String>{};
     final assignees = <String, String>{};
     for (final event in shown) {
-      final color =
-          _eventColors[event] ?? calendarEventColor(event, feedColors);
+      final color = _eventColors[event] ??
+          calendarEventColor(
+            event,
+            feedColors,
+            prefs: _colorPrefs,
+            node: _nodeFor(event),
+          );
       colors[event.id] = color;
       retainedColors[event] = color;
       if (event.isTracking) tracking.add(event.id);
@@ -265,6 +286,18 @@ class CalendarProjection {
     _eventColors = retainedColors;
     trackingEventIds = tracking;
     assigneeLabelById = assignees;
+  }
+
+  /// The node backing [event], when one is loaded: personal links and
+  /// homework shadows map through their back-links, schedule blocks
+  /// through the `node:` id prefix.
+  Node? _nodeFor(PlannerEvent event) {
+    final linked = nodeByEventId[event.id];
+    if (linked != null) return linked;
+    if (isNodeBlockId(event.id)) {
+      return nodeById[nodeIdFromBlockId(event.id)];
+    }
+    return null;
   }
 
   bool _isVisible(
@@ -324,13 +357,10 @@ class CalendarProjection {
   }
 }
 
-Color calendarEventColor(PlannerEvent event, Map<String, Color> feedColors) {
-  final label = event.classLabel;
-  if (label != null && label.isNotEmpty) return courseColor(label);
-  final color = event.colorValue;
-  if (color != null) return mutedCalendarColor(Color(color));
-  final feedColor = feedColors[event.feedId];
-  return feedColor == null
-      ? const Color(defaultPersonalEventColor)
-      : mutedCalendarColor(feedColor);
-}
+Color calendarEventColor(
+  PlannerEvent event,
+  Map<String, Color> feedColors, {
+  ColorPrefs prefs = const ColorPrefs(),
+  Node? node,
+}) =>
+    resolveEventColor(event, feedColors, prefs, node: node);

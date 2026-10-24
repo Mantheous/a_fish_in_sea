@@ -24,11 +24,10 @@ import '../model/recurrence.dart';
 import '../model/task_assignee.dart';
 import '../service/event_reminders.dart';
 import 'event_editor_actions.dart';
+import 'event_colors.dart';
 import 'event_time_sections.dart';
 import 'people_field.dart';
 import 'reminder_prompt.dart' show ReminderField, maybePromptForEventReminder;
-
-const int _personalEventColor = 0xFF6B8F8A;
 
 Future<bool?> showEventEditor(
   BuildContext context, {
@@ -2433,7 +2432,7 @@ class _DayConflictsSection extends StatelessWidget {
                       width: 10,
                       height: 10,
                       decoration: BoxDecoration(
-                        color: _dotColor(context, event),
+                        color: _eventDotColor(context, event),
                         shape: BoxShape.circle,
                       ),
                     ),
@@ -2500,18 +2499,24 @@ class _DayConflictsSection extends StatelessWidget {
     );
   }
 
-  Color _dotColor(BuildContext context, PlannerEvent event) {
-    final label = event.classLabel;
-    if (label != null && label.isNotEmpty) return courseColor(label);
-    if (event.colorValue != null) {
-      return mutedCalendarColor(Color(event.colorValue!));
-    }
-    try {
-      final feed = context.read<FeedCubit>().byId(event.feedId ?? '');
-      if (feed != null) return mutedCalendarColor(feed.color);
-    } catch (_) {}
-    return const Color(_personalEventColor);
-  }
+}
+
+/// Dot color for one event, shared by the day-conflicts list and the event
+/// detail header so both honor the Colors page choices.
+Color _eventDotColor(BuildContext context, PlannerEvent event) {
+  final prefs = colorPrefsOf(context);
+  var feedColors = const <String, Color>{};
+  try {
+    feedColors = {
+      for (final feed in context.read<FeedCubit>().state) feed.id: feed.color,
+    };
+  } catch (_) {}
+  Node? node;
+  try {
+    final nodes = context.read<NodeCubit>();
+    node = nodes.byId(event.taskId ?? '') ?? nodes.byId(event.id);
+  } catch (_) {}
+  return resolveEventColor(event, feedColors, prefs, node: node);
 }
 
 class _EventDetailSheet extends StatelessWidget {
@@ -2577,11 +2582,7 @@ class EventDetailView extends StatelessWidget {
     final pushesToGoogle =
         event.isFromFeed && feedCubit.isRemoteEditable(event);
     final classLabel = event.classLabel;
-    final Color dotColor = classLabel != null && classLabel.isNotEmpty
-        ? courseColor(classLabel)
-        : (feed == null
-            ? const Color(_personalEventColor)
-            : mutedCalendarColor(feed.color));
+    final Color dotColor = _eventDotColor(context, event);
     final String sourceLabel =
         classLabel != null && classLabel.isNotEmpty
             ? classLabel

@@ -14,6 +14,7 @@ import 'package:a_fish_in_sea/reporting/bloc/tracking_cubit.dart';
 import 'package:a_fish_in_sea/reporting/service/location_service.dart';
 import 'package:a_fish_in_sea/reporting/view/places_sheet.dart';
 import 'package:a_fish_in_sea/settings/view/api_tokens_section.dart';
+import 'package:a_fish_in_sea/settings/view/colors_page.dart';
 import 'package:a_fish_in_sea/settings/view/fitness_section.dart';
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
 import 'package:a_fish_in_sea/sync/sync_engine.dart';
@@ -64,6 +65,24 @@ class _SettingsPageState extends State<SettingsPage> {
                   'automatically. Learning Suite: add each class separately.',
               itemNoun: 'class',
               showGoogleButton: false,
+            ),
+          ),
+          _SettingsSection(
+            title: 'Colors',
+            subtitle: 'Homework one color, a color per class or calendar, and '
+                'the surfaces those choices repaint.',
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.palette_outlined),
+              title: const Text('Event colors'),
+              subtitle: const Text(
+                'Color all homework the same, assign colors per class, '
+                'and choose where they apply.',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const ColorsPage()),
+              ),
             ),
           ),
           const _SettingsSection(

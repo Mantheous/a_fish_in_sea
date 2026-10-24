@@ -15,6 +15,8 @@ import 'package:a_fish_in_sea/planner/model/assignment_estimate.dart';
 import 'package:a_fish_in_sea/planner/model/assignment_rule.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
+import 'package:a_fish_in_sea/planner/model/color_prefs.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/model/task.dart';
@@ -732,6 +734,37 @@ void main() {
       expect(restored?.map((n) => n.id), ['t1', 't2']);
       expect(restored?.firstWhere((n) => n.id == 't1').title, 'original');
       expect(restored?.firstWhere((n) => n.id == 't2').title, 'from sync');
+    });
+
+    test('SettingsCubit keeps valid color choices around corrupt entries', () {
+      final cubit = SettingsCubit();
+      final restored = cubit.fromJson({
+        'snapMinutes': 20,
+        'colors': {
+          'homework': 0xFF6A8FB5,
+          'personal': 'not-a-color',
+          'classes': {
+            'STAT 230-002': 0xFFB2706B,
+            'WRTG 150': [1, 2],
+          },
+          'applyToCalendar': false,
+        },
+      });
+      expect(restored, isNotNull);
+      expect(restored!.snapMinutes, 20);
+      expect(restored.colors.homework, 0xFF6A8FB5);
+      expect(restored.colors.personal, isNull);
+      expect(restored.colors.classes, {'STAT 230-002': 0xFFB2706B});
+      expect(restored.colors.applyToCalendar, isFalse);
+      expect(restored.colors.applyToTaskLists, isTrue);
+
+      // A colors blob of the wrong type cannot wipe the other settings.
+      final wrongType = cubit.fromJson({
+        'defaultEventFeedId': 'feed-1',
+        'colors': 'garbage',
+      });
+      expect(wrongType?.defaultEventFeedId, 'feed-1');
+      expect(wrongType?.colors, const ColorPrefs());
     });
   });
 }
