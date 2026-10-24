@@ -439,9 +439,11 @@ class _BoundRow extends StatelessWidget {
                   ChoiceChip(
                     label: const Text('Weekday'),
                     selected: value.kind == TaskRangeBoundKind.weekday,
+                    // This week, not next: switching anchor must not jump
+                    // the bound a week ahead before the user picks.
                     onSelected: (_) => onChanged(
                         const TaskRangeBound.weekday(
-                            weekday: DateTime.monday, weeksOut: 1)),
+                            weekday: DateTime.monday, weeksOut: 0)),
                   ),
                 ],
               ),
@@ -549,7 +551,13 @@ class _WeekdayPicker extends StatelessWidget {
     required this.onChanged,
   });
 
+  // Negative entries reach earlier weeks: with Monday-start weeks,
+  // "Sunday of last week" is the Sunday that just passed for most
+  // readers, which the old 0-floor picker could not express at all.
+  static const _weekValues = [-2, -1, 0, 1, 2, 3];
   static const _weekLabels = [
+    '2 weeks ago',
+    'Last week',
     'This week',
     'Next week',
     'In 2 weeks',
@@ -579,13 +587,13 @@ class _WeekdayPicker extends StatelessWidget {
         const SizedBox(width: 8),
         Expanded(
           child: DropdownButton<int>(
-            value: weeksOut.clamp(0, _weekLabels.length - 1),
+            value: weeksOut.clamp(_weekValues.first, _weekValues.last),
             isExpanded: true,
             items: [
-              for (var w = 0; w < _weekLabels.length; w++)
+              for (var i = 0; i < _weekValues.length; i++)
                 DropdownMenuItem(
-                  value: w,
-                  child: Text(_weekLabels[w]),
+                  value: _weekValues[i],
+                  child: Text(_weekLabels[i]),
                 ),
             ],
             onChanged: (w) {

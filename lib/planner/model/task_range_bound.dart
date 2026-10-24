@@ -7,7 +7,9 @@ const int taskDateRangeMaxOffset = 365;
 int clampTaskDateOffset(int value) =>
     value.clamp(taskDateRangeMinOffset, taskDateRangeMaxOffset);
 
-/// Cap for "N weeks out" on weekday bounds. The picker only offers 0–3.
+/// Bounds for "N weeks out" on weekday bounds: negative looks back
+/// (-1 = last week). The picker only offers -2–3.
+const int taskRangeWeeksOutMin = -52;
 const int taskRangeWeeksOutMax = 52;
 
 /// How one end of a rolling custom range pins itself to the calendar.
@@ -21,7 +23,9 @@ enum TaskRangeBoundKind {
 
   /// A named weekday N weeks out. Weeks start Monday: on Saturday Oct 17
   /// 2026, Monday of next week (weeksOut 1) is Oct 19 — "the next Monday
-  /// that's not this week". Monday of this week (weeksOut 0) is Oct 12.
+  /// that's not this week". Monday of this week (weeksOut 0) is Oct 12,
+  /// and Sunday of last week (weeksOut -1) is Oct 11 — the Sunday that
+  /// opened the current calendar span for Sunday-start readers.
   weekday,
 }
 
@@ -52,7 +56,8 @@ class TaskRangeBound extends Equatable {
   /// [TaskRangeBoundKind.weekday].
   final int weekday;
 
-  /// 0 = this week, 1 = next week, and so on. Only read for weekday.
+  /// 0 = this week, 1 = next week, -1 = last week, and so on. Only read
+  /// for weekday.
   final int weeksOut;
 
   const TaskRangeBound.unbounded()
@@ -94,7 +99,7 @@ class TaskRangeBound extends Equatable {
         TaskRangeBoundKind.unbounded => 'any time',
         TaskRangeBoundKind.offset => _offsetLabel(offsetDays),
         TaskRangeBoundKind.weekday =>
-          '${taskRangeWeekdayName(weekday)} of ${weeksOut == 0 ? 'this week' : weeksOut == 1 ? 'next week' : 'in $weeksOut weeks'}',
+          '${taskRangeWeekdayName(weekday)} of ${_weeksOutLabel(weeksOut)}',
       };
 
   Map<String, dynamic> toJson() => {
@@ -137,7 +142,7 @@ class TaskRangeBound extends Equatable {
         }
         return TaskRangeBound.weekday(
           weekday: w,
-          weeksOut: n.clamp(0, taskRangeWeeksOutMax),
+          weeksOut: n.clamp(taskRangeWeeksOutMin, taskRangeWeeksOutMax),
         );
     }
   }
@@ -145,6 +150,14 @@ class TaskRangeBound extends Equatable {
   @override
   List<Object?> get props => [kind, offsetDays, weekday, weeksOut];
 }
+
+String _weeksOutLabel(int weeksOut) => switch (weeksOut) {
+      0 => 'this week',
+      1 => 'next week',
+      -1 => 'last week',
+      > 1 => 'in $weeksOut weeks',
+      _ => '${-weeksOut} weeks ago',
+    };
 
 String _offsetLabel(int offset) => switch (offset) {
       0 => 'today',
