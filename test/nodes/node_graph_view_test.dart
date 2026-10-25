@@ -255,4 +255,29 @@ void main() {
     expect(find.textContaining('2 of 4 goals'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('empty filter result offers a way back', (tester) async {
+    final nodes = NodeCubit();
+    nodes.emitSilent([
+      goal('school', title: 'School'),
+      goal('math', title: 'Math', parents: ['school']),
+    ]);
+    await tester.pumpWidget(harness(nodes));
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('goal-filter-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('goal-filter-kind-money')),
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('goal-filter-apply')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('No goals match these filters.'), findsOneWidget);
+    await tester.tap(find.text('Clear filters'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('graph-node-school')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }
