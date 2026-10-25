@@ -12,6 +12,7 @@ import 'package:a_fish_in_sea/planner/model/task.dart';
 
 import '../model/node.dart';
 import '../model/node_relations.dart';
+import '../service/class_membership.dart';
 import '../service/event_schedule.dart';
 import '../service/node_feed_import.dart';
 import '../service/node_event_detach.dart';
@@ -692,6 +693,9 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
           ),
           recurrence: n.recurrence,
           auto: n.auto,
+          extraMetrics: n.extraMetrics,
+          classFacet: n.classFacet,
+          classNodeId: n.classNodeId,
           rule: n.rule,
           instanceOfId: n.instanceOfId == null
               ? null
@@ -1540,6 +1544,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       feedId: template.feedId,
       classId: template.classId,
       classLabel: template.classLabel,
+      classNodeId: template.classNodeId,
       assignees: template.assignees,
     );
   }
@@ -1983,8 +1988,11 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     Set<String> taskOptOutIds = const {},
     List<AssignmentRule> assignmentRules = const [],
   }) {
-    final next = importFeedNodes(state, events, feed,
+    final imported = importFeedNodes(state, events, feed,
         taskOptOutIds: taskOptOutIds, assignmentRules: assignmentRules);
+    // Existing class nodes attach by source key as soon as their feed
+    // reports again; no destructive migration or one-time rewrite needed.
+    final next = attachClassMembership(imported);
     if (!identical(next, state)) emitSilent(next);
   }
 

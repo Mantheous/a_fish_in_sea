@@ -62,7 +62,8 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(find.text('Scripture study'), findsOneWidget);
-    expect(find.byIcon(Icons.auto_graph), findsOneWidget);
+    expect(find.byIcon(Icons.check_circle), findsOneWidget);
+    expect(find.textContaining('complete ✓'), findsOneWidget);
     expect(find.textContaining('2h / 2h'), findsOneWidget);
     expect(find.textContaining('this week'), findsOneWidget);
     expect(find.textContaining('1 task'), findsOneWidget);

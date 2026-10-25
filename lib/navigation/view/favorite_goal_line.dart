@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/auto_goal.dart';
+import '../../nodes/service/goal_completion.dart';
 import '../../nodes/service/goal_progress_snapshot.dart';
 import '../../nodes/view/node_checkbox.dart';
 
@@ -42,8 +43,10 @@ class FavoriteGoalLine extends StatelessWidget {
     final childCount = snapshot.childCountOf(live.id);
     final value = snapshot.progressOf(live.id);
     final reading = snapshot.readingOf(live.id);
+    final completion = snapshot.completionOf(live.id);
     final failed = live.status == NodeStatus.failed;
-    final checkboxGoal = _isCheckboxGoal(live);
+    final checkboxGoal =
+        _isCheckboxGoal(live) && completion?.derived != true;
     final showsProgress =
         !live.isUnbounded && (!checkboxGoal || childCount > 0);
     final statusColor = failed || live.isOverdueAt(now)
@@ -54,7 +57,7 @@ class FavoriteGoalLine extends StatelessWidget {
       contentPadding: EdgeInsets.zero,
       leading: checkboxGoal
           ? NodeCheckbox(node: live)
-          : _leadingIcon(context, live, value),
+          : _leadingIcon(context, live, value, completion),
       title: Text(
         live.title,
         style: live.isDone || failed
@@ -95,7 +98,12 @@ class FavoriteGoalLine extends StatelessWidget {
 
   /// Mirrors the Nodes-page leading icons so one goal reads the same on
   /// both surfaces. The percentage is in the tooltip and the bar below.
-  Widget _leadingIcon(BuildContext context, Node live, double value) {
+  Widget _leadingIcon(
+    BuildContext context,
+    Node live,
+    double value,
+    GoalCompletion? completion,
+  ) {
     final theme = Theme.of(context);
     final color = live.status == NodeStatus.failed
         ? theme.colorScheme.error
@@ -104,6 +112,19 @@ class FavoriteGoalLine extends StatelessWidget {
       return const Tooltip(
         message: 'Unbounded goal — ongoing, no checkbox',
         child: Icon(Icons.all_inclusive, size: 24),
+      );
+    }
+    if (completion?.derived == true) {
+      final complete = completion!.complete;
+      return Tooltip(
+        message: complete
+            ? 'Complete — all work/metrics pass'
+            : 'Incomplete — open work or metrics remain',
+        child: Icon(
+          complete ? Icons.check_circle : Icons.radio_button_unchecked,
+          size: 24,
+          color: complete ? color : theme.colorScheme.outline,
+        ),
       );
     }
     final percent = '${(value * 100).round()}%';

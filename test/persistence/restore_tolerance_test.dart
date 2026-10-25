@@ -416,15 +416,21 @@ void main() {
       final restored = cubit.fromJson({
         'nodes': [
           good,
-          {...good, 'id': 'auto2', 'auto': 'garbage'},
+          {
+            ...good,
+            'id': 'auto2',
+            'auto': 'garbage',
+          }..remove('metrics')..remove('extraMetrics'),
           {
             ...good,
             'id': 'auto3',
             'auto': {'source': 'telepathy', 'target': 'lots'},
-          },
+          }..remove('metrics')..remove('extraMetrics'),
           Map<String, dynamic>.from(good)
             ..['id'] = 'auto4'
-            ..remove('auto'),
+            ..remove('auto')
+            ..remove('metrics')
+            ..remove('extraMetrics'),
         ],
       });
       expect(
@@ -442,6 +448,62 @@ void main() {
       expect(restored?[2].auto?.target, 0);
       // Payloads written before automation existed load as plain goals.
       expect(restored?[3].auto, isNull);
+    });
+
+    test('NodeCubit keeps class nodes and metric lists, tolerates garbage', () {
+      final cubit = NodeCubit();
+      final classJson = Node(
+        id: 'cls1',
+        title: 'CMLIT 201',
+        createdAt: _day,
+        classFacet: const ClassFacet(
+          sources: [ClassSource(feedId: 'feed:ls', classLabel: 'CMLIT 201')],
+        ),
+        auto: const AutoFacet(metric: AutoMetric.allDone),
+        extraMetrics: const [
+          AutoFacet(metric: AutoMetric.minutes, target: 300),
+        ],
+      ).toJson();
+      final taskJson = Node(
+        id: 'task1',
+        title: 'Midterm review',
+        createdAt: _day,
+        parentIds: const ['cls1'],
+        classNodeId: 'cls1',
+        classId: 'cls1',
+        classLabel: 'CMLIT 201',
+      ).toJson();
+      final restored = cubit.fromJson({
+        'nodes': [
+          classJson,
+          taskJson,
+          {...classJson, 'id': 'cls2', 'classFacet': 'garbage'},
+          {
+            ...classJson,
+            'id': 'cls3',
+            'metrics': [
+              'not-a-map',
+              {'metric': 'vibes'},
+              {'metric': 'allDone'},
+            ],
+          },
+          Map<String, dynamic>.from(taskJson)
+            ..['id'] = 'task2'
+            ..remove('classNodeId'),
+        ],
+      });
+      expect(
+        restored?.map((n) => n.id),
+        ['cls1', 'task1', 'cls2', 'cls3', 'task2'],
+      );
+      expect(restored?[0].classFacet?.sources.single.classLabel, 'CMLIT 201');
+      expect(restored?[0].metrics, hasLength(2));
+      expect(restored?[1].classNodeId, 'cls1');
+      expect(restored?[2].classFacet, isNull);
+      expect(restored?[2].title, 'CMLIT 201');
+      // Corrupt metric entries drop per-item; unknown names fall back.
+      expect(restored?[3].metrics, isNotEmpty);
+      expect(restored?[4].classNodeId, isNull);
     });
 
     test('NodeCubit loads pre-flag nodes as bounded', () {

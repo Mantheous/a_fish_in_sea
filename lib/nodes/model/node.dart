@@ -1,10 +1,12 @@
 import 'package:equatable/equatable.dart';
 
 import 'auto_goal.dart';
+import 'class_node.dart';
 import 'node_calendar_link.dart';
 import 'node_recurrence.dart';
 
 export 'auto_goal.dart';
+export 'class_node.dart';
 export 'node_calendar_link.dart';
 export 'node_recurrence.dart';
 
@@ -481,7 +483,24 @@ class Node extends Equatable {
 
   /// Generic automated-goal definition. Additive and nullable: payloads
   /// written before it existed load as plain (non-automated) goals.
+  ///
+  /// [auto] is the first/primary metric; [extraMetrics] keeps the rest in
+  /// display order. Use [metrics] to read all of them.
   final AutoFacet? auto;
+
+  /// Additional metrics on the same goal, after [auto]. Metrics are just
+  /// statistics over the goal's scope; completion is derived from all of
+  /// them, not from a role flag.
+  final List<AutoFacet> extraMetrics;
+
+  /// Class-node identity. Set on nodes that represent a course, never on
+  /// work items. Source bindings live in the facet.
+  final ClassFacet? classFacet;
+
+  /// The class a work item belongs to, by node id. Imported homework gets
+  /// this from its feed source; manual work gets it from the class picker.
+  /// Completion is derived from the class `AllDone` metric or child work.
+  final String? classNodeId;
 
   /// Calendar series binding and lossless snapshots of reconciled records.
   final NodeCalendarLink? calendarLink;
@@ -524,6 +543,9 @@ class Node extends Equatable {
     this.anki,
     this.recurrence,
     this.auto,
+    this.extraMetrics = const [],
+    this.classFacet,
+    this.classNodeId,
     this.calendarLink,
     this.rule,
     this.instanceOfId,
@@ -546,17 +568,30 @@ class Node extends Equatable {
   bool get isTracking => timerStartedAt != null;
   bool get hasReported => actualStart != null && actualEnd != null;
 
-  /// Imported homework marker: provenance-based, never tag-based.
+  /// Imported or class-assigned homework: provenance, an explicit class
+  /// node, or both. A manual task with no class remains a personal task.
   bool get isHomework =>
       !(isInstance && calendarLink != null) &&
-      (sourceEventId != null || classId != null || feedId != null);
+      (sourceEventId != null ||
+          classId != null ||
+          feedId != null ||
+          classNodeId != null);
 
+  /// All metrics in display order. The first is the primary reading shown
+  /// on the goal row/progress bar; all of them gate derived completion.
+  List<AutoFacet> get metrics => [
+    if (auto != null) auto!,
+    ...extraMetrics,
+  ];
+
+  bool get hasMetrics => auto != null || extraMetrics.isNotEmpty;
+  bool get isClassNode => classFacet != null;
   bool get hasDue => schedule?.due != null;
   bool get hasCalendarBlock => schedule?.hasCalendarBlock ?? false;
   bool get hasMoney => money != null;
   bool get hasEffort => effort != null;
   bool get hasAnki => anki != null;
-  bool get isAutomatedGoal => auto != null;
+  bool get isAutomatedGoal => hasMetrics;
 
   Duration? get reportedDuration {
     final s = actualStart;
@@ -612,6 +647,11 @@ class Node extends Equatable {
     NodeRecurrence? recurrence,
     AutoFacet? auto,
     bool clearAuto = false,
+    List<AutoFacet>? extraMetrics,
+    ClassFacet? classFacet,
+    bool clearClassFacet = false,
+    String? classNodeId,
+    bool clearClassNodeId = false,
     NodeCalendarLink? calendarLink,
     bool clearCalendarLink = false,
     bool clearRecurrence = false,
@@ -656,6 +696,11 @@ class Node extends Equatable {
         anki: clearAnki ? null : (anki ?? this.anki),
         recurrence: clearRecurrence ? null : (recurrence ?? this.recurrence),
         auto: clearAuto ? null : (auto ?? this.auto),
+        extraMetrics: extraMetrics ?? this.extraMetrics,
+        classFacet:
+            clearClassFacet ? null : (classFacet ?? this.classFacet),
+        classNodeId:
+            clearClassNodeId ? null : (classNodeId ?? this.classNodeId),
         calendarLink: clearCalendarLink
             ? null : (calendarLink ?? this.calendarLink),
         rule: clearRule ? null : (rule ?? this.rule),
@@ -701,6 +746,10 @@ class Node extends Equatable {
     if (rawCreated is String) {
       createdAt = DateTime.tryParse(rawCreated) ?? createdAt;
     }
+    // `metrics` is the current list shape; a legacy single `auto` map
+    // loads as a one-item list so nothing written by the first automated
+    // build is lost.
+    final metrics = _metricsFromJson(json);
     return Node(
       id: rawId,
       title: (json['title'] as String?) ?? '',
@@ -745,10 +794,14 @@ class Node extends Equatable {
           ? _facetOrNull(() => NodeRecurrence.fromJson(
               Map<String, dynamic>.from(json['recurrence'] as Map)))
           : null,
-      auto: json['auto'] is Map
-          ? _facetOrNull(() => AutoFacet.fromJson(
-              Map<String, dynamic>.from(json['auto'] as Map)))
+      auto: metrics.isEmpty ? null : metrics.first,
+      extraMetrics:
+          metrics.length <= 1 ? const [] : metrics.sublist(1),
+      classFacet: json['classFacet'] is Map
+          ? _facetOrNull(() => ClassFacet.fromJson(
+              Map<String, dynamic>.from(json['classFacet'] as Map)))
           : null,
+      classNodeId: _stringOrNull(json['classNodeId']),
       rule: json['rule'] is Map
           ? _facetOrNull(() => RuleFacet.fromJson(
               Map<String, dynamic>.from(json['rule'] as Map)))
@@ -785,7 +838,13 @@ class Node extends Equatable {
         'effort': effort?.toJson(),
         'anki': anki?.toJson(),
         'recurrence': recurrence?.toJson(),
+        // Keep the legacy single metric key for older clients; the full
+        // ordered list is the source of truth on read.
         'auto': auto?.toJson(),
+        'extraMetrics': [for (final metric in extraMetrics) metric.toJson()],
+        'metrics': [for (final metric in metrics) metric.toJson()],
+        'classFacet': classFacet?.toJson(),
+        'classNodeId': classNodeId,
         'calendarLink': calendarLink?.toJson(),
         'rule': rule?.toJson(),
         'instanceOfId': instanceOfId,
@@ -819,6 +878,9 @@ class Node extends Equatable {
         anki,
         recurrence,
         auto,
+        extraMetrics,
+        classFacet,
+        classNodeId,
         calendarLink,
         rule,
         instanceOfId,
@@ -833,6 +895,12 @@ class Node extends Equatable {
         timerStartedAt,
         assignees,
       ];
+}
+
+String? _stringOrNull(Object? raw) {
+  if (raw is! String) return null;
+  final value = raw.trim();
+  return value.isEmpty ? null : value;
 }
 
 DateTime? _tryDate(Object? raw) {
@@ -853,6 +921,31 @@ T? _facetOrNull<T>(T Function() parse) {
   } catch (_) {
     return null;
   }
+}
+
+List<AutoFacet> _metricsFromJson(Map<String, dynamic> json) {
+  final raw = json['metrics'];
+  final out = <AutoFacet>[];
+  if (raw is List) {
+    for (final item in raw) {
+      if (item is! Map) continue;
+      final metric = _facetOrNull(
+        () => AutoFacet.fromJson(Map<String, dynamic>.from(item)),
+      );
+      if (metric != null) out.add(metric);
+      if (out.length >= 16) break;
+    }
+    if (out.isNotEmpty) return out;
+  }
+  if (json['auto'] is Map) {
+    final metric = _facetOrNull(
+      () => AutoFacet.fromJson(
+        Map<String, dynamic>.from(json['auto'] as Map),
+      ),
+    );
+    if (metric != null) return [metric];
+  }
+  return const [];
 }
 
 List<String> _stringList(Object? raw) {

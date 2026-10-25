@@ -29,7 +29,7 @@ String formatAutoMinutes(double value) {
 String formatAutoValue(AutoMetric metric, double value) => switch (metric) {
   AutoMetric.minutes || AutoMetric.averageMinutes => formatAutoMinutes(value),
   AutoMetric.amount => '\$${value.toStringAsFixed(2)}',
-  AutoMetric.percentDone => '${value.round()}%',
+  AutoMetric.allDone || AutoMetric.percentDone => '${value.round()}%',
   AutoMetric.count || AutoMetric.days => '${value.round()}',
 };
 
@@ -45,7 +45,7 @@ String describeAutoGoal(
   final parts = <String>[
     autoSourceLabel(facet.source),
     autoMetricLabel(facet.metric).toLowerCase(),
-    autoPeriodLabel(facet),
+    if (facet.metric != AutoMetric.allDone) autoPeriodLabel(facet),
   ];
   if (facet.source == AutoSource.tasks && facet.homeworkOnly) {
     parts.add('homework only');

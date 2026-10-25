@@ -15,6 +15,10 @@ enum AutoSource { tasks, money }
 
 /// How [AutoSource] rows are combined inside a period.
 enum AutoMetric {
+  /// Share of leaf work in scope that is done; complete only when every
+  /// leaf is done. Ignores the window: it is a structural measure.
+  allDone,
+
   /// Sum of minutes (recorded time, else elapsed calendar-block time).
   minutes,
 
@@ -99,13 +103,13 @@ class AutoFacet extends Equatable {
     this.horizonDays,
   });
 
-  bool get isConfigured => target > 0;
+  bool get isConfigured => metric == AutoMetric.allDone || target > 0;
 
   /// The unit a raw [target] is expressed in.
   String get unit => switch (metric) {
+    AutoMetric.allDone || AutoMetric.percentDone => 'percent',
     AutoMetric.minutes || AutoMetric.averageMinutes => 'minutes',
     AutoMetric.amount => 'dollars',
-    AutoMetric.percentDone => 'percent',
     AutoMetric.count || AutoMetric.days => 'count',
   };
 
@@ -209,6 +213,7 @@ AutoMetric defaultMetricFor(AutoSource source) => switch (source) {
 /// source cannot be added without deciding what it can measure.
 List<AutoMetric> autoMetricsFor(AutoSource source) => switch (source) {
   AutoSource.tasks => const [
+    AutoMetric.allDone,
     AutoMetric.minutes,
     AutoMetric.count,
     AutoMetric.days,
@@ -224,6 +229,7 @@ String autoSourceLabel(AutoSource source) => switch (source) {
 };
 
 String autoMetricLabel(AutoMetric metric) => switch (metric) {
+  AutoMetric.allDone => 'All work done',
   AutoMetric.minutes => 'Minutes',
   AutoMetric.averageMinutes => 'Average minutes',
   AutoMetric.count => 'Count',

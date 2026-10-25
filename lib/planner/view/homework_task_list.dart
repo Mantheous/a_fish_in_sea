@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../common/undo/undo_cubit.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
+import '../../nodes/view/class_picker.dart';
 import '../../nodes/service/node_calendar.dart';
 import '../../nodes/service/node_progress.dart';
 import '../../nodes/view/node_tile.dart';
@@ -108,14 +109,28 @@ class _HomeworkTaskListState extends State<HomeworkTaskList>
                 icon: const Icon(Icons.add),
                 label: const Text('Add a class'),
               ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () => showClassPicker(context, createOnly: true),
+                icon: const Icon(Icons.school_outlined),
+                label: const Text('Create a class without a feed'),
+              ),
             ],
           ),
         ),
       );
     }
+    final classNodeTitles = {
+      for (final node in allNodes)
+        if (node.isClassNode) node.id: node.title,
+    };
     final byClass = <String, List<Node>>{};
     for (final node in imported) {
-      final key = node.classLabel ?? node.classId ?? '';
+      // A class-node membership unifies imported and manual work in one
+      // group even when their feed labels differ (Learning Suite vs a
+      // hand-created class).
+      final key =
+          node.classNodeId ?? node.classLabel ?? node.classId ?? '';
       byClass.putIfAbsent(key, () => []).add(node);
     }
     // Sorted keys keep tile order stable across rebuilds so expansion
@@ -149,8 +164,19 @@ class _HomeworkTaskListState extends State<HomeworkTaskList>
         if (n.isOpen) openCount++;
       }
       groupOpenCount[key] = openCount;
+      final classTitle = classNodeTitles[key];
       final labeled = !list.every((node) => node.classLabel == null);
-      if (labeled) {
+      if (classTitle != null) {
+        groupMeta[key] = (
+          color: resolveClassColor(
+            classTitle,
+            colorPrefs,
+            useOverrides: colorPrefs.applyToTaskLists,
+          ),
+          name: classTitle,
+          removable: false,
+        );
+      } else if (labeled) {
         groupMeta[key] = (
           color: resolveClassColor(
             key,
@@ -218,6 +244,11 @@ class _HomeworkTaskListState extends State<HomeworkTaskList>
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      IconButton(
+                        tooltip: 'New class',
+                        icon: const Icon(Icons.create_new_folder_outlined),
+                        onPressed: () => showClassPicker(context, createOnly: true),
+                      ),
                       Badge(
                         isLabelVisible: unruledRepeating > 0,
                         label: Text('$unruledRepeating'),

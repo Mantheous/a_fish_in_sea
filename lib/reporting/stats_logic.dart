@@ -486,6 +486,7 @@ int _overlapWith(List<_Span> spans, List<_Span> others) {
 
   /// Appends [node]'s report as a span on its day.
   void _addNodeSpans(List<Node> nodes, List<_Span> out, StatsRange range) {
+    final byId = {for (final node in nodes) node.id: node};
     for (final node in nodes) {
       final start = node.actualStart;
       final end = node.actualEnd;
@@ -493,16 +494,17 @@ int _overlapWith(List<_Span> spans, List<_Span> others) {
       if (!range.contains(start)) continue;
       final minutes = end.difference(start).inMinutes;
       if (minutes <= 0) continue;
-      // Group key follows the same scheme as the learned effort index
-      // (feed/class scope), so the class totals and the per-type totals can
-      // be joined without guessing.
-      final scope = node.feedId ?? node.classId;
+      // A class-node membership unifies manual and imported work under one
+      // class key; provenance ids remain the fallback for unbound work.
+      final classNode =
+          node.classNodeId == null ? null : byId[node.classNodeId];
+      final scope = node.classNodeId ?? node.feedId ?? node.classId;
       out.add(_Span(
         start: start,
         end: end,
         groupKey: scope ?? 'unassigned',
-        label: node.classLabel ?? 'No class',
-        classLabel: node.classLabel,
+        label: classNode?.title ?? node.classLabel ?? 'No class',
+        classLabel: classNode?.title ?? node.classLabel,
         title: node.title,
         templateKey: node.isHomework ? assignmentTemplateKey(node.title) : null,
         nodeId: node.id,
@@ -535,20 +537,23 @@ AssignmentTimeReport buildAssignmentTimeReport({
     if (!range.contains(slice.start)) continue;
     final linked = slice.taskId == null ? null : nodeById[slice.taskId];
     final isAssignment = linked != null && linked.isHomework;
-    final label = (slice.classLabel?.trim().isNotEmpty ?? false)
-        ? slice.classLabel!.trim()
-        : (linked?.classLabel ?? 'No class');
+    final classNode =
+        linked?.classNodeId == null ? null : nodeById[linked!.classNodeId];
+    final label = classNode?.title ??
+        ((slice.classLabel?.trim().isNotEmpty ?? false)
+            ? slice.classLabel!.trim()
+            : (linked?.classLabel ?? 'No class'));
     // Same scope key the learned effort index uses, so a class total and
     // a per-type total describe the same thing.
     final scope = linked == null
         ? (slice.classLabel?.trim() ?? 'unassigned')
-        : (linked.feedId ?? linked.classId ?? label);
+        : (linked.classNodeId ?? linked.feedId ?? linked.classId ?? label);
     plannedSpans.add(_Span(
       start: slice.start,
       end: slice.end,
       groupKey: scope,
       label: label,
-      classLabel: linked?.classLabel ?? slice.classLabel,
+      classLabel: classNode?.title ?? linked?.classLabel ?? slice.classLabel,
       title: linked?.title ?? slice.title,
       templateKey: isAssignment ? assignmentTemplateKey(linked.title) : null,
       nodeId: slice.taskId ?? slice.eventId,
