@@ -246,8 +246,9 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('graph-action-edit')));
     await tester.pumpAndSettle();
-    // The parent picker is inline now: the class is a recent goal, so
-    // tapping its row is the whole flow.
+    // The parent picker starts collapsed; open it, then tap the class row.
+    await tester.tap(find.text('Add parent'));
+    await tester.pumpAndSettle();
     final classRow = find.text('CMLIT 201').last;
     await tester.ensureVisible(classRow);
     await tester.pumpAndSettle();

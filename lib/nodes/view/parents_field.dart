@@ -20,10 +20,12 @@ const int _searchLimit = 12;
 
 /// Parent chips plus an inline "add parent" search for the node editor.
 ///
-/// Laid out like the contacts field (`PeopleField`): selected parents sit in
-/// chips, a search box follows, and tapping a result adds it immediately.
-/// The list opens on the goals the user touched most recently, one row per
-/// repeating series — a habit's generated occurrences are not separate
+/// Collapsed by default: selected parents sit in chips next to an "Add
+/// parent" chip, and only that tap reveals the picker. The picker itself is
+/// laid out like the contacts field (`PeopleField`) — search box on top,
+/// tappable result rows — and tapping a result adds it immediately. The
+/// list opens on the goals the user touched most recently, one row per
+/// repeating series: a habit's generated occurrences are not separate
 /// parents and cannot be picked at all.
 class ParentsField extends StatefulWidget {
   final List<String> selected;
@@ -47,10 +49,21 @@ class ParentsField extends StatefulWidget {
 class _ParentsFieldState extends State<ParentsField> {
   final TextEditingController _search = TextEditingController();
 
+  /// Collapsed by default: the editor only shows the chips and an "Add
+  /// parent" chip until the user asks for the picker.
+  bool _expanded = false;
+
   @override
   void dispose() {
     _search.dispose();
     super.dispose();
+  }
+
+  void _expand() => setState(() => _expanded = true);
+
+  void _collapse() {
+    _search.clear();
+    setState(() => _expanded = false);
   }
 
   void _add(Node node) {
@@ -77,7 +90,7 @@ class _ParentsFieldState extends State<ParentsField> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text('Parents', style: theme.textTheme.labelLarge),
-        if (widget.selected.isNotEmpty) ...[
+        if (widget.selected.isNotEmpty || (!isInstance && !_expanded)) ...[
           const SizedBox(height: 6),
           Wrap(
             spacing: 6,
@@ -88,6 +101,12 @@ class _ParentsFieldState extends State<ParentsField> {
                   label: byId[id]?.title ?? 'node',
                   node: byId[id],
                   onDeleted: isInstance ? null : () => _remove(id),
+                ),
+              if (!isInstance && !_expanded)
+                ActionChip(
+                  avatar: const Icon(Icons.add, size: 16),
+                  label: const Text('Add parent'),
+                  onPressed: _expand,
                 ),
             ],
           ),
@@ -101,14 +120,20 @@ class _ParentsFieldState extends State<ParentsField> {
               style: theme.textTheme.bodySmall,
             ),
           )
-        else ...[
+        else if (_expanded) ...[
           const SizedBox(height: 6),
           TextField(
             controller: _search,
-            decoration: const InputDecoration(
+            autofocus: true,
+            decoration: InputDecoration(
               hintText: 'Search goals',
-              prefixIcon: Icon(Icons.search),
-              border: OutlineInputBorder(),
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: IconButton(
+                tooltip: 'Close parent search',
+                icon: const Icon(Icons.close, size: 18),
+                onPressed: _collapse,
+              ),
+              border: const OutlineInputBorder(),
               isDense: true,
             ),
             onChanged: (_) => setState(() {}),
