@@ -22,6 +22,11 @@ String? calendarGoalSeriesKey(PlannerEvent event) {
 class RecurringGoalLink {
   const RecurringGoalLink._();
 
+  /// Repairs converge in small batches. Deleting a whole backlog at once can
+  /// trip the sync mass-deletion guard on smaller devices, which would pull
+  /// the shadows back and repeat the cleanup forever.
+  static const int maxRemovalsPerPass = 50;
+
   static int reconcile(
     CalendarCubit calendar,
     NodeCubit nodes, {
@@ -66,6 +71,7 @@ class RecurringGoalLink {
       }
     }
     var linked = 0;
+    templateLoop:
     for (final template in all.where((n) => n.isTemplate && n.money == null)) {
       if (template.calendarLink?.isEnabled == false) continue;
       var key = template.calendarLink?.seriesKey;
@@ -137,6 +143,10 @@ class RecurringGoalLink {
         final duplicates = backing
             .where((n) => n.id != occurrence!.id)
             .toList();
+        if (removals.isNotEmpty &&
+            removals.length + duplicates.length > maxRemovalsPerPass) {
+          break templateLoop;
+        }
         if (duplicates.any(
           (n) =>
               referenced.contains(n.id) ||
@@ -252,7 +262,9 @@ class RecurringGoalLink {
     final status = settled.isEmpty ? NodeStatus.open : settled.single;
     DateTime? start = event.actualStart;
     DateTime? end = event.actualEnd;
-    DateTime? completed = event.completedAt;
+    // The occurrence's own completion is authority. A shadow ticked later
+    // must not move a done session into a newer automated-goal window.
+    DateTime? completed = occurrence.completedAt ?? event.completedAt;
     for (final n in records) {
       start ??= n.actualStart;
       end ??= n.actualEnd;

@@ -329,6 +329,24 @@ void main() {
     expect(nodes.byId('goal')!.parentIds, isNot(contains('auto')));
   });
 
+  test('a later shadow completion keeps the occurrence completion date', () {
+    seed(assigned: false, linked: true);
+    final instance = nodes.instancesOf('goal').first;
+    final completed = day.add(const Duration(hours: 7));
+    nodes.updateNode(
+      instance.copyWith(status: NodeStatus.done, completedAt: completed),
+    );
+    calendar.updateEvent(
+      calendar.byId('e1')!.copyWith(
+        done: true,
+        completedAt: day.add(const Duration(days: 1)),
+      ),
+    );
+    RecurringGoalLink.reconcile(calendar, nodes);
+    expect(nodes.byId(instance.id)!.completedAt, completed);
+    expect(nodes.byId('e1'), isNull);
+  });
+
   test('a goal-assigned event shadow merges into the recurring owner', () {
     seed(assigned: false, linked: true);
     nodes.addNode(
