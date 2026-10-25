@@ -17,6 +17,7 @@ import 'package:a_fish_in_sea/nodes/service/node_editor_schedule.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/view/class_picker.dart';
 import 'package:a_fish_in_sea/nodes/view/metrics_fields.dart';
+import 'package:a_fish_in_sea/nodes/view/node_editor_side_sheet.dart';
 import 'package:a_fish_in_sea/nodes/view/parents_field.dart';
 import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
@@ -27,7 +28,7 @@ import 'package:a_fish_in_sea/planner/view/class_names.dart';
 import 'package:a_fish_in_sea/planner/view/people_field.dart';
 
 /// Shows the node editor dialog. Returns the created or updated node on
-/// save, or null when the dialog is cancelled or the node is deleted.
+/// save, or null when the editor is cancelled or the node is deleted.
 /// Callers that ignore the result keep working unchanged.
 Future<Node?> showNodeEditor(
   BuildContext context, {
@@ -39,14 +40,39 @@ Future<Node?> showNodeEditor(
   /// goal tile). Ignored when [existing] is set.
   List<String> initialParentIds = const [],
 }) {
-  return showDialog<Node?>(
+  _NodeEditorDialog buildEditor() => _NodeEditorDialog(
+    existing: existing,
+    enableMoney: enableMoney,
+    enableRecurrence: enableRecurrence,
+    initialParentIds: initialParentIds,
+  );
+  if (MediaQuery.sizeOf(context).width >= nodeEditorSideSheetBreakpoint) {
+    return showGeneralDialog<Node>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Close goal editor',
+      barrierColor: Colors.black.withValues(alpha: 0.24),
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) =>
+          buildEditor(),
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        return SlideTransition(
+          position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
+              .animate(
+                CurvedAnimation(
+                  parent: animation,
+                  curve: Curves.easeOutCubic,
+                  reverseCurve: Curves.easeInCubic,
+                ),
+              ),
+          child: child,
+        );
+      },
+    );
+  }
+  return showDialog<Node>(
     context: context,
-    builder: (dialogContext) => _NodeEditorDialog(
-      existing: existing,
-      enableMoney: enableMoney,
-      enableRecurrence: enableRecurrence,
-      initialParentIds: initialParentIds,
-    ),
+    builder: (dialogContext) => buildEditor(),
   );
 }
 
@@ -192,591 +218,611 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   @override
   Widget build(BuildContext context) {
     final e = widget.existing;
+    final title = Text(e == null ? 'New node' : 'Edit node');
+    if (MediaQuery.sizeOf(context).width >= nodeEditorSideSheetBreakpoint) {
+      return _buildSideSheet(context, title, e);
+    }
     return AlertDialog(
-      title: Text(e == null ? 'New node' : 'Edit node'),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
+      title: title,
+      content: SingleChildScrollView(child: _buildFormContent(context, e)),
+      actionsAlignment: MainAxisAlignment.spaceBetween,
+      actions: _buildActions(context, e),
+    );
+  }
+
+  /// Full-height, right-aligned panel: header with a close button, the same
+  /// form, and a pinned action footer so Save never scrolls away.
+  Widget _buildSideSheet(BuildContext context, Widget title, Node? e) {
+    return NodeEditorSideSheet(
+      title: title,
+      form: _buildFormContent(context, e),
+      actions: _buildActions(context, e),
+    );
+  }
+
+  Widget _buildFormContent(BuildContext context, Node? e) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: _title,
+          autofocus: e == null,
+          decoration: const InputDecoration(
+            labelText: 'Title',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _notes,
+          decoration: const InputDecoration(
+            labelText: 'Notes',
+            border: OutlineInputBorder(),
+          ),
+          maxLines: 3,
+        ),
+        const SizedBox(height: 12),
+        ParentsField(
+          selected: _parents,
+          excludeId: e?.id,
+          onChanged: (next) => setState(() => _parents = next),
+        ),
+        const SizedBox(height: 12),
+        PeopleField(
+          selected: _people,
+          onChanged: (next) => setState(() => _people = next),
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('Abstract / unbounded goal'),
+          subtitle: const Text(
+            'Ongoing direction — no due date, no progress bar. '
+            'Track it through concrete subgoals.',
+          ),
+          value: _isUnbounded,
+          onChanged: (v) => setState(() => _isUnbounded = v),
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('Favorite goal'),
+          subtitle: const Text(
+            'Starred goals show on Home and under Favorites.',
+          ),
+          value: _isFavorite,
+          onChanged: (v) => setState(() => _isFavorite = v),
+        ),
+        if (e?.isClassNode != true) ...[
+          const SizedBox(height: 4),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.school_outlined),
+            title: const Text('Class'),
+            subtitle: Text(_className(context)),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_classNodeId != null)
+                  IconButton(
+                    tooltip: 'Clear class',
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: () => setState(() {
+                      _classNodeId = null;
+                      _parents = [
+                        for (final id in _parents)
+                          if (context.read<NodeCubit>().byId(id)
+                                  ?.isClassNode !=
+                              true)
+                            id,
+                      ];
+                    }),
+                  ),
+                IconButton(
+                  tooltip: 'Pick class',
+                  icon: const Icon(Icons.arrow_drop_down),
+                  onPressed: _pickClass,
+                ),
+              ],
+            ),
+          ),
+        ] else
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              'Class node — its work is the subtree plus imported '
+              'assignments from its bound feeds.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+        const SizedBox(height: 12),
+        if (!_isUnbounded) ...[
+          const SizedBox(height: 16),
+          _sectionTitle(context, 'Schedule'),
+          _DateRow(
+            label: _due == null
+                ? 'No due date'
+                : 'Due ${MaterialLocalizations.of(context).formatFullDate(_due!)}${_dateFixed ? ' · fixed' : ''}',
+            onPick: () async {
+              final picked = await showDatePicker(
+                context: context,
+                initialDate: _due ?? DateTime.now(),
+                firstDate: DateTime(2000),
+                lastDate: DateTime(2100),
+              );
+              if (picked != null) setState(() => _due = picked);
+            },
+            onClear: _due == null
+                ? null
+                : () => setState(() => _due = null),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: const Text('Fixed date'),
+            subtitle: const Text('Commitment; estimates stay flexible'),
+            value: _dateFixed,
+            onChanged: (v) => setState(() => _dateFixed = v),
+          ),
+          // Times are calendar events picked visually on the calendar:
+          // save, then use Schedule → Time to place this there. A
+          // stored block is preserved on save.
+          if ((widget.existing?.schedule?.hasCalendarBlock ?? false))
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                'Has a calendar time — change it via Schedule → Time.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          const SizedBox(height: 8),
+          _sectionTitle(context, 'Metrics'),
+          MetricsFields(
+            value: _metrics,
+            onChanged: (value) => setState(() => _metrics = value),
+            classOptions: _classOptions(context),
+            className: classNameResolver(context),
+            moneyCategoryOptions: _moneyCategoryOptions(context),
+            hasChildren: _hasChildren(context),
+          ),
+          if (_metrics.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                'Metrics measure this goal; manual targets below are '
+                'hidden.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          if (_metrics.isEmpty) ...[
+          const SizedBox(height: 8),
+          _sectionTitle(context, 'Money'),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: const Text('Tracks money'),
+            value: _hasMoney,
+            onChanged: (v) => setState(() => _hasMoney = v),
+          ),
+          if (_hasMoney) ...[
             TextField(
-              controller: _title,
-              autofocus: e == null,
+              controller: _amount,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               decoration: const InputDecoration(
-                labelText: 'Title',
+                labelText: 'Target amount',
+                prefixText: '\$ ',
                 border: OutlineInputBorder(),
               ),
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _notes,
+            const SizedBox(height: 8),
+            DropdownButtonFormField<MoneyDirection>(
+              initialValue: _direction,
+              decoration: const InputDecoration(labelText: 'Direction'),
+              items: const [
+                DropdownMenuItem(
+                  value: MoneyDirection.spend,
+                  child: Text('Spend (cap)'),
+                ),
+                DropdownMenuItem(
+                  value: MoneyDirection.income,
+                  child: Text('Income'),
+                ),
+                DropdownMenuItem(
+                  value: MoneyDirection.save,
+                  child: Text('Save toward'),
+                ),
+              ],
+              onChanged: (v) =>
+                  setState(() => _direction = v ?? _direction),
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<TimeScale?>(
+              initialValue: _period,
               decoration: const InputDecoration(
-                labelText: 'Notes',
-                border: OutlineInputBorder(),
+                labelText: 'Period (optional)',
               ),
-              maxLines: 3,
+              items: [
+                const DropdownMenuItem(
+                  value: null,
+                  child: Text('One-time'),
+                ),
+                for (final s in TimeScale.values)
+                  DropdownMenuItem(value: s, child: Text(s.displayName)),
+              ],
+              onChanged: (v) => setState(() => _period = v),
             ),
-            const SizedBox(height: 12),
-            ParentsField(
-              selected: _parents,
-              excludeId: e?.id,
-              onChanged: (next) => setState(() => _parents = next),
-            ),
-            const SizedBox(height: 12),
-            PeopleField(
-              selected: _people,
-              onChanged: (next) => setState(() => _people = next),
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              title: const Text('Abstract / unbounded goal'),
-              subtitle: const Text(
-                'Ongoing direction — no due date, no progress bar. '
-                'Track it through concrete subgoals.',
-              ),
-              value: _isUnbounded,
-              onChanged: (v) => setState(() => _isUnbounded = v),
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              title: const Text('Favorite goal'),
-              subtitle: const Text(
-                'Starred goals show on Home and under Favorites.',
-              ),
-              value: _isFavorite,
-              onChanged: (v) => setState(() => _isFavorite = v),
-            ),
-            if (e?.isClassNode != true) ...[
-              const SizedBox(height: 4),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.school_outlined),
-                title: const Text('Class'),
-                subtitle: Text(_className(context)),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (_classNodeId != null)
-                      IconButton(
-                        tooltip: 'Clear class',
-                        icon: const Icon(Icons.close, size: 18),
-                        onPressed: () => setState(() {
-                          _classNodeId = null;
-                          _parents = [
-                            for (final id in _parents)
-                              if (context.read<NodeCubit>().byId(id)
-                                      ?.isClassNode !=
-                                  true)
-                                id,
-                          ];
-                        }),
-                      ),
-                    IconButton(
-                      tooltip: 'Pick class',
-                      icon: const Icon(Icons.arrow_drop_down),
-                      onPressed: _pickClass,
-                    ),
-                  ],
+            if (_period == TimeScale.custom) ...[
+              const SizedBox(height: 8),
+              TextField(
+                controller: _customDaysCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Custom period (days)',
                 ),
               ),
-            ] else
+            ],
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text('Recurring'),
+              value: _moneyRecurring,
+              onChanged: (v) => setState(() => _moneyRecurring = v),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text('Auto rollover'),
+              value: _autoRollover,
+              onChanged: _moneyRecurring
+                  ? (v) => setState(() => _autoRollover = v)
+                  : null,
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text('Fixed amount'),
+              value: _moneyFixed,
+              onChanged: (v) => setState(() => _moneyFixed = v),
+            ),
+            if (e?.money != null &&
+                e!.money!.linkedTransactionIds.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  'Class node — its work is the subtree plus imported '
-                  'assignments from its bound feeds.',
+                  'Reported by ${e.money!.linkedTransactionIds.length} '
+                  'transaction(s) · ${e.money!.status.name}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
-            const SizedBox(height: 12),
-            if (!_isUnbounded) ...[
-              const SizedBox(height: 16),
-              _sectionTitle(context, 'Schedule'),
-              _DateRow(
-                label: _due == null
-                    ? 'No due date'
-                    : 'Due ${MaterialLocalizations.of(context).formatFullDate(_due!)}${_dateFixed ? ' · fixed' : ''}',
-                onPick: () async {
-                  final picked = await showDatePicker(
-                    context: context,
-                    initialDate: _due ?? DateTime.now(),
-                    firstDate: DateTime(2000),
-                    lastDate: DateTime(2100),
-                  );
-                  if (picked != null) setState(() => _due = picked);
-                },
-                onClear: _due == null
-                    ? null
-                    : () => setState(() => _due = null),
+          ],
+          const SizedBox(height: 8),
+          _sectionTitle(context, 'Time target'),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: const Text('Has time target'),
+            value: _hasEffort,
+            onChanged: (v) => setState(() => _hasEffort = v),
+          ),
+          if (_hasEffort) ...[
+            TextField(
+              controller: _minutes,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Target minutes',
+                border: OutlineInputBorder(),
               ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                title: const Text('Fixed date'),
-                subtitle: const Text('Commitment; estimates stay flexible'),
-                value: _dateFixed,
-                onChanged: (v) => setState(() => _dateFixed = v),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text('Fixed estimate'),
+              value: _effortFixed,
+              onChanged: (v) => setState(() => _effortFixed = v),
+            ),
+          ],
+          const SizedBox(height: 8),
+          _sectionTitle(context, 'Memorization (Anki)'),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: const Text('Has memorization target'),
+            subtitle: const Text(
+              'Review N Anki cards per period — progress feeds from '
+              'AnkiConnect or manual counts',
+            ),
+            value: _hasAnki,
+            onChanged: (v) => setState(() => _hasAnki = v),
+          ),
+          if (_hasAnki) ...[
+            TextField(
+              controller: _deck,
+              decoration: const InputDecoration(
+                labelText: 'Deck (blank = all decks)',
+                border: OutlineInputBorder(),
               ),
-              // Times are calendar events picked visually on the calendar:
-              // save, then use Schedule → Time to place this there. A
-              // stored block is preserved on save.
-              if ((widget.existing?.schedule?.hasCalendarBlock ?? false))
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    'Has a calendar time — change it via Schedule → Time.',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ),
-              const SizedBox(height: 8),
-              _sectionTitle(context, 'Metrics'),
-              MetricsFields(
-                value: _metrics,
-                onChanged: (value) => setState(() => _metrics = value),
-                classOptions: _classOptions(context),
-                className: classNameResolver(context),
-                moneyCategoryOptions: _moneyCategoryOptions(context),
-                hasChildren: _hasChildren(context),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _targetReviews,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Target reviews',
+                border: OutlineInputBorder(),
               ),
-              if (_metrics.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    'Metrics measure this goal; manual targets below are '
-                    'hidden.',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ),
-              if (_metrics.isEmpty) ...[
-              const SizedBox(height: 8),
-              _sectionTitle(context, 'Money'),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                title: const Text('Tracks money'),
-                value: _hasMoney,
-                onChanged: (v) => setState(() => _hasMoney = v),
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<TimeScale?>(
+              initialValue: _ankiPeriod,
+              decoration: const InputDecoration(
+                labelText: 'Period (optional)',
               ),
-              if (_hasMoney) ...[
-                TextField(
-                  controller: _amount,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: const InputDecoration(
-                    labelText: 'Target amount',
-                    prefixText: '\$ ',
-                    border: OutlineInputBorder(),
-                  ),
+              items: [
+                const DropdownMenuItem(
+                  value: null,
+                  child: Text('One-time'),
                 ),
-                const SizedBox(height: 8),
-                DropdownButtonFormField<MoneyDirection>(
-                  initialValue: _direction,
-                  decoration: const InputDecoration(labelText: 'Direction'),
-                  items: const [
-                    DropdownMenuItem(
-                      value: MoneyDirection.spend,
-                      child: Text('Spend (cap)'),
-                    ),
-                    DropdownMenuItem(
-                      value: MoneyDirection.income,
-                      child: Text('Income'),
-                    ),
-                    DropdownMenuItem(
-                      value: MoneyDirection.save,
-                      child: Text('Save toward'),
-                    ),
-                  ],
-                  onChanged: (v) =>
-                      setState(() => _direction = v ?? _direction),
-                ),
-                const SizedBox(height: 8),
-                DropdownButtonFormField<TimeScale?>(
-                  initialValue: _period,
-                  decoration: const InputDecoration(
-                    labelText: 'Period (optional)',
-                  ),
-                  items: [
-                    const DropdownMenuItem(
-                      value: null,
-                      child: Text('One-time'),
-                    ),
-                    for (final s in TimeScale.values)
-                      DropdownMenuItem(value: s, child: Text(s.displayName)),
-                  ],
-                  onChanged: (v) => setState(() => _period = v),
-                ),
-                if (_period == TimeScale.custom) ...[
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _customDaysCtrl,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'Custom period (days)',
-                    ),
-                  ),
-                ],
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  title: const Text('Recurring'),
-                  value: _moneyRecurring,
-                  onChanged: (v) => setState(() => _moneyRecurring = v),
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  title: const Text('Auto rollover'),
-                  value: _autoRollover,
-                  onChanged: _moneyRecurring
-                      ? (v) => setState(() => _autoRollover = v)
-                      : null,
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  title: const Text('Fixed amount'),
-                  value: _moneyFixed,
-                  onChanged: (v) => setState(() => _moneyFixed = v),
-                ),
-                if (e?.money != null &&
-                    e!.money!.linkedTransactionIds.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      'Reported by ${e.money!.linkedTransactionIds.length} '
-                      'transaction(s) · ${e.money!.status.name}',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ),
+                for (final s in TimeScale.values)
+                  DropdownMenuItem(value: s, child: Text(s.displayName)),
               ],
+              onChanged: (v) => setState(() => _ankiPeriod = v),
+            ),
+            if (_ankiPeriod == TimeScale.custom) ...[
               const SizedBox(height: 8),
-              _sectionTitle(context, 'Time target'),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                title: const Text('Has time target'),
-                value: _hasEffort,
-                onChanged: (v) => setState(() => _hasEffort = v),
-              ),
-              if (_hasEffort) ...[
-                TextField(
-                  controller: _minutes,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Target minutes',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  title: const Text('Fixed estimate'),
-                  value: _effortFixed,
-                  onChanged: (v) => setState(() => _effortFixed = v),
-                ),
-              ],
-              const SizedBox(height: 8),
-              _sectionTitle(context, 'Memorization (Anki)'),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                title: const Text('Has memorization target'),
-                subtitle: const Text(
-                  'Review N Anki cards per period — progress feeds from '
-                  'AnkiConnect or manual counts',
-                ),
-                value: _hasAnki,
-                onChanged: (v) => setState(() => _hasAnki = v),
-              ),
-              if (_hasAnki) ...[
-                TextField(
-                  controller: _deck,
-                  decoration: const InputDecoration(
-                    labelText: 'Deck (blank = all decks)',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _targetReviews,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Target reviews',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                DropdownButtonFormField<TimeScale?>(
-                  initialValue: _ankiPeriod,
-                  decoration: const InputDecoration(
-                    labelText: 'Period (optional)',
-                  ),
-                  items: [
-                    const DropdownMenuItem(
-                      value: null,
-                      child: Text('One-time'),
-                    ),
-                    for (final s in TimeScale.values)
-                      DropdownMenuItem(value: s, child: Text(s.displayName)),
-                  ],
-                  onChanged: (v) => setState(() => _ankiPeriod = v),
-                ),
-                if (_ankiPeriod == TimeScale.custom) ...[
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _ankiCustomDays,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'Custom period (days)',
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _manualReviews,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Reviews so far (this period)',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                if (_ankiSyncedAt != null)
-                  Text(
-                    'Last counted '
-                    '${MaterialLocalizations.of(context).formatFullDate(_ankiSyncedAt!)}',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                Row(
-                  children: [
-                    TextButton.icon(
-                      onPressed: _ankiSyncing ? null : () => _syncAnki(context),
-                      icon: _ankiSyncing
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.sync, size: 16),
-                      label: const Text('Sync from Anki'),
-                    ),
-                    TextButton.icon(
-                      onPressed: () => _importAnki(context),
-                      icon: const Icon(Icons.upload_outlined, size: 16),
-                      label: const Text('Paste stats'),
-                    ),
-                  ],
-                ),
-                if (kIsWeb)
-                  Text(
-                    'Sync from Anki goes through the app server here — '
-                    'sign in first. Manual entry and pasted stats still '
-                    'work offline.',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-              ],
-              const SizedBox(height: 8),
-              _sectionTitle(context, 'Repeats'),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                title: const Text('Repeats'),
-                subtitle: const Text(
-                  'Habit/budget template — generates dated instances',
-                ),
-                value: _hasRecurrence,
-                onChanged: (v) => setState(() => _hasRecurrence = v),
-              ),
-              if (_hasRecurrence) ...[
-                DropdownButtonFormField<TimeScale>(
-                  initialValue: _frequency,
-                  decoration: const InputDecoration(labelText: 'Frequency'),
-                  items: TimeScale.values
-                      .map(
-                        (s) => DropdownMenuItem(
-                          value: s,
-                          child: Text(s.displayName),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (v) =>
-                      setState(() => _frequency = v ?? _frequency),
-                ),
-                _DateRow(
-                  label: _recurEnd == null
-                      ? 'Repeats forever'
-                      : 'Ends ${MaterialLocalizations.of(context).formatFullDate(_recurEnd!)}',
-                  onPick: () async {
-                    final picked = await showDatePicker(
-                      context: context,
-                      initialDate:
-                          _recurEnd ??
-                          DateTime.now().add(const Duration(days: 365)),
-                      firstDate: DateTime(2000),
-                      lastDate: DateTime(2100),
-                    );
-                    if (picked != null) {
-                      setState(() => _recurEnd = picked);
-                    }
-                  },
-                  onClear: _recurEnd == null
-                      ? null
-                      : () => setState(() => _recurEnd = null),
-                ),
-              ],
-              ], // end if (_metrics.isEmpty): manual targets and repeats
-              if (e?.rule != null) ...[
-                const SizedBox(height: 8),
-                _sectionTitle(context, 'Legacy rule'),
-                DropdownButtonFormField<NodeRuleKind>(
-                initialValue: _ruleKind,
+              TextField(
+                controller: _ankiCustomDays,
+                keyboardType: TextInputType.number,
                 decoration: const InputDecoration(
-                  labelText: 'Derived goal (optional)',
+                  labelText: 'Custom period (days)',
                 ),
-                items: const [
-                  DropdownMenuItem(
-                    value: NodeRuleKind.none,
-                    child: Text('None'),
-                  ),
-                  DropdownMenuItem(
-                    value: NodeRuleKind.homeworkAhead,
-                    child: Text('Homework ahead'),
-                  ),
-                  DropdownMenuItem(
-                    value: NodeRuleKind.minBalance,
-                    child: Text('Minimum balance'),
-                  ),
-                ],
-                onChanged: (v) =>
-                    setState(() => _ruleKind = v ?? NodeRuleKind.none),
               ),
-              if (_ruleKind == NodeRuleKind.homeworkAhead) ...[
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _horizon,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Days ahead that must be done',
-                  ),
-                ),
-              ],
-              if (_ruleKind == NodeRuleKind.minBalance) ...[
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _minBalance,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: const InputDecoration(
-                    labelText: 'Floor balance',
-                    prefixText: '\$ ',
-                  ),
-                ),
-              ],
-              ], // end if (e?.rule != null): legacy rule
-            ], // end if (!_isUnbounded): dates, targets, repeats, rules
-            if (_isUnbounded) ...[
-              const SizedBox(height: 8),
+            ],
+            const SizedBox(height: 8),
+            TextField(
+              controller: _manualReviews,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Reviews so far (this period)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 4),
+            if (_ankiSyncedAt != null)
               Text(
-                'Add concrete subgoals underneath (e.g. “Serve others '
-                'this week”) — they carry the dates and the progress.',
+                'Last counted '
+                '${MaterialLocalizations.of(context).formatFullDate(_ankiSyncedAt!)}',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
-            ],
-            if (e != null &&
-                (e.hasReported && e.reportedDuration != null ||
-                    e.isTracking)) ...[
-              const SizedBox(height: 8),
-              Builder(
-                builder: (context) {
-                  // Live copy: a timer correction made in the edit sheet
-                  // (opened below) shows here without reopening the editor.
-                  Node live = e;
-                  try {
-                    live = context.watch<NodeCubit>().byId(e.id) ?? e;
-                  } catch (_) {}
-                  final trackingLine =
-                      live.isTracking && live.timerStartedAt != null
-                      ? 'Recording since ${DateFormat('h:mm a').format(live.timerStartedAt!)}'
-                      : null;
-                  final reportedLine =
-                      live.hasReported &&
-                          live.reportedDuration != null &&
-                          live.actualStart != null &&
-                          live.actualEnd != null
-                      ? 'Reported ${live.reportedDuration!.inMinutes}m '
-                            '(${DateFormat('h:mm a').format(live.actualStart!)} – '
-                            '${DateFormat('h:mm a').format(live.actualEnd!)})'
-                      : null;
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (trackingLine != null)
-                              Text(
-                                trackingLine,
-                                style: Theme.of(context).textTheme.bodySmall
-                                    ?.copyWith(fontWeight: FontWeight.w600),
-                              ),
-                            if (reportedLine != null)
-                              Text(
-                                reportedLine,
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ),
-                          ],
-                        ),
-                      ),
-                      if (trackingLine != null ||
-                          live.recordedSessions.length <= 1)
-                        TextButton(
-                          onPressed: () =>
-                              showEditNodeTimerSheet(context, nodeId: e.id),
-                          child: Text(
-                            trackingLine != null ? 'Edit start' : 'Adjust',
-                          ),
-                        ),
-                    ],
-                  );
-                },
-              ),
-            ],
-            if (e != null && e.status == NodeStatus.failed) ...[
-              const SizedBox(height: 4),
-              Text(
-                'Marked as failed — tap its box to unmark.',
-                style: Theme.of(context).textTheme.bodySmall
-                    ?.copyWith(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
-          ],
-        ),
-      ),
-      actionsAlignment: MainAxisAlignment.spaceBetween,
-      actions: [
-        if (e != null)
-          TextButton(
-            onPressed: () => _delete(context, e),
-            style: TextButton.styleFrom(
-              foregroundColor: Theme.of(context).colorScheme.error,
+            Row(
+              children: [
+                TextButton.icon(
+                  onPressed: _ankiSyncing ? null : () => _syncAnki(context),
+                  icon: _ankiSyncing
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.sync, size: 16),
+                  label: const Text('Sync from Anki'),
+                ),
+                TextButton.icon(
+                  onPressed: () => _importAnki(context),
+                  icon: const Icon(Icons.upload_outlined, size: 16),
+                  label: const Text('Paste stats'),
+                ),
+              ],
             ),
-            child: const Text('Delete'),
+            if (kIsWeb)
+              Text(
+                'Sync from Anki goes through the app server here — '
+                'sign in first. Manual entry and pasted stats still '
+                'work offline.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+          ],
+          const SizedBox(height: 8),
+          _sectionTitle(context, 'Repeats'),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: const Text('Repeats'),
+            subtitle: const Text(
+              'Habit/budget template — generates dated instances',
+            ),
+            value: _hasRecurrence,
+            onChanged: (v) => setState(() => _hasRecurrence = v),
           ),
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () => _save(context),
-          child: Text(e == null ? 'Add' : 'Save'),
-        ),
+          if (_hasRecurrence) ...[
+            DropdownButtonFormField<TimeScale>(
+              initialValue: _frequency,
+              decoration: const InputDecoration(labelText: 'Frequency'),
+              items: TimeScale.values
+                  .map(
+                    (s) => DropdownMenuItem(
+                      value: s,
+                      child: Text(s.displayName),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (v) =>
+                  setState(() => _frequency = v ?? _frequency),
+            ),
+            _DateRow(
+              label: _recurEnd == null
+                  ? 'Repeats forever'
+                  : 'Ends ${MaterialLocalizations.of(context).formatFullDate(_recurEnd!)}',
+              onPick: () async {
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate:
+                      _recurEnd ??
+                      DateTime.now().add(const Duration(days: 365)),
+                  firstDate: DateTime(2000),
+                  lastDate: DateTime(2100),
+                );
+                if (picked != null) {
+                  setState(() => _recurEnd = picked);
+                }
+              },
+              onClear: _recurEnd == null
+                  ? null
+                  : () => setState(() => _recurEnd = null),
+            ),
+          ],
+          ], // end if (_metrics.isEmpty): manual targets and repeats
+          if (e?.rule != null) ...[
+            const SizedBox(height: 8),
+            _sectionTitle(context, 'Legacy rule'),
+            DropdownButtonFormField<NodeRuleKind>(
+            initialValue: _ruleKind,
+            decoration: const InputDecoration(
+              labelText: 'Derived goal (optional)',
+            ),
+            items: const [
+              DropdownMenuItem(
+                value: NodeRuleKind.none,
+                child: Text('None'),
+              ),
+              DropdownMenuItem(
+                value: NodeRuleKind.homeworkAhead,
+                child: Text('Homework ahead'),
+              ),
+              DropdownMenuItem(
+                value: NodeRuleKind.minBalance,
+                child: Text('Minimum balance'),
+              ),
+            ],
+            onChanged: (v) =>
+                setState(() => _ruleKind = v ?? NodeRuleKind.none),
+          ),
+          if (_ruleKind == NodeRuleKind.homeworkAhead) ...[
+            const SizedBox(height: 8),
+            TextField(
+              controller: _horizon,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Days ahead that must be done',
+              ),
+            ),
+          ],
+          if (_ruleKind == NodeRuleKind.minBalance) ...[
+            const SizedBox(height: 8),
+            TextField(
+              controller: _minBalance,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(
+                labelText: 'Floor balance',
+                prefixText: '\$ ',
+              ),
+            ),
+          ],
+          ], // end if (e?.rule != null): legacy rule
+        ], // end if (!_isUnbounded): dates, targets, repeats, rules
+        if (_isUnbounded) ...[
+          const SizedBox(height: 8),
+          Text(
+            'Add concrete subgoals underneath (e.g. “Serve others '
+            'this week”) — they carry the dates and the progress.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+        if (e != null &&
+            (e.hasReported && e.reportedDuration != null ||
+                e.isTracking)) ...[
+          const SizedBox(height: 8),
+          Builder(
+            builder: (context) {
+              // Live copy: a timer correction made in the edit sheet
+              // (opened below) shows here without reopening the editor.
+              Node live = e;
+              try {
+                live = context.watch<NodeCubit>().byId(e.id) ?? e;
+              } catch (_) {}
+              final trackingLine =
+                  live.isTracking && live.timerStartedAt != null
+                  ? 'Recording since ${DateFormat('h:mm a').format(live.timerStartedAt!)}'
+                  : null;
+              final reportedLine =
+                  live.hasReported &&
+                      live.reportedDuration != null &&
+                      live.actualStart != null &&
+                      live.actualEnd != null
+                  ? 'Reported ${live.reportedDuration!.inMinutes}m '
+                        '(${DateFormat('h:mm a').format(live.actualStart!)} – '
+                        '${DateFormat('h:mm a').format(live.actualEnd!)})'
+                  : null;
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (trackingLine != null)
+                          Text(
+                            trackingLine,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(fontWeight: FontWeight.w600),
+                          ),
+                        if (reportedLine != null)
+                          Text(
+                            reportedLine,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (trackingLine != null ||
+                      live.recordedSessions.length <= 1)
+                    TextButton(
+                      onPressed: () =>
+                          showEditNodeTimerSheet(context, nodeId: e.id),
+                      child: Text(
+                        trackingLine != null ? 'Edit start' : 'Adjust',
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+        ],
+        if (e != null && e.status == NodeStatus.failed) ...[
+          const SizedBox(height: 4),
+          Text(
+            'Marked as failed — tap its box to unmark.',
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: Theme.of(context).colorScheme.error),
+          ),
+        ],
       ],
     );
+  }
+
+  List<Widget> _buildActions(BuildContext context, Node? e) {
+    return [
+      if (e != null)
+        TextButton(
+          onPressed: () => _delete(context, e),
+          style: TextButton.styleFrom(
+            foregroundColor: Theme.of(context).colorScheme.error,
+          ),
+          child: const Text('Delete'),
+        ),
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        onPressed: () => _save(context),
+        child: Text(e == null ? 'Add' : 'Save'),
+      ),
+    ];
   }
 
   String _className(BuildContext context) {
