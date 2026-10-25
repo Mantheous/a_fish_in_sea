@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
@@ -20,6 +21,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
+import 'package:intl/intl.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
@@ -287,6 +289,46 @@ void main() {
     expect(
       DateTime(display.year, display.month, display.day),
       DateTime(due.year, due.month, due.day),
+    );
+  });
+
+  testWidgets('the side panel names the day a task is planned', (tester) async {
+    final now = DateTime.now();
+    final dueDay = shiftByCalendarDays(localDay(now), 3);
+    final planDay = shiftByCalendarDays(localDay(now), 2);
+    final start = DateTime(planDay.year, planDay.month, planDay.day, 14);
+    await pumpCalendar(
+      tester,
+      nodes: [
+        Node(
+          id: 'n1',
+          title: 'Problem set 5',
+          createdAt: now,
+          schedule: ScheduleFacet(
+            due: DateTime(dueDay.year, dueDay.month, dueDay.day, 23, 59),
+          ),
+        ),
+      ],
+      events: [
+        PlannerEvent(
+          id: 'e1',
+          subject: 'PS5 work block',
+          start: start,
+          end: start.add(const Duration(hours: 1)),
+          isTask: true,
+          taskId: 'n1',
+        ),
+      ],
+    );
+    await tester.pump();
+
+    final dayFormat = DateFormat('EEE, MMM d');
+    expect(find.text('Due ${dayFormat.format(dueDay)}'), findsOneWidget);
+    expect(
+      find.text(
+        'Planned ${dayFormat.format(planDay)}, 2:00 PM – 3:00 PM',
+      ),
+      findsOneWidget,
     );
   });
 

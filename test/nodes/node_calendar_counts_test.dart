@@ -175,4 +175,78 @@ void main() {
       expect(counts, {'n1': 2});
     });
   });
+
+  group('upcomingNodePlans', () {
+    test('carries the earliest upcoming slot', () {
+      final plans = upcomingNodePlans(
+        [node('n1')],
+        [
+          event(
+            'e1',
+            start: now.add(const Duration(days: 2)),
+            length: const Duration(minutes: 90),
+            taskId: 'n1',
+          ),
+          event('e2', start: now.add(const Duration(days: 1)), taskId: 'n1'),
+        ],
+        now,
+      );
+      expect(plans.counts, {'n1': 2});
+      expect(
+        plans.nextSlots['n1'],
+        PlannedSlot(
+          start: now.add(const Duration(days: 1)),
+          end: now.add(const Duration(days: 1, hours: 1)),
+        ),
+      );
+    });
+
+    test('all-day and past entries add no slot', () {
+      final plans = upcomingNodePlans(
+        [node('n1')],
+        [
+          event(
+            'e1',
+            start: now.add(const Duration(days: 1)),
+            taskId: 'n1',
+            allDay: true,
+          ),
+          event(
+            'e2',
+            start: now.subtract(const Duration(days: 1)),
+            taskId: 'n1',
+          ),
+        ],
+        now,
+      );
+      expect(plans.counts, isEmpty);
+      expect(plans.nextSlots, isEmpty);
+    });
+
+    test('source-linked event is the slot, not the mirrored block', () {
+      final blockStart = now.add(const Duration(hours: 2));
+      final plans = upcomingNodePlans(
+        [
+          node(
+            'n1',
+            sourceEventId: 'e1',
+            schedule: ScheduleFacet(
+              start: blockStart,
+              end: blockStart.add(const Duration(minutes: 45)),
+            ),
+          ),
+        ],
+        [event('e1', start: blockStart)],
+        now,
+      );
+      expect(plans.counts, {'n1': 1});
+      expect(
+        plans.nextSlots['n1'],
+        PlannedSlot(
+          start: blockStart,
+          end: blockStart.add(const Duration(hours: 1)),
+        ),
+      );
+    });
+  });
 }

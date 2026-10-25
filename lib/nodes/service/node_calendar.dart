@@ -42,13 +42,43 @@ List<PlannerEvent> nodeCalendarBlocks(List<Node> nodes) {
   return out;
 }
 
+/// One upcoming work slot: where a node is planned on the calendar.
+class PlannedSlot {
+  final DateTime start;
+  final DateTime end;
+
+  const PlannedSlot({required this.start, required this.end});
+
+  @override
+  bool operator ==(Object other) =>
+      other is PlannedSlot && other.start == start && other.end == end;
+
+  @override
+  int get hashCode => Object.hash(start, end);
+
+  @override
+  String toString() => 'PlannedSlot($start – $end)';
+}
+
+/// Upcoming (future, timed) calendar entries per node: how many there are
+/// ([counts]) and the earliest one's bounds ([nextSlots]).
+class NodePlanOverview {
+  const NodePlanOverview({required this.counts, required this.nextSlots});
+
+  final Map<String, int> counts;
+
+  /// Earliest upcoming slot per node; absent when the node has none.
+  final Map<String, PlannedSlot> nextSlots;
+}
+
 /// Number of future, timed calendar entries linked to each node, keyed by
 /// node id. Nodes with no upcoming entries are absent from the map.
 ///
 /// The map is the single source of the app's "planned" meaning: the
-/// schedule button tints exactly when a node's count is positive, and the
-/// Planned/Unplanned task filter keeps exactly the nodes present here, so
-/// the button and the filter can never disagree.
+/// schedule button tints exactly when a node's count is positive, the
+/// Planned/Unplanned task filter keeps exactly the nodes present here, and
+/// the tile's "Planned …" line shows the slot from [upcomingNodePlans] — so
+/// the button, the filter, and the line can never disagree.
 ///
 /// An entry counts for a node when the calendar displays it as that node's
 /// schedule and it starts after [now]:
@@ -64,9 +94,33 @@ Map<String, int> futureCalendarEntryCounts(
   List<Node> nodes,
   List<PlannerEvent> events,
   DateTime now,
+) =>
+    upcomingNodePlans(nodes, events, now).counts;
+
+/// Single pass behind [futureCalendarEntryCounts]: same planned rules, plus
+/// the earliest upcoming slot's bounds for each node so tiles can name the
+/// day a task is planned on instead of only its times.
+NodePlanOverview upcomingNodePlans(
+  List<Node> nodes,
+  List<PlannerEvent> events,
+  DateTime now,
 ) {
   final countByNode = <String, int>{};
-  if (nodes.isEmpty) return countByNode;
+  final nextSlotByNode = <String, PlannedSlot>{};
+  if (nodes.isEmpty) {
+    return NodePlanOverview(counts: countByNode, nextSlots: nextSlotByNode);
+  }
+
+  void record(Node node, DateTime start, DateTime end) {
+    countByNode[node.id] = (countByNode[node.id] ?? 0) + 1;
+    final current = nextSlotByNode[node.id];
+    if (current == null ||
+        start.isBefore(current.start) ||
+        (start == current.start && end.isAfter(current.end))) {
+      nextSlotByNode[node.id] = PlannedSlot(start: start, end: end);
+    }
+  }
+
   final nodeById = <String, Node>{};
   final nodeByCalendarEventId = <String, Node>{};
   final nodeBySourceEventId = <String, Node>{};
@@ -90,7 +144,7 @@ Map<String, int> futureCalendarEntryCounts(
     final bySource = nodeBySourceEventId[e.id];
     if (bySource != null) targets.add(bySource);
     for (final n in targets) {
-      countByNode[n.id] = (countByNode[n.id] ?? 0) + 1;
+      record(n, e.start, e.end);
     }
   }
   for (final n in nodes) {
@@ -99,9 +153,12 @@ Map<String, int> futureCalendarEntryCounts(
     final s = n.schedule;
     if (s == null || s.allDay || !s.hasCalendarBlock) continue;
     if (!s.start!.isAfter(now)) continue;
-    countByNode[n.id] = (countByNode[n.id] ?? 0) + 1;
+    record(n, s.start!, s.end!);
   }
-  return countByNode;
+  return NodePlanOverview(
+    counts: countByNode,
+    nextSlots: nextSlotByNode,
+  );
 }
 
 /// Shift a node's schedule block by the same delta an event drag applied.

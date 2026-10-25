@@ -19,7 +19,6 @@ import '../bloc/node_cubit.dart';
 import '../model/node.dart';
 import '../service/node_calendar.dart';
 import '../service/node_event_link.dart';
-import '../service/node_progress.dart';
 import 'node_checkbox.dart';
 import 'node_editor.dart';
 import 'node_finish_sheet.dart';
@@ -55,6 +54,12 @@ class NodeTile extends StatelessWidget {
   /// standalone embeds: the tile then derives its own count from
   /// [CalendarCubit] via [futureCalendarEntryCounts].
   final Map<String, int>? upcomingEventCounts;
+
+  /// Earliest upcoming planned slot per node id, from the same pass as
+  /// [upcomingEventCounts]. Names the day on the "Planned …" line so a plan
+  /// visibly lands before its due date. Null in standalone embeds: the tile
+  /// then derives the slot for this node only.
+  final Map<String, PlannedSlot>? plannedSlots;
   // Multi-select state. While [selecting], the leading checkbox becomes
   // a selection box and taps toggle selection instead of opening the
   // editor; long-press is what enters selection mode.
@@ -83,6 +88,7 @@ class NodeTile extends StatelessWidget {
     this.linkedEventIds,
     this.linkedTaskIds,
     this.upcomingEventCounts,
+    this.plannedSlots,
     this.selected = false,
     this.selecting = false,
     this.onToggleSelection,
@@ -166,38 +172,20 @@ class NodeTile extends StatelessWidget {
     final upcomingCount = upcomingEventCounts != null
         ? (upcomingEventCounts![live.id] ?? 0)
         : _countUpcomingEvents(context, live, effectiveNow);
-    String? workLine;
-    final plannedStart = live.schedule?.start;
-    final plannedEnd = live.schedule?.end;
-    if (failed) {
-      workLine = 'Failed';
-    } else if (live.isTracking) {
-      workLine = 'Recording…';
-    } else if (live.hasReported && live.reportedDuration != null) {
-      final planned = live.schedule?.plannedDuration;
-      workLine = planned == null
-          ? 'Reported ${live.reportedDuration!.inMinutes}m'
-          : 'Reported ${live.reportedDuration!.inMinutes}m '
-                '(planned ${planned.inMinutes}m)';
-    } else if (plannedStart != null && plannedEnd != null) {
-      workLine =
-          'Planned ${formatTaskTime(plannedStart)} – '
-          '${formatTaskTime(plannedEnd)}';
-    } else if (live.isHomework) {
-      // Not placed yet: show what the app expects this to take, and the
-      // slot the schedule will default to.
-      workLine = estimateLine(estimateForNode(context, live));
-    } else if (live.money != null) {
-      final actual = (indexById != null && indexByParent != null)
-          ? moneyActualForNodeIndexed(
-              live,
-              byId: indexById!,
-              byParent: indexByParent!,
-            )
-          : moneyActualForNode(live, context.read<NodeCubit>().state);
-      workLine =
-          '\$${actual.toStringAsFixed(2)} / \$${live.money!.effectiveTarget.toStringAsFixed(2)}';
-    }
+    // The plan the calendar shows for this node: its next upcoming slot
+    // (own block or linked event). Its own block stays visible below even
+    // when it already started or passed, so a missed plan doesn't vanish.
+    final nextPlan = plannedSlots != null
+        ? plannedSlots![live.id]
+        : _nextPlannedSlot(context, live, effectiveNow);
+    final workLine = taskWorkLine(
+      context,
+      live,
+      now: effectiveNow,
+      plan: nextPlan,
+      indexById: indexById,
+      indexByParent: indexByParent,
+    );
     final due = live.schedule?.due;
     // Due today outranks the custom tint: same highlight, hotter color.
     // (A highlighted row is always open — the highlight set is open-only
@@ -502,6 +490,21 @@ class NodeTile extends StatelessWidget {
       return futureCalendarEntryCounts([node], events, now)[node.id] ?? 0;
     } catch (_) {
       return 0;
+    }
+  }
+
+  /// Per-tile fallback for embeds that didn't hoist [plannedSlots]: the next
+  /// planned slot for this one node, through the shared planner rules.
+  static PlannedSlot? _nextPlannedSlot(
+    BuildContext context,
+    Node node,
+    DateTime now,
+  ) {
+    try {
+      final events = context.read<CalendarCubit>().state;
+      return upcomingNodePlans([node], events, now).nextSlots[node.id];
+    } catch (_) {
+      return null;
     }
   }
 
