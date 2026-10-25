@@ -62,14 +62,48 @@ void main() {
     expect(merged['actualEnd'], c.end.toUtc().toIso8601String());
   });
 
-  test('an aggregate pair that already matches the runs is not duplicated', () {
-    final local = _payload([a, b]);
-    final merged = _payload([b]);
+  test('a remote aggregate that spans local runs is not counted again', () {
+    final local = _payload([a, b]); // 09:00–09:20 and 10:00–10:30
+    final merged = <String, dynamic>{
+      // A pre-sessions client writes only the aggregate span.
+      'actualStart': a.start.toUtc().toIso8601String(),
+      'actualEnd': b.end.toUtc().toIso8601String(),
+    };
     preserveRecordedSessions('nodes', local, merged);
 
     final sessions = TimeSession.listFromJson(merged['sessions']);
     expect(sessions.map((s) => s.id), ['ts:a', 'ts:b']);
+    expect(merged['actualStart'], a.start.toUtc().toIso8601String());
+    expect(merged['actualEnd'], b.end.toUtc().toIso8601String());
   });
+
+  test('the remote copy wins when both devices edited one run', () {
+    final local = _payload([a]);
+    final edited = (
+      id: 'ts:a',
+      start: DateTime(2026, 9, 12, 9, 5),
+      end: DateTime(2026, 9, 12, 9, 25),
+    );
+    final merged = _payload([edited]);
+    preserveRecordedSessions('nodes', local, merged);
+
+    final sessions = TimeSession.listFromJson(merged['sessions']);
+    expect(sessions, hasLength(1));
+    expect(sessions.single.start, edited.start);
+    expect(sessions.single.end, edited.end);
+  });
+
+  test(
+    'a remote aggregate pair that already matches the runs is not duplicated',
+    () {
+      final local = _payload([a, b]);
+      final merged = _payload([b]);
+      preserveRecordedSessions('nodes', local, merged);
+
+      final sessions = TimeSession.listFromJson(merged['sessions']);
+      expect(sessions.map((s) => s.id), ['ts:a', 'ts:b']);
+    },
+  );
 
   test('other collections are untouched', () {
     final local = _payload([a]);

@@ -297,6 +297,39 @@ void main() {
       );
     });
 
+    test('stopping a node timer keeps an event-only run', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      final eventOnly = TimeSession(
+        id: 'ts:event-only',
+        start: DateTime(2026, 10, 13, 6),
+        end: DateTime(2026, 10, 13, 6, 15),
+      );
+      calendar.addEvent(
+        evt('e1', taskId: 'n1').copyWith(
+          sessions: [eventOnly],
+          actualStart: eventOnly.start,
+          actualEnd: eventOnly.end,
+        ),
+      );
+      nodes.addNode(taskNode('n1', calendarEventId: 'e1'));
+      nodes.startTracking('n1', now: DateTime(2026, 10, 13, 8));
+      NodeEventLink.stopNodeTrackingAligned(
+        nodes,
+        calendar,
+        'n1',
+        now: DateTime(2026, 10, 13, 8, 30),
+      );
+
+      final mirrored = calendar.byId('e1')!;
+      expect(mirrored.recordedSessions, hasLength(2));
+      expect(
+        mirrored.recordedSessions.map((s) => s.id),
+        contains('ts:event-only'),
+      );
+      expect(mirrored.reportedDuration, const Duration(minutes: 45));
+    });
+
     test('starting a node stops a running plain event timer', () {
       final nodes = NodeCubit();
       final calendar = CalendarCubit();

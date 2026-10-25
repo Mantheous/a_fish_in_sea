@@ -496,14 +496,19 @@ class NodeEventLink {
     });
   }
 
-  /// Copies a session list onto an event and refreshes its aggregate span.
+  /// Copies the node's runs onto an event, keeping runs recorded directly
+  /// on the event instead of replacing its list.
   static PlannerEvent _eventWithSessions(
     PlannerEvent event,
     List<TimeSession> sessions,
   ) {
-    final span = sessionSpan(sessions);
+    var combined = event.recordedSessions;
+    for (final session in sessions) {
+      combined = withSession(combined, session);
+    }
+    final span = sessionSpan(combined);
     return event.copyWith(
-      sessions: sessions,
+      sessions: combined,
       actualStart: span?.start,
       clearActualStart: span == null,
       actualEnd: span?.end,

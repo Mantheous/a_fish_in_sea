@@ -91,7 +91,7 @@ class NodeEventSync {
     DateTime end,
   ) {
     final node = nodes.byId(nodeId);
-    if (node == null) return;
+    if (node == null || node.recordedSessions.length > 1) return;
     RevertableHydratedCubit.atomic([nodes, calendar], () {
       nodes.setReported(nodeId, start, end);
       final saved = nodes.byId(nodeId);

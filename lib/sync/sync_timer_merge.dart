@@ -42,22 +42,35 @@ void preserveRunningTimer(
 /// knows the legacy `actualStart`/`actualEnd` pair must not erase runs this
 /// device already has.
 ///
-/// The kept runs are unioned with the remote list (by session id). A session
-/// deleted locally can be resurrected when another device still has it; that
-/// is deliberately preferred over silently losing recorded time, which is
-/// unrecoverable. The aggregate `actualStart`/`actualEnd` span is recomputed
-/// from the union to stay consistent for older readers.
+/// Remote wins when both sides carry the same session id, so two devices
+/// that edited one run converge instead of ping-ponging forever. Local runs
+/// with new ids are appended; a legacy-only aggregate that overlaps them is
+/// ignored so the gap between two runs is never counted as extra work.
 void preserveRecordedSessions(
   String collection,
   Map<String, dynamic>? local,
   Map<String, dynamic> merged,
 ) {
   if (collection != 'nodes' && collection != 'events') return;
-  final localSessions = _sessionsWithOwnLegacy(local);
-  if (localSessions.isEmpty) return;
-  final remoteSessions = _sessionsWithOwnLegacy(merged);
-  var combined = remoteSessions;
+  final localExplicit = TimeSession.listFromJson(local?['sessions']);
+  final localLegacy = _legacySession(local);
+  final remoteExplicit = TimeSession.listFromJson(merged['sessions']);
+  final remoteLegacy = _legacySession(merged);
+  final localSessions = localExplicit.isNotEmpty
+      ? localExplicit
+      : [if (localLegacy != null) localLegacy];
+
+  var combined = remoteExplicit;
+  if (combined.isEmpty &&
+      remoteLegacy != null &&
+      !_overlapsAny(remoteLegacy, localSessions)) {
+    combined = [remoteLegacy];
+  }
   for (final session in localSessions) {
+    if (sessionById(combined, session.id) != null) continue;
+    // A legacy-only local pair is usually the aggregate of the remote runs;
+    // adding it would count the gaps between them as work.
+    if (localExplicit.isEmpty && _overlapsAny(session, combined)) continue;
     combined = withSession(combined, session);
   }
   if (combined.isEmpty) return;
@@ -69,17 +82,19 @@ void preserveRecordedSessions(
   }
 }
 
-/// Sessions plus a legacy-only interval that disagrees with them. Compares
-/// against this payload's own span, not the merged span, so an older aggregate
-/// pair is not mistaken for an extra run.
-List<TimeSession> _sessionsWithOwnLegacy(Map<String, dynamic>? payload) {
-  if (payload == null) return const [];
-  return sessionsWithLegacySpan(
-    TimeSession.listFromJson(payload['sessions']),
+TimeSession? _legacySession(Map<String, dynamic>? payload) {
+  if (payload == null) return null;
+  return TimeSession.legacySession(
     _payloadDate(payload['actualStart']),
     _payloadDate(payload['actualEnd']),
   );
 }
+
+bool _overlapsAny(TimeSession session, Iterable<TimeSession> others) =>
+    others.any(
+      (other) =>
+          session.start.isBefore(other.end) && session.end.isAfter(other.start),
+    );
 
 DateTime? _payloadDate(Object? raw) {
   if (raw is! String || raw.isEmpty) return null;
