@@ -40,10 +40,10 @@ List<Node> attachClassMembership(List<Node> nodes) {
       next.add(node);
       continue;
     }
-    final parents = [
-      for (final parent in node.parentIds)
-        if (byId[parent]?.isClassNode != true || parent == classNode.id) parent,
-    ];
+    // Import is not a re-parent operation: only add the resolved class
+    // edge. An explicit class picker/editor is where a user replaces one
+    // class parent with another, with an undo record.
+    final parents = [...node.parentIds];
     final needsParent = !parents.contains(classNode.id);
     final needsId = node.classNodeId != classNode.id;
     if (!needsParent && !needsId) {
