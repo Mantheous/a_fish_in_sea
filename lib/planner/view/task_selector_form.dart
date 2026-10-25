@@ -7,6 +7,7 @@ import '../bloc/calendar_cubit.dart';
 import '../model/task_date_range.dart';
 import '../model/task_range_bound.dart';
 import '../model/task_filter.dart';
+import 'class_names.dart';
 
 /// The "which tasks" half of a view or rule editor: name, date window,
 /// status, kind, classes, and planning. Emits a new [TaskFilter] on every
@@ -115,9 +116,14 @@ class _TaskSelectorFormState extends State<TaskSelectorForm> {
       name: _name.text.trim().isEmpty ? 'Filter' : _name.text.trim(),
     );
     final classOptions = _classOptions();
+    final className = classNameResolver(context);
     final classes = Set.of(draft.classKeys)
       ..removeWhere((c) => !classOptions.contains(c));
     final matchCount = _matchCount(draft.copyWith(classKeys: classes.toList()));
+    final summary = describeTaskFilter(
+      draft.copyWith(classKeys: classes.toList()),
+      className: className,
+    );
     final showUndatedRow =
         draft.date != TaskFilterDate.all && draft.date != TaskFilterDate.undated;
     return Column(
@@ -216,7 +222,7 @@ class _TaskSelectorFormState extends State<TaskSelectorForm> {
             children: [
               for (final c in classOptions)
                 FilterChip(
-                  label: Text(c),
+                  label: Text(className(c)),
                   selected: classes.contains(c),
                   onSelected: (sel) {
                     final next = Set.of(classes);
@@ -256,10 +262,8 @@ class _TaskSelectorFormState extends State<TaskSelectorForm> {
         const SizedBox(height: 12),
         Text(
           matchCount == null
-              ? describeTaskFilter(draft.copyWith(
-                  classKeys: classes.toList()))
-              : '${describeTaskFilter(draft.copyWith(classKeys: classes.toList()))}\n'
-                  'Keeps $matchCount To-Do row(s) right now.',
+              ? summary
+              : '$summary\nKeeps $matchCount To-Do row(s) right now.',
           style: Theme.of(context).textTheme.bodySmall,
         ),
       ],
@@ -439,9 +443,11 @@ class _BoundRow extends StatelessWidget {
                   ChoiceChip(
                     label: const Text('Weekday'),
                     selected: value.kind == TaskRangeBoundKind.weekday,
+                    // This week, not next: switching anchor must not jump
+                    // the bound a week ahead before the user picks.
                     onSelected: (_) => onChanged(
                         const TaskRangeBound.weekday(
-                            weekday: DateTime.monday, weeksOut: 1)),
+                            weekday: DateTime.monday, weeksOut: 0)),
                   ),
                 ],
               ),
@@ -549,7 +555,13 @@ class _WeekdayPicker extends StatelessWidget {
     required this.onChanged,
   });
 
+  // Negative entries reach earlier weeks: with Monday-start weeks,
+  // "Sunday of last week" is the Sunday that just passed for most
+  // readers, which the old 0-floor picker could not express at all.
+  static const _weekValues = [-2, -1, 0, 1, 2, 3];
   static const _weekLabels = [
+    '2 weeks ago',
+    'Last week',
     'This week',
     'Next week',
     'In 2 weeks',
@@ -579,13 +591,13 @@ class _WeekdayPicker extends StatelessWidget {
         const SizedBox(width: 8),
         Expanded(
           child: DropdownButton<int>(
-            value: weeksOut.clamp(0, _weekLabels.length - 1),
+            value: weeksOut.clamp(_weekValues.first, _weekValues.last),
             isExpanded: true,
             items: [
-              for (var w = 0; w < _weekLabels.length; w++)
+              for (var i = 0; i < _weekValues.length; i++)
                 DropdownMenuItem(
-                  value: w,
-                  child: Text(_weekLabels[w]),
+                  value: _weekValues[i],
+                  child: Text(_weekLabels[i]),
                 ),
             ],
             onChanged: (w) {

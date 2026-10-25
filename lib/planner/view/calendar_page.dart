@@ -24,6 +24,7 @@ import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/calendar_visibility_cubit.dart';
 import '../bloc/feed_cubit.dart';
+import '../model/color_prefs.dart';
 import '../model/event_reschedule.dart';
 import '../model/planner_event.dart';
 import '../bloc/settings_cubit.dart';
@@ -31,15 +32,18 @@ import '../service/calendar_report.dart';
 import '../service/event_reminders.dart';
 import '../service/report_adjustment.dart';
 import 'calendar_data_source.dart';
+import 'calendar_grid_tracker.dart';
 import 'calendar_projection.dart';
 import 'calendar_filter_sheet.dart';
 import 'calendar_report_layout.dart';
-import 'calendar_report_lane.dart';
-import 'calendar_scroll_sync.dart';
+import 'calendar_recording_banner.dart';
 import 'calendar_side_panel.dart';
+import 'calendar_snackbars.dart';
 import 'calendar_tile_metrics.dart';
+import 'event_colors.dart';
 import 'event_editor.dart';
 import 'feed_manager.dart';
+import 'report_lane_overlay.dart';
 import 'task_tile_helpers.dart';
 import 'tasks_panel.dart';
 
@@ -103,17 +107,27 @@ class _CalendarPageState extends State<CalendarPage> {
   Timer? _liveTicker;
   Timer? _suppressTimer;
   PlannerCalendarDataSource? _dataSource;
-  PlannerCalendarDataSource? _railDataSource;
-  final _railController = CalendarController();
   final _projection = CalendarProjection();
   TimeSlotViewSettings? _slotSettingsCache;
-  TimeSlotViewSettings? _railSlotSettingsCache;
   double? _slotStartHour;
   double? _slotEndHour;
-  late final _pairedScrollSync = CalendarScrollSync(
+
+  /// Where the plan calendar and the report overlay meet: the one grid's
+  /// scroll offset and on-screen rect. The overlay only reads it.
+  late final _gridTracker = PlanGridTracker(
     isMounted: () => mounted,
     timeGridViewportThreshold: _calendarViewHeaderHeight,
+    anchorKey: _calendarStackKey,
   );
+
+  /// The stack holding the calendar and its report overlay. The tracker
+  /// reports grid geometry relative to it.
+  final _calendarStackKey = GlobalKey(debugLabel: 'plan-calendar-stack');
+
+  /// Wraps the plan calendar so the tracker can walk down to its time-grid
+  /// scrollable (Syncfusion gives no public handle on it).
+  final _calendarSubtreeKey = GlobalKey(debugLabel: 'plan-calendar-subtree');
+  bool _gridDiscoveryScheduled = false;
 
   TimeSlotViewSettings _slotSettings(double startHour, double endHour) {
     if (_slotSettingsCache == null ||
@@ -137,25 +151,6 @@ class _CalendarPageState extends State<CalendarPage> {
       _slotEndHour = endHour;
     }
     return _slotSettingsCache!;
-  }
-
-  /// Slot settings for the report calendar: reserve the same time-ruler
-  /// width as the plan grid, but keep its labels blank.
-  TimeSlotViewSettings _railSlotSettings(double startHour, double endHour) {
-    if (_railSlotSettingsCache == null ||
-        _slotStartHour != startHour ||
-        _slotEndHour != endHour) {
-      _railSlotSettingsCache = TimeSlotViewSettings(
-        timeInterval: const Duration(minutes: 30),
-        startHour: startHour,
-        endHour: endHour,
-        // Keep the day columns aligned with the plan calendar; the plan grid
-        // already shows the hour labels.
-        timeRulerSize: _calendarTimeRulerWidth,
-        timeFormat: '',
-      );
-    }
-    return _railSlotSettingsCache!;
   }
 
   /// Schedules the tap-suppression reset. Cancelable so a pending reset
@@ -196,6 +191,9 @@ class _CalendarPageState extends State<CalendarPage> {
   void _setView(CalendarView view) {
     setState(() => _view = view);
     _controller.view = view;
+    // Day ↔ Week rebuilds the calendar's time-grid scrollable; re-find it.
+    _gridTracker.reset();
+    _scheduleGridDiscovery();
     try {
       if (context.read<SettingsCubit>().state.defaultCalendarView != view) {
         context.read<SettingsCubit>().setDefaultCalendarView(view);
@@ -209,14 +207,32 @@ class _CalendarPageState extends State<CalendarPage> {
     _view = context.read<SettingsCubit>().state.defaultCalendarView;
     _controller.view = _view;
     _controller.addPropertyChangedListener(_onCalendarControllerChanged);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final pending = context.read<CalendarDraftCubit>().takePending();
-      if (pending != null) {
-        _seedFromPageMount = true;
-        _openCreator(seed: pending);
-      }
-    });
+    // Claim a pending seed before the first build. The projection only puts
+    // a draft into the data source while the create flow is active, and a
+    // post-frame claim added the ghost through an incremental
+    // CalendarDataSourceAction.add after Syncfusion's initial layout — the
+    // appointment existed in the data source but never got painted, so a
+    // "schedule follow-up" landed on the calendar with no visible ghost.
+    final pending = _takePendingDraft();
+    if (pending != null) {
+      _seedFromPageMount = true;
+      final draft = _asDraft(pending);
+      _applyCreatorState(draft, seed: pending);
+      // The narrow-screen editor sheet needs a mounted Navigator; wide
+      // screens show the create panel from the first frame.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _isWide) return;
+        _openSheetCreator(_draftEvent ?? draft);
+      });
+    }
+  }
+
+  PlannerEvent? _takePendingDraft() {
+    try {
+      return context.read<CalendarDraftCubit>().takePending();
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
@@ -232,7 +248,11 @@ class _CalendarPageState extends State<CalendarPage> {
     }
     if (!_appliedPanelDefault) {
       _appliedPanelDefault = true;
-      _panelOpen = MediaQuery.of(context).size.width >= _panelDefaultBreakpoint;
+      // A pending seed claims the create flow in initState; the panel
+      // default must not close it on the first dependency pass.
+      _panelOpen =
+          _panelMode == CalendarPanelMode.creating ||
+          MediaQuery.of(context).size.width >= _panelDefaultBreakpoint;
     }
   }
 
@@ -242,142 +262,40 @@ class _CalendarPageState extends State<CalendarPage> {
     _suppressTimer?.cancel();
     _controller.removePropertyChangedListener(_onCalendarControllerChanged);
     _dataSource?.dispose();
-    _railDataSource?.dispose();
-    _railController.dispose();
+    _gridTracker.dispose();
     _controller.dispose();
     super.dispose();
   }
 
-  /// Navigation happens inside SfCalendar (header arrows, swipes): the
-  /// controller tells us the display date moved, and the report column must
-  /// follow it (its own calendar, whose controller we drive). Deferred to the
-  /// frame's end — the controller can also be updated from inside the
-  /// calendar's own build.
+  /// Navigation happens inside SfCalendar (header arrows, swipes). The
+  /// report overlay is derived from the same controller, so a navigation
+  /// only needs a rebuild; the tracker also re-finds the time grid because
+  /// Day ↔ Week swaps the scrollable underneath it.
   void _onCalendarControllerChanged(String property) {
+    _scheduleGridDiscovery();
     if (!_sideBySide || _view == CalendarView.month) return;
-    // Only touch the report calendar's controller while it is on screen:
-    // changing a calendar that is about to be removed schedules a post-frame
-    // relayout on a disposed state (Syncfusion calls setState there).
-    if (_railController.view != _controller.view) {
-      _railController.view = _controller.view;
-    }
-    final display = _controller.displayDate;
-    if (display != null && _railController.displayDate != display) {
-      _railController.displayDate = display;
-    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) setState(() {});
     });
   }
 
-  /// The report overlay's calendar: same visible dates and time grid as the
-  /// plan calendar, with its header removed because the plan supplies the
-  /// shared date headers.
-  Widget _railCalendar(SettingsState settings) {
-    return SfCalendar(
-      key: _railCalendarKey,
-      controller: _railController,
-      // Keep the hidden calendar on a cheap view: its month grid is never
-      // shown (the report overlay only exists in day/week).
-      view: _view == CalendarView.month ? CalendarView.day : _view,
-      dataSource: _railDataSource!,
-      firstDayOfWeek: 7,
-      allowDragAndDrop: false,
-      allowAppointmentResize: false,
-      appointmentBuilder: (context, details) => _railAppointmentBuilder(
-        context,
-        details,
-        settings.dayStartHour,
-        settings.dayEndHour,
-        settings.snapMinutes,
-      ),
-      onTap: _onRailTap,
-      timeSlotViewSettings: _railSlotSettings(
-        settings.dayStartHour,
-        settings.dayEndHour,
-      ),
-      todayHighlightColor: Theme.of(context).colorScheme.primary,
-      // The plan calendar supplies shared headers and navigation.
-      headerHeight: 0,
-      // Day view reserves one view-header-height row for its all-day area by
-      // default, even though it doesn't paint a weekday header. Keep that
-      // height so the report time grid lines up with the plan grid.
-      viewHeaderHeight: _view == CalendarView.day
-          ? _calendarViewHeaderHeight
-          : 0,
-      showNavigationArrow: false,
-    );
+  /// Finds the plan calendar's time-grid scrollable once the frame is laid
+  /// out. Deferred (and de-duplicated) because discovery runs during build:
+  /// the calendar's own subtree is only complete at frame end.
+  void _scheduleGridDiscovery() {
+    if (_gridDiscoveryScheduled) return;
+    _gridDiscoveryScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _gridDiscoveryScheduled = false;
+      if (!mounted) return;
+      final rootContext = _calendarSubtreeKey.currentContext;
+      if (rootContext == null) return;
+      _gridTracker.discover(rootContext);
+      _gridTracker.refreshViewport();
+    });
   }
 
-  static const Key _railCalendarKey = Key('report-calendar');
   static const Key _planCalendarKey = Key('plan-calendar');
-
-  /// Once the report column has been shown it stays mounted (just hidden):
-  /// removing a Syncfusion calendar from the tree can land its scheduled
-  /// relayout on a defunct state.
-  bool _railMounted = false;
-
-  Widget _railAppointmentBuilder(
-    BuildContext context,
-    CalendarAppointmentDetails details,
-    double startHour,
-    double endHour,
-    int snapMinutes,
-  ) {
-    if (details.isMoreAppointmentRegion) return const SizedBox.shrink();
-    final raw = details.appointments.isNotEmpty
-        ? details.appointments.first
-        : null;
-    final event = raw is PlannerEvent ? raw : null;
-    if (event == null) return const SizedBox.shrink();
-    // Copies of the plan calendar's all-day events keep both calendars' rows
-    // aligned and paint the report half over spanning plan tiles.
-    if (isReportPlaceholderId(event.id)) {
-      return ExcludeSemantics(
-        child: DecoratedBox(
-          key: ValueKey('report-mask:${event.id}'),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
-          ),
-          child: const SizedBox.expand(),
-        ),
-      );
-    }
-    _pairedScrollSync.rememberPosition(context, rail: true, timeGrid: true);
-    final blocks = _projection.reportBlocksByLaneId[event.id];
-    if (blocks == null) return const SizedBox.shrink();
-    final isRtl = Directionality.of(context).name == 'rtl';
-    return Align(
-      alignment: isRtl ? Alignment.centerLeft : Alignment.centerRight,
-      child: SizedBox(
-        width: details.bounds.width / 2,
-        child: ReportLaneView(
-          key: ValueKey('report-lane:${event.id}'),
-          blocks: blocks,
-          day: reportLaneDayOf(event.id) ?? event.start,
-          startHour: startHour,
-          endHour: endHour,
-          isRtl: isRtl,
-          selectedId: _selectedReportId,
-          snapMinutes: snapMinutes,
-          onIntervalChanged: _adjustReportedInterval,
-          onDeleted: _deleteReportedBlock,
-          colorFor: (block) =>
-              _projection.reportColorById[block.displayId] ??
-              const Color(defaultPersonalEventColor),
-          onTap: (block) {
-            _suppressNextTap();
-            _openReport(block.displayId);
-          },
-        ),
-      ),
-    );
-  }
-
-  /// The report column is read-only apart from its chips, which carry their
-  /// own tap handlers; an empty stretch of the column should not open
-  /// anything or create an event.
-  void _onRailTap(CalendarTapDetails details) {}
 
   /// The days the report overlay must cover: what the calendar shows right
   /// now — the display date in the day view, its Sunday-start week in the
@@ -626,8 +544,8 @@ class _CalendarPageState extends State<CalendarPage> {
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
                 child: Text(
                   'Each day: plan on the left, report right beside it · '
-                  'tap a report, then drag its circles to adjust · '
-                  'red = recording now',
+                  'tap a report for details and ▶ to record it again · '
+                  'drag its circles to adjust · red = recording now',
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
@@ -636,7 +554,7 @@ class _CalendarPageState extends State<CalendarPage> {
               ),
             // Toggl-style running-entry bar: always visible while an event
             // timer is recording, with elapsed time and Stop.
-            _RecordingBannerSlot(
+            RecordingBannerSlot(
               onOpen: (event) {
                 PlannerEvent? live;
                 try {
@@ -670,6 +588,7 @@ class _CalendarPageState extends State<CalendarPage> {
                     visibleStartHour: settings.dayStartHour,
                     visibleEndHour: settings.dayEndHour,
                     now: DateTime.now(),
+                    colorPrefs: settings.colors,
                     draft: wide && _panelMode == CalendarPanelMode.creating
                         ? _draftEvent
                         : null,
@@ -689,6 +608,7 @@ class _CalendarPageState extends State<CalendarPage> {
                       shown,
                       feedColors,
                       colorById,
+                      settings.colors,
                     );
                   } else if (!_dataSource!.matches(
                     shown,
@@ -697,41 +617,19 @@ class _CalendarPageState extends State<CalendarPage> {
                   )) {
                     _dataSource!.update(shown, feedColors, colorById);
                   }
-                  if (reportLanes) {
-                    final rails = _projection.reportRails;
-                    if (_railDataSource == null) {
-                      _railDataSource = PlannerCalendarDataSource(
-                        rails,
-                        const {},
-                      );
-                    } else if (!_railDataSource!.matches(
-                      rails,
-                      const {},
-                      null,
-                    )) {
-                      _railDataSource!.update(rails, const {});
-                    }
-                    // The rail calendar is never removed from the tree
-                    // again: disposing a Syncfusion calendar mid-flight can
-                    // land its scheduled relayout on a defunct state.
-                    _railMounted = true;
-                  }
+                  if (reportLanes) _scheduleGridDiscovery();
                   // Keep the calendar at a stable tree position. Opening a
                   // drawer or report hint must not dispose/recreate SfCalendar
                   // and regenerate every appointment (or leave its scheduled
                   // data-source callbacks pointing at a disposed state).
                   //
-                  // The report calendar is clipped to the trailing half of
-                  // every day cell over the plan grid. Plan tiles are laid out
-                  // in the matching leading half; both calendars stay
-                  // scrolled together by [_pairedScrollSync].
+                  // Plans are drawn in the leading half of each day cell and
+                  // the report overlay paints the trailing half. One calendar
+                  // owns every gesture; the overlay only mirrors its scroll.
                   final calendarView = LayoutBuilder(
                     builder: (context, constraints) {
                       final isRtl = Directionality.of(context).name == 'rtl';
                       final headerHeight = compactHeader ? 32.0 : 40.0;
-                      final viewHeaderHeight = _view == CalendarView.week
-                          ? _calendarViewHeaderHeight
-                          : 0.0;
                       final slotSettings = _slotSettings(
                         settings.dayStartHour,
                         settings.dayEndHour,
@@ -764,6 +662,7 @@ class _CalendarPageState extends State<CalendarPage> {
                             details,
                             reportById: reportById,
                             colorById: colorById,
+                            colorPrefs: settings.colors,
                             remoteEditableFeedIds:
                                 _projection.remoteEditableFeedIds,
                             nodeById: _projection.nodeById,
@@ -790,8 +689,7 @@ class _CalendarPageState extends State<CalendarPage> {
                             timeRulerWidth: _calendarTimeRulerWidth,
                             isRtl: isRtl,
                             eventId: event.id,
-                            timeGridViewportGlobal:
-                                _pairedScrollSync.planTimeViewportGlobal,
+                            tracker: _gridTracker,
                             onTap: () {
                               if (_suppressTap ||
                                   event.id == calendarDraftEventId) {
@@ -805,10 +703,9 @@ class _CalendarPageState extends State<CalendarPage> {
                                 _openDetail(event);
                               }
                             },
-                            onPointerSignal:
-                                _pairedScrollSync.onPlanPointerSignal,
+                            onPointerSignal: _gridTracker.onPlanPointerSignal,
                             onVerticalDragUpdate:
-                                _pairedScrollSync.onPlanVerticalDrag,
+                                _gridTracker.onPlanVerticalDrag,
                             onLongPressStart: (drag) => _onPairedPlanDragStart(
                               event,
                               drag.globalPosition,
@@ -834,9 +731,9 @@ class _CalendarPageState extends State<CalendarPage> {
                           agendaItemHeight: 44,
                         ),
                         timeSlotViewSettings: slotSettings,
-                        todayHighlightColor: Theme.of(context)
-                            .colorScheme
-                            .primary,
+                        todayHighlightColor: Theme.of(
+                          context,
+                        ).colorScheme.primary,
                         headerDateFormat: compactHeader ? 'MMM y' : null,
                         headerHeight: headerHeight,
                         viewHeaderHeight: _view == CalendarView.week
@@ -849,31 +746,51 @@ class _CalendarPageState extends State<CalendarPage> {
                             : const CalendarHeaderStyle(),
                         showNavigationArrow: true,
                       );
-                      final reportCalendar = _railMounted
-                          ? Visibility(
-                              visible: reportLanes,
-                              maintainState: true,
-                              child: NotificationListener<ScrollNotification>(
-                                onNotification: _pairedScrollSync.onRailScroll,
-                                child: _railCalendar(settings),
+                      final reportCalendar = reportLanes
+                          ? Positioned.fill(
+                              child: ReportLaneOverlay(
+                                tracker: _gridTracker,
+                                width: constraints.maxWidth,
+                                days: laneDays,
+                                startHour: settings.dayStartHour,
+                                endHour: settings.dayEndHour,
+                                pixelsPerMinute: pixelsPerMinute,
+                                snapMinutes: snap,
+                                timeRulerWidth: _calendarTimeRulerWidth,
+                                isRtl: isRtl,
+                                blocksForDay: (day) =>
+                                    _projection.reportBlocksByDay[day] ??
+                                    const <ReportBlock>[],
+                                selectedId:
+                                    _selectedReportBlock()?.displayId ??
+                                    _selectedReportId,
+                                onIntervalChanged: _adjustReportedInterval,
+                                onRecord: _recordReport,
+                                onDeleted: _deleteReportedBlock,
+                                colorFor: (block) =>
+                                    _projection.reportColorById[block
+                                        .displayId] ??
+                                    const Color(defaultPersonalEventColor),
+                                onTap: (block) {
+                                  _suppressNextTap();
+                                  _openReport(block.displayId);
+                                },
                               ),
                             )
                           : null;
                       return Stack(
+                        key: _calendarStackKey,
                         children: [
                           Positioned.fill(
-                            child: CalendarReportLayout(
-                              plans: NotificationListener<ScrollNotification>(
-                                onNotification: _pairedScrollSync.onPlanScroll,
+                            child: KeyedSubtree(
+                              key: _calendarSubtreeKey,
+                              child: NotificationListener<ScrollNotification>(
+                                onNotification: _gridTracker.onPlanScroll,
                                 child: calendar,
                               ),
-                              reports: reportCalendar,
-                              reportTopInset: headerHeight + viewHeaderHeight,
-                              dayCount: laneDays.length,
-                              timeRulerWidth: _calendarTimeRulerWidth,
-                              isRtl: isRtl,
                             ),
                           ),
+                          if (reportCalendar != null) reportCalendar,
                           if (sideBySide && reportById.isEmpty)
                             Positioned(
                               left: 0,
@@ -917,6 +834,7 @@ class _CalendarPageState extends State<CalendarPage> {
     CalendarAppointmentDetails details, {
     required Map<String, ReportBlock> reportById,
     Map<String, Color>? colorById,
+    ColorPrefs colorPrefs = const ColorPrefs(),
     Set<String>? remoteEditableFeedIds,
     Map<String, Node>? nodeById,
     Map<String, Node>? nodeByEventId,
@@ -941,14 +859,11 @@ class _CalendarPageState extends State<CalendarPage> {
         : null;
     final event = raw is PlannerEvent ? raw : null;
     if (event == null) return const SizedBox.shrink();
-    _pairedScrollSync.rememberPosition(
-      context,
-      rail: false,
-      timeGrid: !event.allDay,
-    );
+    _gridTracker.rememberPosition(context, timeGrid: !event.allDay);
     final report = reportById[event.id];
     final isDraft = event.id == calendarDraftEventId;
-    final baseColor = colorById?[event.id] ?? _eventColor(event, feedColors);
+    final baseColor =
+        colorById?[event.id] ?? _eventColor(event, feedColors, colorPrefs);
     var color = isDraft ? baseColor.withValues(alpha: 0.55) : baseColor;
     if (event.isTask && event.done) {
       color = color.withValues(alpha: 0.55);
@@ -1349,7 +1264,6 @@ class _CalendarPageState extends State<CalendarPage> {
 
   bool _isMovable(PlannerEvent event) {
     if (isReportDisplayId(event.id)) return false;
-    if (isReportLaneId(event.id)) return false;
     if (isNodeBlockId(event.id)) return true;
     if (!event.isFromFeed) return event.recurrenceRule.isEmpty;
     if (!mounted) return false;
@@ -1360,7 +1274,6 @@ class _CalendarPageState extends State<CalendarPage> {
   /// per tile per frame.
   bool _isMovableFast(PlannerEvent event, Set<String> remoteEditableFeedIds) {
     if (isReportDisplayId(event.id)) return false;
-    if (isReportLaneId(event.id)) return false;
     if (isNodeBlockId(event.id)) return true;
     if (!event.isFromFeed) return event.recurrenceRule.isEmpty;
     final feedId = event.feedId;
@@ -1548,6 +1461,7 @@ class _CalendarPageState extends State<CalendarPage> {
       return;
     }
     final undoCubit = context.read<UndoCubit>();
+    final messenger = ScaffoldMessenger.of(context);
     // A committed move is newer than the open edit form (native drag path):
     // drop its stale preview so the tile shows the committed times.
     // Callers repaint after this returns.
@@ -1570,28 +1484,25 @@ class _CalendarPageState extends State<CalendarPage> {
           ),
         ),
       );
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_movedText(updated)),
-          action: SnackBarAction(label: 'Undo', onPressed: undoCubit.undo),
-        ),
+      showCalendarUndoSnackBar(
+        messenger: messenger,
+        message: _movedText(updated),
+        onUndo: undoCubit.undo,
       );
       return;
     }
     final calendarCubit = context.read<CalendarCubit>();
     final nodesCubit = context.read<NodeCubit>();
-    final messenger = ScaffoldMessenger.of(context);
     NodeEventSync.rescheduleLinkedEvent(calendarCubit, nodesCubit, updated);
     if (updated.reminderMinutesBefore == null) {
       unawaited(EventReminderService.cancelReminder(updated.id));
     } else {
       unawaited(EventReminderService.scheduleReminder(updated));
     }
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(_movedText(updated)),
-        action: SnackBarAction(label: 'Undo', onPressed: undoCubit.undo),
-      ),
+    showCalendarUndoSnackBar(
+      messenger: messenger,
+      message: _movedText(updated),
+      onUndo: undoCubit.undo,
     );
     if (!previous.isFromFeed) return;
     // Optimistic: the new time is already applied above so the drop
@@ -1605,8 +1516,9 @@ class _CalendarPageState extends State<CalendarPage> {
       } else {
         unawaited(EventReminderService.scheduleReminder(previous));
       }
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(error)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error)));
     }
   }
 
@@ -1692,8 +1604,26 @@ class _CalendarPageState extends State<CalendarPage> {
     );
   }
 
-  Color _eventColor(PlannerEvent event, Map<String, Color> feedColors) {
-    return calendarEventColor(event, feedColors);
+  Color _eventColor(
+    PlannerEvent event,
+    Map<String, Color> feedColors, [
+    ColorPrefs prefs = const ColorPrefs(),
+  ]) => resolveEventColor(event, feedColors, prefs);
+
+  /// Report block the panel should show: the selected chip, or — after a
+  /// recording starts/stops and the chip's display id changes kind — the
+  /// current block for the selected event.
+  ReportBlock? _selectedReportBlock() {
+    final reportId = _selectedReportId;
+    if (reportId == null) return null;
+    final direct = _projection.reportById[reportId];
+    if (direct != null) return direct;
+    final eventId = _selectedEventId;
+    if (eventId == null) return null;
+    for (final block in _projection.reportById.values) {
+      if (block.eventId == eventId) return block;
+    }
+    return null;
   }
 
   Widget _buildSidePanel(int snap) {
@@ -1701,6 +1631,7 @@ class _CalendarPageState extends State<CalendarPage> {
       mode: _panelMode,
       snapMinutes: snap,
       selectedEventId: _selectedEventId,
+      selectedReport: _selectedReportBlock(),
       draft: _draftEvent,
       seedSubject: _draftSeedSubject,
       seedNotes: _draftSeedNotes,
@@ -1721,6 +1652,7 @@ class _CalendarPageState extends State<CalendarPage> {
       onBack: _backFromPanel,
       onClose: _closeDrawer,
       onReport: _reportEvent,
+      onRecordReport: _recordReport,
     );
   }
 
@@ -1750,10 +1682,20 @@ class _CalendarPageState extends State<CalendarPage> {
           _selectedReportId = reportId;
         });
       }
+      final selectedReport = reportId == null
+          ? null
+          : _projection.reportById[reportId];
       showEventDetail(
         context,
         event: event,
         onReport: event.isTask ? () => _reportEvent(event) : null,
+        report: selectedReport,
+        onRecordReport: selectedReport == null
+            ? null
+            : () {
+                _recordReport(selectedReport);
+                Navigator.of(context).pop();
+              },
       );
       return;
     }
@@ -1896,18 +1838,12 @@ class _CalendarPageState extends State<CalendarPage> {
         displayId,
       );
     } catch (_) {}
-    var eventId = entry?.eventId;
-    if (eventId == null &&
-        (displayId.startsWith(reportTimerDisplayIdPrefix) ||
-            displayId.startsWith(reportLiveDisplayIdPrefix))) {
-      eventId = reportOwnerIdForDisplayId(displayId);
-    }
-    if (eventId != null) {
-      final event = calendar.byId(eventId);
-      if (event != null) {
-        _openDetail(event, reportId: displayId);
-        return;
-      }
+    final eventId =
+        entry?.eventId ?? reportOwnerIdForDisplayId(displayId);
+    final event = calendar.byId(eventId);
+    if (event != null) {
+      _openDetail(event, reportId: displayId);
+      return;
     }
     if (entry != null && mounted) {
       final start = entry.start;
@@ -1940,25 +1876,96 @@ class _CalendarPageState extends State<CalendarPage> {
       if (adjusted) {
         final undo = context.read<UndoCubit>();
         final messenger = ScaffoldMessenger.of(context);
-        messenger.showSnackBar(
-          SnackBar(
-            content: Text(
+        showCalendarUndoSnackBar(
+          messenger: messenger,
+          message:
               'Reported time updated · '
               '${_calendarTimeFormat.format(start)} – '
               '${_calendarTimeFormat.format(end)}',
-            ),
-            action: SnackBarAction(label: 'Undo', onPressed: undo.undo),
-          ),
+          onUndo: undo.undo,
         );
       }
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Couldn’t adjust that report — please try again.'),
-        ),
-      );
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Couldn’t adjust that report — please try again.'),
+            duration: Duration(seconds: 2),
+          ),
+        );
     }
+  }
+
+  /// Starts another recording for the task behind a report chip. Works from
+  /// the chip's ▶ and from the selected-report card in the side panel; a
+  /// completed task records extra time without being reopened.
+  void _recordReport(ReportBlock block) {
+    if (block.kind == ReportBlockKind.live || !block.recordable) return;
+    final calendar = context.read<CalendarCubit>();
+    final ownerId = block.eventId ?? reportOwnerIdForDisplayId(block.displayId);
+    final event = calendar.byId(ownerId);
+    NodeCubit? nodes;
+    try {
+      nodes = context.read<NodeCubit>();
+    } catch (_) {}
+    String? nodeId = event == null ? ownerId : null;
+    if (event == null &&
+        (nodeId == null || nodes == null || nodes.byId(nodeId) == null)) {
+      return;
+    }
+
+    var started = false;
+    if (nodes != null && event != null) {
+      NodeEventLink.startEventTracking(
+        nodes,
+        calendar,
+        event.id,
+        allowCompleted: true,
+      );
+      final backing = event.isTask
+          ? NodeEventLink.backingNodeFor(nodes, calendar, event.id)
+          : null;
+      nodeId = backing?.id;
+      started =
+          (calendar.byId(event.id)?.isTracking ?? false) ||
+          (backing?.isTracking ?? false);
+    } else if (nodes != null) {
+      NodeEventLink.startNodeTracking(
+        nodes,
+        calendar,
+        nodeId!,
+        allowCompleted: true,
+      );
+      started = nodes.byId(nodeId)?.isTracking ?? false;
+    } else {
+      calendar.startTracking(ownerId);
+      started = calendar.byId(ownerId)?.isTracking ?? false;
+    }
+    if (!started || !mounted) return;
+
+    // Keep the panel's report card live when it was showing this report.
+    if (event != null && _selectedEventId == event.id) {
+      // Event-backed blocks keep their event id in the live display id even
+      // when the timer runs on the backing node.
+      final liveId = '$reportLiveDisplayIdPrefix${event.id}';
+      if (_selectedReportId != liveId) {
+        setState(() => _selectedReportId = liveId);
+      }
+    }
+    final title = block.title.trim().isEmpty
+        ? event?.subject.trim() ?? ''
+        : block.title.trim();
+    final messenger = ScaffoldMessenger.of(context);
+    final undo = context.read<UndoCubit>();
+    showCalendarUndoSnackBar(
+      messenger: messenger,
+      message: title.isEmpty
+          ? 'Recording another report…'
+          : 'Recording another report · $title',
+      onUndo: undo.undo,
+    );
   }
 
   /// Drops one recorded run (or manual entry) from the Plan + Report
@@ -2070,14 +2077,10 @@ class _CalendarPageState extends State<CalendarPage> {
     _controller.selectedDate = date;
   }
 
-  void _openCreator({
-    DateTime? initialDate,
-    TimeOfDay? initialTime,
-    PlannerEvent? seed,
-  }) {
-    final draft = seed != null
-        ? _asDraft(seed)
-        : _initialDraft(initialDate: initialDate, initialTime: initialTime);
+  /// Mutates the create-flow fields without a `setState`, so [initState] can
+  /// claim a pending seed before the first build (a setState there would be
+  /// redundant) while [_openCreator] can wrap it for the live-seed path.
+  void _applyCreatorState(PlannerEvent draft, {PlannerEvent? seed}) {
     // Remember the slot the user had selected before this create flow
     // took over the calendar selection, so a cancel can put it back.
     if (!_preCreateSelectionCaptured &&
@@ -2086,22 +2089,32 @@ class _CalendarPageState extends State<CalendarPage> {
       _preCreateSelectionCaptured = true;
     }
     _focusOnDraft(draft.start);
+    _selectedEventId = null;
+    _selectedReportId = null;
+    _panelMode = CalendarPanelMode.creating;
+    _panelOpen = true;
+    _draftEvent = draft;
+    _draftSeedSubject = seed?.subject;
+    _draftSeedNotes = seed?.notes;
+    _draftSeedLocation = seed?.location;
+    _draftSeedClassLabel = seed?.classLabel;
+    _draftSeedTaskId = seed?.taskId;
+  }
+
+  void _openCreator({
+    DateTime? initialDate,
+    TimeOfDay? initialTime,
+    PlannerEvent? seed,
+  }) {
+    final draft = seed != null
+        ? _asDraft(seed)
+        : _initialDraft(initialDate: initialDate, initialTime: initialTime);
     if (!_isWide) {
+      _applyCreatorState(draft, seed: seed);
       _openSheetCreator(draft);
       return;
     }
-    setState(() {
-      _selectedEventId = null;
-      _selectedReportId = null;
-      _panelMode = CalendarPanelMode.creating;
-      _panelOpen = true;
-      _draftEvent = draft;
-      _draftSeedSubject = seed?.subject;
-      _draftSeedNotes = seed?.notes;
-      _draftSeedLocation = seed?.location;
-      _draftSeedClassLabel = seed?.classLabel;
-      _draftSeedTaskId = seed?.taskId;
-    });
+    setState(() => _applyCreatorState(draft, seed: seed));
   }
 
   Future<void> _openSheetCreator(PlannerEvent draft) async {
@@ -2301,9 +2314,6 @@ class _CalendarPageState extends State<CalendarPage> {
           ? details.appointments!.first
           : null;
       if (raw is PlannerEvent && raw.id == calendarDraftEventId) return;
-      // Lane placeholder taps (the empty part of a report column) are not
-      // events; the chips handle their own taps.
-      if (raw is PlannerEvent && isReportLaneId(raw.id)) return;
       if (raw is PlannerEvent && isReportDisplayId(raw.id)) {
         _openReport(raw.id);
         return;
@@ -2465,9 +2475,7 @@ class _CalendarPageState extends State<CalendarPage> {
     try {
       final appointment = details.appointment;
       final droppingTime = details.droppingTime;
-      if (appointment is PlannerEvent &&
-          (isReportDisplayId(appointment.id) ||
-              isReportLaneId(appointment.id))) {
+      if (appointment is PlannerEvent && isReportDisplayId(appointment.id)) {
         if (mounted) setState(() {});
         return;
       }
@@ -2526,8 +2534,9 @@ class _CalendarPageState extends State<CalendarPage> {
           context.read<CalendarCubit>().byId(appointment.id) ?? appointment;
       if (!_isMovable(event)) {
         if (mounted) {
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text(_blockedMessage(event))));
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(_blockedMessage(event))));
         }
         return;
       }
@@ -2587,143 +2596,5 @@ class _CalendarPageState extends State<CalendarPage> {
       if (candidates.length == 1) return candidates.first;
     }
     return null;
-  }
-}
-
-/// Watches for a running event timer and shows [_RecordingBanner] while
-/// one is active. Collapses to nothing otherwise.
-class _RecordingBannerSlot extends StatelessWidget {
-  final ValueChanged<PlannerEvent> onOpen;
-
-  const _RecordingBannerSlot({required this.onOpen});
-
-  @override
-  Widget build(BuildContext context) {
-    // Select only the active tracking event: rebuilds only when it changes,
-    // not on every calendar emit (the old watch rebuilt on any event edit).
-    return BlocSelector<CalendarCubit, List<PlannerEvent>, PlannerEvent?>(
-      selector: (events) {
-        for (final e in events) {
-          if (e.isTracking) return e;
-        }
-        return null;
-      },
-      builder: (context, active) {
-        if (active == null || active.timerStartedAt == null) {
-          return const SizedBox.shrink();
-        }
-        return _RecordingBanner(event: active, onOpen: onOpen);
-      },
-    );
-  }
-}
-
-class _RecordingBanner extends StatefulWidget {
-  final PlannerEvent event;
-  final ValueChanged<PlannerEvent> onOpen;
-
-  const _RecordingBanner({required this.event, required this.onOpen});
-
-  @override
-  State<_RecordingBanner> createState() => _RecordingBannerState();
-}
-
-class _RecordingBannerState extends State<_RecordingBanner> {
-  Timer? _ticker;
-
-  @override
-  void initState() {
-    super.initState();
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() {});
-    });
-  }
-
-  @override
-  void dispose() {
-    _ticker?.cancel();
-    super.dispose();
-  }
-
-  static String _elapsed(DateTime since) {
-    final d = DateTime.now().difference(since);
-    final total = d.inSeconds < 0 ? 0 : d.inSeconds;
-    final h = total ~/ 3600;
-    final m = (total % 3600) ~/ 60;
-    final s = total % 60;
-    final mm = m.toString().padLeft(h > 0 ? 2 : 1, '0');
-    final ss = s.toString().padLeft(2, '0');
-    return h > 0 ? '$h:$mm:$ss' : '$mm:$ss';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final startedAt = widget.event.timerStartedAt ?? widget.event.start;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(10),
-        onTap: () => widget.onOpen(widget.event),
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-          decoration: BoxDecoration(
-            color: scheme.errorContainer,
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(
-            children: [
-              const Icon(
-                Icons.fiber_manual_record,
-                size: 14,
-                color: Color(0xFFFF5252),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Recording · ${_elapsed(startedAt)}',
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: scheme.onErrorContainer,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    Text(
-                      widget.event.subject,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall
-                          ?.copyWith(color: scheme.onErrorContainer),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              FilledButton.icon(
-                onPressed: () {
-                  try {
-                    NodeEventLink.stopEventTrackingAligned(
-                      context.read<NodeCubit>(),
-                      context.read<CalendarCubit>(),
-                      widget.event.id,
-                    );
-                  } catch (_) {}
-                },
-                style: FilledButton.styleFrom(
-                  backgroundColor: scheme.error,
-                  foregroundColor: scheme.onError,
-                  visualDensity: VisualDensity.compact,
-                ),
-                icon: const Icon(Icons.stop, size: 16),
-                label: const Text('Stop'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }

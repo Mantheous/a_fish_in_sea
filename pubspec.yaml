@@ -34,6 +34,7 @@ dependencies:
   flutter_bloc: ^8.1.2
   bloc: ^8.1.4
   hydrated_bloc: ^9.1.5
+  hive: ^2.2.3
   path_provider: ^2.1.5
   fl_chart: ^1.0.1
   vector_math: ^2.1.5
@@ -71,6 +72,12 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/app_logo.png
+    - assets/fonts/OFL.txt
+
+  fonts:
+    - family: Fredoka
+      fonts:
+        - asset: assets/fonts/Fredoka-Variable.ttf
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

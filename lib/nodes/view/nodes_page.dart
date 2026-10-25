@@ -9,19 +9,34 @@ import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/auto_goal.dart';
+import 'package:a_fish_in_sea/nodes/service/goal_completion.dart';
+import 'package:a_fish_in_sea/nodes/service/goal_graph_filter.dart';
+import 'package:a_fish_in_sea/nodes/service/goal_progress_snapshot.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/service/node_legacy_migration.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
-import 'package:a_fish_in_sea/nodes/service/node_tree_ops.dart';
 import 'package:a_fish_in_sea/finances/service/node_transaction_cleanup.dart';
+import 'package:a_fish_in_sea/nodes/view/goal_filter_sheet.dart';
 import 'package:a_fish_in_sea/nodes/view/goal_picker.dart';
 import 'package:a_fish_in_sea/nodes/view/node_checkbox.dart';
 import 'package:a_fish_in_sea/nodes/view/node_editor.dart';
 import 'package:a_fish_in_sea/nodes/view/node_graph_view.dart';
 import 'package:a_fish_in_sea/nodes/view/node_finish_sheet.dart';
+import 'package:a_fish_in_sea/nodes/view/task_rollup_tile.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 
-enum _NodeView { leaves, all, favorites, graph, due, scheduled, money, habits }
+enum _NodeView {
+  graph,
+  all,
+  leaves,
+  automated,
+  favorites,
+  due,
+  scheduled,
+  money,
+  habits,
+}
 
 final _nodesDateFormat = DateFormat('EEE, MMM d');
 
@@ -33,11 +48,21 @@ class NodesPage extends StatefulWidget {
 }
 
 class _NodesPageState extends State<NodesPage> {
-  _NodeView _view = _NodeView.leaves;
+  // The graph is the landing view. It is the only view that keeps the
+  // relationships between goals visible, and filtering collapses
+  // non-matching ancestors into path markers instead of deleting them.
+  _NodeView _view = _NodeView.graph;
   final TextEditingController _search = TextEditingController();
   String _query = '';
   bool _expandAll = false;
   int _expandToken = 0;
+
+  /// Filter selection from the filter menu. Transient UI state only:
+  /// never persisted, and cleared by a "Show in goals" reveal.
+  GoalGraphFilter _filter = const GoalGraphFilter();
+
+  /// Bumped when the filter changes so the graph re-fits its viewport.
+  int _fitToken = 0;
 
   /// Pending "Show in goals" reveal from [NavigationCubit]: the target is
   /// shown in the All tree with its ancestor chain expanded and itself
@@ -112,6 +137,8 @@ class _NodesPageState extends State<NodesPage> {
       _expandToken++;
       _query = '';
       _search.clear();
+      _filter = const GoalGraphFilter();
+      _fitToken++;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -127,23 +154,21 @@ class _NodesPageState extends State<NodesPage> {
 
   @override
   Widget build(BuildContext context) {
+    String? topicTitle;
+    final topicId = _filter.topicRootId;
+    if (topicId != null) {
+      try {
+        topicTitle = context.read<NodeCubit>().byId(topicId)?.title;
+      } catch (_) {}
+    }
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Nodes'),
+        title: const Text('Goals'),
         actions: const [UndoRedoActions()],
       ),
       drawer: const AppDrawer(),
       floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          final created = await showNodeEditor(context);
-          // A brand-new unbounded goal is invisible in the default Leaves
-          // view, which would read as "nothing happened". Land on the
-          // tree instead so the goal is on screen right after saving.
-          if (!mounted) return;
-          if (created != null && created.isUnbounded) {
-            setState(() => _view = _NodeView.all);
-          }
-        },
+        onPressed: () => showNodeEditor(context),
         child: const Icon(Icons.add),
       ),
       body: Column(
@@ -164,7 +189,21 @@ class _NodesPageState extends State<NodesPage> {
                     onChanged: (v) => setState(() => _query = v),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 4),
+                Badge(
+                  isLabelVisible: _filter.isActive,
+                  label: Text('${_filter.activeCount}'),
+                  child: IconButton(
+                    key: const ValueKey('goal-filter-button'),
+                    tooltip: 'Filter goals',
+                    icon: Icon(
+                      _filter.isActive
+                          ? Icons.filter_alt
+                          : Icons.filter_alt_outlined,
+                    ),
+                    onPressed: _openFilters,
+                  ),
+                ),
                 Tooltip(
                   message: _expandAll ? 'Collapse all' : 'Expand all',
                   child: IconButton(
@@ -181,10 +220,18 @@ class _NodesPageState extends State<NodesPage> {
             ),
           ),
           _ViewRow(view: _view, onView: (v) => setState(() => _view = v)),
+          GoalFilterSummaryBar(
+            filter: _filter,
+            topicTitle: topicTitle,
+            onChanged: _applyFilter,
+          ),
           Expanded(
             child: _NodeBody(
               view: _view,
               query: _query,
+              filter: _filter,
+              fitToken: _fitToken,
+              onClearFilters: () => _applyFilter(const GoalGraphFilter()),
               expandAll: _expandAll,
               expandToken: _expandToken,
               focusNodeId: _focusNodeId,
@@ -195,6 +242,26 @@ class _NodesPageState extends State<NodesPage> {
         ],
       ),
     );
+  }
+
+  void _applyFilter(GoalGraphFilter next) {
+    setState(() {
+      _filter = next;
+      _fitToken++;
+    });
+  }
+
+  Future<void> _openFilters() async {
+    final goals = goalNodes(context.read<NodeCubit>().state);
+    final selected = await showGoalFilterSheet(
+      context,
+      filter: _filter,
+      nodes: goals,
+      now: DateTime.now(),
+      query: _query,
+    );
+    if (!mounted || selected == null) return;
+    _applyFilter(selected);
   }
 }
 
@@ -226,8 +293,9 @@ class _ViewRow extends StatelessWidget {
   }
 
   static String _label(_NodeView v) => switch (v) {
-    _NodeView.leaves => 'Leaves',
-    _NodeView.all => 'All',
+    _NodeView.leaves => 'Open list',
+    _NodeView.all => 'Goal tree',
+    _NodeView.automated => 'Automated',
     _NodeView.favorites => 'Favorites',
     _NodeView.graph => 'Graph',
     _NodeView.due => 'Due',
@@ -240,8 +308,13 @@ class _ViewRow extends StatelessWidget {
 class _NodeBody extends StatelessWidget {
   final _NodeView view;
   final String query;
+  final GoalGraphFilter filter;
+  final int fitToken;
   final bool expandAll;
   final int expandToken;
+
+  /// Clears the filter from the graph's empty state.
+  final VoidCallback? onClearFilters;
 
   /// "Show in goals" reveal: target highlighted in the All tree with
   /// [expandedIds] (its ancestor chain) force-expanded and [focusKey]
@@ -252,6 +325,9 @@ class _NodeBody extends StatelessWidget {
 
   const _NodeBody({
     required this.view,
+    required this.filter,
+    this.fitToken = 0,
+    this.onClearFilters,
     this.query = '',
     this.expandAll = false,
     this.expandToken = 0,
@@ -265,73 +341,43 @@ class _NodeBody extends StatelessWidget {
     return BlocBuilder<NodeCubit, List<Node>>(
       builder: (context, nodes) {
         // Goal tree only: homework imports and calendar links live in
-        // Tasks/Calendar, never auto-fill this page.
-        final goals = goalNodes(nodes);
-        if (goals.isEmpty) return const _EmptyNodes();
-        final txns = context.watch<TransactionsCubit>().state;
-        final txnAmounts = {for (final t in txns) t.id: t.amount};
-        // Money actuals keyed by node id: recorded actualAmount wins, plus
-        // assigned-transaction sums for nodes without one (audit gaps).
-        // Txn-id entries are kept too so linkedTransactionIds fallbacks
-        // in progress math keep resolving. Time actuals come from each
-        // node's own reported duration.
-        final assignedSums = <String, double>{};
-        for (final t in txns) {
-          final nid = t.assignedNodeId;
-          if (nid != null) {
-            assignedSums[nid] =
-                (assignedSums[nid] ?? 0) + t.amount.abs();
-          }
-        }
-        final moneyActualByNodeId = <String, double>{...txnAmounts};
-        for (final n in goals) {
-          final recorded = n.money?.actualAmount?.abs();
-          if (recorded != null) {
-            moneyActualByNodeId[n.id] = recorded;
-          } else {
-            var sum = 0.0;
-            for (final txnId in n.money?.linkedTransactionIds ??
-                const <String>[]) {
-              sum += (txnAmounts[txnId] ?? 0).abs();
-            }
-            // Assigned sums may duplicate linked ids (link + assign happen
-            // together), so only count assigned txns not already linked.
-            final linked =
-                n.money?.linkedTransactionIds.toSet() ?? const <String>{};
-            for (final t in txns) {
-              if (t.assignedNodeId == n.id && !linked.contains(t.id)) {
-                sum += t.amount.abs();
-              }
-            }
-            if (sum > 0) moneyActualByNodeId[n.id] = sum;
-          }
-        }
-        // Assigned-only nodes (no facet amount yet) still report.
-        for (final entry in assignedSums.entries) {
-          moneyActualByNodeId.putIfAbsent(entry.key, () => entry.value);
-        }
-        final timeActualByNodeId = <String, double>{
-          for (final n in goals)
-            if (n.reportedDuration != null)
-              n.id: n.reportedDuration!.inMinutes.toDouble(),
-        };
-        final progress = progressForest(
-          goals,
-          moneyActualByNodeId: moneyActualByNodeId,
-          timeActualByNodeId: timeActualByNodeId,
+        // Tasks/Calendar, never auto-fill this page. Shared with Home's
+        // favorite rows: one snapshot builder keeps the same goal at the
+        // same percentage on both surfaces.
+        final now = DateTime.now();
+        final snapshot = buildGoalProgressSnapshot(
+          nodes: nodes,
+          transactions: context.watch<TransactionsCubit>().state,
+          now: now,
         );
-        final trimmed = query.trim();
-        final visible = trimmed.isEmpty ? null : filterTreeIds(nodes, trimmed);
+        final goals = snapshot.goals;
+        if (goals.isEmpty) return const _EmptyNodes();
+        final txnAmounts = snapshot.txnAmountsById;
+        final autoReadings = snapshot.autoReadings;
+        final metricReadings = snapshot.metricReadings;
+        final completion = snapshot.completion;
+        final progress = snapshot.progress;
+        final projection = filterGoalGraph(
+          nodes: goals,
+          now: now,
+          filter: filter,
+          query: query,
+        );
+        // A filter is graph-shaped: lists keep only the matches (the
+        // compact path markers belong to the graph). Plain search keeps
+        // its old matches + ancestors + descendants shape.
+        final visible = projection.filterActive
+            ? projection.matchedIds
+            : (projection.active ? projection.visibleIds : null);
         List<Node> matching(List<Node> items) => visible == null
             ? items
             : items.where((n) => visible.contains(n.id)).toList();
         // Hoisted once per body build (not per tile): shared DAG indexes,
-        // liveness map, one `now`, and one homework-ahead evaluation
-        // (the old code re-ran it O(n) per rule tile).
+        // liveness map, and one homework-ahead evaluation (the old code
+        // re-ran it O(n) per rule tile).
         final indexes = buildNodeIndexes(goals);
         final nodeById = indexes.byId;
         final byParent = indexes.byParent;
-        final now = DateTime.now();
         HomeworkAheadResult? homeworkAhead;
         HomeworkAheadResult getHomeworkAhead() => homeworkAhead ??=
             evaluateHomeworkAhead(all: nodes, now: now, horizonDays: 3);
@@ -346,6 +392,9 @@ class _NodeBody extends StatelessWidget {
                 nodes: goals,
                 progress: progress,
                 txnAmounts: txnAmounts,
+                autoReadings: autoReadings,
+                metricReadings: metricReadings,
+                completion: completion,
                 depth: 0,
                 flat: true,
                 visible: visible,
@@ -372,6 +421,9 @@ class _NodeBody extends StatelessWidget {
               nodes: goals,
               progress: progress,
               txnAmounts: txnAmounts,
+              autoReadings: autoReadings,
+              metricReadings: metricReadings,
+              completion: completion,
               visible: visible,
               expandAll: expandAll,
               expandToken: expandToken,
@@ -383,6 +435,20 @@ class _NodeBody extends StatelessWidget {
               expandedIds: expandedIds,
               focusKey: focusKey,
             );
+          case _NodeView.automated:
+            final items = matching(
+              goals.where((n) => n.isAutomatedGoal).toList(),
+            );
+            if (items.isEmpty) {
+              return const Center(
+                child: Text(
+                  'No automated goals yet.\n'
+                  'Edit a goal and turn on Automated goal.',
+                  textAlign: TextAlign.center,
+                ),
+              );
+            }
+            return flatList(items);
           case _NodeView.favorites:
             final items = matching(goals.where((n) => n.isFavorite).toList());
             if (items.isEmpty) {
@@ -395,13 +461,30 @@ class _NodeBody extends StatelessWidget {
             }
             return flatList(items);
           case _NodeView.graph:
+            String? topicTitle;
+            final topicId = filter.topicRootId;
+            if (topicId != null) {
+              for (final node in goals) {
+                if (node.id == topicId) {
+                  topicTitle = node.title;
+                  break;
+                }
+              }
+            }
             return NodeGraphView(
               nodes: goals,
               progress: progress,
-              visibleIds: visible,
-              query: trimmed,
+              visibleIds: projection.active ? projection.visibleIds : null,
+              contextIds: projection.contextIds,
+              matchedIds: projection.active ? projection.matchedIds : const {},
+              filterActive: projection.filterActive,
+              filterSummary: projection.filterActive
+                  ? goalFilterSummary(filter, topicTitle: topicTitle)
+                  : null,
+              fitToken: fitToken,
               expandAll: expandAll,
               expandToken: expandToken,
+              onClearFilters: onClearFilters,
             );
           case _NodeView.due:
             final queue = matching(priorityQueue(goals, now));
@@ -441,6 +524,9 @@ class _NodeBody extends StatelessWidget {
                   nodes: goals,
                   progress: progress,
                   txnAmounts: txnAmounts,
+                  autoReadings: autoReadings,
+                  metricReadings: metricReadings,
+                  completion: completion,
                   depth: 0,
                   flat: false,
                   visible: visible,
@@ -469,6 +555,9 @@ class _NodeTree extends StatelessWidget {
   final List<Node> nodes;
   final Map<String, double> progress;
   final Map<String, double> txnAmounts;
+  final Map<String, AutoGoalReading> autoReadings;
+  final Map<String, GoalMetricsReading> metricReadings;
+  final Map<String, GoalCompletion> completion;
   final Map<String, Node>? nodeById;
   final Map<String, List<Node>>? byParent;
   final DateTime? now;
@@ -484,6 +573,9 @@ class _NodeTree extends StatelessWidget {
     required this.nodes,
     required this.progress,
     required this.txnAmounts,
+    this.autoReadings = const {},
+    this.metricReadings = const {},
+    this.completion = const {},
     this.nodeById,
     this.byParent,
     this.now,
@@ -523,6 +615,9 @@ class _NodeTree extends StatelessWidget {
             nodes: nodes,
             progress: progress,
             txnAmounts: txnAmounts,
+            autoReadings: autoReadings,
+            metricReadings: metricReadings,
+            completion: completion,
             depth: 0,
             flat: true,
             visible: visible,
@@ -548,6 +643,9 @@ class _NodeTree extends StatelessWidget {
           nodes: nodes,
           progress: progress,
           txnAmounts: txnAmounts,
+          autoReadings: autoReadings,
+          metricReadings: metricReadings,
+          completion: completion,
           depth: 0,
           flat: false,
           visited: {n.id},
@@ -583,6 +681,9 @@ class _NodeTile extends StatelessWidget {
   final List<Node> nodes;
   final Map<String, double> progress;
   final Map<String, double> txnAmounts;
+  final Map<String, AutoGoalReading> autoReadings;
+  final Map<String, GoalMetricsReading> metricReadings;
+  final Map<String, GoalCompletion> completion;
   final int depth;
   final bool flat;
   final Set<String> visited;
@@ -609,6 +710,9 @@ class _NodeTile extends StatelessWidget {
     required this.nodes,
     required this.progress,
     required this.txnAmounts,
+    this.autoReadings = const {},
+    this.metricReadings = const {},
+    this.completion = const {},
     required this.depth,
     required this.flat,
     this.visited = const {},
@@ -633,9 +737,25 @@ class _NodeTile extends StatelessWidget {
     final kids = flat
         ? const <Node>[]
         : (_children(live)..sort((a, b) => _compareKids(a, b)));
+    final goalKids = <Node>[];
+    final taskKids = <Node>[];
+    for (final kid in kids) {
+      if (kid.isPlainTask && !_hasChildren(kid)) {
+        taskKids.add(kid);
+      } else {
+        goalKids.add(kid);
+      }
+    }
     final value = progress[live.id] ?? 0;
     final theme = Theme.of(context);
-    final subtitle = _subtitle(context, live, value, kids.length);
+    final subtitle = _subtitle(
+      context,
+      live,
+      value,
+      kids.length,
+      metricReadings[live.id],
+      completion[live.id],
+    );
     final focused = live.id == focusNodeId;
     Widget wrapFocus(Widget child) {
       if (!focused) return child;
@@ -649,7 +769,7 @@ class _NodeTile extends StatelessWidget {
     }
     final tile = ListTile(
       contentPadding: EdgeInsets.only(left: 16 + depth * 20, right: 8),
-      leading: _leading(context, live),
+      leading: _leading(context, live, completion[live.id]),
       title: Text(
         live.title,
         style: TextStyle(
@@ -675,7 +795,7 @@ class _NodeTile extends StatelessWidget {
       _ParentTile(
         key: ValueKey('${live.id}:$expandToken:$expandAll'),
         tilePadding: EdgeInsets.only(left: 16 + depth * 20, right: 8),
-        leading: _leading(context, live),
+        leading: _leading(context, live, completion[live.id]),
         title: Text(
           live.title,
           style: TextStyle(
@@ -695,12 +815,15 @@ class _NodeTile extends StatelessWidget {
         expandToken: expandToken,
         onTap: () => showNodeEditor(context, existing: live),
         children: [
-          for (final k in kids)
+          for (final k in goalKids)
             _NodeTile(
               node: k,
               nodes: nodes,
               progress: progress,
               txnAmounts: txnAmounts,
+              autoReadings: autoReadings,
+              metricReadings: metricReadings,
+              completion: completion,
               depth: depth + 1,
               flat: false,
               visited: {...visited, k.id},
@@ -715,9 +838,47 @@ class _NodeTile extends StatelessWidget {
               expandedIds: expandedIds,
               focusKey: focusKey,
             ),
+          if (taskKids.isNotEmpty)
+            TaskRollupTile(
+              tilePadding: EdgeInsets.only(
+                left: 16 + (depth + 1) * 20,
+                right: 8,
+              ),
+              openCount: taskKids.where((n) => n.isOpen).length,
+              doneCount: taskKids.where((n) => n.isDone).length,
+              initiallyExpanded: expandAll,
+              expandToken: expandToken,
+              children: [
+                for (final k in taskKids)
+                  _NodeTile(
+                    node: k,
+                    nodes: nodes,
+                    progress: progress,
+                    txnAmounts: txnAmounts,
+                    autoReadings: autoReadings,
+                    metricReadings: metricReadings,
+                    completion: completion,
+                    depth: depth + 2,
+                    flat: true,
+                    visible: visible,
+                    expandAll: expandAll,
+                    expandToken: expandToken,
+                    nodeById: nodeById,
+                    byParent: byParent,
+                    now: now,
+                    homeworkAhead: homeworkAhead,
+                  ),
+              ],
+            ),
         ],
       ),
     );
+  }
+
+  bool _hasChildren(Node node) {
+    final map = byParent;
+    if (map != null) return (map[node.id] ?? const <Node>[]).isNotEmpty;
+    return nodes.any((n) => n.parentIds.contains(node.id));
   }
 
   /// Action buttons shared by leaf rows ([ListTile]) and parent rows
@@ -853,11 +1014,51 @@ class _NodeTile extends StatelessWidget {
     return aDue.compareTo(bDue);
   }
 
-  Widget _leading(BuildContext context, Node live) {
+  Widget _leading(
+    BuildContext context,
+    Node live,
+    GoalCompletion? completion,
+  ) {
     if (live.isUnbounded) {
       return const Tooltip(
         message: 'Unbounded goal — ongoing, no checkbox',
         child: Icon(Icons.all_inclusive),
+      );
+    }
+    // Metric goals and containers derive completion; only checklist leaves
+    // keep an editable checkbox.
+    if (completion?.derived == true) {
+      final complete = completion!.complete;
+      return Tooltip(
+        message: live.isClassNode
+            ? (complete
+                  ? 'Class complete — all work done'
+                  : 'Class — completes when all work is done')
+            : live.hasMetrics
+            ? (complete
+                  ? 'Complete — all metrics pass'
+                  : 'Incomplete — not all metrics pass')
+            : (complete
+                  ? 'Complete — all sub-work done'
+                  : 'Completes when all sub-work is done'),
+        child: Icon(
+          complete ? Icons.check_circle : Icons.radio_button_unchecked,
+          color: complete
+              ? Theme.of(context).colorScheme.primary
+              : Theme.of(context).colorScheme.outline,
+        ),
+      );
+    }
+    if (live.isAutomatedGoal) {
+      return const Tooltip(
+        message: 'Automated goal — measured from your data',
+        child: Icon(Icons.auto_graph),
+      );
+    }
+    if (live.isClassNode) {
+      return const Tooltip(
+        message: 'Class node',
+        child: Icon(Icons.school_outlined),
       );
     }
     if (live.isTemplate) {
@@ -905,6 +1106,8 @@ class _NodeTile extends StatelessWidget {
     Node live,
     double value,
     int childCount,
+    GoalMetricsReading? metricReading,
+    GoalCompletion? completion,
   ) {
     // Unbounded goals never show dates, targets, or a percent — just the
     // ongoing marker plus how many concrete steps hang underneath.
@@ -917,10 +1120,31 @@ class _NodeTile extends StatelessWidget {
     }
     final effectiveNow = now ?? DateTime.now();
     final parts = <String>[];
+    if (live.isClassNode) {
+      parts.add('class');
+      final sources = live.classFacet?.sources.length ?? 0;
+      if (sources > 0) {
+        parts.add('$sources feed${sources == 1 ? '' : 's'}');
+      }
+    }
     if (childCount > 0) {
       parts.add('$childCount step${childCount == 1 ? '' : 's'}');
     }
-    if (live.money != null) {
+    final primary = metricReading?.primary;
+    if (primary != null) {
+      parts.add(metricReading!.summary);
+      if (primary.facet.metric != AutoMetric.allDone) {
+        parts.add(primary.windowLabel);
+      }
+      if (metricReading.readings.length == 1 &&
+          primary.facet.metric != AutoMetric.allDone &&
+          primary.matchedLabel.isNotEmpty) {
+        parts.add(primary.matchedLabel);
+      }
+      if (metricReading.satisfied) parts.add('complete ✓');
+    } else if (live.isAutomatedGoal) {
+      parts.add('automated goal');
+    } else if (live.money != null) {
       final m = live.money!;
       final actual = byParent != null && nodeById != null
           ? moneyActualForNodeIndexed(
@@ -978,7 +1202,12 @@ class _NodeTile extends StatelessWidget {
     if ((live.schedule?.isFixed ?? false) || (live.money?.isFixed ?? false)) {
       parts.add('fixed');
     }
-    parts.add('${(value * 100).round()}%');
+    if (completion?.derived == true &&
+        completion!.complete &&
+        !(metricReading?.satisfied ?? false)) {
+      parts.add('all work done ✓');
+    }
+    if (metricReading == null) parts.add('${(value * 100).round()}%');
     if (parts.isEmpty) return 'note';
     return parts.join(' · ');
   }

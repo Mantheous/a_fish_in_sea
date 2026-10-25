@@ -269,9 +269,10 @@ class AssignmentTimeReport {
 // ── Non-time goals ─────────────────────────────────────────────────────
 
 /// What kind of goal a node is, for the goals summary.
-enum GoalKind { checklist, money, time, anki }
+enum GoalKind { checklist, automated, money, time, anki }
 
 GoalKind goalKindOf(Node node) {
+  if (node.auto != null) return GoalKind.automated;
   if (node.money != null) return GoalKind.money;
   if (node.effort != null) return GoalKind.time;
   if (node.anki != null) return GoalKind.anki;
@@ -280,6 +281,7 @@ GoalKind goalKindOf(Node node) {
 
 String goalKindLabel(GoalKind kind) => switch (kind) {
   GoalKind.checklist => 'Checklist',
+  GoalKind.automated => 'Automated',
   GoalKind.money => 'Money',
   GoalKind.time => 'Time',
   GoalKind.anki => 'Review',
@@ -325,6 +327,11 @@ class GoalRangeReport {
   final int ankiTarget;
   final int ankiGoalCount;
 
+  /// Automated goals present in the range. Their readings need the task,
+  /// and transaction stores, so the range report only counts
+  /// them instead of folding them into the checklist ratio.
+  final int automatedGoalCount;
+
   const GoalRangeReport({
     this.completed = const [],
     this.failed = 0,
@@ -341,6 +348,7 @@ class GoalRangeReport {
     this.ankiReviews = 0,
     this.ankiTarget = 0,
     this.ankiGoalCount = 0,
+    this.automatedGoalCount = 0,
   });
 
   double get checklistPct => checklistTotal <= 0
@@ -359,7 +367,8 @@ class GoalRangeReport {
       checklistTotal > 0 ||
       effortGoalCount > 0 ||
       moneyGoalCount > 0 ||
-      ankiGoalCount > 0;
+      ankiGoalCount > 0 ||
+      automatedGoalCount > 0;
 }
 
 // ── Aggregation ────────────────────────────────────────────────────────
@@ -480,6 +489,7 @@ int _overlapWith(List<_Span> spans, List<_Span> others) {
 
 /// Appends [node]'s report as a span on its day.
 void _addNodeSpans(List<Node> nodes, List<_Span> out, StatsRange range) {
+  final byId = {for (final node in nodes) node.id: node};
   for (final node in nodes) {
     // One span per run: the aggregate actual span would count the gaps
     // between sessions as study time.
@@ -488,17 +498,18 @@ void _addNodeSpans(List<Node> nodes, List<_Span> out, StatsRange range) {
       if (!range.contains(session.start)) continue;
       final minutes = session.duration.inMinutes;
       if (minutes <= 0) continue;
-      // Group key follows the same scheme as the learned effort index
-      // (feed/class scope), so the class totals and the per-type totals
-      // can be joined without guessing.
-      final scope = node.feedId ?? node.classId;
+      // A class-node membership unifies manual and imported work under one
+      // class key; provenance ids remain the fallback for unbound work.
+      final classNode =
+          node.classNodeId == null ? null : byId[node.classNodeId];
+      final scope = node.classNodeId ?? node.feedId ?? node.classId;
       out.add(
         _Span(
           start: session.start,
           end: session.end,
           groupKey: scope ?? 'unassigned',
-          label: node.classLabel ?? 'No class',
-          classLabel: node.classLabel,
+          label: classNode?.title ?? node.classLabel ?? 'No class',
+          classLabel: classNode?.title ?? node.classLabel,
           title: node.title,
           templateKey: node.isHomework
               ? assignmentTemplateKey(node.title)
@@ -535,21 +546,24 @@ AssignmentTimeReport buildAssignmentTimeReport({
     if (!range.contains(slice.start)) continue;
     final linked = slice.taskId == null ? null : nodeById[slice.taskId];
     final isAssignment = linked != null && linked.isHomework;
-    final label = (slice.classLabel?.trim().isNotEmpty ?? false)
-        ? slice.classLabel!.trim()
-        : (linked?.classLabel ?? 'No class');
+    final classNode =
+        linked?.classNodeId == null ? null : nodeById[linked!.classNodeId];
+    final label = classNode?.title ??
+        ((slice.classLabel?.trim().isNotEmpty ?? false)
+            ? slice.classLabel!.trim()
+            : (linked?.classLabel ?? 'No class'));
     // Same scope key the learned effort index uses, so a class total and
     // a per-type total describe the same thing.
     final scope = linked == null
         ? (slice.classLabel?.trim() ?? 'unassigned')
-        : (linked.feedId ?? linked.classId ?? label);
+        : (linked.classNodeId ?? linked.feedId ?? linked.classId ?? label);
     plannedSpans.add(
       _Span(
         start: slice.start,
         end: slice.end,
         groupKey: scope,
         label: label,
-        classLabel: linked?.classLabel ?? slice.classLabel,
+        classLabel: classNode?.title ?? linked?.classLabel ?? slice.classLabel,
         title: linked?.title ?? slice.title,
         templateKey: isAssignment ? assignmentTemplateKey(linked.title) : null,
         nodeId: slice.taskId ?? slice.eventId,
@@ -850,6 +864,7 @@ GoalRangeReport buildGoalRangeReport({
   var ankiReviews = 0;
   var ankiTarget = 0;
   var ankiGoalCount = 0;
+  var automatedGoalCount = 0;
 
   // A leaf is a node nothing else points at — "no children", not "no
   // parents". Building the parent set once keeps that O(n) instead of a
@@ -866,7 +881,9 @@ GoalRangeReport buildGoalRangeReport({
     // Finished goals keep their targets and logged progress: accumulate
     // before the done-skip below, so marking a goal Done does not erase
     // it from the totals.
-    if (kind == GoalKind.money) {
+    if (kind == GoalKind.automated) {
+      automatedGoalCount++;
+    } else if (kind == GoalKind.money) {
       final money = node.money!;
       moneyTarget += money.effectiveTarget;
       moneyActual += money.actualAmount ?? 0;
@@ -935,5 +952,6 @@ GoalRangeReport buildGoalRangeReport({
     ankiReviews: ankiReviews,
     ankiTarget: ankiTarget,
     ankiGoalCount: ankiGoalCount,
+    automatedGoalCount: automatedGoalCount,
   );
 }

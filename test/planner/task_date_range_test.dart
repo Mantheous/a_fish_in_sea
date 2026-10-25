@@ -2,6 +2,8 @@ import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/planner/model/task_date_range.dart';
 import 'package:a_fish_in_sea/planner/model/task_filter.dart';
 import 'package:a_fish_in_sea/planner/model/task_range_bound.dart';
+import 'package:a_fish_in_sea/planner/view/task_selector_form.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Node _node(String id, {DateTime? due}) {
@@ -54,6 +56,36 @@ void main() {
               .resolve(monday),
           DateTime(2026, 11, 1));
     });
+
+    test('weekday anchors can reach last week', () {
+      // Saturday Oct 17: Sunday of last week is Oct 11 — the Sunday
+      // before this Monday-start week, unreachable when weeksOut
+      // floored at 0. Sunday of this week (Oct 18) looked a week ahead.
+      const lastSunday =
+          TaskRangeBound.weekday(weekday: DateTime.sunday, weeksOut: -1);
+      expect(lastSunday.resolve(saturday), DateTime(2026, 10, 11));
+      const lastMonday =
+          TaskRangeBound.weekday(weekday: DateTime.monday, weeksOut: -1);
+      expect(lastMonday.resolve(saturday), DateTime(2026, 10, 5));
+      expect(
+          const TaskRangeBound.weekday(weekday: DateTime.sunday, weeksOut: -2)
+              .resolve(saturday),
+          DateTime(2026, 10, 4));
+      // The reported window: last Sunday through next Monday.
+      const window = TaskDateRange(
+        start: TaskRangeBound.weekday(
+            weekday: DateTime.sunday, weeksOut: -1),
+        end: TaskRangeBound.weekday(weekday: DateTime.monday, weeksOut: 1),
+      );
+      expect(window.startDate(saturday), DateTime(2026, 10, 11));
+      expect(window.endDate(saturday), DateTime(2026, 10, 19));
+      expect(window.matches(DateTime(2026, 10, 10, 9), saturday), isFalse);
+      expect(window.matches(DateTime(2026, 10, 11, 9), saturday), isTrue);
+      expect(window.matches(DateTime(2026, 10, 19, 9), saturday), isTrue);
+      expect(window.matches(DateTime(2026, 10, 20, 9), saturday), isFalse);
+      expect(describeTaskDateRange(window),
+          'Due Sunday of last week – Monday of next week');
+    });
   });
 
   group('TaskRangeBound describe + JSON', () {
@@ -73,6 +105,16 @@ void main() {
                   weekday: DateTime.sunday, weeksOut: 0)
               .describe(),
           'Sunday of this week');
+      expect(
+          const TaskRangeBound.weekday(
+                  weekday: DateTime.sunday, weeksOut: -1)
+              .describe(),
+          'Sunday of last week');
+      expect(
+          const TaskRangeBound.weekday(
+                  weekday: DateTime.monday, weeksOut: -2)
+              .describe(),
+          'Monday of 2 weeks ago');
       expect(taskRangeWeekdayName(DateTime.friday), 'Friday');
     });
 
@@ -121,6 +163,19 @@ void main() {
           const TaskRangeBound.weekday(
               weekday: DateTime.monday,
               weeksOut: taskRangeWeeksOutMax));
+      // Negative weeksOut survives a round-trip and clamps, not zeroes.
+      const lastSunday = TaskRangeBound.weekday(
+          weekday: DateTime.sunday, weeksOut: -1);
+      expect(TaskRangeBound.tryParse(lastSunday.toJson()), lastSunday);
+      expect(
+          TaskRangeBound.tryParse(const {
+            'kind': 'weekday',
+            'weekday': DateTime.monday,
+            'weeksOut': -9999
+          }),
+          const TaskRangeBound.weekday(
+              weekday: DateTime.monday,
+              weeksOut: taskRangeWeeksOutMin));
     });
   });
 
@@ -273,6 +328,44 @@ void main() {
       expect(wrongTypes, const TaskDateRange());
       expect(TaskDateRange.tryParse(null), isNull);
       expect(TaskDateRange.tryParse('nope'), isNull);
+    });
+  });
+
+  group('weekday picker', () {
+    testWidgets('offers last week for the start bound', (tester) async {
+      var value = const TaskFilter(
+        id: 't',
+        name: 't',
+        date: TaskFilterDate.custom,
+        customRange: TaskDateRange(
+          start: TaskRangeBound.weekday(
+              weekday: DateTime.sunday, weeksOut: 0),
+          end: TaskRangeBound.weekday(weekday: DateTime.monday, weeksOut: 1),
+        ),
+      );
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: StatefulBuilder(
+              builder: (context, setState) => TaskSelectorForm(
+                value: value,
+                onChanged: (next) => setState(() => value = next),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      // From row: weekday dropdown first, weeks-out dropdown second.
+      await tester.tap(find.byType(DropdownButton<int>).at(1));
+      await tester.pumpAndSettle();
+      expect(find.text('Last week'), findsWidgets);
+      await tester.tap(find.text('Last week').last);
+      await tester.pumpAndSettle();
+      expect(value.customRange?.start,
+          const TaskRangeBound.weekday(weekday: DateTime.sunday, weeksOut: -1));
+      expect(value.customRange?.end,
+          const TaskRangeBound.weekday(weekday: DateTime.monday, weeksOut: 1));
     });
   });
 

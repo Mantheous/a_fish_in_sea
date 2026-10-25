@@ -1,13 +1,14 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../service/calendar_report.dart';
+import 'report_chip.dart';
 
 // Hoisted: DateFormat construction parses ICU skeletons; the lane can hold
 // a dozen chips and this runs on every calendar rebuild.
 final _chipTimeFormat = DateFormat('h:mm a');
-
-const _liveColor = Color(0xFFFF5252);
 
 /// Time label a chip shows, matching the wording the old report tiles used.
 String reportChipTimeLabel(ReportBlock block) {
@@ -22,17 +23,18 @@ String reportChipTimeLabel(ReportBlock block) {
 }
 
 /// Called when a drag settles on a new interval for a reported block.
-typedef ReportIntervalChanged = void Function(
-  ReportBlock block,
-  DateTime start,
-  DateTime end,
-);
+typedef ReportIntervalChanged =
+    void Function(ReportBlock block, DateTime start, DateTime end);
 
 /// The report column of one day in the Plan + Report view.
 ///
-/// Syncfusion lays this widget out as the tile of the day's invisible
-/// lane appointment in the report calendar. It paints the trailing half of
-/// that day, directly beside the plan calendar's leading half.
+/// This is a plain overlay on the single plan calendar, positioned in the
+/// trailing half of the day cell by `ReportLaneOverlay`. It is *not* a
+/// calendar: it owns no scrollable, no controller and no navigation. The
+/// overlay hands it the plan grid's [scrollOffset] and [pixelsPerMinute],
+/// so chips move exactly with the plan tiles underneath. Only the chips
+/// take pointers — empty lane area lets taps, scrolls and day-changing
+/// swipes fall through to the plan calendar.
 ///
 /// A selected (tapped) chip shows the same white resize circles as calendar
 /// events; dragging them adjusts the reported interval directly. The drag
@@ -50,8 +52,11 @@ class ReportLaneView extends StatefulWidget {
     this.selectedId,
     this.snapMinutes = 5,
     this.onIntervalChanged,
+    this.onRecord,
     this.onDeleted,
     this.isRtl = false,
+    this.scrollOffset = 0,
+    this.pixelsPerMinute,
   });
 
   /// The day's report blocks, already ordered by start time.
@@ -76,23 +81,51 @@ class ReportLaneView extends StatefulWidget {
   /// Commits a dragged interval. Live recordings never call this.
   final ReportIntervalChanged? onIntervalChanged;
 
+  /// Starts another recording for the report's task. Null hides the chip's
+  /// play button; live chips never show it.
+  final ValueChanged<ReportBlock>? onRecord;
+
   /// Deletes a selected recording. Live recordings never call this.
   final ValueChanged<ReportBlock>? onDeleted;
 
   final bool isRtl;
+
+  /// How far the plan grid is currently scrolled, in pixels. Chips shift
+  /// up by this much, so the lane's own height is just the visible
+  /// viewport rather than a whole day.
+  final double scrollOffset;
+
+  /// Vertical scale of the plan grid. Null lets the lane derive it from
+  /// its height (standalone use, where the lane *is* a whole day tall).
+  final double? pixelsPerMinute;
 
   @override
   State<ReportLaneView> createState() => _ReportLaneViewState();
 }
 
 class _ReportLaneViewState extends State<ReportLaneView> {
-  ReportBlock? _dragOriginal;
+  /// The dragged edge clamped to the visible grid. Delta math starts here so
+  /// a chip whose real edge is past midnight (drawn at the grid bottom) still
+  /// follows the pointer as soon as it moves inward.
+  ReportBlock? _dragBase;
   ReportBlock? _dragPreview;
   bool _dragTop = true;
   double _dragDy = 0;
   double _dragPxPerMinute = 1;
 
-  bool get _dragging => _dragOriginal != null && _dragPreview != null;
+  bool get _dragging => _dragBase != null && _dragPreview != null;
+
+  DateTime get _gridStart => DateTime(
+    widget.day.year,
+    widget.day.month,
+    widget.day.day,
+  ).add(Duration(minutes: (widget.startHour * 60).round()));
+
+  DateTime get _gridEnd => DateTime(
+    widget.day.year,
+    widget.day.month,
+    widget.day.day,
+  ).add(Duration(minutes: (widget.endHour * 60).round()));
 
   List<ReportBlock> get _displayBlocks {
     final preview = _dragPreview;
@@ -105,9 +138,26 @@ class _ReportLaneViewState extends State<ReportLaneView> {
 
   void _beginHandleDrag(ReportBlock block, bool top, double pxPerMinute) {
     if (block.kind == ReportBlockKind.live) return;
+    // Only the dragged edge is re-anchored; the other edge keeps its stored
+    // time so fixing a clipped end never truncates a clipped start.
+    final base = top
+        ? (block.start.isBefore(_gridStart)
+              ? resizedReportBlock(
+                  block,
+                  newStart: _gridStart,
+                  snapMinutes: widget.snapMinutes,
+                )
+              : block)
+        : (block.end.isAfter(_gridEnd)
+              ? resizedReportBlock(
+                  block,
+                  newEnd: _gridEnd,
+                  snapMinutes: widget.snapMinutes,
+                )
+              : block);
     setState(() {
-      _dragOriginal = block;
-      _dragPreview = block;
+      _dragBase = base;
+      _dragPreview = base;
       _dragTop = top;
       _dragDy = 0;
       _dragPxPerMinute = pxPerMinute <= 0 ? 1 : pxPerMinute;
@@ -115,15 +165,19 @@ class _ReportLaneViewState extends State<ReportLaneView> {
   }
 
   void _updateHandleDrag(DragUpdateDetails details) {
-    final original = _dragOriginal;
-    if (original == null) return;
+    final base = _dragBase;
+    if (base == null) return;
     _dragDy += details.delta.dy;
     final minutes = _dragDy / _dragPxPerMinute;
-    final shifted = (_dragTop ? original.start : original.end).add(
+    var shifted = (_dragTop ? base.start : base.end).add(
       Duration(microseconds: (minutes * 60000000).round()),
     );
+    // Never move an edge somewhere the lane cannot draw it: the chip stops
+    // at the grid boundary and that boundary is what a release commits.
+    if (_dragTop && shifted.isBefore(_gridStart)) shifted = _gridStart;
+    if (!_dragTop && shifted.isAfter(_gridEnd)) shifted = _gridEnd;
     final preview = resizedReportBlock(
-      original,
+      base,
       newStart: _dragTop ? shifted : null,
       newEnd: _dragTop ? null : shifted,
       snapMinutes: widget.snapMinutes,
@@ -136,22 +190,25 @@ class _ReportLaneViewState extends State<ReportLaneView> {
       _cancelDrag();
       return;
     }
-    final original = _dragOriginal!;
+    final base = _dragBase!;
     final preview = _dragPreview!;
     setState(() {
-      _dragOriginal = null;
+      _dragBase = null;
       _dragPreview = null;
     });
-    if (preview.start == original.start && preview.end == original.end) {
+    // A drag that only pushes farther outside the grid changes nothing the
+    // user can see, so it must not rewrite the report (that was how a
+    // 1:30 AM report could be "updated" without the chip moving).
+    if (preview.start == base.start && preview.end == base.end) {
       return;
     }
-    widget.onIntervalChanged?.call(original, preview.start, preview.end);
+    widget.onIntervalChanged?.call(base, preview.start, preview.end);
   }
 
   void _cancelDrag() {
-    if (_dragOriginal == null && _dragPreview == null) return;
+    if (_dragBase == null && _dragPreview == null) return;
     setState(() {
-      _dragOriginal = null;
+      _dragBase = null;
       _dragPreview = null;
     });
   }
@@ -159,397 +216,128 @@ class _ReportLaneViewState extends State<ReportLaneView> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.16),
-        border: Border(
-          left: widget.isRtl
-              ? BorderSide.none
-              : BorderSide(
-                  color: scheme.outlineVariant.withValues(alpha: 0.7),
-                  width: 1,
-                ),
-          right: widget.isRtl
-              ? BorderSide(
-                  color: scheme.outlineVariant.withValues(alpha: 0.7),
-                  width: 1,
-                )
-              : BorderSide.none,
-        ),
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final height = constraints.maxHeight;
-          final minutes = ((widget.endHour - widget.startHour) * 60)
-              .clamp(1, 24 * 60)
-              .toDouble();
-          if (!height.isFinite || height <= 0) {
-            return const SizedBox.shrink();
-          }
-          final pxPerMinute = height / minutes;
-          final gridStart = DateTime(
-            widget.day.year,
-            widget.day.month,
-            widget.day.day,
-          ).add(Duration(minutes: (widget.startHour * 60).round()));
-          // Chips that overlap in time fan out a little instead of hiding
-          // each other completely (two reports over one stretch happen when
-          // an event has more than one accepted entry).
-          final laneEnds = <DateTime>[];
-          final chips = <Widget>[];
-          for (final block in _displayBlocks) {
-            var lane = 0;
-            while (lane < laneEnds.length &&
-                block.start.isBefore(laneEnds[lane])) {
-              lane++;
-            }
-            if (lane == laneEnds.length) {
-              laneEnds.add(block.end);
-            } else {
-              laneEnds[lane] = block.end;
-            }
-            // Clamp to the grid's hour range: a block that starts before it
-            // (or ends after) keeps the visible part at the right offset.
-            final rawStart = block.start
-                .difference(gridStart)
-                .inMinutes
-                .toDouble();
-            final rawEnd = block.end.difference(gridStart).inMinutes.toDouble();
-            final top = rawStart.clamp(0, minutes).toDouble() * pxPerMinute;
-            final bottom = rawEnd.clamp(0, minutes).toDouble() * pxPerMinute;
-            final visible = bottom - top;
-            final chipHeight = visible < 3 ? 3.0 : visible;
-            chips.add(
-              Positioned(
-                top: top,
-                left: lane * 8.0,
-                right: 0,
-                height: chipHeight,
-                child: _ReportChip(
-                  block: block,
-                  color: widget.colorFor(block),
-                  timeLabel: reportChipTimeLabel(block),
-                  selected: block.displayId == widget.selectedId,
-                  adjustable: block.kind != ReportBlockKind.live,
-                  onTap: () => widget.onTap(block),
-                  onResizeStart: (top) =>
-                      _beginHandleDrag(block, top, pxPerMinute),
-                  onResizeUpdate: _updateHandleDrag,
-                  onResizeEnd: _endDrag,
-                  onResizeCancel: _cancelDrag,
-                  onDelete: block.kind == ReportBlockKind.live
-                      ? null
-                      : () => widget.onDeleted?.call(block),
-                ),
-              ),
-            );
-          }
-          return SizedBox.expand(
-            child: ClipRect(child: Stack(children: chips)),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _ReportChip extends StatelessWidget {
-  const _ReportChip({
-    required this.block,
-    required this.color,
-    required this.timeLabel,
-    required this.selected,
-    required this.adjustable,
-    required this.onTap,
-    this.onResizeStart,
-    this.onResizeUpdate,
-    this.onResizeEnd,
-    this.onResizeCancel,
-    this.onDelete,
-  });
-
-  final ReportBlock block;
-  final Color color;
-  final String timeLabel;
-  final bool selected;
-  final bool adjustable;
-  final VoidCallback onTap;
-  final ValueChanged<bool>? onResizeStart;
-  final GestureDragUpdateCallback? onResizeUpdate;
-  final VoidCallback? onResizeEnd;
-  final VoidCallback? onResizeCancel;
-  final VoidCallback? onDelete;
-
-  @override
-  Widget build(BuildContext context) {
-    final live = block.kind == ReportBlockKind.live;
-    final title = block.title.isEmpty ? 'Report' : block.title;
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: '$title · $timeLabel',
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        onLongPress: selected ? onDelete : null,
-        child: Tooltip(
-          message:
-              '$title\n'
-              '$timeLabel'
-              '${selected && adjustable ? '\nDrag the white circles to adjust the time' : ''}'
-              '${selected && onDelete != null ? '\nTap × or long-press to delete this recording' : ''}',
-          waitDuration: const Duration(milliseconds: 500),
-          child: Container(
-            key: ValueKey('report-chip:${block.displayId}'),
-            margin: const EdgeInsets.symmetric(vertical: 1),
-            decoration: BoxDecoration(
-              color: live ? color : color.withValues(alpha: 0.75),
-              borderRadius: BorderRadius.circular(6),
-              border: live
-                  ? Border.all(color: _liveColor, width: 2)
-                  : selected
-                  ? Border.all(color: Colors.white, width: 2)
-                  : null,
-              boxShadow: selected
-                  ? const [
-                      BoxShadow(
-                        color: Colors.black38,
-                        blurRadius: 4,
-                        offset: Offset(0, 1),
-                      ),
-                    ]
-                  : null,
-            ),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final height = constraints.maxHeight;
-                final width = constraints.maxWidth;
-                // Week view gives each report track half of a day cell. Keep
-                // the title visible in that narrow column; only collapse to
-                // a color bar when it can't fit even a short label.
-                final compact = width.isFinite && width < 44;
-                final showText =
-                    !compact && (height.isInfinite || height >= 20);
-                final showTime =
-                    !compact &&
-                    (width.isInfinite || width >= 100) &&
-                    (height.isInfinite || height >= 34);
-                // The same threshold as event tiles: below ~12px there is no
-                // room for two grabbable circles.
-                final showHandles =
-                    selected &&
-                    adjustable &&
-                    height.isFinite &&
-                    height >= 12 &&
-                    width.isFinite &&
-                    width >= 24;
-                final compactHandles =
-                    compact || (height.isFinite && height < 58);
-                final tightHandles =
-                    compactHandles && height.isFinite && height < 40;
-                Widget? content;
-                if (showText) {
-                  content = Padding(
-                    padding: const EdgeInsets.fromLTRB(6, 3, 6, 3),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (live)
-                              const Padding(
-                                padding: EdgeInsets.only(right: 3),
-                                child: Icon(
-                                  Icons.fiber_manual_record,
-                                  size: 12,
-                                  color: _liveColor,
-                                ),
-                              ),
-                            if (block.kind == ReportBlockKind.timer)
-                              const Padding(
-                                padding: EdgeInsets.only(right: 3),
-                                child: Icon(
-                                  Icons.timer_outlined,
-                                  size: 12,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            if (block.kind == ReportBlockKind.accepted)
-                              const Padding(
-                                padding: EdgeInsets.only(right: 3),
-                                child: Icon(
-                                  Icons.fact_check,
-                                  size: 12,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            Flexible(
-                              child: Text(
-                                block.title.isEmpty ? 'Report' : block.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        if (showTime) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            timeLabel,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  );
-                }
-                return Stack(
-                  // Nothing (the circles included) may paint outside the
-                  // chip's rounded body.
-                  clipBehavior: Clip.hardEdge,
-                  children: [
-                    if (content != null) content,
-                    if (showHandles)
-                      Positioned(
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        child: Center(
-                          child: SizedBox(
-                            width: compactHandles ? 40 : 48,
-                            child: _resizeHandle(
-                              top: true,
-                              compact: compactHandles,
-                              tight: tightHandles,
-                            ),
-                          ),
-                        ),
-                      ),
-                    if (showHandles)
-                      Positioned(
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        child: Center(
-                          child: SizedBox(
-                            width: compactHandles ? 40 : 48,
-                            child: _resizeHandle(
-                              top: false,
-                              compact: compactHandles,
-                              tight: tightHandles,
-                            ),
-                          ),
-                        ),
-                      ),
-                    if (selected &&
-                        onDelete != null &&
-                        (height.isInfinite || height >= 12) &&
-                        (width.isInfinite || width >= 28))
-                      Positioned(top: 1, right: 1, child: _deleteBadge()),
-                  ],
-                );
-              },
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Small × on a selected chip. The chip sits on a dense time grid, so the
-  /// badge is kept to 16px and overlaid on the top-right corner.
-  Widget _deleteBadge() {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onDelete,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: Semantics(
-          button: true,
-          label: 'Delete recorded time',
-          child: Container(
-            key: ValueKey('report-delete:${block.displayId}'),
-            width: 16,
-            height: 16,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-              border: Border.all(color: color, width: 1.5),
-              boxShadow: const [
-                BoxShadow(color: Colors.black38, blurRadius: 2),
-              ],
-            ),
-            child: Icon(Icons.close, size: 11, color: color),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// White grab circle centered on the chip's start or end edge, drawn the
-  /// same way as the calendar's event resize handles.
-  Widget _resizeHandle({
-    required bool top,
-    required bool compact,
-    required bool tight,
-  }) {
-    final grabHeight = compact ? 20.0 : 28.0;
-    final diameter = compact ? 14.0 : 18.0;
-    final alignment = top
-        ? (tight ? Alignment.topLeft : Alignment.topCenter)
-        : (tight ? Alignment.bottomRight : Alignment.bottomCenter);
-    return GestureDetector(
-      behavior: HitTestBehavior.deferToChild,
-      onVerticalDragStart: (_) => onResizeStart?.call(top),
-      onVerticalDragUpdate: onResizeUpdate,
-      onVerticalDragEnd: (_) => onResizeEnd?.call(),
-      onVerticalDragCancel: onResizeCancel,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.resizeUpDown,
-        child: Container(
-          height: grabHeight,
-          alignment: alignment,
-          padding: EdgeInsets.only(
-            top: 2,
-            bottom: 2,
-            left: tight ? 4 : 0,
-            right: tight ? 4 : 0,
-          ),
-          child: Semantics(
-            label: top
-                ? 'Drag to adjust report start'
-                : 'Drag to adjust report end',
-            child: Container(
-              width: diameter,
-              height: diameter,
+    // The tinted background must not take pointers: only chips are
+    // interactive, everything else belongs to the plan calendar below.
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: IgnorePointer(
+            child: DecoratedBox(
               decoration: BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: color.withValues(alpha: 0.9),
-                  width: compact ? 2.5 : 3,
+                color: scheme.surfaceContainerHighest.withValues(alpha: 0.16),
+                border: Border(
+                  left: widget.isRtl
+                      ? BorderSide.none
+                      : BorderSide(
+                          color: scheme.outlineVariant.withValues(alpha: 0.7),
+                          width: 1,
+                        ),
+                  right: widget.isRtl
+                      ? BorderSide(
+                          color: scheme.outlineVariant.withValues(alpha: 0.7),
+                          width: 1,
+                        )
+                      : BorderSide.none,
                 ),
-                boxShadow: const [
-                  BoxShadow(color: Colors.black38, blurRadius: 3),
-                ],
               ),
             ),
           ),
         ),
-      ),
+        Positioned.fill(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final height = constraints.maxHeight;
+              final minutes = ((widget.endHour - widget.startHour) * 60)
+                  .clamp(1, 24 * 60)
+                  .toDouble();
+              if (!height.isFinite || height <= 0) {
+                return const SizedBox.shrink();
+              }
+              final pxPerMinute = widget.pixelsPerMinute ?? height / minutes;
+              final gridStart = DateTime(
+                widget.day.year,
+                widget.day.month,
+                widget.day.day,
+              ).add(Duration(minutes: (widget.startHour * 60).round()));
+              // Chips that overlap in time fan out a little instead of hiding
+              // each other completely (two reports over one stretch happen when
+              // an event has more than one accepted entry).
+              final laneEnds = <DateTime>[];
+              final chips = <Widget>[];
+              for (final block in _displayBlocks) {
+                var lane = 0;
+                while (lane < laneEnds.length &&
+                    block.start.isBefore(laneEnds[lane])) {
+                  lane++;
+                }
+                if (lane == laneEnds.length) {
+                  laneEnds.add(block.end);
+                } else {
+                  laneEnds[lane] = block.end;
+                }
+                // Clamp to the grid's hour range: a block that starts before it
+                // (or ends after) keeps the visible part at the right offset.
+                final rawStart = block.start
+                    .difference(gridStart)
+                    .inMinutes
+                    .toDouble();
+                final rawEnd = block.end
+                    .difference(gridStart)
+                    .inMinutes
+                    .toDouble();
+                final top =
+                    rawStart.clamp(0, minutes).toDouble() * pxPerMinute -
+                    widget.scrollOffset;
+                final bottom =
+                    rawEnd.clamp(0, minutes).toDouble() * pxPerMinute -
+                    widget.scrollOffset;
+                final visible = bottom - top;
+                final chipHeight = visible < 3 ? 3.0 : visible;
+                // A very short report paints a thin bar, but its hit area stays
+                // tall enough to tap and to hold two resize circles. The bar
+                // stays centered on its real interval; only the grab area grows.
+                final hitHeight = math.max(chipHeight, reportChipMinHitHeight);
+                final hitTop = top - (hitHeight - chipHeight) / 2;
+                // Fully scrolled out of the viewport: no chip at all, so an
+                // off-screen report can never intercept a tap or paint over
+                // the header.
+                if (hitTop + hitHeight <= 0 || hitTop >= height) continue;
+                chips.add(
+                  Positioned(
+                    top: hitTop,
+                    left: lane * 8.0,
+                    right: 0,
+                    height: hitHeight,
+                    child: ReportChip(
+                      block: block,
+                      color: widget.colorFor(block),
+                      timeLabel: reportChipTimeLabel(block),
+                      selected: block.displayId == widget.selectedId,
+                      adjustable: block.kind != ReportBlockKind.live,
+                      visualHeight: chipHeight,
+                      onTap: () => widget.onTap(block),
+                      onResizeStart: (top) =>
+                          _beginHandleDrag(block, top, pxPerMinute),
+                      onResizeUpdate: _updateHandleDrag,
+                      onResizeEnd: _endDrag,
+                      onResizeCancel: _cancelDrag,
+                      onRecord: widget.onRecord == null || !block.recordable
+                          ? null
+                          : () => widget.onRecord!(block),
+                      onDelete: block.kind == ReportBlockKind.live
+                          ? null
+                          : () => widget.onDeleted?.call(block),
+                    ),
+                  ),
+                );
+              }
+              return SizedBox.expand(
+                child: ClipRect(child: Stack(children: chips)),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }

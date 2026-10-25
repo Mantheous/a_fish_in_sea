@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 
+import 'color_prefs.dart';
 import 'feed.dart';
 import 'planner_event.dart';
 
@@ -142,6 +143,7 @@ class CalendarGroup extends Equatable {
 List<CalendarGroup> buildCalendarTree({
   required List<Feed> feeds,
   required List<PlannerEvent> events,
+  ColorPrefs prefs = const ColorPrefs(),
 }) {
   final feedById = {for (final f in feeds) f.id: f};
 
@@ -184,11 +186,15 @@ List<CalendarGroup> buildCalendarTree({
         final sorted = labels.toList()..sort();
         for (final label in sorted) {
           final leafId = '${feed.id}$canvasLeafSeparator$label';
+          final assigned = prefs.classColorFor(
+            label,
+            useOverrides: prefs.applyToCalendar,
+          );
           out.add(CalendarLeaf(
             id: leafId,
             groupId: calendarGroupHomework,
             title: label,
-            colorValue: courseColor(label).toARGB32(),
+            colorValue: assigned ?? courseColor(label).toARGB32(),
             eventCount: counts[leafId] ?? 0,
           ));
         }

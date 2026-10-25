@@ -1,8 +1,12 @@
+import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
+import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/service/calendar_report.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_page.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_report_lane.dart';
+import 'package:a_fish_in_sea/planner/view/report_chip.dart';
 import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
 import 'package:a_fish_in_sea/reporting/model/reported_entry.dart';
 import 'package:flutter/gestures.dart';
@@ -36,27 +40,13 @@ ReportedEntry _accepted({
 );
 
 void main() {
-  group('report lane ids', () {
-    test('round-trip a day', () {
-      final day = DateTime(2026, 10, 5);
-      final id = reportLaneIdForDay(day);
-      expect(isReportLaneId(id), isTrue);
-      expect(reportLaneDayOf(id), day);
-    });
-
-    test('rejects ids that are not lanes or not real dates', () {
-      expect(isReportLaneId('report:manual'), isFalse);
-      expect(reportLaneDayOf('report:manual'), isNull);
-      expect(reportLaneDayOf('reportlane:not-a-date'), isNull);
-      expect(reportLaneDayOf('reportlane:2026-13-45'), isNull);
-      expect(reportLaneDayOf('reportlane:2026-02-29'), isNull);
-    });
-
-    test('placeholder ids are recognised and never read as lanes', () {
-      final id = '${reportPlaceholderIdPrefix}personal-1';
-      expect(isReportPlaceholderId(id), isTrue);
-      expect(isReportLaneId(id), isFalse);
-      expect(reportLaneDayOf(id), isNull);
+  group('report display ids', () {
+    test('timer and live ids expose their owner; manual ids do not', () {
+      expect(reportOwnerIdForDisplayId('report:timer:e1'), 'e1');
+      expect(reportOwnerIdForDisplayId('report:live:node-7'), 'node-7');
+      expect(reportOwnerIdForDisplayId('report:r1'), isNull);
+      expect(reportOwnerIdForDisplayId('event:e1'), isNull);
+      expect(reportOwnerIdForDisplayId('report:timer:'), isNull);
     });
   });
 
@@ -162,9 +152,9 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
 
-      // Two calendars share one grid: the plan track is left and the report
-      // track is directly beside it in the same day cell.
-      expect(find.byType(SfCalendar), findsNWidgets(2));
+      // One calendar: the report track is a passive overlay on the plan
+      // grid, not a second calendar.
+      expect(find.byType(SfCalendar), findsOneWidget);
       final railFinder = find.byType(ReportLaneView);
       expect(
         railFinder,
@@ -181,8 +171,8 @@ void main() {
       expect(tileRect.right, lessThanOrEqualTo(railRect.left + 1));
       expect(tileRect.width, closeTo(railRect.width, 4));
 
-      // Both grids share one time axis: a chip at 9:05 lines up with the
-      // 9:00 planned tile in the other calendar.
+      // Both tracks share one time axis: a chip at 9:05 lines up with the
+      // 9:00 planned tile beside it.
       expect(find.text('9:05 AM – 9:50 AM · accepted'), findsOneWidget);
       final chipRect = tester.getRect(
         find.byKey(const ValueKey('report-chip:report:r1')),
@@ -191,19 +181,23 @@ void main() {
       expect(chipRect.top - tileRect.top, closeTo(6.7, 6));
       expect(chipRect.height, closeTo(60, 6));
 
-      // Scrolling one grid scrolls the other, to the same offset.
+      // Scrolling the plan grid moves the chips with it, to the same offset:
+      // there is no second scrollable to fall out of sync.
       final planScroll = Scrollable.maybeOf(
         tester.element(find.byKey(const ValueKey('tile:e1'))),
       )!.position;
-      final railScroll = Scrollable.maybeOf(
-        tester.element(railFinder),
-      )!.position;
       planScroll.jumpTo(200);
       await tester.pump(const Duration(milliseconds: 200));
-      expect(railScroll.pixels, planScroll.pixels);
-      railScroll.jumpTo(120);
-      await tester.pump(const Duration(milliseconds: 200));
-      expect(planScroll.pixels, railScroll.pixels);
+      final scrolledTile = tester.getRect(
+        find.byKey(const ValueKey('tile:e1')),
+      );
+      final scrolledChip = tester.getRect(
+        find.byKey(const ValueKey('report-chip:report:r1')),
+      );
+      expect(
+        scrolledChip.top - scrolledTile.top,
+        closeTo(chipRect.top - tileRect.top, 1),
+      );
     });
 
     testWidgets('week view keeps a report column per visible day', (
@@ -431,6 +425,133 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
       expect(find.text('Event details'), findsOneWidget);
+      // The panel leads with the tapped report, not just the event.
+      expect(
+        find.byKey(const ValueKey('selected-report:report:r1')),
+        findsOneWidget,
+      );
+      expect(find.text('9:05 AM – 9:50 AM · 45m'), findsOneWidget);
+    });
+
+    testWidgets('play on a report chip records another report for the task', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final now = DateTime.now();
+      final start = DateTime(now.year, now.month, now.day, 9);
+      calendar.addEvent(_event('e1', start));
+      context.read<ReportingCubit>().upsertEntry(
+        DateTime(now.year, now.month, now.day),
+        _accepted(
+          id: 'r1',
+          eventId: 'e1',
+          start: start.add(const Duration(minutes: 5)),
+          end: start.add(const Duration(minutes: 50)),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      await tester.tap(find.byKey(const ValueKey('report-play:report:r1')));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(calendar.byId('e1')?.isTracking, isTrue);
+      expect(find.textContaining('Recording another report'), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(
+        find.byKey(const ValueKey('report-chip:report:live:e1')),
+        findsOneWidget,
+        reason: 'the new recording takes over the report lane',
+      );
+    });
+
+    testWidgets('play on a node-only report starts that node timer', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final nodes = context.read<NodeCubit>();
+      final now = DateTime.now();
+      final start = DateTime(now.year, now.month, now.day, 9);
+      nodes.addNode(
+        Node(
+          id: 'n1',
+          title: 'Off-calendar task',
+          createdAt: DateTime(now.year, now.month, now.day),
+        ),
+      );
+      nodes.setReported('n1', start, start.add(const Duration(minutes: 30)));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      await tester.tap(
+        find.byKey(const ValueKey('report-play:report:timer:n1')),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(nodes.byId('n1')?.isTracking, isTrue);
+      expect(find.textContaining('Recording another report'), findsOneWidget);
+    });
+
+    testWidgets('panel report card records again for the same event', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final now = DateTime.now();
+      final start = DateTime(now.year, now.month, now.day, 9);
+      calendar.addEvent(_event('e1', start));
+      context.read<ReportingCubit>().upsertEntry(
+        DateTime(now.year, now.month, now.day),
+        _accepted(
+          id: 'r1',
+          eventId: 'e1',
+          start: start.add(const Duration(minutes: 5)),
+          end: start.add(const Duration(minutes: 50)),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Report r1'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      await tester.tap(find.byKey(const ValueKey('report-record:report:r1')));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(calendar.byId('e1')?.isTracking, isTrue);
+      expect(
+        find.byKey(const ValueKey('selected-report:report:live:e1')),
+        findsOneWidget,
+        reason: 'the panel card follows the new live recording',
+      );
+      expect(find.text('Recording now'), findsOneWidget);
+
+      NodeEventLink.stopEventTrackingAligned(
+        context.read<NodeCubit>(),
+        calendar,
+        'e1',
+        now: start.add(const Duration(minutes: 5)),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(
+        find.byKey(const ValueKey('selected-report:report:timer:e1')),
+        findsOneWidget,
+        reason: 'the card follows the block kind change after Stop',
+      );
+      expect(find.text('Timer report'), findsOneWidget);
     });
 
     Finder reportHandle(String label) => find.byWidgetPredicate(
@@ -490,6 +611,64 @@ void main() {
       expect(reportHandle('Drag to adjust report end'), findsOneWidget);
     });
 
+    testWidgets('a very short report chip stays tappable and grows handles', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final reporting = context.read<ReportingCubit>();
+      final now = DateTime.now();
+      final day = DateTime(now.year, now.month, now.day);
+      final start = DateTime(now.year, now.month, now.day, 9, 5);
+      calendar.addEvent(_event('e1', start));
+      // A two-minute report paints under one grid pixel: the chip must still
+      // keep a tappable hit area and grow its resize circles when selected.
+      reporting.upsertEntry(
+        day,
+        _accepted(
+          id: 'r1',
+          eventId: 'e1',
+          start: start,
+          end: start.add(const Duration(minutes: 2)),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final chip = find.byKey(const ValueKey('report-chip:report:r1'));
+      expect(chip, findsOneWidget);
+      // The painted bar stays proportional to the report…
+      expect(tester.getSize(chip).height, lessThan(reportChipMinHitHeight));
+      // …while the chip itself reserves a tappable, adjustable hit area.
+      expect(
+        tester.getSize(find.byType(ReportChip)).height,
+        greaterThanOrEqualTo(reportChipMinHitHeight),
+      );
+      expect(reportHandle('Drag to adjust report end'), findsNothing);
+
+      await tester.tap(chip);
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('Event details'), findsOneWidget);
+      expect(reportHandle('Drag to adjust report start'), findsOneWidget);
+      expect(reportHandle('Drag to adjust report end'), findsOneWidget);
+
+      await tester.drag(
+        reportHandle('Drag to adjust report end'),
+        const Offset(0, 80),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final updated = reporting.entriesForDay(day).single;
+      expect(updated.start, start);
+      expect(updated.end.isAfter(start), isTrue);
+    });
+
     testWidgets('top handle moves the reported start earlier', (tester) async {
       await pumpGoldenPage(tester, const CalendarPage());
       final context = tester.element(find.byType(CalendarPage));
@@ -527,6 +706,133 @@ void main() {
       expect(updated.end, end);
     });
 
+    testWidgets(
+      'bottom handle of a report past midnight moves the visible edge',
+      (tester) async {
+        await pumpGoldenPage(tester, const CalendarPage());
+        final context = tester.element(find.byType(CalendarPage));
+        final calendar = context.read<CalendarCubit>();
+        final reporting = context.read<ReportingCubit>();
+        final now = DateTime.now();
+        final day = DateTime(now.year, now.month, now.day);
+        final start = DateTime(now.year, now.month, now.day, 23);
+        // The tracked session ran into the next morning: the lane draws the
+        // chip clipped at midnight, so its real end is off-grid.
+        final reportedEnd = DateTime(now.year, now.month, now.day + 1, 1, 30);
+        calendar.addEvent(
+          PlannerEvent(
+            id: 'e1',
+            subject: 'Event e1',
+            start: start,
+            end: start.add(const Duration(minutes: 30)),
+          ),
+        );
+        reporting.upsertEntry(
+          day,
+          _accepted(id: 'r1', eventId: 'e1', start: start, end: reportedEnd),
+        );
+        await tester.pump(const Duration(milliseconds: 200));
+        await tester.pump(const Duration(milliseconds: 200));
+        await tester.tap(find.text('Plan + Report'));
+        await tester.pump(const Duration(milliseconds: 200));
+        await tester.pump(const Duration(milliseconds: 200));
+
+        final planScroll = Scrollable.maybeOf(
+          tester.element(find.byKey(const ValueKey('tile:e1'))),
+        )!;
+        planScroll.position.jumpTo(planScroll.position.maxScrollExtent);
+        await tester.pump(const Duration(milliseconds: 200));
+
+        final chip = find.byKey(const ValueKey('report-chip:report:r1'));
+        await tester.tap(chip);
+        await tester.pump(const Duration(milliseconds: 200));
+        await tester.pump(const Duration(milliseconds: 200));
+        final before = tester.getRect(chip);
+
+        await tester.drag(
+          reportHandle('Drag to adjust report end'),
+          const Offset(0, -40),
+        );
+        await tester.pump(const Duration(milliseconds: 200));
+        await tester.pump(const Duration(milliseconds: 200));
+
+        final updated = reporting.entriesForDay(day).single;
+        expect(updated.start, start);
+        expect(updated.end.isBefore(reportedEnd), isTrue);
+        // The chip must shrink with the committed value instead of staying
+        // pinned at the grid bottom.
+        final after = tester.getRect(chip);
+        expect(after.bottom, lessThan(before.bottom - 10));
+        expect(after.top, closeTo(before.top, 1));
+
+        // Repeated adjustments can't pile up Undo prompts: the prompt is gone
+        // a couple of seconds after it appears.
+        expect(find.textContaining('Reported time updated'), findsOneWidget);
+        expect(
+          tester.widget<SnackBar>(find.byType(SnackBar)).duration,
+          const Duration(seconds: 2),
+        );
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.pump(const Duration(seconds: 2));
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.textContaining('Reported time updated'), findsNothing);
+      },
+    );
+
+    testWidgets('dragging a clipped report end outward commits nothing', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final reporting = context.read<ReportingCubit>();
+      final now = DateTime.now();
+      final day = DateTime(now.year, now.month, now.day);
+      final start = DateTime(now.year, now.month, now.day, 23);
+      final reportedEnd = DateTime(now.year, now.month, now.day + 1, 1, 30);
+      calendar.addEvent(
+        PlannerEvent(
+          id: 'e1',
+          subject: 'Event e1',
+          start: start,
+          end: start.add(const Duration(minutes: 30)),
+        ),
+      );
+      reporting.upsertEntry(
+        day,
+        _accepted(id: 'r1', eventId: 'e1', start: start, end: reportedEnd),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final planScroll = Scrollable.maybeOf(
+        tester.element(find.byKey(const ValueKey('tile:e1'))),
+      )!;
+      planScroll.position.jumpTo(planScroll.position.maxScrollExtent);
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final chip = find.byKey(const ValueKey('report-chip:report:r1'));
+      await tester.tap(chip);
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      await tester.drag(
+        reportHandle('Drag to adjust report end'),
+        const Offset(0, 60),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      // The chip already stops at midnight; extending past it is invisible,
+      // so it must not silently rewrite the stored end or claim an update.
+      final updated = reporting.entriesForDay(day).single;
+      expect(updated.end, reportedEnd);
+      expect(find.textContaining('Reported time updated'), findsNothing);
+    });
+
     testWidgets('live report has no resize handles while recording', (
       tester,
     ) async {
@@ -550,9 +856,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
 
-      final liveChip = find.byKey(
-        const ValueKey('report-chip:report:live:e1'),
-      );
+      final liveChip = find.byKey(const ValueKey('report-chip:report:live:e1'));
       final liveRect = tester.getRect(liveChip);
       await tester.tapAt(Offset(liveRect.center.dx, liveRect.top + 8));
       await tester.pump(const Duration(milliseconds: 200));

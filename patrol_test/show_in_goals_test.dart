@@ -9,7 +9,7 @@ import 'package:patrol/patrol.dart';
 class MockStorage extends Mock implements Storage {}
 
 /// "Show in goals" end-to-end: a task's three-dots menu jumps to the goal
-/// tree with the task revealed in the All view.
+/// tree with the task revealed in the goal-tree view.
 ///
 /// Run against the live dev API server:
 ///   patrol test --device chrome --web-headless \
@@ -61,11 +61,11 @@ void main() {
     await $('Show in goals').tap();
     await $.pumpAndSettle();
 
-    // Landed on Nodes, All tree view, with the task revealed.
-    expect($('Nodes').visible, true);
+    // Landed on Goals, goal-tree view, with the task revealed.
+    expect($('Goals').visible, true);
     expect($(title).visible, true);
     final allChip = find.ancestor(
-      of: find.text('All'),
+      of: find.text('Goal tree'),
       matching: find.byType(ChoiceChip),
     );
     expect(allChip, findsOneWidget);

@@ -22,13 +22,14 @@ import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../model/recurrence.dart';
 import '../model/task_assignee.dart';
+import '../service/calendar_report.dart';
 import '../service/event_reminders.dart';
 import 'event_editor_actions.dart';
+import 'event_colors.dart';
 import 'event_time_sections.dart';
 import 'people_field.dart';
 import 'reminder_prompt.dart' show ReminderField, maybePromptForEventReminder;
-
-const int _personalEventColor = 0xFF6B8F8A;
+import 'report_detail_card.dart';
 
 Future<bool?> showEventEditor(
   BuildContext context, {
@@ -81,11 +82,17 @@ Future<void> showEventDetail(
   BuildContext context, {
   required PlannerEvent event,
   VoidCallback? onReport,
+  ReportBlock? report,
+  VoidCallback? onRecordReport,
 }) {
   return showModalBottomSheet<void>(
     context: context,
-    builder: (sheetContext) =>
-        _EventDetailSheet(event: event, onReport: onReport),
+    builder: (sheetContext) => _EventDetailSheet(
+      event: event,
+      onReport: onReport,
+      report: report,
+      onRecordReport: onRecordReport,
+    ),
   );
 }
 
@@ -2433,7 +2440,7 @@ class _DayConflictsSection extends StatelessWidget {
                       width: 10,
                       height: 10,
                       decoration: BoxDecoration(
-                        color: _dotColor(context, event),
+                        color: _eventDotColor(context, event),
                         shape: BoxShape.circle,
                       ),
                     ),
@@ -2500,25 +2507,38 @@ class _DayConflictsSection extends StatelessWidget {
     );
   }
 
-  Color _dotColor(BuildContext context, PlannerEvent event) {
-    final label = event.classLabel;
-    if (label != null && label.isNotEmpty) return courseColor(label);
-    if (event.colorValue != null) {
-      return mutedCalendarColor(Color(event.colorValue!));
-    }
-    try {
-      final feed = context.read<FeedCubit>().byId(event.feedId ?? '');
-      if (feed != null) return mutedCalendarColor(feed.color);
-    } catch (_) {}
-    return const Color(_personalEventColor);
-  }
+}
+
+/// Dot color for one event, shared by the day-conflicts list and the event
+/// detail header so both honor the Colors page choices.
+Color _eventDotColor(BuildContext context, PlannerEvent event) {
+  final prefs = colorPrefsOf(context);
+  var feedColors = const <String, Color>{};
+  try {
+    feedColors = {
+      for (final feed in context.read<FeedCubit>().state) feed.id: feed.color,
+    };
+  } catch (_) {}
+  Node? node;
+  try {
+    final nodes = context.read<NodeCubit>();
+    node = nodes.byId(event.taskId ?? '') ?? nodes.byId(event.id);
+  } catch (_) {}
+  return resolveEventColor(event, feedColors, prefs, node: node);
 }
 
 class _EventDetailSheet extends StatelessWidget {
   final PlannerEvent event;
   final VoidCallback? onReport;
+  final ReportBlock? report;
+  final VoidCallback? onRecordReport;
 
-  const _EventDetailSheet({required this.event, this.onReport});
+  const _EventDetailSheet({
+    required this.event,
+    this.onReport,
+    this.report,
+    this.onRecordReport,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -2546,6 +2566,8 @@ class _EventDetailSheet extends StatelessWidget {
                     Future.microtask(report);
                   },
             onClose: () => Navigator.of(context).pop(),
+            report: this.report,
+            onRecordReport: onRecordReport,
           );
         },
       ),
@@ -2559,12 +2581,21 @@ class EventDetailView extends StatelessWidget {
   final VoidCallback? onReport;
   final VoidCallback? onClose;
 
+  /// Report chip selected in the Plan + Report lane, shown as a detail card
+  /// above the event so the tapped report's interval is visible.
+  final ReportBlock? report;
+
+  /// Starts another recording for the report's task.
+  final VoidCallback? onRecordReport;
+
   const EventDetailView({
     super.key,
     required this.event,
     this.onEdit,
     this.onReport,
     this.onClose,
+    this.report,
+    this.onRecordReport,
   });
 
   @override
@@ -2577,11 +2608,7 @@ class EventDetailView extends StatelessWidget {
     final pushesToGoogle =
         event.isFromFeed && feedCubit.isRemoteEditable(event);
     final classLabel = event.classLabel;
-    final Color dotColor = classLabel != null && classLabel.isNotEmpty
-        ? courseColor(classLabel)
-        : (feed == null
-            ? const Color(_personalEventColor)
-            : mutedCalendarColor(feed.color));
+    final Color dotColor = _eventDotColor(context, event);
     final String sourceLabel =
         classLabel != null && classLabel.isNotEmpty
             ? classLabel
@@ -2604,6 +2631,16 @@ class EventDetailView extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (report != null) ...[
+            SelectedReportCard(
+              report: report!,
+              eventSubject: event.subject,
+              onRecord: onRecordReport,
+            ),
+            const SizedBox(height: 12),
+            const Divider(height: 1),
+            const SizedBox(height: 12),
+          ],
           Row(
             children: [
               Container(

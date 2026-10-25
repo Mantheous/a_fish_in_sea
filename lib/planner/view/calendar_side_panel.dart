@@ -6,6 +6,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_panel_cubit.dart';
 import '../model/planner_event.dart';
+import '../service/calendar_report.dart';
 import 'event_editor.dart';
 
 /// Key for the drag handle that resizes the panel.
@@ -32,6 +33,7 @@ class CalendarSidePanel extends StatelessWidget {
     required this.mode,
     required this.snapMinutes,
     required this.selectedEventId,
+    required this.selectedReport,
     required this.draft,
     required this.seedSubject,
     required this.seedNotes,
@@ -48,11 +50,16 @@ class CalendarSidePanel extends StatelessWidget {
     required this.onBack,
     required this.onClose,
     required this.onReport,
+    required this.onRecordReport,
   });
 
   final CalendarPanelMode mode;
   final int snapMinutes;
   final String? selectedEventId;
+
+  /// Report chip selected in the Plan + Report lane, if any. Its details
+  /// lead the event detail.
+  final ReportBlock? selectedReport;
 
   /// Preview event the create form is editing.
   final PlannerEvent? draft;
@@ -80,6 +87,10 @@ class CalendarSidePanel extends StatelessWidget {
   final VoidCallback onBack;
   final VoidCallback onClose;
   final ValueChanged<PlannerEvent> onReport;
+
+  /// Panel twin of the report chips' play button: starts another recording
+  /// for the selected report's task.
+  final ValueChanged<ReportBlock> onRecordReport;
 
   @override
   Widget build(BuildContext context) {
@@ -290,6 +301,7 @@ class CalendarSidePanel extends StatelessWidget {
             onCancelled: onEditingCancelled,
           );
         }
+        final report = selectedReport;
         return SingleChildScrollView(
           child: EventDetailView(
             key: ValueKey('detail:${detailEvent.id}'),
@@ -297,6 +309,9 @@ class CalendarSidePanel extends StatelessWidget {
             onEdit: onEditRequested,
             onReport: detailEvent.isTask ? () => onReport(detailEvent) : null,
             onClose: onClose,
+            report: report,
+            onRecordReport:
+                report == null ? null : () => onRecordReport(report),
           ),
         );
       },

@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:equatable/equatable.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 
+import '../common/persistence/stable_storage_keys.dart';
+
 /// Stable FNV-1a 32-bit hash over canonical JSON. Used only for
 /// change-detection against this device's own last-synced snapshot
 /// (hashes are never compared across devices), so insertion-ordered
@@ -172,6 +174,9 @@ class SyncMetaState extends Equatable {
 
 class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
   SyncMetaCubit() : super(const SyncMetaState());
+
+  @override
+  String get storagePrefix => StableStorageKeys.syncMeta;
 
   static String key(String collection, String itemId) => '$collection/$itemId';
 

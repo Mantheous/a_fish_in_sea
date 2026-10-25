@@ -2,7 +2,6 @@ import 'package:a_fish_in_sea/common/time/time_session.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
-import 'package:a_fish_in_sea/fitness/fitness_models.dart';
 import 'package:a_fish_in_sea/goals/model/goal.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/budget.dart';
@@ -16,6 +15,8 @@ import 'package:a_fish_in_sea/planner/model/assignment_estimate.dart';
 import 'package:a_fish_in_sea/planner/model/assignment_rule.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
+import 'package:a_fish_in_sea/planner/model/color_prefs.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/model/task.dart';
@@ -414,6 +415,111 @@ void main() {
       expect(restored?[2].anki, isNull);
     });
 
+    test('NodeCubit keeps automated goals, tolerates corrupt auto facets', () {
+      final cubit = NodeCubit();
+      final good = Node(
+        id: 'auto1',
+        title: 'Scripture study',
+        createdAt: _day,
+        auto: const AutoFacet(
+          target: 420,
+          period: TimeScale.weekly,
+          homeworkOnly: true,
+        ),
+      ).toJson();
+      final restored = cubit.fromJson({
+        'nodes': [
+          good,
+          {
+            ...good,
+            'id': 'auto2',
+            'auto': 'garbage',
+          }..remove('metrics')..remove('extraMetrics'),
+          {
+            ...good,
+            'id': 'auto3',
+            'auto': {'source': 'telepathy', 'target': 'lots'},
+          }..remove('metrics')..remove('extraMetrics'),
+          Map<String, dynamic>.from(good)
+            ..['id'] = 'auto4'
+            ..remove('auto')
+            ..remove('metrics')
+            ..remove('extraMetrics'),
+        ],
+      });
+      expect(
+        restored?.map((n) => n.id),
+        ['auto1', 'auto2', 'auto3', 'auto4'],
+      );
+      expect(restored?[0].auto?.target, 420);
+      expect(restored?[0].auto?.homeworkOnly, isTrue);
+      // A wrong-shaped facet drops only itself; the node survives — a
+      // schema typo must never wipe the goal.
+      expect(restored?[1].auto, isNull);
+      expect(restored?[1].title, 'Scripture study');
+      // Unknown enum names and wrong-typed numbers fall back to defaults.
+      expect(restored?[2].auto?.source, AutoSource.tasks);
+      expect(restored?[2].auto?.target, 0);
+      // Payloads written before automation existed load as plain goals.
+      expect(restored?[3].auto, isNull);
+    });
+
+    test('NodeCubit keeps class nodes and metric lists, tolerates garbage', () {
+      final cubit = NodeCubit();
+      final classJson = Node(
+        id: 'cls1',
+        title: 'CMLIT 201',
+        createdAt: _day,
+        classFacet: const ClassFacet(
+          sources: [ClassSource(feedId: 'feed:ls', classLabel: 'CMLIT 201')],
+        ),
+        auto: const AutoFacet(metric: AutoMetric.allDone),
+        extraMetrics: const [
+          AutoFacet(metric: AutoMetric.minutes, target: 300),
+        ],
+      ).toJson();
+      final taskJson = Node(
+        id: 'task1',
+        title: 'Midterm review',
+        createdAt: _day,
+        parentIds: const ['cls1'],
+        classNodeId: 'cls1',
+        classId: 'cls1',
+        classLabel: 'CMLIT 201',
+      ).toJson();
+      final restored = cubit.fromJson({
+        'nodes': [
+          classJson,
+          taskJson,
+          {...classJson, 'id': 'cls2', 'classFacet': 'garbage'},
+          {
+            ...classJson,
+            'id': 'cls3',
+            'metrics': [
+              'not-a-map',
+              {'metric': 'vibes'},
+              {'metric': 'allDone'},
+            ],
+          },
+          Map<String, dynamic>.from(taskJson)
+            ..['id'] = 'task2'
+            ..remove('classNodeId'),
+        ],
+      });
+      expect(
+        restored?.map((n) => n.id),
+        ['cls1', 'task1', 'cls2', 'cls3', 'task2'],
+      );
+      expect(restored?[0].classFacet?.sources.single.classLabel, 'CMLIT 201');
+      expect(restored?[0].metrics, hasLength(2));
+      expect(restored?[1].classNodeId, 'cls1');
+      expect(restored?[2].classFacet, isNull);
+      expect(restored?[2].title, 'CMLIT 201');
+      // Corrupt metric entries drop per-item; unknown names fall back.
+      expect(restored?[3].metrics, isNotEmpty);
+      expect(restored?[4].classNodeId, isNull);
+    });
+
     test('NodeCubit loads pre-flag nodes as bounded', () {
       final cubit = NodeCubit();
       final preFlag = Node(
@@ -462,34 +568,37 @@ void main() {
       expect(restoredStarred?.single.isFavorite, isTrue);
     });
 
-    test('NodeCubit loads pre-fitness nodes as plain non-workouts', () {
+    test('NodeCubit ignores retired workout/fitness payload keys', () {
       final cubit = NodeCubit();
-      final preFitness =
-          Node(
-              id: 'n4',
-              title: 'Sleep 8h',
-              createdAt: _day,
-              fitness: const FitnessFacet(
-                metric: FitnessMetric.sleepMinutes,
-                targetValue: 480,
-              ),
-              isWorkout: true,
-            ).toJson()
-            ..remove('fitness')
-            ..remove('isWorkout');
+      // Payload written while the Strava/watch connector existed. The
+      // keys are gone from the model now, but loading an old device must
+      // still keep the node and every field it still understands.
+      final legacy = Node(
+        id: 'n4',
+        title: 'Sleep 8h',
+        createdAt: _day,
+        effort: const EffortFacet(targetMinutes: 60),
+      ).toJson()
+        ..['isWorkout'] = true
+        ..['fitness'] = {
+          'metric': 'sleepMinutes',
+          'targetValue': 480,
+          'provider': 'garmin',
+        };
       final restored = cubit.fromJson({
-        'nodes': [preFitness],
+        'nodes': [legacy],
       });
-      expect(restored?.single.fitness, isNull);
-      expect(restored?.single.isWorkout, isFalse);
-      final corrupt = Map<String, dynamic>.from(preFitness)
-        ..['fitness'] = {'metric': 'renamed-value', 'targetValue': 60};
-      final restoredCorrupt = cubit.fromJson({
-        'nodes': [corrupt],
-      });
+      expect(restored?.single.id, 'n4');
+      expect(restored?.single.title, 'Sleep 8h');
+      expect(restored?.single.effort?.targetMinutes, 60);
+      // A corrupt retired payload is ignored just as safely.
+      final corrupt = Map<String, dynamic>.from(legacy)
+        ..['fitness'] = 'not-a-map';
       expect(
-        restoredCorrupt?.single.fitness?.metric,
-        FitnessMetric.activityMinutes,
+        cubit.fromJson({
+          'nodes': [corrupt],
+        })?.single.id,
+        'n4',
       );
     });
 
@@ -787,6 +896,37 @@ void main() {
       expect(restored?.map((n) => n.id), ['t1', 't2']);
       expect(restored?.firstWhere((n) => n.id == 't1').title, 'original');
       expect(restored?.firstWhere((n) => n.id == 't2').title, 'from sync');
+    });
+
+    test('SettingsCubit keeps valid color choices around corrupt entries', () {
+      final cubit = SettingsCubit();
+      final restored = cubit.fromJson({
+        'snapMinutes': 20,
+        'colors': {
+          'homework': 0xFF6A8FB5,
+          'personal': 'not-a-color',
+          'classes': {
+            'STAT 230-002': 0xFFB2706B,
+            'WRTG 150': [1, 2],
+          },
+          'applyToCalendar': false,
+        },
+      });
+      expect(restored, isNotNull);
+      expect(restored!.snapMinutes, 20);
+      expect(restored.colors.homework, 0xFF6A8FB5);
+      expect(restored.colors.personal, isNull);
+      expect(restored.colors.classes, {'STAT 230-002': 0xFFB2706B});
+      expect(restored.colors.applyToCalendar, isFalse);
+      expect(restored.colors.applyToTaskLists, isTrue);
+
+      // A colors blob of the wrong type cannot wipe the other settings.
+      final wrongType = cubit.fromJson({
+        'defaultEventFeedId': 'feed-1',
+        'colors': 'garbage',
+      });
+      expect(wrongType?.defaultEventFeedId, 'feed-1');
+      expect(wrongType?.colors, const ColorPrefs());
     });
   });
 }

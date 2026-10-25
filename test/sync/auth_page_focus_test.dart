@@ -2,7 +2,7 @@ import 'package:a_fish_in_sea/sync/auth_cubit.dart';
 import 'package:a_fish_in_sea/sync/sync_client.dart';
 import 'package:a_fish_in_sea/sync/sync_engine.dart';
 import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
-import 'package:a_fish_in_sea/sync/view/auth_page.dart';
+import 'package:a_fish_in_sea/sync/view/auth/auth_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -39,7 +39,10 @@ Future<void> pumpAuthPage(WidgetTester tester) async {
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  // The sign-in scene carries a looping fish, so pumpAndSettle never
+  // settles; two frames are enough for autofocus to be requested.
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 100));
 }
 
 bool hasFocus(WidgetTester tester, int index) {

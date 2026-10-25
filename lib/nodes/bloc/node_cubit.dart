@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/common/persistence/stable_storage_keys.dart';
 import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/budget.dart';
 import 'package:a_fish_in_sea/finances/model/expense.dart';
@@ -13,6 +14,7 @@ import 'package:a_fish_in_sea/planner/model/task.dart';
 
 import '../model/node.dart';
 import '../model/node_relations.dart';
+import '../service/class_membership.dart';
 import '../service/event_schedule.dart';
 import '../service/node_feed_import.dart';
 import '../service/node_event_detach.dart';
@@ -26,6 +28,9 @@ import '../service/node_tree_ops.dart';
 /// link in directly (no tags anywhere).
 class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   NodeCubit() : super(const []);
+
+  @override
+  String get storagePrefix => StableStorageKeys.node;
 
   // ── Lookups (indexed; rebuilt once per state change, not per tile) ────
 
@@ -696,6 +701,10 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
             clearLastSyncedAt: true,
           ),
           recurrence: n.recurrence,
+          auto: n.auto,
+          extraMetrics: n.extraMetrics,
+          classFacet: n.classFacet,
+          classNodeId: n.classNodeId,
           rule: n.rule,
           instanceOfId: n.instanceOfId == null
               ? null
@@ -1010,9 +1019,18 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     return null;
   }
 
-  void startTracking(String id, {DateTime? now}) {
+  /// Starts [id]'s timer. Completed nodes are skipped unless
+  /// [allowCompleted] is set: the report lane's play button deliberately
+  /// records extra work on a task that already has reports, without
+  /// reopening it.
+  void startTracking(
+    String id, {
+    DateTime? now,
+    bool allowCompleted = false,
+  }) {
     final target = byId(id);
-    if (target == null || target.isDone || target.isTracking) return;
+    if (target == null || target.isTracking) return;
+    if (target.isDone && !allowCompleted) return;
     final at = now ?? DateTime.now();
     var next = state;
     final activeId = activeTrackingId;
@@ -1638,6 +1656,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       feedId: template.feedId,
       classId: template.classId,
       classLabel: template.classLabel,
+      classNodeId: template.classNodeId,
       assignees: template.assignees,
     );
   }
@@ -2085,13 +2104,16 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     Set<String> taskOptOutIds = const {},
     List<AssignmentRule> assignmentRules = const [],
   }) {
-    final next = importFeedNodes(
+    final imported = importFeedNodes(
       state,
       events,
       feed,
       taskOptOutIds: taskOptOutIds,
       assignmentRules: assignmentRules,
     );
+    // Existing class nodes attach by source key as soon as their feed
+    // reports again; no destructive migration or one-time rewrite needed.
+    final next = attachClassMembership(imported);
     if (!identical(next, state)) emitSilent(next);
   }
 

@@ -12,6 +12,7 @@ import '../../planner/bloc/feed_cubit.dart';
 import '../../planner/model/feed.dart';
 import '../../planner/model/planner_event.dart';
 import '../../planner/service/feed_links.dart';
+import '../../planner/view/event_colors.dart';
 import '../../planner/view/task_highlight_tint.dart';
 import '../../planner/view/task_tile_helpers.dart';
 import '../bloc/node_cubit.dart';
@@ -104,7 +105,12 @@ class NodeTile extends StatelessWidget {
     final String chipLabel;
     Feed? resolvedFeed;
     if (showClass && live.classLabel != null) {
-      chipColor = courseColor(live.classLabel!);
+      final colorPrefs = colorPrefsOf(context);
+      chipColor = resolveClassColor(
+        live.classLabel!,
+        colorPrefs,
+        useOverrides: colorPrefs.applyToTaskLists,
+      );
       chipLabel = live.classLabel!;
     } else {
       Feed? feed;

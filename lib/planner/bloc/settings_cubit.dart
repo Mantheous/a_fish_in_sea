@@ -3,6 +3,9 @@ import 'package:flutter/foundation.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
+import '../../common/persistence/stable_storage_keys.dart';
+import '../model/color_prefs.dart';
+
 /// Mobile phones start on the day view; web desktop and desktop start on week.
 /// Mobile browsers (android/iOS on web) also start on day — the app is
 /// served as a web build, so `isWeb` alone can't decide.
@@ -37,6 +40,10 @@ class SettingsState extends Equatable {
   final bool trackingEnabled;
   final int trackingIntervalMinutes;
 
+  /// Homework/class/calendar event colors and where they apply. Persisted
+  /// and roamed inside this cubit's JSON as one additive blob.
+  final ColorPrefs colors;
+
   /// AnkiConnect endpoint for memorization goals. Per-device like
   /// [icalProxyBase]: a desktop talks to its own localhost, a phone to a
   /// LAN address — roaming one value would break the other device.
@@ -51,6 +58,7 @@ class SettingsState extends Equatable {
     this.defaultEventFeedId,
     this.trackingEnabled = true,
     this.trackingIntervalMinutes = 5,
+    this.colors = const ColorPrefs(),
     this.ankiConnectHost = SettingsCubit.defaultAnkiConnectHost,
   });
 
@@ -64,6 +72,7 @@ class SettingsState extends Equatable {
     bool clearDefaultEventFeedId = false,
     bool? trackingEnabled,
     int? trackingIntervalMinutes,
+    ColorPrefs? colors,
     String? ankiConnectHost,
   }) {
     return SettingsState(
@@ -78,6 +87,7 @@ class SettingsState extends Equatable {
       trackingEnabled: trackingEnabled ?? this.trackingEnabled,
       trackingIntervalMinutes:
           trackingIntervalMinutes ?? this.trackingIntervalMinutes,
+      colors: colors ?? this.colors,
       ankiConnectHost: ankiConnectHost ?? this.ankiConnectHost,
     );
   }
@@ -92,6 +102,7 @@ class SettingsState extends Equatable {
         defaultEventFeedId,
         trackingEnabled,
         trackingIntervalMinutes,
+        colors,
         ankiConnectHost,
       ];
 }
@@ -101,6 +112,9 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
 
   SettingsCubit()
       : super(SettingsState(defaultCalendarView: platformDefaultCalendarView));
+
+  @override
+  String get storagePrefix => StableStorageKeys.settings;
 
   void setIcalProxyBase(String url) =>
       emit(state.copyWith(icalProxyBase: url.trim()));
@@ -162,6 +176,54 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
     }
   }
 
+  // ── Event colors ────────────────────────────────────────────────────
+
+  /// One color for every imported homework event; null restores
+  /// class/calendar colors.
+  void setHomeworkColor(int? value) {
+    emit(state.copyWith(
+      colors: state.colors.copyWith(
+        homework: value,
+        clearHomework: value == null,
+      ),
+    ));
+  }
+
+  /// Default color for events with no class and no calendar.
+  void setPersonalEventColor(int? value) {
+    emit(state.copyWith(
+      colors: state.colors.copyWith(
+        personal: value,
+        clearPersonal: value == null,
+      ),
+    ));
+  }
+
+  /// Assigns (or, with null, clears) one class color.
+  void setClassColor(String label, int? value) {
+    emit(state.copyWith(
+      colors: state.colors.withClassColor(label, value),
+    ));
+  }
+
+  void setColorsApplyToCalendar(bool apply) {
+    emit(state.copyWith(
+      colors: state.colors.copyWith(applyToCalendar: apply),
+    ));
+  }
+
+  void setColorsApplyToTaskLists(bool apply) {
+    emit(state.copyWith(
+      colors: state.colors.copyWith(applyToTaskLists: apply),
+    ));
+  }
+
+  /// Clears every event-color override and re-enables both surfaces.
+  /// Calendar (feed) colors live on the feeds themselves and stay.
+  void resetEventColors() {
+    emit(state.copyWith(colors: const ColorPrefs()));
+  }
+
   /// AnkiConnect endpoint. Blank resets to the local default; validation
   /// (and its displayable error) lives in the client at sync time.
   void setAnkiConnectHost(String host) {
@@ -218,6 +280,7 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
         trackingEnabled: json['trackingEnabled'] as bool? ?? true,
         trackingIntervalMinutes:
             _parseTrackingInterval(json['trackingIntervalMinutes']),
+        colors: ColorPrefs.fromJson(json['colors']),
         ankiConnectHost: _parseAnkiHost(json['ankiConnectHost']),
       );
 
@@ -236,6 +299,7 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
         'defaultEventFeedId': state.defaultEventFeedId,
         'trackingEnabled': state.trackingEnabled,
         'trackingIntervalMinutes': state.trackingIntervalMinutes,
+        'colors': state.colors.toJson(),
         'ankiConnectHost': state.ankiConnectHost,
       };
 }

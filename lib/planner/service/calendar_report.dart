@@ -49,6 +49,11 @@ class ReportBlock {
   /// for accepted entries, live blocks, and legacy single intervals.
   final String? sessionId;
 
+  /// True when the block resolves to an event or task node, so the lane can
+  /// offer a play button that records another report for it. Ownerless
+  /// manual entries (reports typed in without a linked task) stay false.
+  final bool recordable;
+
   const ReportBlock({
     required this.displayId,
     required this.title,
@@ -59,6 +64,7 @@ class ReportBlock {
     this.entryId,
     this.status,
     this.sessionId,
+    this.recordable = false,
   });
 
   ReportBlock copyWith({String? title, DateTime? start, DateTime? end}) =>
@@ -72,6 +78,7 @@ class ReportBlock {
         entryId: entryId,
         status: status,
         sessionId: sessionId,
+        recordable: recordable,
       );
 }
 
@@ -227,6 +234,7 @@ List<ReportBlock> buildReportBlocks({
           end: end,
           kind: ReportBlockKind.live,
           eventId: event.id,
+          recordable: true,
         ),
       );
     }
@@ -243,6 +251,7 @@ List<ReportBlock> buildReportBlocks({
             kind: ReportBlockKind.timer,
             eventId: event.id,
             sessionId: session.id,
+            recordable: true,
           ),
         );
       }
@@ -266,6 +275,7 @@ List<ReportBlock> buildReportBlocks({
             eventId: event.id,
             entryId: entry.id,
             status: entry.status,
+            recordable: true,
           ),
         );
       }
@@ -300,6 +310,7 @@ List<ReportBlock> buildReportBlocks({
           end: end,
           kind: ReportBlockKind.live,
           eventId: null,
+          recordable: true,
         ),
       );
     }
@@ -313,6 +324,7 @@ List<ReportBlock> buildReportBlocks({
           kind: ReportBlockKind.timer,
           eventId: null,
           sessionId: session.id,
+          recordable: true,
         ),
       );
     }
@@ -396,56 +408,6 @@ PlannerEvent reportBlockToDisplayEvent(
     colorValue: template?.colorValue,
   );
 }
-
-/// Id prefix of the invisible full-day appointment that claims a day column
-/// in the Plan + Report report calendar. Its tile renders report blocks in
-/// the trailing half of each visible day.
-const String reportLaneIdPrefix = 'reportlane:';
-
-/// Id prefix of the all-day copies that keep the report track aligned with
-/// the plan calendar while masking the trailing half of spanning plan tiles.
-const String reportPlaceholderIdPrefix = 'reportplaceholder:';
-
-bool isReportLaneId(String id) => id.startsWith(reportLaneIdPrefix);
-
-bool isReportPlaceholderId(String id) =>
-    id.startsWith(reportPlaceholderIdPrefix);
-
-String reportLaneIdForDay(DateTime day) {
-  final month = day.month.toString().padLeft(2, '0');
-  final dayOfMonth = day.day.toString().padLeft(2, '0');
-  return '$reportLaneIdPrefix${day.year}-$month-$dayOfMonth';
-}
-
-/// The day a report-lane id stands for, or null when [id] is not a lane id.
-DateTime? reportLaneDayOf(String id) {
-  if (!isReportLaneId(id)) return null;
-  final parts = id.substring(reportLaneIdPrefix.length).split('-');
-  if (parts.length != 3) return null;
-  final year = int.tryParse(parts[0]);
-  final month = int.tryParse(parts[1]);
-  final day = int.tryParse(parts[2]);
-  if (year == null || month == null || day == null) return null;
-  final parsed = DateTime(year, month, day);
-  // DateTime normalizes overflow (2026-13-45 rolls into 2027); only accept
-  // a canonical date so a stray id can never invent a day.
-  if (parsed.year != year || parsed.month != month || parsed.day != day) {
-    return null;
-  }
-  return parsed;
-}
-
-/// A full-day placeholder appointment for the report calendar. It never
-/// renders as an event: the calendar page's rail builder turns its tile into
-/// the report column (background + time-positioned report chips). Being an
-/// appointment is the point — the report calendar lays its chips out on a
-/// real time grid that matches the plan calendar beside it.
-PlannerEvent buildReportLaneEvent(DateTime day) => PlannerEvent(
-  id: reportLaneIdForDay(day),
-  subject: '',
-  start: DateTime(day.year, day.month, day.day),
-  end: DateTime(day.year, day.month, day.day, 23, 59, 59),
-);
 
 /// Groups report blocks by the calendar day they start on, keyed by
 /// midnight of that day. A block that crosses midnight stays with the day

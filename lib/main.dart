@@ -1,18 +1,16 @@
+import 'package:a_fish_in_sea/common/persistence/legacy_minified_keys.dart';
+import 'package:a_fish_in_sea/common/persistence/migration.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
-import 'package:a_fish_in_sea/demo/demo_banner.dart';
 import 'package:a_fish_in_sea/demo/demo_cubit.dart';
-import 'package:a_fish_in_sea/feedback/view/feedback_page.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
-import 'package:a_fish_in_sea/navigation/view/finances_hub.dart';
+import 'package:a_fish_in_sea/navigation/view/planner_shell.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/service/recurring_goal_coordinator.dart';
 import 'package:a_fish_in_sea/nodes/bloc/schedule_prefs_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
-import 'package:a_fish_in_sea/navigation/view/home_page.dart';
-import 'package:a_fish_in_sea/nodes/view/nodes_page.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_draft_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_panel_cubit.dart';
@@ -27,34 +25,56 @@ import 'package:a_fish_in_sea/planner/bloc/tasks_view_options_cubit.dart';
 import 'package:a_fish_in_sea/planner/service/canvas_service.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
-import 'package:a_fish_in_sea/planner/view/calendar_page.dart';
-import 'package:a_fish_in_sea/planner/view/tasks_page.dart';
 import 'package:a_fish_in_sea/reporting/bloc/places_cubit.dart';
 import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
 import 'package:a_fish_in_sea/reporting/bloc/tracking_cubit.dart';
-import 'package:a_fish_in_sea/reporting/view/stats_page.dart';
-import 'package:a_fish_in_sea/settings/view/settings_page.dart';
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
 import 'package:a_fish_in_sea/sync/sync_client.dart';
 import 'package:a_fish_in_sea/sync/sync_engine.dart';
 import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
-import 'package:a_fish_in_sea/sync/view/auth_page.dart';
+import 'package:a_fish_in_sea/sync/view/auth/auth_gate.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:hive/hive.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:timezone/data/latest_all.dart' as tzdata;
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   tzdata.initializeTimeZones();
-  HydratedBloc.storage = await HydratedStorage.build(
-    storageDirectory: kIsWeb
-        ? HydratedStorage.webStorageDirectory
-        : await getApplicationDocumentsDirectory(),
-  );
+  await _initPersistentStorage();
   runApp(const MyApp());
+}
+
+/// Opens the hydrated box once. On web we own the Hive box so the one-time
+/// recovery of pre-minified-key payloads can share it with [HydratedStorage]
+/// (a second handle would keep its own in-memory cache and miss the writes).
+Future<void> _initPersistentStorage() async {
+  if (kIsWeb) {
+    final box = await Hive.openBox<dynamic>('hydrated_box');
+    // Payloads written by release builds before the stable keys landed sit
+    // under `minified:<compiler name>`; a deploy renames those classes and
+    // orphaned the Tasks views/rules, calendar visibility, and session.
+    if (Migration.removeAfter('2026-10-27')) {
+      try {
+        final recovered = await migrateLegacyHydratedKeys(box);
+        if (recovered.isNotEmpty) {
+          debugPrint('[persistence] recovered legacy prefs: $recovered');
+        }
+      } catch (error) {
+        // Recovery is best-effort: a damaged box must never block boot.
+        debugPrint('[persistence] legacy prefs recovery skipped: $error');
+      }
+    }
+    // ignore: invalid_use_of_visible_for_testing_member
+    HydratedBloc.storage = HydratedStorage(box);
+    return;
+  }
+  HydratedBloc.storage = await HydratedStorage.build(
+    storageDirectory: await getApplicationDocumentsDirectory(),
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -168,29 +188,6 @@ class MyApp extends StatelessWidget {
   }
 }
 
-/// Page switch shared by the normal and demo shells.
-class _DemoContent extends StatelessWidget {
-  const _DemoContent();
-
-  @override
-  Widget build(BuildContext context) {
-    return BlocBuilder<NavigationCubit, PlannerPage>(
-      builder: (context, page) {
-        return switch (page) {
-          PlannerPage.home => const HomePage(),
-          PlannerPage.calendar => const CalendarPage(),
-          PlannerPage.tasks => const TasksPage(),
-          PlannerPage.nodes => const NodesPage(),
-          PlannerPage.stats => const StatsPage(),
-          PlannerPage.finances => const FinancesHubPage(),
-          PlannerPage.feedback => const FeedbackPage(),
-          PlannerPage.settings => const SettingsPage(),
-        };
-      },
-    );
-  }
-}
-
 /// Boots the sync engine once (first pull if signed in) and keeps it live:
 /// the 5-minute background timer plus a debounced sync on local mutations.
 class _SyncBootstrap extends StatefulWidget {
@@ -276,37 +273,7 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
           useMaterial3: true,
           brightness: Brightness.dark,
         ),
-        home: BlocBuilder<AuthCubit, AuthState>(
-          builder: (context, auth) {
-            final demo = context.watch<DemoCubit>().state;
-            if (!auth.isSignedIn && !demo) return const AuthPage();
-            final content = BlocBuilder<NavigationCubit, PlannerPage>(
-              builder: (context, page) {
-                return switch (page) {
-                  PlannerPage.home => const HomePage(),
-                  PlannerPage.calendar => const CalendarPage(),
-                  PlannerPage.tasks => const TasksPage(),
-                  PlannerPage.nodes => const NodesPage(),
-                  PlannerPage.stats => const StatsPage(),
-                  PlannerPage.finances => const FinancesHubPage(),
-                  PlannerPage.feedback => const FeedbackPage(),
-                  PlannerPage.settings => const SettingsPage(),
-                };
-              },
-            );
-            if (!demo) return content;
-            // Demo shell: persistent mock-data banner above every page.
-            // Inner pages keep their own Scaffolds (drawers keep working).
-            return const Scaffold(
-              body: Column(
-                children: [
-                  DemoBanner(),
-                  Expanded(child: _DemoContent()),
-                ],
-              ),
-            );
-          },
-        ),
+        home: const AuthGate(child: PlannerShell()),
       ),
     );
   }

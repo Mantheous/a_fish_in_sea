@@ -56,8 +56,11 @@ void main() {
           .first,
       'Serve others',
     );
-    await tester.tap(find.widgetWithText(
-        SwitchListTile, 'Abstract / unbounded goal'));
+    final unboundedSwitch = find.widgetWithText(
+        SwitchListTile, 'Abstract / unbounded goal');
+    await tester.ensureVisible(unboundedSwitch);
+    await tester.pumpAndSettle();
+    await tester.tap(unboundedSwitch);
     await tester.pumpAndSettle();
     // Concrete sections hide while unbounded is on.
     final dialog = find.byType(AlertDialog);
@@ -74,9 +77,12 @@ void main() {
     final saved = nodes.state.single;
     expect(saved.title, 'Serve others');
     expect(saved.isUnbounded, isTrue);
-    // The page lands on the tree by itself: unbounded goals are not in
-    // the default Leaves view, so staying there would read as failure.
-    expect(find.text('unbounded'), findsOneWidget);
+    // The graph is the landing view; the unbounded goal is a card there
+    // (and still no progress bar or checkbox).
+    expect(
+      find.byKey(ValueKey('graph-node-${saved.id}')),
+      findsOneWidget,
+    );
     expect(find.byIcon(Icons.all_inclusive), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsNothing);
     expect(find.byType(Checkbox), findsNothing);
@@ -99,10 +105,16 @@ void main() {
 
     await tester.tap(find.text('Dated'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(
-        SwitchListTile, 'Abstract / unbounded goal'));
+    final unboundedSwitch = find.widgetWithText(
+        SwitchListTile, 'Abstract / unbounded goal');
+    await tester.ensureVisible(unboundedSwitch);
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.tap(unboundedSwitch);
+    await tester.pumpAndSettle();
+    final save = find.widgetWithText(FilledButton, 'Save');
+    await tester.ensureVisible(save);
+    await tester.pumpAndSettle();
+    await tester.tap(save);
     await tester.pumpAndSettle();
 
     // Confirm gate lists what will go.
@@ -117,7 +129,7 @@ void main() {
     expect(saved.isUnbounded, isTrue);
     expect(saved.schedule, isNull);
     // Unbounded goals live in the tree, not the Leaves view.
-    await tester.tap(find.widgetWithText(ChoiceChip, 'All'));
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Goal tree'));
     await tester.pumpAndSettle();
     expect(find.text('unbounded'), findsOneWidget);
   });
@@ -138,10 +150,16 @@ void main() {
 
     await tester.tap(find.text('Dated'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(
-        SwitchListTile, 'Abstract / unbounded goal'));
+    final unboundedSwitch = find.widgetWithText(
+        SwitchListTile, 'Abstract / unbounded goal');
+    await tester.ensureVisible(unboundedSwitch);
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.tap(unboundedSwitch);
+    await tester.pumpAndSettle();
+    final save = find.widgetWithText(FilledButton, 'Save');
+    await tester.ensureVisible(save);
+    await tester.pumpAndSettle();
+    await tester.tap(save);
     await tester.pumpAndSettle();
     expect(find.text('Remove dates and targets?'), findsOneWidget);
     await tester.tap(find.widgetWithText(TextButton, 'Keep editing'));

@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../bloc/tasks_view_options_cubit.dart';
 import '../model/task_filter.dart';
 import '../model/task_rule.dart';
+import 'class_names.dart';
 import 'task_selector_form.dart';
 
 /// Fixed tint choices for highlight rules. Null is the theme-default tint
@@ -187,7 +188,10 @@ class _TaskRuleEditorSheetState extends State<_TaskRuleEditorSheet> {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    describeTaskRule(draft),
+                    describeTaskRule(
+                      draft,
+                      className: classNameResolver(context),
+                    ),
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                   const SizedBox(height: 16),
