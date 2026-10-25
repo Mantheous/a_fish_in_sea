@@ -477,7 +477,13 @@ String taskFilterPlannedLabel(TaskFilterPlanned planned) => switch (planned) {
 
 /// One-line summary for a saved view, e.g. "Due tomorrow · hides
 /// completed · Homework only · Physics".
-String describeTaskFilter(TaskFilter filter) {
+///
+/// [className] resolves a class key for display, so feed-backed classes
+/// show their name instead of a raw `feed:<id>` key.
+String describeTaskFilter(
+  TaskFilter filter, {
+  String Function(String key)? className,
+}) {
   final parts = <String>[];
   if (filter.date == TaskFilterDate.custom) {
     parts.add(
@@ -494,9 +500,14 @@ String describeTaskFilter(TaskFilter filter) {
     parts.add(taskFilterKindLabel(filter.kind));
   }
   if (filter.classKeys.isNotEmpty) {
-    parts.add(filter.classKeys.length == 1
+    final single = filter.classKeys.length == 1
         ? filter.classKeys.single
-        : '${filter.classKeys.length} classes');
+        : null;
+    parts.add(
+      single != null
+          ? (className?.call(single) ?? single)
+          : '${filter.classKeys.length} classes',
+    );
   }
   if (filter.planned != TaskFilterPlanned.all) {
     parts.add(taskFilterPlannedLabel(filter.planned));

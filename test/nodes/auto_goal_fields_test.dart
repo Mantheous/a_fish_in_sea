@@ -89,4 +89,43 @@ void main() {
     expect(value!.source, AutoSource.money);
     expect(value!.metric, AutoMetric.amount);
   });
+
+  testWidgets('class chips render names but keep feeding the raw keys', (
+    tester,
+  ) async {
+    const feedKey = 'feed:1789249594268000';
+    AutoFacet? value = const AutoFacet(
+      source: AutoSource.tasks,
+      metric: AutoMetric.percentDone,
+      target: 100,
+      homeworkOnly: true,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) => SingleChildScrollView(
+              child: AutoGoalFields(
+                value: value,
+                classOptions: const [feedKey],
+                className: (key) =>
+                    key == feedKey ? 'Discrete Structure' : key,
+                onChanged: (next) => setState(() => value = next),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Discrete Structure'), findsOneWidget);
+    expect(find.text(feedKey), findsNothing);
+    expect(find.textContaining('Discrete Structure'), findsWidgets);
+
+    await tester.tap(find.widgetWithText(FilterChip, 'Discrete Structure'));
+    await tester.pump();
+    expect(value!.classKeys, [feedKey]);
+    // The chips kept their raw key while the summary shows the class name.
+    expect(find.text(feedKey), findsNothing);
+  });
 }

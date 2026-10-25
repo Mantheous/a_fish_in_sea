@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../bloc/tasks_view_options_cubit.dart';
 import '../model/task_rule.dart';
+import 'class_names.dart';
 import 'task_rule_editor_sheet.dart';
 
 /// Dedicated page for adjusting the Tasks display rules, opened from the
@@ -124,7 +125,9 @@ class _RuleTile extends StatelessWidget {
     return ListTile(
       leading: _EffectIcon(rule: rule),
       title: Text(rule.name),
-      subtitle: Text(describeTaskRule(rule)),
+      subtitle: Text(
+        describeTaskRule(rule, className: classNameResolver(context)),
+      ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [

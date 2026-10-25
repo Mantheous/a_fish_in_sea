@@ -22,6 +22,7 @@ import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/task_assignee.dart';
+import 'package:a_fish_in_sea/planner/view/class_names.dart';
 import 'package:a_fish_in_sea/planner/view/people_field.dart';
 
 /// Shows the node editor dialog. Returns the created or updated node on
@@ -290,6 +291,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                 value: _auto,
                 onChanged: (value) => setState(() => _auto = value),
                 classOptions: _classOptions(context),
+                className: classNameResolver(context),
                 moneyCategoryOptions: _moneyCategoryOptions(context),
               ),
               if (_auto != null)

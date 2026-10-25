@@ -35,7 +35,13 @@ String formatAutoValue(AutoMetric metric, double value) => switch (metric) {
 
 /// Short description of what an automated goal reads, used in the editor
 /// and empty-state copy.
-String describeAutoGoal(AutoFacet facet) {
+///
+/// [className] resolves class keys for display, so feed-backed classes
+/// show their name instead of a raw `feed:<id>` key.
+String describeAutoGoal(
+  AutoFacet facet, {
+  String Function(String key)? className,
+}) {
   final parts = <String>[
     autoSourceLabel(facet.source),
     autoMetricLabel(facet.metric).toLowerCase(),
@@ -45,7 +51,9 @@ String describeAutoGoal(AutoFacet facet) {
     parts.add('homework only');
   }
   if (facet.source == AutoSource.tasks && facet.classKeys.isNotEmpty) {
-    parts.add(facet.classKeys.join(', '));
+    parts.add(
+      facet.classKeys.map((key) => className?.call(key) ?? key).join(', '),
+    );
   }
   if (facet.source == AutoSource.money && facet.moneyCategories.isNotEmpty) {
     parts.add(facet.moneyCategories.join(', '));

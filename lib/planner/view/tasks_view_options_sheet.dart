@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../bloc/tasks_view_options_cubit.dart';
 import '../model/task_filter.dart';
 import '../model/task_rule.dart';
+import 'class_names.dart';
 import 'task_filter_editor_sheet.dart';
 import 'task_rule_editor_sheet.dart';
 import 'task_rules_page.dart';
@@ -186,7 +187,9 @@ class _ViewTile extends StatelessWidget {
         color: active ? Theme.of(context).colorScheme.primary : null,
       ),
       title: Text(filter.name),
-      subtitle: Text(describeTaskFilter(filter)),
+      subtitle: Text(
+        describeTaskFilter(filter, className: classNameResolver(context)),
+      ),
       trailing: IconButton(
         tooltip: 'Edit ${filter.name}',
         icon: const Icon(Icons.edit_outlined),
@@ -216,7 +219,9 @@ class _RuleRow extends StatelessWidget {
       dense: true,
       leading: _RuleEffectIcon(rule: rule),
       title: Text(rule.name),
-      subtitle: Text(describeTaskRule(rule)),
+      subtitle: Text(
+        describeTaskRule(rule, className: classNameResolver(context)),
+      ),
       trailing: Switch(
         value: rule.enabled,
         onChanged: onToggled,

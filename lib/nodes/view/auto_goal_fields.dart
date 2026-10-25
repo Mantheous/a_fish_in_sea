@@ -20,12 +20,18 @@ class AutoGoalFields extends StatefulWidget {
   final List<String> classOptions;
   final List<String> moneyCategoryOptions;
 
+  /// Maps a class key (`classLabel` or feed id) to the name to render, so
+  /// Learning Suite classes don't show their raw `feed:<id>`. Null keeps
+  /// keys as-is (focused tests/previews).
+  final String Function(String key)? className;
+
   const AutoGoalFields({
     super.key,
     required this.value,
     required this.onChanged,
     this.classOptions = const [],
     this.moneyCategoryOptions = const [],
+    this.className,
   });
 
   @override
@@ -285,6 +291,7 @@ class _AutoGoalFieldsState extends State<AutoGoalFields> {
                 emptyLabel: 'No homework classes found yet.',
                 options: widget.classOptions,
                 selected: facet.classKeys,
+                className: widget.className,
                 onChanged: (keys) => _emit(facet.copyWith(classKeys: keys)),
               ),
             if (facet.metric == AutoMetric.percentDone) ...[
@@ -312,7 +319,10 @@ class _AutoGoalFieldsState extends State<AutoGoalFields> {
                   _emit(facet.copyWith(moneyCategories: categories)),
             ),
           const SizedBox(height: 8),
-          Text(describeAutoGoal(facet), style: theme.textTheme.bodySmall),
+          Text(
+            describeAutoGoal(facet, className: widget.className),
+            style: theme.textTheme.bodySmall,
+          ),
         ],
       ],
     );
@@ -339,6 +349,7 @@ class _ChipPicker extends StatelessWidget {
   final String emptyLabel;
   final List<String> options;
   final List<String> selected;
+  final String Function(String key)? className;
   final ValueChanged<List<String>> onChanged;
 
   const _ChipPicker({
@@ -347,6 +358,7 @@ class _ChipPicker extends StatelessWidget {
     required this.options,
     required this.selected,
     required this.onChanged,
+    this.className,
   });
 
   @override
@@ -373,7 +385,7 @@ class _ChipPicker extends StatelessWidget {
               children: [
                 for (final option in merged)
                   FilterChip(
-                    label: Text(option),
+                    label: Text(className?.call(option) ?? option),
                     selected: selected.any(
                       (value) => value.toLowerCase() == option.toLowerCase(),
                     ),
