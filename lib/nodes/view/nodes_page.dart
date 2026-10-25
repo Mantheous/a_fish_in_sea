@@ -10,6 +10,7 @@ import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/auto_goal.dart';
+import 'package:a_fish_in_sea/nodes/service/goal_progress_snapshot.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/service/node_legacy_migration.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
@@ -305,70 +306,17 @@ class _NodeBody extends StatelessWidget {
         // Tasks/Calendar, never auto-fill this page.
         final goals = goalNodes(nodes);
         if (goals.isEmpty) return const _EmptyNodes();
-        final txns = context.watch<TransactionsCubit>().state;
-        final txnAmounts = {for (final t in txns) t.id: t.amount};
-        // Money actuals keyed by node id: recorded actualAmount wins, plus
-        // assigned-transaction sums for nodes without one (audit gaps).
-        // Txn-id entries are kept too so linkedTransactionIds fallbacks
-        // in progress math keep resolving. Time actuals come from each
-        // node's own reported duration.
-        final assignedSums = <String, double>{};
-        for (final t in txns) {
-          final nid = t.assignedNodeId;
-          if (nid != null) {
-            assignedSums[nid] =
-                (assignedSums[nid] ?? 0) + t.amount.abs();
-          }
-        }
-        final moneyActualByNodeId = <String, double>{...txnAmounts};
-        for (final n in goals) {
-          final recorded = n.money?.actualAmount?.abs();
-          if (recorded != null) {
-            moneyActualByNodeId[n.id] = recorded;
-          } else {
-            var sum = 0.0;
-            for (final txnId in n.money?.linkedTransactionIds ??
-                const <String>[]) {
-              sum += (txnAmounts[txnId] ?? 0).abs();
-            }
-            // Assigned sums may duplicate linked ids (link + assign happen
-            // together), so only count assigned txns not already linked.
-            final linked =
-                n.money?.linkedTransactionIds.toSet() ?? const <String>{};
-            for (final t in txns) {
-              if (t.assignedNodeId == n.id && !linked.contains(t.id)) {
-                sum += t.amount.abs();
-              }
-            }
-            if (sum > 0) moneyActualByNodeId[n.id] = sum;
-          }
-        }
-        // Assigned-only nodes (no facet amount yet) still report.
-        for (final entry in assignedSums.entries) {
-          moneyActualByNodeId.putIfAbsent(entry.key, () => entry.value);
-        }
-        final timeActualByNodeId = <String, double>{
-          for (final n in goals)
-            if (n.reportedDuration != null)
-              n.id: n.reportedDuration!.inMinutes.toDouble(),
-        };
         final now = DateTime.now();
-        // Automated goals read the whole store, not just goal nodes:
-        // homework imports are exactly what a homework goal must see.
-        final autoReadings = autoReadingsForNodes(
-          nodes,
+        // Shared with Home's favorite rows: one snapshot builder keeps the
+        // same goal at the same percentage on both surfaces.
+        final snapshot = buildGoalProgressSnapshot(
+          nodes: nodes,
+          transactions: context.watch<TransactionsCubit>().state,
           now: now,
-          transactions: txns,
         );
-        final progress = progressForest(
-          goals,
-          moneyActualByNodeId: moneyActualByNodeId,
-          timeActualByNodeId: timeActualByNodeId,
-          autoProgressByNodeId: {
-            for (final entry in autoReadings.entries)
-              entry.key: entry.value.progress,
-          },
-        );
+        final txnAmounts = snapshot.txnAmountsById;
+        final autoReadings = snapshot.autoReadings;
+        final progress = snapshot.progress;
         final trimmed = query.trim();
         final visible = trimmed.isEmpty ? null : filterTreeIds(nodes, trimmed);
         List<Node> matching(List<Node> items) => visible == null
