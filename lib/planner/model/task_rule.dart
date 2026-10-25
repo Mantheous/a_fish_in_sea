@@ -217,7 +217,10 @@ bool taskHiddenByRules(
 
 /// Human summary, e.g. "Due this week · highlighted" or
 /// "Physics · hidden".
-String describeTaskRule(TaskRule rule) {
+String describeTaskRule(
+  TaskRule rule, {
+  String Function(String key)? className,
+}) {
   final effect = rule.isHide ? 'hidden' : 'highlighted';
-  return '${describeTaskFilter(rule.selector)} · $effect';
+  return '${describeTaskFilter(rule.selector, className: className)} · $effect';
 }

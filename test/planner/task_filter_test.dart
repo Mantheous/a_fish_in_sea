@@ -550,4 +550,35 @@ void main() {
           cubit.dueThisWeekAt(sunday).map((n) => n.id).toSet());
     });
   });
+
+  group('describeTaskFilter', () {
+    test('resolves a single class key through the supplied lookup', () {
+      const filter = TaskFilter(
+        id: 't',
+        name: 't',
+        classKeys: ['feed:1789249594268000'],
+      );
+      expect(describeTaskFilter(filter), contains('feed:1789249594268000'));
+      expect(
+        describeTaskFilter(
+          filter,
+          className: (key) =>
+              key == 'feed:1789249594268000' ? 'Discrete Structure' : key,
+        ),
+        contains('Discrete Structure'),
+      );
+    });
+
+    test('multiple class keys stay a count', () {
+      const filter = TaskFilter(
+        id: 't',
+        name: 't',
+        classKeys: ['feed:1', 'feed:2'],
+      );
+      expect(
+        describeTaskFilter(filter, className: (_) => 'should not show'),
+        contains('2 classes'),
+      );
+    });
+  });
 }

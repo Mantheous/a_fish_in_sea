@@ -212,6 +212,21 @@ void main() {
 
       expect(describeTaskRule(tint), contains('highlighted'));
       expect(describeTaskRule(hide), contains('hidden'));
+      expect(
+        describeTaskRule(
+          TaskRule(
+            id: 'class',
+            selector: const TaskFilter(
+              id: 'class',
+              name: 'Discrete only',
+              classKeys: ['feed:1789249594268000'],
+            ),
+          ),
+          className: (key) =>
+              key == 'feed:1789249594268000' ? 'Discrete Structure' : key,
+        ),
+        contains('Discrete Structure'),
+      );
     });
   });
 
