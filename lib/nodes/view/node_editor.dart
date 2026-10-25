@@ -901,10 +901,17 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     final imported = existing != null &&
         (existing.sourceEventId != null || existing.feedId != null);
     if (classNode != null) {
+      final oldClassId = existing?.classId;
+      final oldClassIdIsNode =
+          oldClassId != null && cubit.byId(oldClassId)?.isClassNode == true;
       return (
         parents: parents,
         classNodeId: classNode.id,
-        classId: imported ? existing.classId : classNode.id,
+        classId: imported
+            ? existing.classId
+            : (oldClassId != null && !oldClassIdIsNode
+                  ? oldClassId
+                  : classNode.id),
         classLabel: imported
             ? (existing.classLabel ?? classNode.title)
             : classNode.title,

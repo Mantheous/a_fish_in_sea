@@ -181,11 +181,17 @@ void main() {
       classId: 'feed:old-syllabus',
       classLabel: 'CMLIT 201',
     );
-    final applied = _apply(
+    final first = _apply(
       [homework, cls, legacy],
       planHomeworkStructure([homework, cls, legacy], now: _now),
     );
-    final saved = applied.firstWhere((n) => n.id == 'legacy');
+    final secondPlan = planHomeworkStructure(
+      first,
+      now: _now.add(const Duration(seconds: 1)),
+    );
+    expect(secondPlan.upserts, isEmpty);
+    final saved = _apply(first, secondPlan)
+        .firstWhere((n) => n.id == 'legacy');
     expect(saved.classNodeId, 'cmlit');
     expect(saved.classId, 'feed:old-syllabus');
     expect(saved.classLabel, 'CMLIT 201');

@@ -196,11 +196,7 @@ HomeworkStructurePlan planHomeworkStructure(
     // actually points at another class node.
     final classId = isImported
         ? (oldClassId ?? cls.id)
-        : (node.classNodeId == null &&
-                  oldClassId != null &&
-                  !oldClassIdIsNode
-              ? oldClassId
-              : cls.id);
+        : (oldClassId != null && !oldClassIdIsNode ? oldClassId : cls.id);
     final classLabel = node.classLabel ?? cls.title;
     if (node.classNodeId == cls.id &&
         node.classId == classId &&
