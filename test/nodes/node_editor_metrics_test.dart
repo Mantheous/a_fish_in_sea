@@ -3,6 +3,7 @@ import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/view/node_editor.dart';
 import 'package:a_fish_in_sea/nodes/view/nodes_page.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:flutter/material.dart';
@@ -140,6 +141,73 @@ void main() {
     expect(task.parentIds, contains(cls.id));
     expect(task.isHomework, isTrue);
     expect(task.classLabel, 'CMLIT 201');
+  });
+
+  testWidgets('saving a legacy classId-only node keeps its feed id',
+      (tester) async {
+    final nodes = NodeCubit();
+    addTearDown(nodes.close);
+    final now = DateTime(2026, 10, 25);
+    final homework = Node(
+      id: 'homework',
+      title: 'Homework',
+      createdAt: now,
+    );
+    final cls = Node(
+      id: 'cmlit',
+      title: 'CMLIT 201',
+      parentIds: const ['homework'],
+      createdAt: now,
+      classFacet: const ClassFacet(),
+      auto: const AutoFacet(metric: AutoMetric.allDone),
+    );
+    final legacy = Node(
+      id: 'legacy',
+      title: 'Syllabus assignment',
+      parentIds: const ['cmlit'],
+      createdAt: now,
+      classId: 'feed:old-syllabus',
+      classLabel: 'CMLIT 201',
+    );
+    nodes.emitSilent([homework, cls, legacy]);
+    tester.view.physicalSize = const Size(900, 1800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MultiBlocProvider(
+        providers: [
+          BlocProvider.value(value: nodes),
+          BlocProvider(create: (_) => TransactionsCubit()),
+          BlocProvider(create: (_) => CalendarCubit()),
+          BlocProvider(create: (_) => UndoCubit()),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () =>
+                    showNodeEditor(context, existing: legacy),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    final save = find.widgetWithText(FilledButton, 'Save');
+    await tester.ensureVisible(save);
+    await tester.pumpAndSettle();
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    final saved = nodes.byId('legacy')!;
+    expect(saved.classNodeId, 'cmlit');
+    expect(saved.classId, 'feed:old-syllabus');
+    expect(saved.classLabel, 'CMLIT 201');
   });
 
   testWidgets('adding a class in the Parents picker assigns the class',
