@@ -8,6 +8,7 @@ import '../../nodes/service/node_progress.dart';
 import '../../nodes/view/node_tile.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/feed_cubit.dart';
+import '../bloc/settings_cubit.dart';
 import 'task_list_parts.dart';
 import 'tasks_view_filtering.dart';
 
@@ -43,6 +44,7 @@ class TodoTaskList extends StatelessWidget {
         final nodeCubit = context.read<NodeCubit>();
         final viewOptions = viewOptionsOf(context);
         final now = DateTime.now();
+        final firstDayOfWeek = _firstDayOfWeekOf(context);
         // One calendar pass per build: the counts drive the schedule tint
         // and, through their key set, the Planned/Unplanned filter — so a
         // tinted clock always reads as planned.
@@ -51,12 +53,14 @@ class TodoTaskList extends StatelessWidget {
             futureCalendarEntryCounts(nodes, calendarState, now);
         final plannedIds = upcomingCounts.keys.toSet();
         final tints = taskTintMap(nodeCubit.state, viewOptions, now,
-            plannedNodeIds: plannedIds);
+            plannedNodeIds: plannedIds,
+            firstDayOfWeek: firstDayOfWeek);
         var open = applyTaskViewOptions(
           feedCubit.visibleNodes(nodeCubit.openNodes),
           viewOptions,
           now,
           plannedNodeIds: plannedIds,
+          firstDayOfWeek: firstDayOfWeek,
         );
         if (open.isEmpty) {
           return viewOptions.isFiltering
@@ -121,3 +125,12 @@ class TodoTaskList extends StatelessWidget {
     );
   }
 }
+
+int _firstDayOfWeekOf(BuildContext context) {
+  try {
+    return context.read<SettingsCubit>().state.firstDayOfWeek;
+  } catch (_) {
+    return 1;
+  }
+}
+

@@ -97,6 +97,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 SizedBox(height: 8),
                 _SnapTile(),
                 SizedBox(height: 8),
+                _FirstDayOfWeekTile(),
+                SizedBox(height: 8),
                 _DefaultCalendarTile(),
                 SizedBox(height: 8),
                 FeedManagerBody(
@@ -462,6 +464,62 @@ class _SnapTile extends StatelessWidget {
                 selected: settingsCubit.state.snapMinutes == choice,
                 onSelected: (_) {
                   settingsCubit.setSnapMinutes(choice);
+                  Navigator.of(dialogContext).pop();
+                },
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FirstDayOfWeekTile extends StatelessWidget {
+  const _FirstDayOfWeekTile();
+
+  static const _names = <int, String>{
+    1: 'Monday',
+    2: 'Tuesday',
+    3: 'Wednesday',
+    4: 'Thursday',
+    5: 'Friday',
+    6: 'Saturday',
+    7: 'Sunday',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final current = context.watch<SettingsCubit>().state.firstDayOfWeek;
+    return ListTile(
+      leading: const Icon(Icons.view_week_outlined),
+      title: const Text('First day of week'),
+      subtitle: Text(_names[current] ?? 'Monday'),
+      trailing: const Icon(Icons.edit_outlined),
+      onTap: () => _edit(context, current),
+    );
+  }
+
+  void _edit(BuildContext context, int current) {
+    final settingsCubit = context.read<SettingsCubit>();
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('First day of week'),
+        content: Wrap(
+          spacing: 8,
+          children: [
+            for (var d = 1; d <= 7; d++)
+              ChoiceChip(
+                label: Text(_names[d]!),
+                selected: current == d,
+                onSelected: (_) {
+                  settingsCubit.setFirstDayOfWeek(d);
                   Navigator.of(dialogContext).pop();
                 },
               ),

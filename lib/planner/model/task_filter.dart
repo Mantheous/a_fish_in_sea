@@ -44,6 +44,7 @@ bool taskFilterDateMatches(
   DateTime? due,
   DateTime now, {
   bool showUndated = false,
+  int firstDayOfWeek = 1,
 }) {
   switch (date) {
     case TaskFilterDate.all:
@@ -67,13 +68,14 @@ bool taskFilterDateMatches(
       if (due == null) return showUndated;
       final today = _day(now);
       if (_day(due).isBefore(today)) return false;
-      // DateTime.weekday: Monday = 1 … Sunday = 7. Days until Sunday;
-      // Sunday itself rolls forward to next Sunday.
-      var daysToSunday = DateTime.sunday - now.weekday;
-      if (daysToSunday <= 0) daysToSunday += 7;
-      // +1 so a due date on Sunday itself is still inside the window.
-      final endExclusive = today.add(Duration(days: daysToSunday + 1));
-      return !due.isBefore(today) && due.isBefore(endExclusive);
+      // today through the next occurrence of the week's last day
+      // (the day before firstDayOfWeek), rolling forward when today is
+      // already that day — mirrors the legacy "today through Sunday".
+      final lastDayOfWeek = firstDayOfWeek == 1 ? 7 : firstDayOfWeek - 1;
+      var daysToEnd = lastDayOfWeek - now.weekday;
+      if (daysToEnd <= 0) daysToEnd += 7;
+      final endExclusive = today.add(Duration(days: daysToEnd + 1));
+      return _day(due).isBefore(endExclusive);
     case TaskFilterDate.next7Days:
       if (due == null) return showUndated;
       final today = _day(now);
@@ -152,7 +154,8 @@ class TaskFilter extends Equatable {
   /// data must pass it so the planned narrows match the tint. Null (standalone
   /// embeds, previews without a calendar) falls back to node-local data: only
   /// a future, non-all-day own block counts.
-  bool matches(Node node, DateTime now, {Set<String>? plannedNodeIds}) {
+  bool matches(Node node, DateTime now,
+      {Set<String>? plannedNodeIds, int firstDayOfWeek = 1}) {
     if (node.status == NodeStatus.open) {
       // Always kept (subject to the criteria below).
     } else if (node.status == NodeStatus.done && showCompleted) {
@@ -193,6 +196,7 @@ class TaskFilter extends Equatable {
         node.schedule?.due,
         now,
         showUndated: showUndated,
+        firstDayOfWeek: firstDayOfWeek,
       );
     }
     return taskFilterDateMatches(
@@ -200,6 +204,7 @@ class TaskFilter extends Equatable {
       node.schedule?.due,
       now,
       showUndated: showUndated,
+      firstDayOfWeek: firstDayOfWeek,
     );
   }
 
@@ -384,12 +389,13 @@ class TaskHighlight extends Equatable {
     this.hideMatching = false,
   });
 
-  bool matches(Node node, DateTime now) {
+  bool matches(Node node, DateTime now, {int firstDayOfWeek = 1}) {
     if (!enabled || !node.isOpen) return false;
     return taskFilterDateMatches(
       _highlightDateAsFilter(date),
       node.schedule?.due,
       now,
+      firstDayOfWeek: firstDayOfWeek,
     );
   }
 
