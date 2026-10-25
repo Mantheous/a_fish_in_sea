@@ -305,8 +305,11 @@ class _CalendarPageState extends State<CalendarPage> {
     final display = _controller.displayDate ?? DateTime.now();
     final day = DateTime(display.year, display.month, display.day);
     if (_view == CalendarView.day) return [day];
-    // firstDayOfWeek is 7 (Sunday): back up to the week's first day.
-    final start = day.subtract(Duration(days: day.weekday % 7));
+    // Back up to the week's first day per the firstDayOfWeek setting.
+    final firstDayOfWeek =
+        context.read<SettingsCubit>().state.firstDayOfWeek;
+    final startOffset = (day.weekday - firstDayOfWeek + 7) % 7;
+    final start = day.subtract(Duration(days: startOffset));
     return [for (var i = 0; i < 7; i++) start.add(Duration(days: i))];
   }
 
@@ -646,7 +649,7 @@ class _CalendarPageState extends State<CalendarPage> {
                         controller: _controller,
                         view: _view,
                         dataSource: _dataSource!,
-                        firstDayOfWeek: 7,
+                        firstDayOfWeek: settings.firstDayOfWeek,
                         allowDragAndDrop: true,
                         allowAppointmentResize: false,
                         dragAndDropSettings: const DragAndDropSettings(

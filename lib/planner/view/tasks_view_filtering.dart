@@ -29,12 +29,15 @@ List<Node> applyTaskViewOptions(
   TasksViewOptionsState viewOptions,
   DateTime now, {
   Set<String>? plannedNodeIds,
+  int firstDayOfWeek = 1,
 }) {
   var result = nodes;
   final filter = viewOptions.activeFilter;
   if (!filter.isShowAll) {
     result = result
-        .where((n) => filter.matches(n, now, plannedNodeIds: plannedNodeIds))
+        .where((n) => filter.matches(n, now,
+            plannedNodeIds: plannedNodeIds,
+            firstDayOfWeek: firstDayOfWeek))
         .toList();
   }
   if (viewOptions.hasHidingRule) {
@@ -44,6 +47,7 @@ List<Node> applyTaskViewOptions(
               n,
               now,
               plannedNodeIds: plannedNodeIds,
+              firstDayOfWeek: firstDayOfWeek,
             ))
         .toList();
   }
@@ -68,6 +72,7 @@ Map<String, TaskTint> taskTintMap(
   TasksViewOptionsState viewOptions,
   DateTime now, {
   Set<String>? plannedNodeIds,
+  int firstDayOfWeek = 1,
 }) {
   if (!viewOptions.hasHighlightRule) return const {};
   final tints = <String, TaskTint>{};
@@ -77,6 +82,7 @@ Map<String, TaskTint> taskTintMap(
       node,
       now,
       plannedNodeIds: plannedNodeIds,
+      firstDayOfWeek: firstDayOfWeek,
     );
     final tint = outcome.tint;
     if (tint == null) continue;

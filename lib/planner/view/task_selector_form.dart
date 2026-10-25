@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/service/node_calendar.dart';
 import '../bloc/calendar_cubit.dart';
+import '../bloc/settings_cubit.dart';
 import '../model/task_date_range.dart';
 import '../model/task_range_bound.dart';
 import '../model/task_filter.dart';
@@ -75,6 +76,7 @@ class _TaskSelectorFormState extends State<TaskSelectorForm> {
     try {
       final cubit = context.read<NodeCubit>();
       final now = DateTime.now();
+      final firstDayOfWeek = _firstDayOfWeekOf(context);
       if (draft.isShowAll) return cubit.openNodes.length;
       // Same planned set as the lists: keys of the schedule-tint counts,
       // so the preview agrees with what the applied view will keep.
@@ -90,7 +92,11 @@ class _TaskSelectorFormState extends State<TaskSelectorForm> {
       }
       var count = 0;
       for (final n in cubit.openNodes) {
-        if (draft.matches(n, now, plannedNodeIds: plannedIds)) count++;
+        if (draft.matches(n, now,
+            plannedNodeIds: plannedIds,
+            firstDayOfWeek: firstDayOfWeek)) {
+          count++;
+        }
       }
       return count;
     } catch (_) {
@@ -276,6 +282,14 @@ class _TaskSelectorFormState extends State<TaskSelectorForm> {
 /// presets and a resolved-date preview so a rolling window can be dialed
 /// in ("overdue to next Monday" is the second preset; "Sunday + 8 days"
 /// is From Sunday / To Sunday + 8 — the preview shows the actual dates).
+int _firstDayOfWeekOf(BuildContext context) {
+  try {
+    return context.read<SettingsCubit>().state.firstDayOfWeek;
+  } catch (_) {
+    return 1;
+  }
+}
+
 class _CustomRangeSection extends StatelessWidget {
   final TaskDateRange value;
   final ValueChanged<TaskDateRange> onChanged;
@@ -355,7 +369,8 @@ class _CustomRangeSection extends StatelessWidget {
           onChanged: _setEnd,
         ),
         Text(
-          resolvedTaskDateRange(value, now),
+          resolvedTaskDateRange(value, now,
+              firstDayOfWeek: _firstDayOfWeekOf(context)),
           style: Theme.of(context).textTheme.bodySmall,
         ),
         if (!value.isValidAt(now))

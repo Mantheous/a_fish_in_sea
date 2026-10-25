@@ -44,13 +44,13 @@ List<Node> attachClassMembership(List<Node> nodes) {
     // edge. An explicit class picker/editor is where a user replaces one
     // class parent with another, with an undo record.
     final parents = [...node.parentIds];
-    final needsParent = !parents.contains(classNode.id);
+    final needsParent = !node.isInstance && !parents.contains(classNode.id);
     final needsId = node.classNodeId != classNode.id;
     if (!needsParent && !needsId) {
       next.add(node);
       continue;
     }
-    if (needsParent) parents.add(classNode.id);
+    if (needsParent && !node.isInstance) parents.add(classNode.id);
     changed = true;
     next.add(
       node.copyWith(

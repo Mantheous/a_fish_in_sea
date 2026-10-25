@@ -78,8 +78,9 @@ class TaskRangeBound extends Equatable {
   bool get isUnbounded => kind == TaskRangeBoundKind.unbounded;
 
   /// The calendar day this end resolves to for [now] (day precision),
-  /// or null when unbounded.
-  DateTime? resolve(DateTime now) {
+  /// or null when unbounded. [firstDayOfWeek] is 1 = Monday … 7 = Sunday
+  /// and sets which day opens the week for weekday bounds.
+  DateTime? resolve(DateTime now, {int firstDayOfWeek = 1}) {
     final today = DateTime(now.year, now.month, now.day);
     switch (kind) {
       case TaskRangeBoundKind.unbounded:
@@ -87,10 +88,10 @@ class TaskRangeBound extends Equatable {
       case TaskRangeBoundKind.offset:
         return today.add(Duration(days: offsetDays));
       case TaskRangeBoundKind.weekday:
-        final monday =
-            today.subtract(Duration(days: today.weekday - 1));
-        return monday
-            .add(Duration(days: (weekday - 1) + weeksOut * 7));
+        final startOffset = (today.weekday - firstDayOfWeek + 7) % 7;
+        final weekStart = today.subtract(Duration(days: startOffset));
+        final position = (weekday - firstDayOfWeek + 7) % 7;
+        return weekStart.add(Duration(days: position + weeksOut * 7));
     }
   }
 

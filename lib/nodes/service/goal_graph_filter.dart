@@ -88,11 +88,12 @@ class GoalGraphFilter {
     Node node,
     DateTime now, {
     Map<String, Set<String>>? ancestorsById,
+    int firstDayOfWeek = 1,
   }) {
     if (starredOnly && !node.isFavorite) return false;
     if (status != null && node.status != status) return false;
     if (!_matchesKind(node)) return false;
-    if (!_matchesDate(node, now)) return false;
+    if (!_matchesDate(node, now, firstDayOfWeek: firstDayOfWeek)) return false;
     final topic = topicRootId;
     if (topic != null) {
       final ancestors = ancestorsById?[node.id] ?? const <String>{};
@@ -110,12 +111,15 @@ class GoalGraphFilter {
     // Repeating goals generate their own occurrences, so the automated
     // bucket includes them alongside goals measured from data.
     GoalKindFilter.automated => node.isAutomatedGoal || node.isTemplate,
-    GoalKindFilter.homework => node.isHomework,
+    GoalKindFilter.homework =>
+      node.isHomework ||
+      node.isClassNode ||
+      (node.auto?.homeworkOnly ?? false),
     GoalKindFilter.anki => node.anki != null,
     GoalKindFilter.unbounded => node.isUnbounded,
   };
 
-  bool _matchesDate(Node node, DateTime now) {
+  bool _matchesDate(Node node, DateTime now, {int firstDayOfWeek = 1}) {
     final day = _dayOf(node);
     final today = DateTime(now.year, now.month, now.day);
     switch (date) {
@@ -127,7 +131,8 @@ class GoalGraphFilter {
         return day != null && _sameDay(day, today);
       case GoalDateFilter.thisWeek:
         if (day == null) return false;
-        final weekStart = today.subtract(Duration(days: today.weekday - 1));
+        final startOffset = (today.weekday - firstDayOfWeek + 7) % 7;
+        final weekStart = today.subtract(Duration(days: startOffset));
         final weekEnd = weekStart.add(const Duration(days: 7));
         return !day.isBefore(weekStart) && day.isBefore(weekEnd);
       case GoalDateFilter.thisMonth:

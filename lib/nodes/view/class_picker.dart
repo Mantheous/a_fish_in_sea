@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/view/class_names.dart';
 
 /// Picks or creates a class node for a work item.
@@ -221,12 +222,34 @@ class _ClassPickerDialogState extends State<_ClassPickerDialog> {
     ClassSource? source,
   ) async {
     final cubit = context.read<NodeCubit>();
-    final nodes = cubit.state;
-    final parentId = _homeworkParentId(nodes);
+    Map<String, String> feedNames = const {};
+    try {
+      feedNames = {
+        for (final feed in context.read<FeedCubit>().state)
+          feed.id: feed.name,
+      };
+    } catch (_) {}
+    // Opening the picker from Home/Tasks may be the first structural pass;
+    // ensure the Homework container before parenting this class.
+    final homeworkId = cubit.ensureHomeworkStructure(
+      force: true,
+      feedNames: feedNames,
+    );
+    if (source != null) {
+      // The structural pass may already have created the class for this
+      // feed; reuse it instead of duplicating.
+      for (final node in cubit.state) {
+        if (!node.isClassNode) continue;
+        if (node.classFacet!.matchesNodeSource(source)) {
+          if (context.mounted) Navigator.of(context).pop(node.id);
+          return;
+        }
+      }
+    }
     final classNode = Node(
       id: 'node:class:${DateTime.now().microsecondsSinceEpoch}',
       title: label.trim().isEmpty ? 'Class' : label.trim(),
-      parentIds: [if (parentId != null) parentId],
+      parentIds: [if (homeworkId != null) homeworkId],
       createdAt: DateTime.now(),
       classFacet: ClassFacet(sources: [if (source != null) source]),
       auto: const AutoFacet(metric: AutoMetric.allDone),
@@ -265,7 +288,9 @@ class _ClassPickerDialogState extends State<_ClassPickerDialog> {
         for (final parent in node.parentIds)
           if (cubit.byId(parent)?.isClassNode != true) parent,
       ];
-      if (!parents.contains(classNode.id)) parents.add(classNode.id);
+      if (!node.isInstance && !parents.contains(classNode.id)) {
+        parents.add(classNode.id);
+      }
       upserts.add(
         node.copyWith(
           parentIds: parents,
@@ -277,14 +302,5 @@ class _ClassPickerDialogState extends State<_ClassPickerDialog> {
     if (upserts.isNotEmpty) cubit.writeNodes(upserts: upserts);
   }
 
-  /// Class nodes live under the user's "Homework" goal when one exists.
-  /// Otherwise they are roots the user can move.
-  static String? _homeworkParentId(List<Node> nodes) {
-    for (final node in nodes) {
-      if (node.isClassNode || node.isHomework || node.isInstance) continue;
-      final label = node.title.trim().toLowerCase();
-      if (label == 'homework' || label.contains('homework')) return node.id;
-    }
-    return null;
-  }
+
 }
