@@ -13,7 +13,7 @@ import 'node_graph_card.dart';
 /// An alternative to the list views, not a replacement: tap a card to edit
 /// (same editor as everywhere else) and tap the −/+ badge under a card to
 /// collapse or expand that subtree. Each card also grows the tree in place:
-/// its `+` button creates a subgoal beneath it and its `↑` button creates a
+/// its `↓` button creates a subgoal beneath it and its `↑` button creates a
 /// parent goal above it. Pan and zoom to move around large trees. Repeating
 /// templates and goals with a very wide fan-out start collapsed so their
 /// generated instances or subgoal walls don't flood the graph. Folding is
@@ -245,7 +245,7 @@ class _NodeGraphViewState extends State<NodeGraphView> {
           child: _GraphPill(
             text: widget.filterActive
                 ? 'Filtered-out goals collapse · links stay visible'
-                : 'Tap to edit · + / ↑ add goals · −/+ collapses',
+                : 'Tap to edit · ↓ / ↑ add goals · −/+ collapses',
           ),
         ),
       ],
