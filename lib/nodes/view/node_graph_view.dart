@@ -5,18 +5,21 @@ import 'package:flutter/material.dart';
 import '../model/node.dart';
 import '../service/node_graph_layout.dart';
 import 'node_editor.dart';
+import 'node_graph_card.dart';
 
 /// Graphical top-down view of the goal DAG, following the board in
 /// `docs/goal-tree-issue-4.png`: layered cards joined by curved connectors.
 ///
 /// An alternative to the list views, not a replacement: tap a card to edit
 /// (same editor as everywhere else) and tap the −/+ badge under a card to
-/// collapse or expand that subtree. Pan and zoom to move around large
-/// trees. Repeating templates and goals with a very wide fan-out start
-/// collapsed so their generated instances or subgoal walls don't flood the
-/// graph. Folding is reported through [onCollapsedChanged] and can be
-/// restored with [collapsedIds], so leaving the Goals tab and coming back
-/// shows the same graph.
+/// collapse or expand that subtree. Each card also grows the tree in place:
+/// its `+` button creates a subgoal beneath it and its `↑` button creates a
+/// parent goal above it. Pan and zoom to move around large trees. Repeating
+/// templates and goals with a very wide fan-out start collapsed so their
+/// generated instances or subgoal walls don't flood the graph. Folding is
+/// reported through [onCollapsedChanged] and can be restored with
+/// [collapsedIds], so leaving the Goals tab and coming back shows the same
+/// graph.
 class NodeGraphView extends StatefulWidget {
   const NodeGraphView({
     super.key,
@@ -92,6 +95,13 @@ class _NodeGraphViewState extends State<NodeGraphView> {
 
   final Set<String> _collapsed = <String>{};
   bool _seeded = false;
+
+  /// Most recently added goal. The viewport pans just enough to show it
+  /// without changing zoom, so growing the tree is visible even when the
+  /// new card lands outside the current view (e.g. a new parent root to
+  /// the right of the tree).
+  String? _revealId;
+  int _revealToken = 0;
 
   @override
   void didUpdateWidget(covariant NodeGraphView oldWidget) {
@@ -193,16 +203,29 @@ class _NodeGraphViewState extends State<NodeGraphView> {
         if (!_collapsed.remove(id)) _collapsed.add(id);
         _reportCollapsed();
       }),
+      onAddSubgoal: _addSubgoal,
+      onAddParent: _addParent,
     );
     final shown = restricted
         ? widget.matchedIds.length
         : layout.placements.length;
+    GraphNodePlacement? reveal;
+    if (_revealId != null) {
+      for (final placement in layout.placements) {
+        if (placement.node.id == _revealId) {
+          reveal = placement;
+          break;
+        }
+      }
+    }
     return Stack(
       children: [
         Positioned.fill(
           child: _GraphViewport(
             layoutSize: layout.size,
             fitToken: widget.fitToken,
+            revealRect: reveal?.rect,
+            revealToken: _revealToken,
             child: canvas,
           ),
         ),
@@ -222,11 +245,39 @@ class _NodeGraphViewState extends State<NodeGraphView> {
           child: _GraphPill(
             text: widget.filterActive
                 ? 'Filtered-out goals collapse · links stay visible'
-                : 'Tap to edit · − / + collapses',
+                : 'Tap to edit · + / ↑ add goals · −/+ collapses',
           ),
         ),
       ],
     );
+  }
+
+  /// "Add subgoal": the new goal is created with [parent] pre-selected as
+  /// its parent. A collapsed parent is expanded on success so the new card
+  /// is actually visible instead of hidden behind its own count badge.
+  Future<void> _addSubgoal(Node parent) async {
+    final created = await showNodeEditor(
+      context,
+      initialParentIds: [parent.id],
+    );
+    if (!mounted || created == null) return;
+    setState(() {
+      _collapsed.remove(parent.id);
+      _revealId = created.id;
+      _revealToken++;
+    });
+    _reportCollapsed();
+  }
+
+  /// "Add parent goal": the new goal is created as a parent of [child] in
+  /// one write, so the edge exists the moment the card appears.
+  Future<void> _addParent(Node child) async {
+    final created = await showNodeEditor(context, initialChildIds: [child.id]);
+    if (!mounted || created == null) return;
+    setState(() {
+      _revealId = created.id;
+      _revealToken++;
+    });
   }
 }
 
@@ -273,11 +324,17 @@ class _GraphViewport extends StatefulWidget {
     required this.layoutSize,
     required this.child,
     this.fitToken = 0,
+    this.revealRect,
+    this.revealToken = 0,
   });
 
   final Size layoutSize;
   final Widget child;
   final int fitToken;
+
+  /// Canvas-space rect to bring into view when [revealToken] changes.
+  final Rect? revealRect;
+  final int revealToken;
 
   @override
   State<_GraphViewport> createState() => _GraphViewportState();
@@ -291,6 +348,7 @@ class _GraphViewportState extends State<_GraphViewport> {
   Size _viewport = Size.zero;
   bool _didFit = false;
   bool _fitScheduled = false;
+  bool _revealScheduled = false;
 
   @override
   void didUpdateWidget(covariant _GraphViewport oldWidget) {
@@ -298,6 +356,8 @@ class _GraphViewportState extends State<_GraphViewport> {
     if (widget.fitToken != oldWidget.fitToken) {
       _didFit = false;
       _scheduleFit();
+    } else if (widget.revealToken != oldWidget.revealToken) {
+      _scheduleReveal();
     }
   }
 
@@ -316,6 +376,43 @@ class _GraphViewportState extends State<_GraphViewport> {
       _didFit = true;
       _fit();
     });
+  }
+
+  /// Pans minimally so [widget.revealRect] is inside the viewport, keeping
+  /// the user's zoom. A card already in view does not move the canvas.
+  void _scheduleReveal() {
+    if (_revealScheduled) return;
+    _revealScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _revealScheduled = false;
+      if (!mounted) return;
+      _reveal();
+    });
+  }
+
+  void _reveal() {
+    final rect = widget.revealRect;
+    if (rect == null || _viewport.isEmpty) return;
+    final m = _controller.value;
+    final scale = m.getMaxScaleOnAxis();
+    final t = m.getTranslation();
+    const padding = 24.0;
+    final left = rect.left * scale + t.x;
+    final top = rect.top * scale + t.y;
+    final right = rect.right * scale + t.x;
+    final bottom = rect.bottom * scale + t.y;
+    var dx = 0.0;
+    var dy = 0.0;
+    if (right > _viewport.width - padding) {
+      dx = _viewport.width - padding - right;
+    }
+    if (left + dx < padding) dx = padding - left;
+    if (bottom > _viewport.height - padding) {
+      dy = _viewport.height - padding - bottom;
+    }
+    if (top + dy < padding) dy = padding - top;
+    if (dx == 0 && dy == 0) return;
+    _controller.value = _matrix(scale, t.x + dx, t.y + dy);
   }
 
   Matrix4 _matrix(double scale, double tx, double ty) {
@@ -452,6 +549,8 @@ class _GraphCanvas extends StatelessWidget {
     required this.showToggles,
     required this.onEdit,
     required this.onToggle,
+    required this.onAddSubgoal,
+    required this.onAddParent,
   });
 
   final NodeGraphLayout layout;
@@ -460,6 +559,8 @@ class _GraphCanvas extends StatelessWidget {
   final bool showToggles;
   final ValueChanged<Node> onEdit;
   final ValueChanged<String> onToggle;
+  final ValueChanged<Node> onAddSubgoal;
+  final ValueChanged<Node> onAddParent;
 
   @override
   Widget build(BuildContext context) {
@@ -482,7 +583,7 @@ class _GraphCanvas extends StatelessWidget {
               top: placement.rect.top,
               width: placement.rect.width,
               height: placement.rect.height,
-              child: _GraphNodeCard(
+              child: NodeGraphCard(
                 key: ValueKey(
                   'graph-${placement.compact ? 'context' : 'node'}-'
                   '${placement.node.id}',
@@ -493,265 +594,13 @@ class _GraphCanvas extends StatelessWidget {
                 showToggle: showToggles,
                 onEdit: () => onEdit(placement.node),
                 onToggle: () => onToggle(placement.node.id),
+                onAddSubgoal: () => onAddSubgoal(placement.node),
+                onAddParent: () => onAddParent(placement.node),
               ),
             ),
         ],
       ),
     );
-  }
-}
-
-class _GraphNodeCard extends StatelessWidget {
-  const _GraphNodeCard({
-    super.key,
-    required this.placement,
-    required this.progress,
-    required this.isMatch,
-    required this.showToggle,
-    required this.onEdit,
-    required this.onToggle,
-  });
-
-  final GraphNodePlacement placement;
-  final double progress;
-  final bool isMatch;
-  final bool showToggle;
-  final VoidCallback onEdit;
-  final VoidCallback onToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final node = placement.node;
-    if (placement.compact) return _compactCard(context, node);
-    final isRoot = node.parentIds.isEmpty;
-    final fill = _fill(theme, node);
-    final border = isMatch
-        ? scheme.primary
-        : isRoot
-        ? scheme.primary.withValues(alpha: 0.55)
-        : scheme.outlineVariant;
-    final titleColor = node.status == NodeStatus.failed
-        ? scheme.error
-        : node.isDone
-        ? scheme.outline
-        : scheme.onSurface;
-    return Tooltip(
-      message: _tooltip(node),
-      waitDuration: const Duration(milliseconds: 600),
-      child: Material(
-        color: fill,
-        elevation: 1,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(isRoot ? 28 : 10),
-          side: BorderSide(color: border, width: isMatch ? 2 : 1),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onEdit,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(9, 6, 9, 5),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  child: Center(
-                    child: Text(
-                      node.title.isEmpty ? '(untitled)' : node.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 11,
-                        height: 1.2,
-                        color: titleColor,
-                        decoration:
-                            node.isDone || node.status == NodeStatus.failed
-                            ? TextDecoration.lineThrough
-                            : null,
-                      ),
-                    ),
-                  ),
-                ),
-                Row(
-                  children: [
-                    Expanded(child: _footer(context, node)),
-                    if (showToggle && placement.hasChildren) ...[
-                      const SizedBox(width: 4),
-                      _toggle(context),
-                    ],
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// A filtered-out ancestor, collapsed to a small path marker. It keeps
-  /// the connector visible and stays tappable, but reads as context rather
-  /// than as a matching goal.
-  Widget _compactCard(BuildContext context, Node node) {
-    final scheme = Theme.of(context).colorScheme;
-    final title = node.title.isEmpty ? '(untitled)' : node.title;
-    return Tooltip(
-      message: '$title\nfiltered out · shown to keep the link',
-      waitDuration: const Duration(milliseconds: 500),
-      child: Opacity(
-        opacity: 0.82,
-        child: Material(
-          color: scheme.surfaceContainerHighest,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(999),
-            side: BorderSide(color: scheme.outlineVariant),
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: onEdit,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.filter_alt_off_outlined,
-                    size: 10,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 9,
-                        height: 1.1,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Progress strip (or the ongoing marker for unbounded goals).
-  Widget _footer(BuildContext context, Node node) {
-    final scheme = Theme.of(context).colorScheme;
-    if (node.isUnbounded) {
-      return Align(
-        alignment: Alignment.centerLeft,
-        child: Icon(
-          Icons.all_inclusive,
-          size: 12,
-          color: scheme.onSurfaceVariant,
-        ),
-      );
-    }
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(2),
-      child: LinearProgressIndicator(
-        value: progress.clamp(0.0, 1.0),
-        minHeight: 3,
-        backgroundColor: scheme.surfaceContainerHighest,
-      ),
-    );
-  }
-
-  /// Collapse/expand badge: a minus while expanded, the hidden count while
-  /// collapsed — the standard mind-map affordance.
-  Widget _toggle(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final collapsed = placement.collapsed;
-    return Tooltip(
-      message: collapsed
-          ? 'Expand ${placement.hiddenDescendants} hidden goal'
-                '${placement.hiddenDescendants == 1 ? '' : 's'}'
-          : 'Collapse ${placement.childCount} direct '
-                'subgoal${placement.childCount == 1 ? '' : 's'}',
-      waitDuration: const Duration(milliseconds: 500),
-      child: InkWell(
-        key: ValueKey('graph-toggle-${placement.node.id}'),
-        borderRadius: BorderRadius.circular(9),
-        onTap: onToggle,
-        child: Container(
-          width: 24,
-          height: 18,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: scheme.surface,
-            border: Border.all(color: scheme.outlineVariant),
-          ),
-          child: collapsed
-              ? FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 3),
-                    child: Text(
-                      '+${placement.hiddenDescendants}',
-                      style: TextStyle(
-                        fontSize: 8,
-                        height: 1,
-                        fontWeight: FontWeight.w700,
-                        color: scheme.onSurface,
-                      ),
-                    ),
-                  ),
-                )
-              : Icon(Icons.remove, size: 12, color: scheme.onSurfaceVariant),
-        ),
-      ),
-    );
-  }
-
-  String _tooltip(Node node) {
-    final parts = <String>[node.title.isEmpty ? '(untitled)' : node.title];
-    parts.add(
-      node.isUnbounded
-          ? 'unbounded · ongoing'
-          : '${(progress * 100).round()}% complete',
-    );
-    if (node.isDone) parts.add('done');
-    if (node.status == NodeStatus.failed) parts.add('failed');
-    if (node.isTracking) parts.add('recording');
-    parts.add('tap to edit');
-    return parts.join('\n');
-  }
-
-  /// Card fill reads the goal's state at a glance: green for done, teal
-  /// while recording, error tint for failed, secondary for unbounded and
-  /// repeating templates — the colored boxes on the Figma board.
-  static Color _fill(ThemeData theme, Node node) {
-    final scheme = theme.colorScheme;
-    final surface = scheme.surfaceContainerHigh;
-    if (node.status == NodeStatus.failed) return scheme.errorContainer;
-    if (node.isDone) {
-      final green = theme.brightness == Brightness.dark
-          ? const Color(0xFF3E6B49)
-          : const Color(0xFF9ED8A9);
-      return Color.alphaBlend(green.withValues(alpha: 0.55), surface);
-    }
-    if (node.isTracking) {
-      return Color.alphaBlend(scheme.primary.withValues(alpha: 0.2), surface);
-    }
-    if (node.isUnbounded) {
-      return Color.alphaBlend(
-        scheme.secondary.withValues(alpha: 0.16),
-        surface,
-      );
-    }
-    if (node.isTemplate) {
-      return Color.alphaBlend(scheme.tertiary.withValues(alpha: 0.14), surface);
-    }
-    return surface;
   }
 }
 

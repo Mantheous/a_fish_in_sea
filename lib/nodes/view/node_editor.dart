@@ -39,12 +39,17 @@ Future<Node?> showNodeEditor(
   /// Pre-selected parents for a brand-new node (e.g. "add subgoal" from a
   /// goal tile). Ignored when [existing] is set.
   List<String> initialParentIds = const [],
+
+  /// Existing goals to place under a brand-new node (e.g. "add parent
+  /// goal" from a graph card). Ignored when [existing] is set.
+  List<String> initialChildIds = const [],
 }) {
   _NodeEditorDialog buildEditor() => _NodeEditorDialog(
     existing: existing,
     enableMoney: enableMoney,
     enableRecurrence: enableRecurrence,
     initialParentIds: initialParentIds,
+    initialChildIds: initialChildIds,
   );
   if (MediaQuery.sizeOf(context).width >= nodeEditorSideSheetBreakpoint) {
     return showGeneralDialog<Node>(
@@ -81,12 +86,14 @@ class _NodeEditorDialog extends StatefulWidget {
   final bool enableMoney;
   final bool enableRecurrence;
   final List<String> initialParentIds;
+  final List<String> initialChildIds;
 
   const _NodeEditorDialog({
     this.existing,
     this.enableMoney = false,
     this.enableRecurrence = false,
     this.initialParentIds = const [],
+    this.initialChildIds = const [],
   });
 
   @override
@@ -253,6 +260,10 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
             border: OutlineInputBorder(),
           ),
         ),
+        if (e == null && widget.initialChildIds.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          _attachedChildrenHint(context),
+        ],
         const SizedBox(height: 12),
         TextField(
           controller: _notes,
@@ -825,6 +836,47 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     ];
   }
 
+  /// One-line context for "add parent goal": the new goal adopts the
+  /// tapped goal, whose existing parents stay in place.
+  Widget _attachedChildrenHint(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    var titles = const <String>[];
+    try {
+      final cubit = context.read<NodeCubit>();
+      titles = [
+        for (final id in widget.initialChildIds)
+          if (cubit.byId(id) case final node?) node.title,
+      ];
+    } catch (_) {}
+    final named = titles.isEmpty
+        ? null
+        : titles.length == 1
+        ? '“${titles.single}”'
+        : '${titles.length} goals';
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          Icons.subdirectory_arrow_right,
+          size: 16,
+          color: scheme.onSurfaceVariant,
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            named == null
+                ? 'This goal becomes a parent of the selected goal.'
+                : 'This goal becomes a parent of $named. '
+                      'Existing parents stay.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   String _className(BuildContext context) {
     try {
       final cubit = context.read<NodeCubit>();
@@ -1131,7 +1183,12 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         rule: rule,
         assignees: _people,
       );
-      error = cubit.addNode(node);
+      error = widget.initialChildIds.isEmpty
+          ? cubit.addNode(node)
+          : cubit.addNodeWithChildren(
+              node,
+              childIds: widget.initialChildIds,
+            );
       if (error == null) {
         result = node;
         if (recurrence != null) {

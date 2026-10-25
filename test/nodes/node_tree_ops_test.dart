@@ -169,6 +169,60 @@ void main() {
     });
   });
 
+  group('addNodeWithChildren', () {
+    test('adds a parent and attaches children in one change', () {
+      final cubit = NodeCubit();
+      expect(cubit.addNode(node('goal')), isNull);
+      expect(cubit.addNode(node('other')), isNull);
+      expect(cubit.addNode(node('child', parents: ['goal', 'other'])), isNull);
+
+      expect(
+        cubit.addNodeWithChildren(node('parent'), childIds: ['child']),
+        isNull,
+      );
+      final parent = cubit.byId('parent');
+      expect(parent, isNotNull);
+      expect(parent!.parentIds, isEmpty, reason: 'new goal starts as a root');
+      // The DAG keeps existing parents: adding a parent never steals the
+      // child from the rest of the tree.
+      expect(cubit.byId('child')?.parentIds, ['goal', 'other', 'parent']);
+    });
+
+    test('rejects generated instances without writing anything', () {
+      final cubit = NodeCubit();
+      expect(cubit.addNode(node('template')), isNull);
+      expect(
+        cubit.addNode(
+          node('inst', parents: ['template'], instanceOfId: 'template'),
+        ),
+        isNull,
+      );
+      // A generated instance must stay parented to its template only.
+      final before = cubit.state;
+      expect(
+        cubit.addNodeWithChildren(node('parent'), childIds: ['inst']),
+        isNotNull,
+      );
+      expect(identical(cubit.state, before), isTrue);
+      expect(cubit.byId('parent'), isNull);
+    });
+
+    test('rejects unknown children and duplicate ids', () {
+      final cubit = NodeCubit();
+      expect(cubit.addNode(node('goal')), isNull);
+      expect(
+        cubit.addNodeWithChildren(node('parent'), childIds: ['missing']),
+        isNotNull,
+      );
+      expect(cubit.byId('parent'), isNull);
+      expect(
+        cubit.addNodeWithChildren(node('goal')),
+        isNotNull,
+        reason: 'duplicate id',
+      );
+    });
+  });
+
   group('duplicateSubtree', () {
     test('deep-copies the closure, keeps shared parents, strips links',
         () {
