@@ -107,7 +107,9 @@ class GoalGraphFilter {
     GoalKindFilter.money => node.money != null,
     GoalKindFilter.time => node.effort != null,
     GoalKindFilter.repeating => node.isTemplate,
-    GoalKindFilter.automated => node.isAutomatedGoal,
+    // Repeating goals generate their own occurrences, so the automated
+    // bucket includes them alongside goals measured from data.
+    GoalKindFilter.automated => node.isAutomatedGoal || node.isTemplate,
     GoalKindFilter.homework => node.isHomework,
     GoalKindFilter.anki => node.anki != null,
     GoalKindFilter.unbounded => node.isUnbounded,

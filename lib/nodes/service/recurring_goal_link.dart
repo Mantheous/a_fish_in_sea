@@ -3,6 +3,7 @@ import '../model/node.dart';
 import '../../planner/bloc/calendar_cubit.dart';
 import '../../planner/model/planner_event.dart';
 import 'event_schedule.dart';
+import 'node_progress.dart';
 
 /// Include the feed in the identity: two calendars may expose the same UID.
 String? calendarGoalSeriesKey(PlannerEvent event) {
@@ -27,6 +28,7 @@ class RecurringGoalLink {
     Set<String> protectedNodeIds = const {},
   }) {
     final all = nodes.state;
+    final allById = {for (final n in all) n.id: n};
     final pending = {for (final n in all) n.id: n};
     final byEvent = {for (final e in calendar.state) e.id: e};
     final upserts = <String, Node>{};
@@ -96,6 +98,7 @@ class RecurringGoalLink {
         if (n.instanceOfId != template.id || n.schedule?.due == null) continue;
         (instancesByDay[_day(n.schedule!.due!)] ??= []).add(n);
       }
+      final templateDescendants = descendantIds(template.id, all);
       for (final event in members) {
         if (template.calendarLink?.excludedEventIds.contains(event.id) ??
             false) {
@@ -139,7 +142,6 @@ class RecurringGoalLink {
               referenced.contains(n.id) ||
               calendar.state.any((e) => e.id != event.id && e.taskId == n.id) ||
               n.instanceOfId != null ||
-              n.parentIds.any((id) => id != template.id) ||
               n.money != null ||
               n.anki != null ||
               n.rule != null ||
@@ -148,12 +150,41 @@ class RecurringGoalLink {
         )) {
           continue;
         }
+        // An old per-occurrence series assignment left each shadow parented
+        // to the goal. The template owns the series, so move that goal edge
+        // onto the template before dropping the shadow; the goal keeps
+        // measuring every generated instance instead of losing its source.
+        final extraParents = <String>{
+          for (final n in duplicates)
+            for (final id in n.parentIds)
+              if (id != template.id) id,
+        };
+        if (extraParents.any((id) {
+          final parent = pending[id] ?? allById[id];
+          return parent == null ||
+              !isGoalNode(parent) ||
+              templateDescendants.contains(id);
+        })) {
+          continue;
+        }
         final merged = _merge(occurrence, duplicates, event, key);
         if (merged == null) continue;
         if (merged != occurrence) {
           pending[merged.id] = merged;
           upserts[merged.id] = merged;
           linked++;
+        }
+        if (extraParents.isNotEmpty) {
+          final current = pending[template.id] ?? template;
+          final parents = [...current.parentIds];
+          for (final id in extraParents) {
+            if (!parents.contains(id)) parents.add(id);
+          }
+          if (parents.length != current.parentIds.length) {
+            final updatedTemplate = current.copyWith(parentIds: parents);
+            pending[template.id] = updatedTemplate;
+            upserts[template.id] = updatedTemplate;
+          }
         }
         removals.addAll(duplicates.map((n) => n.id));
         final updated = event.copyWith(

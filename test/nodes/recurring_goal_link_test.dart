@@ -38,7 +38,7 @@ void main() {
     completedAt: done ? day.add(const Duration(hours: 7)) : null,
   );
 
-  void seed({bool assigned = true}) {
+  void seed({bool assigned = true, bool linked = false, bool shadow = true}) {
     nodes.addNode(
       Node(
         id: 'goal',
@@ -46,6 +46,11 @@ void main() {
         createdAt: day,
         effort: const EffortFacet(targetMinutes: 60),
         recurrence: const NodeRecurrence(frequency: TimeScale.daily),
+        calendarLink: linked
+            ? const NodeCalendarLink(
+                seriesKey: 'personal-calendar|series:scripture',
+              )
+            : null,
       ),
     );
     nodes.generateInstances(
@@ -54,7 +59,7 @@ void main() {
       horizon: day.add(const Duration(days: 2)),
     );
     calendar.addEvent(event('e1'));
-    nodes.ensureNodeForFeedEvent(calendar.byId('e1')!);
+    if (shadow) nodes.ensureNodeForFeedEvent(calendar.byId('e1')!);
     if (assigned) nodes.reparent('e1', ['goal']);
   }
 
@@ -261,6 +266,91 @@ void main() {
       'goal',
     );
   });
+  test(
+    'assigning a series to a goal attaches its recurring owner, not shadows',
+    () {
+      seed(assigned: false, linked: true, shadow: false);
+      nodes.addNode(
+        Node(
+          id: 'auto',
+          title: '7h scripture',
+          createdAt: day,
+          auto: const AutoFacet(target: 420),
+        ),
+      );
+      final event = calendar.byId('e1')!;
+      final result = NodeEventLink.assignEventToGoal(
+        calendar,
+        nodes,
+        'e1',
+        'auto',
+        includeSeries: true,
+        now: day,
+      );
+      expect(result.error, isNull);
+      expect(nodes.byId('goal')!.parentIds, contains('auto'));
+      expect(nodes.byId('e1'), isNull);
+      RecurringGoalLink.reconcile(calendar, nodes);
+      final instance = nodes.instancesOf('goal').first;
+      expect(calendar.byId(event.id)!.taskId, instance.id);
+      expect(nodes.nodesForEventId(event.id), hasLength(1));
+    },
+  );
+
+  test('unassigning a series removes the recurring owner edge', () {
+    seed(assigned: false, linked: true, shadow: false);
+    nodes.addNode(
+      Node(
+        id: 'auto',
+        title: '7h scripture',
+        createdAt: day,
+        auto: const AutoFacet(target: 420),
+      ),
+    );
+    NodeEventLink.assignEventToGoal(
+      calendar,
+      nodes,
+      'e1',
+      'auto',
+      includeSeries: true,
+      now: day,
+    );
+    expect(nodes.byId('goal')!.parentIds, contains('auto'));
+    final result = NodeEventLink.unassignEventFromGoal(
+      calendar,
+      nodes,
+      'e1',
+      'auto',
+      includeSeries: true,
+      now: day,
+    );
+    expect(result.error, isNull);
+    expect(result.removed, 1);
+    expect(nodes.byId('goal')!.parentIds, isNot(contains('auto')));
+  });
+
+  test('a goal-assigned event shadow merges into the recurring owner', () {
+    seed(assigned: false, linked: true);
+    nodes.addNode(
+      Node(
+        id: 'auto',
+        title: '7h scripture',
+        createdAt: day,
+        auto: const AutoFacet(target: 420),
+      ),
+    );
+    // Old assignment path: one feed shadow per occurrence, parented to the
+    // goal, while the template's instance stays the canonical occurrence.
+    nodes.reparent('e1', ['auto']);
+    expect(RecurringGoalLink.reconcile(calendar, nodes), 1);
+    expect(nodes.byId('e1'), isNull);
+    expect(nodes.byId('goal')!.parentIds, contains('auto'));
+    expect(
+      NodeEventLink.backingNodeFor(nodes, calendar, 'e1')!.instanceOfId,
+      'goal',
+    );
+  });
+
   test(
     'unlinking one occurrence keeps history and survives reconciliation',
     () {

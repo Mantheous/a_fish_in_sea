@@ -2995,9 +2995,18 @@ class _GoalAssignmentSection extends StatelessWidget {
       if (futureMembers.length > 1) {
         var assignedCount = 0;
         for (final m in futureMembers) {
+          // A series-level assignment attaches the recurring template, so a
+          // member counts when either its backing instance or that owner is
+          // parented under the goal.
+          final owner = NodeEventLink.recurringOwnerForEvent(
+            calendar,
+            nodes,
+            m.id,
+          );
           final backing =
               NodeEventLink.backingNodeFor(nodes, calendar, m.id);
-          if (backing?.parentIds.contains(goalId) ?? false) {
+          if ((owner?.parentIds.contains(goalId) ?? false) ||
+              (backing?.parentIds.contains(goalId) ?? false)) {
             assignedCount++;
           }
         }
