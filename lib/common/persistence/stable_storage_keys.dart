@@ -51,4 +51,26 @@ abstract final class StableStorageKeys {
     assignmentRules,
     assignmentEstimates,
   };
+
+  /// Constant name -> literal value. Tests use this to prove each cubit's
+  /// `StableStorageKeys.<name>` matches its class name.
+  static const Map<String, String> byName = {
+    'auth': auth,
+    'node': node,
+    'calendar': calendar,
+    'feed': feed,
+    'transactions': transactions,
+    'plaid': plaid,
+    'waterfall': waterfall,
+    'places': places,
+    'reporting': reporting,
+    'tracking': tracking,
+    'settings': settings,
+    'syncMeta': syncMeta,
+    'schedulePrefs': schedulePrefs,
+    'tasksViewOptions': tasksViewOptions,
+    'calendarVisibility': calendarVisibility,
+    'assignmentRules': assignmentRules,
+    'assignmentEstimates': assignmentEstimates,
+  };
 }

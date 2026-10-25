@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:hive/hive.dart';
 
 import 'stable_storage_keys.dart';
@@ -11,14 +9,17 @@ import 'stable_storage_keys.dart';
 /// `minified:<compiler name>` there, and those names shift between builds, so
 /// a deploy left the real payload behind under the previous build's key and
 /// booted from a fresh one. This scans the box for payloads whose shape
-/// unambiguously identifies a *local-only* state and copies the best one onto
-/// the stable key when that key has nothing yet.
+/// unambiguously identifies a *device-local* state and copies the best one
+/// onto the stable key when that key has nothing yet.
 ///
-/// Deliberately narrow: only device-local preferences and the auth session
-/// are recovered. Synced collections (nodes, events, feeds, transactions,
-/// settings, waterfall, plaid, places, reporting, tracked points) are left to
-/// the sync engine's normal pull — copying a stale payload of one collection
-/// while its sync bookkeeping starts empty could look like a mass deletion.
+/// Deliberately narrow: no synced collection (nodes, events, feeds,
+/// transactions, settings, waterfall, plaid, places, reporting, tracked
+/// points) and no auth session is recovered. Those are re-pulled from the
+/// server; copying a stale payload of one collection while its sync
+/// bookkeeping starts empty could look like a mass deletion, and restoring an
+/// old session could sign a user back in after an explicit sign-out (the
+/// revoked refresh token would also fail moments later). A one-time sign-in is
+/// the safe trade.
 ///
 /// Never deletes anything and never overwrites an existing stable key, so
 /// repeated boots are harmless.
@@ -77,9 +78,6 @@ class _Match {
 _Match? _classify(Object? raw) {
   if (raw is! Map) return null;
 
-  if (_looksLikeSignedInAuth(raw)) {
-    return _Match(StableStorageKeys.auth, recency: _authRecency(raw));
-  }
   if (_looksLikeTaskViewOptions(raw)) {
     return _Match(
       StableStorageKeys.tasksViewOptions,
@@ -103,45 +101,13 @@ _Match? _classify(Object? raw) {
       weight: _list(raw['rules']).length,
     );
   }
-  return null;
-}
-
-/// Signed-out payloads carry null tokens; restoring one over a real session
-/// would force a needless re-login, so only payloads with a token match.
-bool _looksLikeSignedInAuth(Map raw) {
-  if (raw['status'] is! String) return false;
-  final refresh = raw['refreshToken'];
-  final access = raw['accessToken'];
-  return (refresh is String && refresh.isNotEmpty) ||
-      (access is String && access.isNotEmpty);
-}
-
-/// JWT `exp` (seconds) is the best recency signal for a session payload; the
-/// newest token pair is the one the current device is still using. Opaque
-/// tokens fall back to 1 so any signed-in payload beats none.
-int _authRecency(Map raw) {
-  final access = _jwtExpiry(raw['accessToken']);
-  if (access > 0) return access;
-  return _jwtExpiry(raw['refreshToken']).clamp(0, 1);
-}
-
-int _jwtExpiry(Object? raw) {
-  if (raw is! String) return 0;
-  final parts = raw.split('.');
-  if (parts.length < 2) return 0;
-  try {
-    final payload = utf8.decode(base64Url.decode(base64Url.normalize(parts[1])));
-    final decoded = jsonDecode(payload);
-    if (decoded is Map) {
-      final exp = decoded['exp'];
-      if (exp is num) return exp.toInt();
-      final iat = decoded['iat'];
-      if (iat is num) return iat.toInt();
-    }
-  } catch (_) {
-    // Opaque or malformed token: no useful timestamp.
+  if (raw['efforts'] is List) {
+    return _Match(
+      StableStorageKeys.assignmentEstimates,
+      weight: (raw['efforts'] as List).length,
+    );
   }
-  return 0;
+  return null;
 }
 
 bool _looksLikeTaskViewOptions(Map raw) {

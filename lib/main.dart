@@ -58,9 +58,14 @@ Future<void> _initPersistentStorage() async {
     // under `minified:<compiler name>`; a deploy renames those classes and
     // orphaned the Tasks views/rules, calendar visibility, and session.
     if (Migration.removeAfter('2026-10-27')) {
-      final recovered = await migrateLegacyHydratedKeys(box);
-      if (recovered.isNotEmpty) {
-        debugPrint('[persistence] recovered legacy prefs: $recovered');
+      try {
+        final recovered = await migrateLegacyHydratedKeys(box);
+        if (recovered.isNotEmpty) {
+          debugPrint('[persistence] recovered legacy prefs: $recovered');
+        }
+      } catch (error) {
+        // Recovery is best-effort: a damaged box must never block boot.
+        debugPrint('[persistence] legacy prefs recovery skipped: $error');
       }
     }
     // ignore: invalid_use_of_visible_for_testing_member

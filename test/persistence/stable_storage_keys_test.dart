@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:a_fish_in_sea/common/persistence/legacy_minified_keys.dart';
@@ -10,13 +9,6 @@ import 'package:a_fish_in_sea/planner/model/task_rule.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
-
-/// Fake JWT whose payload carries [exp]; signature is irrelevant here.
-String _token(int exp) {
-  final header = base64Url.encode(utf8.encode('{"alg":"none"}'));
-  final payload = base64Url.encode(utf8.encode('{"exp":$exp}'));
-  return '$header.$payload.signature';
-}
 
 Map<String, dynamic> _taskViewPayload({
   required String filterId,
@@ -63,25 +55,36 @@ void main() {
   });
 
   group('stable storage prefixes', () {
-    test('constants are unique and cover every hydrated cubit', () {
+    test('constants are unique', () {
       expect(StableStorageKeys.all, hasLength(17));
       expect(StableStorageKeys.all.length, StableStorageKeys.all.toSet().length);
+      expect(StableStorageKeys.byName.values.toSet(),
+          StableStorageKeys.all);
     });
 
-    test('every hydrated cubit overrides storagePrefix', () {
-      final pattern =
-          RegExp(r'class \w+ extends (?:Revertable)?Hydrated(?:Cubit|Bloc)<');
-      final missing = <String>[];
+    test('every hydrated cubit pins its own class name', () {
+      final hydrated =
+          RegExp(r'class (\w+) extends (?:Revertable)?Hydrated(?:Cubit|Bloc)<');
+      final prefix =
+          RegExp(r'String get storagePrefix => StableStorageKeys\.(\w+);');
+      final seen = <String>{};
       for (final entity in Directory('lib').listSync(recursive: true)) {
         if (entity is! File || !entity.path.endsWith('.dart')) continue;
         final source = entity.readAsStringSync();
-        if (!pattern.hasMatch(source)) continue;
-        if (!source.contains('String get storagePrefix')) {
-          missing.add(entity.path);
-        }
+        final cls = hydrated.firstMatch(source);
+        if (cls == null) continue;
+        final key = prefix.firstMatch(source);
+        expect(key, isNotNull,
+            reason: 'Pin this cubit to StableStorageKeys: ${entity.path}');
+        final className = cls.group(1)!;
+        expect(
+          StableStorageKeys.byName[key!.group(1)!],
+          className,
+          reason: 'A wrong literal would orphan ${entity.path} on native',
+        );
+        seen.add(className);
       }
-      expect(missing, isEmpty,
-          reason: 'Pin these cubits to StableStorageKeys: $missing');
+      expect(seen, StableStorageKeys.all);
     });
 
     test('web-minified key shapes do not leak into the stable set', () {
@@ -184,6 +187,20 @@ void main() {
       expect(recoveredAssignmentRules['rules'], hasLength(1));
     });
 
+    test('recovers learned assignment efforts', () async {
+      final payload = {
+        'efforts': [
+          {'typeKey': 'math290|video quiz', 'minutes': 35},
+        ],
+      };
+      await box.put('minified:EFF', payload);
+
+      final recovered = await migrateLegacyHydratedKeys(box);
+
+      expect(recovered, [StableStorageKeys.assignmentEstimates]);
+      expect(box.get(StableStorageKeys.assignmentEstimates), equals(payload));
+    });
+
     test('never overwrites a stable key that already has state', () async {
       final existing = _taskViewPayload(
         filterId: 'custom:900',
@@ -204,32 +221,18 @@ void main() {
       );
     });
 
-    test('restores the newest signed-in session, not signed-out noise',
-        () async {
+    test('never resurrects a session after an explicit sign-out', () async {
       await box.put('minified:OLDAUTH', {
         'status': 'signedIn',
         'email': 'old@example.com',
-        'accessToken': _token(100),
+        'accessToken': 'header.payload.signature',
         'refreshToken': 'old-refresh',
       });
-      await box.put('minified:NEWAUTH', {
-        'status': 'signedIn',
-        'email': 'new@example.com',
-        'accessToken': _token(200),
-        'refreshToken': 'new-refresh',
-      });
-      await box.put('minified:SIGNEDOUT', {
-        'status': 'signedOut',
-        'email': '',
-        'accessToken': null,
-        'refreshToken': null,
-      });
 
-      await migrateLegacyHydratedKeys(box);
+      final recovered = await migrateLegacyHydratedKeys(box);
 
-      final auth = box.get(StableStorageKeys.auth) as Map<dynamic, dynamic>;
-      expect(auth['email'], 'new@example.com');
-      expect(auth['refreshToken'], 'new-refresh');
+      expect(recovered, isEmpty);
+      expect(box.containsKey(StableStorageKeys.auth), isFalse);
     });
 
     test('leaves unknown shapes alone', () async {
