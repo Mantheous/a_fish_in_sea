@@ -14,15 +14,15 @@ import 'package:mocktail/mocktail.dart';
 class MockStorage extends Mock implements Storage {}
 
 Widget harness(NodeCubit nodes) => MultiBlocProvider(
-      providers: [
-        BlocProvider.value(value: nodes),
-        BlocProvider(create: (_) => TransactionsCubit()),
-        BlocProvider(create: (_) => CalendarCubit()),
-        BlocProvider(create: (_) => UndoCubit()),
-        BlocProvider(create: (_) => NavigationCubit()),
-      ],
-      child: const MaterialApp(home: NodesPage()),
-    );
+  providers: [
+    BlocProvider.value(value: nodes),
+    BlocProvider(create: (_) => TransactionsCubit()),
+    BlocProvider(create: (_) => CalendarCubit()),
+    BlocProvider(create: (_) => UndoCubit()),
+    BlocProvider(create: (_) => NavigationCubit()),
+  ],
+  child: const MaterialApp(home: NodesPage()),
+);
 
 void main() {
   setUp(() {
@@ -42,12 +42,11 @@ void main() {
 
     // Simulate exactly what the editor saves for a plain node.
     expect(
-        nodes.addNode(Node(
-          id: 'node:1',
-          title: 'My goal',
-          createdAt: DateTime(2026, 10, 11),
-        )),
-        isNull);
+      nodes.addNode(
+        Node(id: 'node:1', title: 'My goal', createdAt: DateTime(2026, 10, 11)),
+      ),
+      isNull,
+    );
     await tester.pump();
     await tester.pump();
     expect(tester.takeException(), isNull);
@@ -64,13 +63,14 @@ void main() {
     // Scope to the editor dialog: the page's own search field is also a
     // TextField once nodes exist.
     await tester.enterText(
-        find
-            .descendant(
-              of: find.byType(AlertDialog),
-              matching: find.byType(TextField),
-            )
-            .first,
-        'Via editor');
+      find
+          .descendant(
+            of: find.byType(AlertDialog),
+            matching: find.byType(TextField),
+          )
+          .first,
+      'Via editor',
+    );
     await tester.tap(find.widgetWithText(FilledButton, 'Add'));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
@@ -80,12 +80,11 @@ void main() {
   testWidgets('add subgoal pre-fills the parent', (tester) async {
     final nodes = NodeCubit();
     expect(
-        nodes.addNode(Node(
-          id: 'node:p',
-          title: 'Parent',
-          createdAt: DateTime(2026, 10, 11),
-        )),
-        isNull);
+      nodes.addNode(
+        Node(id: 'node:p', title: 'Parent', createdAt: DateTime(2026, 10, 11)),
+      ),
+      isNull,
+    );
     await tester.pumpWidget(harness(nodes));
     await tester.pump();
     await tester.pump();
@@ -99,23 +98,23 @@ void main() {
     await tester.tap(find.text('Add subgoal'));
     await tester.pumpAndSettle();
     // Parent is already attached; no need to use the picker.
-    expect(find.widgetWithText(Chip, 'Parent'), findsOneWidget);
+    expect(find.widgetWithText(InputChip, 'Parent'), findsOneWidget);
     // Scope to the editor dialog: the page's search field is also a
     // TextField.
     await tester.enterText(
-        find
-            .descendant(
-              of: find.byType(AlertDialog),
-              matching: find.byType(TextField),
-            )
-            .first,
-        'Child');
+      find
+          .descendant(
+            of: find.byType(AlertDialog),
+            matching: find.byType(TextField),
+          )
+          .first,
+      'Child',
+    );
     await tester.tap(find.widgetWithText(FilledButton, 'Add'));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(nodes.byId('node:p'), isNotNull);
-    final child =
-        nodes.state.firstWhere((n) => n.title == 'Child');
+    final child = nodes.state.firstWhere((n) => n.title == 'Child');
     expect(child.parentIds, ['node:p']);
   });
 }
