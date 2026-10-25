@@ -107,6 +107,9 @@ class _CalendarPageState extends State<CalendarPage> {
   bool _sideBySide = false;
   Timer? _liveTicker;
   Timer? _suppressTimer;
+  Timer? _recordingTicker;
+  StreamSubscription<List<Node>>? _nodeTickerSub;
+  StreamSubscription<List<PlannerEvent>>? _calendarTickerSub;
   PlannerCalendarDataSource? _dataSource;
   final _projection = CalendarProjection();
   TimeSlotViewSettings? _slotSettingsCache;
@@ -208,6 +211,7 @@ class _CalendarPageState extends State<CalendarPage> {
     _view = context.read<SettingsCubit>().state.defaultCalendarView;
     _controller.view = _view;
     _controller.addPropertyChangedListener(_onCalendarControllerChanged);
+    _wireRecordingTicker();
     // Claim a pending seed before the first build. The projection only puts
     // a draft into the data source while the create flow is active, and a
     // post-frame claim added the ghost through an incremental
@@ -236,6 +240,40 @@ class _CalendarPageState extends State<CalendarPage> {
     }
   }
 
+  /// Refreshes the live recording block's end time while a timer runs.
+  /// Without this the Calendar would freeze the block at its first frame
+  /// even though the banner's elapsed clock keeps moving.
+  void _wireRecordingTicker() {
+    try {
+      final nodes = context.read<NodeCubit>();
+      final calendar = context.read<CalendarCubit>();
+      _syncRecordingTicker(nodes.state, calendar.state);
+      _nodeTickerSub = nodes.stream.listen((value) {
+        _syncRecordingTicker(value, calendar.state);
+      });
+      _calendarTickerSub = calendar.stream.listen((value) {
+        _syncRecordingTicker(nodes.state, value);
+      });
+    } catch (_) {
+      // Standalone widget tests may mount the page without both cubits;
+      // the rest of the page has the same tolerance.
+    }
+  }
+
+  void _syncRecordingTicker(List<Node> nodes, List<PlannerEvent> events) {
+    final active =
+        nodes.any((node) => node.isTracking) ||
+        events.any((event) => event.isTracking);
+    if (active && _recordingTicker == null) {
+      _recordingTicker = Timer.periodic(const Duration(seconds: 15), (_) {
+        if (mounted) setState(() {});
+      });
+    } else if (!active && _recordingTicker != null) {
+      _recordingTicker?.cancel();
+      _recordingTicker = null;
+    }
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -261,6 +299,9 @@ class _CalendarPageState extends State<CalendarPage> {
   void dispose() {
     _liveTicker?.cancel();
     _suppressTimer?.cancel();
+    _recordingTicker?.cancel();
+    _nodeTickerSub?.cancel();
+    _calendarTickerSub?.cancel();
     _controller.removePropertyChangedListener(_onCalendarControllerChanged);
     _dataSource?.dispose();
     _gridTracker.dispose();
@@ -558,14 +599,22 @@ class _CalendarPageState extends State<CalendarPage> {
             // Toggl-style running-entry bar: always visible while an event
             // timer is recording, with elapsed time and Stop.
             RecordingBannerSlot(
-              onOpen: (event) {
+              onOpen: (recording) {
+                final nodeId = recording.nodeId;
+                if (nodeId != null) {
+                  final node = context.read<NodeCubit>().byId(nodeId);
+                  if (node != null) showNodeEditor(context, existing: node);
+                  return;
+                }
+                final eventId = recording.eventId;
+                if (eventId == null) return;
                 PlannerEvent? live;
                 try {
-                  live = context.read<CalendarCubit>().byId(event.id) ?? event;
+                  live = context.read<CalendarCubit>().byId(eventId);
                 } catch (_) {
-                  live = event;
+                  live = null;
                 }
-                _openDetail(live);
+                if (live != null) _openDetail(live);
               },
             ),
             Expanded(
@@ -603,9 +652,7 @@ class _CalendarPageState extends State<CalendarPage> {
                   final shown = _projection.shown;
                   final feedColors = _projection.feedColors;
                   final colorById = _projection.colorById;
-                  final reportById = sideBySide
-                      ? _projection.reportById
-                      : const <String, ReportBlock>{};
+                  final reportById = _projection.reportById;
                   if (_dataSource == null) {
                     _dataSource = PlannerCalendarDataSource(
                       shown,
@@ -1857,7 +1904,17 @@ class _CalendarPageState extends State<CalendarPage> {
         day: DateTime(start.year, start.month, start.day),
         entry: entry,
       );
+      return;
     }
+    // A live block for a node-only recording has no event to open; its
+    // owner is the node, so route the tap to the goal editor.
+    final ownerId = reportOwnerIdForDisplayId(displayId);
+    if (ownerId == null) return;
+    Node? node;
+    try {
+      node = context.read<NodeCubit>().byId(ownerId);
+    } catch (_) {}
+    if (node != null) showNodeEditor(context, existing: node);
   }
 
   /// Commits a report chip resize. Manual entries, timer-logged events, and

@@ -568,6 +568,42 @@ void main() {
       expect(restoredStarred?.single.isFavorite, isTrue);
     });
 
+    test('NodeCubit loads pre-task nodes with derived classification', () {
+      final cubit = NodeCubit();
+      final scheduled = Node(
+        id: 'task-old',
+        title: 'Essay',
+        createdAt: _day,
+        schedule: ScheduleFacet(due: DateTime(2026, 10, 20)),
+      ).toJson()
+        ..remove('isTask');
+      final abstract = Node(
+        id: 'goal-old',
+        title: 'Serve others',
+        createdAt: _day,
+        isUnbounded: true,
+      ).toJson()
+        ..remove('isTask');
+      final corrupt = Map<String, dynamic>.from(scheduled)
+        ..['id'] = 'task-corrupt'
+        ..['isTask'] = 'yes';
+      final restored = cubit.fromJson({
+        'nodes': [scheduled, abstract, corrupt],
+      });
+      expect(restored?.map((n) => n.id), [
+        'task-old',
+        'goal-old',
+        'task-corrupt',
+      ]);
+      // Pre-flag payloads keep the old shape rule; a corrupt flag falls
+      // back to it instead of dropping the goal.
+      expect(restored?[0].taskFlag, isNull);
+      expect(restored?[0].isTask, isTrue);
+      expect(restored?[1].isTask, isFalse);
+      expect(restored?[2].taskFlag, isNull);
+      expect(restored?[2].isTask, isTrue);
+    });
+
     test('NodeCubit ignores retired workout/fitness payload keys', () {
       final cubit = NodeCubit();
       // Payload written while the Strava/watch connector existed. The

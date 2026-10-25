@@ -1097,7 +1097,10 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       }
     }
     next = next
-        .map((n) => n.id == id ? n.copyWith(timerStartedAt: at) : n)
+        .map(
+          (n) =>
+              n.id == id ? n.copyWith(timerStartedAt: at, taskFlag: true) : n,
+        )
         .toList();
     if (next != state) emitChange(next);
   }

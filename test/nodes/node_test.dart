@@ -763,6 +763,10 @@ void main() {
       final restored = cubit.fromJson(cubit.toJson(cubit.state));
       expect(restored?.single.isTracking, isTrue);
       expect(restored?.single.timerStartedAt, t0);
+      // Starting a recording makes the goal concrete work, per the goal
+      // editor's Task switch.
+      expect(restored?.single.isTask, isTrue);
+      expect(restored?.single.taskFlag, isTrue);
     });
 
     test('timer fields serialize with a timezone; old zone-less loads', () {
@@ -898,6 +902,7 @@ void main() {
         effort: const EffortFacet(targetMinutes: 60),
         recurrence: const NodeRecurrence(frequency: TimeScale.daily),
         rule: const RuleFacet(kind: NodeRuleKind.homeworkAhead),
+        taskFlag: true,
         instanceOfId: 'tmpl',
         overriddenFields: const {'money.targetAmount'},
       );
@@ -941,6 +946,54 @@ void main() {
       expect(restored?.single.schedule, isNull);
       expect(restored?.single.money, isNull);
       expect(restored?.single.parentIds, isEmpty);
+    });
+
+    test('task flag round-trips and old payloads keep the shape rule', () {
+      final explicit = Node(
+        id: 'explicit',
+        title: 'Read',
+        createdAt: DateTime(2026, 9, 1),
+        taskFlag: true,
+      );
+      final restored = Node.fromJson(explicit.toJson());
+      expect(restored.taskFlag, isTrue);
+      expect(restored.isTask, isTrue);
+
+      final notTask = explicit.copyWith(taskFlag: false);
+      expect(notTask.isTask, isFalse);
+      expect(Node.fromJson(notTask.toJson()).taskFlag, isFalse);
+
+      // No stored flag: a scheduled leaf is still derived as a task, and
+      // an abstract goal is not. Clearing returns to that derivation.
+      final scheduled = Node(
+        id: 'scheduled',
+        title: 'Essay',
+        createdAt: DateTime(2026, 9, 1),
+        schedule: ScheduleFacet(due: DateTime(2026, 9, 30)),
+      );
+      expect(scheduled.taskFlag, isNull);
+      expect(scheduled.isTask, isTrue);
+      expect(scheduled.copyWith(taskFlag: false).isTask, isFalse);
+      expect(
+        scheduled
+            .copyWith(taskFlag: false)
+            .copyWith(clearTaskFlag: true)
+            .isTask,
+        isTrue,
+      );
+      final goal = Node(
+        id: 'goal',
+        title: 'Serve others',
+        createdAt: DateTime(2026, 9, 1),
+        isUnbounded: true,
+      );
+      expect(goal.isTask, isFalse);
+
+      // A corrupt value falls back to the derivation instead of dropping
+      // the node.
+      final corrupt = scheduled.toJson()..['isTask'] = 'yes';
+      expect(Node.fromJson(corrupt).taskFlag, isNull);
+      expect(Node.fromJson(corrupt).isTask, isTrue);
     });
   });
 

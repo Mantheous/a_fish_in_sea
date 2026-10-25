@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_visibility_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/service/calendar_report.dart';
@@ -134,6 +135,77 @@ void main() {
       expect(projection.reportBlocksByDay.keys, [day]);
       expect(projection.reportBlocksByDay[day], isEmpty);
       expect(projection.reportById, isNotEmpty);
+    });
+
+    test('plans mode shows a running goal recording as a live block', () {
+      final node = Node(
+        id: 'n1',
+        title: 'Buy groceries',
+        createdAt: day,
+        timerStartedAt: DateTime(2026, 10, 5, 11, 30),
+      );
+      projection.update(
+        events: [event],
+        feeds: const [],
+        visibility: const CalendarVisibilityState(),
+        nodes: [node],
+        reports: const {},
+        showReports: false,
+        showReportLanes: false,
+        visibleDays: const [],
+        now: DateTime(2026, 10, 5, 12),
+      );
+
+      final liveId = '${reportLiveDisplayIdPrefix}n1';
+      expect(projection.shown.map((e) => e.id), contains(liveId));
+      expect(projection.reportById[liveId]?.kind, ReportBlockKind.live);
+      expect(projection.reportById[liveId]?.start, node.timerStartedAt);
+
+      // Stopping the timer removes the live block again.
+      projection.update(
+        events: [event],
+        feeds: const [],
+        visibility: const CalendarVisibilityState(),
+        nodes: [node.copyWith(clearTimerStartedAt: true)],
+        reports: const {},
+        showReports: false,
+        showReportLanes: false,
+        visibleDays: const [],
+        now: DateTime(2026, 10, 5, 12, 5),
+      );
+      expect(projection.shown.map((e) => e.id), isNot(contains(liveId)));
+      expect(projection.reportById, isEmpty);
+    });
+
+    test('plans mode keeps a scheduled node block as the only block', () {
+      final node = Node(
+        id: 'scheduled',
+        title: 'Planned work',
+        createdAt: day,
+        schedule: ScheduleFacet(
+          start: DateTime(2026, 10, 5, 11),
+          end: DateTime(2026, 10, 5, 13),
+        ),
+        timerStartedAt: DateTime(2026, 10, 5, 11, 30),
+      );
+      projection.update(
+        events: [event],
+        feeds: const [],
+        visibility: const CalendarVisibilityState(),
+        nodes: [node],
+        reports: const {},
+        showReports: false,
+        showReportLanes: false,
+        visibleDays: const [],
+        now: DateTime(2026, 10, 5, 12),
+      );
+
+      expect(projection.shown.map((e) => e.id), contains('node:scheduled'));
+      expect(
+        projection.shown.any((e) => isReportDisplayId(e.id)),
+        isFalse,
+        reason: 'the planned block already represents this node',
+      );
     });
   });
 }

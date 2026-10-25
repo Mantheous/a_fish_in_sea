@@ -107,6 +107,8 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
 
   bool _isUnbounded = false;
   bool _isFavorite = false;
+  bool _isTask = false;
+  bool _taskTouched = false;
 
   DateTime? _due;
 
@@ -154,6 +156,8 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _parents = List.of(e?.parentIds ?? widget.initialParentIds);
     _isUnbounded = e?.isUnbounded ?? false;
     _isFavorite = e?.isFavorite ?? false;
+    _isTask = e?.isTask ?? false;
+    _taskTouched = false;
     _due = e?.schedule?.due;
     _hasMoney = e?.money != null || widget.enableMoney;
     _amount = TextEditingController(
@@ -303,6 +307,20 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
           value: _isFavorite,
           onChanged: (v) => setState(() => _isFavorite = v),
         ),
+        if (!_isUnbounded)
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: const Text('Task'),
+            subtitle: const Text(
+              'Concrete work — shows under tasks and can be recorded.',
+            ),
+            value: _isTask,
+            onChanged: (v) => setState(() {
+              _isTask = v;
+              _taskTouched = true;
+            }),
+          ),
         if (e?.isClassNode != true) ...[
           const SizedBox(height: 4),
           ListTile(
@@ -1138,6 +1156,13 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     // metrics — the hidden sections' stale state is dropped so the save
     // validates.
     final isUnbounded = _isUnbounded;
+    // Preserve the derived classification unless the user touched the
+    // switch: an untouched node keeps its tri-state flag, while an explicit
+    // choice (or an unbounded goal, which can never be concrete work)
+    // writes one. Null clears the override and returns to the shape rule.
+    final bool? taskFlag = isUnbounded
+        ? null
+        : (_taskTouched ? _isTask : existing?.taskFlag);
     if (isUnbounded) {
       schedule = null;
       money = null;
@@ -1160,6 +1185,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         createdAt: DateTime.now(),
         isUnbounded: isUnbounded,
         isFavorite: _isFavorite,
+        taskFlag: taskFlag,
         schedule: schedule,
         money: money,
         effort: effort,
@@ -1200,6 +1226,8 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         parentIds: classValues.parents,
         isUnbounded: isUnbounded,
         isFavorite: _isFavorite,
+        taskFlag: taskFlag,
+        clearTaskFlag: taskFlag == null,
         schedule: schedule,
         clearSchedule: schedule == null,
         money: money,

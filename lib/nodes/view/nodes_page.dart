@@ -835,7 +835,7 @@ class _NodeTile extends StatelessWidget {
     final goalKids = <Node>[];
     final taskKids = <Node>[];
     for (final kid in kids) {
-      if (kid.isPlainTask && !_hasChildren(kid)) {
+      if (kid.isTask && !_hasChildren(kid)) {
         taskKids.add(kid);
       } else {
         goalKids.add(kid);

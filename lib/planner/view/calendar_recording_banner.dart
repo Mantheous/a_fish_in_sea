@@ -4,43 +4,44 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../nodes/bloc/node_cubit.dart';
-import '../../nodes/service/node_event_link.dart';
+import '../../nodes/model/node.dart';
+import '../../nodes/service/active_recording.dart';
 import '../bloc/calendar_cubit.dart';
 import '../model/planner_event.dart';
 
-/// Watches for a running event timer and shows the recording banner while
-/// one is active. Collapses to nothing otherwise.
+/// Watches for the single active timer across tasks and events and shows
+/// the recording banner while one is running. Collapses to nothing
+/// otherwise.
+///
+/// The banner must read both stores: a goal started from the Goals page
+/// lives on a node, and a task-event's timer also lives on its backing
+/// node. Reading only [CalendarCubit] hid both recordings.
 class RecordingBannerSlot extends StatelessWidget {
   const RecordingBannerSlot({super.key, required this.onOpen});
 
-  final ValueChanged<PlannerEvent> onOpen;
+  final ValueChanged<ActiveRecording> onOpen;
 
   @override
   Widget build(BuildContext context) {
-    // Select only the active tracking event: rebuilds only when it changes,
-    // not on every calendar emit (the old watch rebuilt on any event edit).
-    return BlocSelector<CalendarCubit, List<PlannerEvent>, PlannerEvent?>(
-      selector: (events) {
-        for (final e in events) {
-          if (e.isTracking) return e;
-        }
-        return null;
-      },
-      builder: (context, active) {
-        if (active == null || active.timerStartedAt == null) {
-          return const SizedBox.shrink();
-        }
-        return _RecordingBanner(event: active, onOpen: onOpen);
+    return BlocBuilder<NodeCubit, List<Node>>(
+      builder: (context, nodes) {
+        return BlocBuilder<CalendarCubit, List<PlannerEvent>>(
+          builder: (context, events) {
+            final active = activeRecordingOf(nodes, events);
+            if (active == null) return const SizedBox.shrink();
+            return _RecordingBanner(recording: active, onOpen: onOpen);
+          },
+        );
       },
     );
   }
 }
 
 class _RecordingBanner extends StatefulWidget {
-  const _RecordingBanner({required this.event, required this.onOpen});
+  const _RecordingBanner({required this.recording, required this.onOpen});
 
-  final PlannerEvent event;
-  final ValueChanged<PlannerEvent> onOpen;
+  final ActiveRecording recording;
+  final ValueChanged<ActiveRecording> onOpen;
 
   @override
   State<_RecordingBanner> createState() => _RecordingBannerState();
@@ -74,15 +75,25 @@ class _RecordingBannerState extends State<_RecordingBanner> {
     return h > 0 ? '$h:$mm:$ss' : '$mm:$ss';
   }
 
+  void _stop() {
+    try {
+      stopActiveRecording(
+        context.read<NodeCubit>(),
+        context.read<CalendarCubit>(),
+        widget.recording,
+      );
+    } catch (_) {}
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final startedAt = widget.event.timerStartedAt ?? widget.event.start;
+    final title = widget.recording.title.trim();
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
       child: InkWell(
         borderRadius: BorderRadius.circular(10),
-        onTap: () => widget.onOpen(widget.event),
+        onTap: () => widget.onOpen(widget.recording),
         child: Container(
           padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
           decoration: BoxDecoration(
@@ -103,14 +114,14 @@ class _RecordingBannerState extends State<_RecordingBanner> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      'Recording · ${_elapsed(startedAt)}',
+                      'Recording · ${_elapsed(widget.recording.startedAt)}',
                       style: Theme.of(context).textTheme.labelMedium?.copyWith(
                         color: scheme.onErrorContainer,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
                     Text(
-                      widget.event.subject,
+                      title.isEmpty ? 'Untitled task' : title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -122,15 +133,7 @@ class _RecordingBannerState extends State<_RecordingBanner> {
               ),
               const SizedBox(width: 8),
               FilledButton.icon(
-                onPressed: () {
-                  try {
-                    NodeEventLink.stopEventTrackingAligned(
-                      context.read<NodeCubit>(),
-                      context.read<CalendarCubit>(),
-                      widget.event.id,
-                    );
-                  } catch (_) {}
-                },
+                onPressed: _stop,
                 style: FilledButton.styleFrom(
                   backgroundColor: scheme.error,
                   foregroundColor: scheme.onError,

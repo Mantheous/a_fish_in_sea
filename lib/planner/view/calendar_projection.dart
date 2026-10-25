@@ -34,6 +34,7 @@ class CalendarProjection {
   Map<DateTime, List<ReportBlock>> reportBlocksByDay = const {};
   bool _laneMode = false;
   bool _reportModeOn = false;
+  bool _reportLiveOnly = false;
   List<DateTime>? _laneDays;
   double _laneStartHour = 0;
   double _laneEndHour = 24;
@@ -134,27 +135,61 @@ class CalendarProjection {
     _visibilitySource = visibility;
     _nodeSource = nodes;
 
-    if (showReports &&
-        (showReports != _reportModeOn ||
-            !identical(_visible, _reportVisible) ||
-            !identical(nodes, _reportNodes) ||
-            !identical(reports, _reportSource) ||
-            colorPrefsChanged ||
-            laneMode != _laneMode ||
-            (laneMode &&
-                (!_sameDays(visibleDays, _laneDays) ||
-                    visibleStartHour != _laneStartHour ||
-                    visibleEndHour != _laneEndHour)) ||
-            (_hasTracking &&
-                (_reportTime == null ||
-                    now.difference(_reportTime!) >=
-                        const Duration(seconds: 15))))) {
-      final blocks = buildReportBlocks(
+    // Plans mode normally hides reports, but a recording started on a goal
+    // (or any node without a calendar block) has no appointment of its own.
+    // Keep just that live block in the grid so the Calendar reflects the
+    // same running timer the Goals page shows.
+    final liveOnly = !showReports && _hasTracking;
+    final showAnyReports = showReports || liveOnly;
+    if (!showAnyReports) {
+      if (_reportEvents.isNotEmpty ||
+          reportById.isNotEmpty ||
+          _reportModeOn ||
+          _reportLiveOnly) {
+        _reportEvents = const [];
+        reportById = const {};
+        reportColorById = const {};
+        reportBlocksByDay = const {};
+        _reportModeOn = false;
+        _reportLiveOnly = false;
+        _laneMode = false;
+        _reportVisible = _visible;
+        _reportNodes = nodes;
+        _reportSource = reports;
+        _reportTime = now;
+      }
+    } else if (showReports != _reportModeOn ||
+        liveOnly != _reportLiveOnly ||
+        !identical(_visible, _reportVisible) ||
+        !identical(nodes, _reportNodes) ||
+        !identical(reports, _reportSource) ||
+        colorPrefsChanged ||
+        laneMode != _laneMode ||
+        (laneMode &&
+            (!_sameDays(visibleDays, _laneDays) ||
+                visibleStartHour != _laneStartHour ||
+                visibleEndHour != _laneEndHour)) ||
+        (_hasTracking &&
+            (_reportTime == null ||
+                now.difference(_reportTime!) >=
+                    const Duration(seconds: 15)))) {
+      var blocks = buildReportBlocks(
         visibleEvents: _visible,
         nodes: nodes,
         reportsByDay: reports,
         now: now,
       );
+      if (liveOnly) {
+        blocks = [
+          for (final block in blocks)
+            if (block.kind == ReportBlockKind.live &&
+                block.eventId == null &&
+                !(nodeById[reportOwnerIdForDisplayId(block.displayId)]
+                        ?.hasCalendarBlock ??
+                    false))
+              block,
+        ];
+      }
       final byId = {for (final event in _visible) event.id: event};
       _reportEvents = [
         for (final block in blocks)
@@ -179,8 +214,9 @@ class CalendarProjection {
         startHour: visibleStartHour,
         endHour: visibleEndHour,
       );
-      _laneMode = laneMode;
+      _laneMode = showReports && laneMode;
       _reportModeOn = showReports;
+      _reportLiveOnly = liveOnly;
       _laneDays = List<DateTime>.of(visibleDays);
       _laneStartHour = visibleStartHour;
       _laneEndHour = visibleEndHour;
@@ -190,8 +226,9 @@ class CalendarProjection {
       _reportTime = now;
     }
     // In lane mode the overlay owns report blocks, so they stay out of
-    // `shown`; the month view keeps them as ordinary agenda chips.
-    final reportEvents = !showReports || _laneMode
+    // `shown`; plans mode keeps live recordings and the month view keeps
+    // every report as an ordinary agenda chip.
+    final reportEvents = _laneMode && showReports
         ? const <PlannerEvent>[]
         : _reportEvents;
     if (identical(_shownVisible, _visible) &&

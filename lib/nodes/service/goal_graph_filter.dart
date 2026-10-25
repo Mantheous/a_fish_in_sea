@@ -9,8 +9,9 @@ import 'node_tree_ops.dart';
 /// overdue child is not itself overdue.
 enum GoalDateFilter { any, overdue, today, thisWeek, thisMonth, noDate }
 
-/// What kind of goal to keep. Plain tasks are scheduled leaves with no
-/// facet; the rest mirror the facets that make a node a goal.
+/// What kind of goal to keep. Tasks are concrete work: an explicit task
+/// flag, or a plain scheduled leaf with no facet; the rest mirror the
+/// facets that make a node a goal.
 enum GoalKindFilter {
   any,
   task,
@@ -105,7 +106,7 @@ class GoalGraphFilter {
 
   bool _matchesKind(Node node) => switch (kind) {
     GoalKindFilter.any => true,
-    GoalKindFilter.task => node.isPlainTask,
+    GoalKindFilter.task => node.isTask,
     GoalKindFilter.money => node.money != null,
     GoalKindFilter.time => node.effort != null,
     GoalKindFilter.repeating => node.isTemplate,
