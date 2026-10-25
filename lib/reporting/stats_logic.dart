@@ -38,8 +38,7 @@ import 'reporting_logic.dart';
 const int statsWakingStartMinute = 7 * 60;
 const int statsWakingEndMinute = 24 * 60;
 
-int get statsWakingMinutes =>
-    statsWakingEndMinute - statsWakingStartMinute;
+int get statsWakingMinutes => statsWakingEndMinute - statsWakingStartMinute;
 
 /// Named ranges offered in the UI. Weeks start Monday, matching the
 /// calendar's week view.
@@ -47,11 +46,11 @@ enum StatsRangePreset { thisWeek, lastWeek, thisMonth, last30 }
 
 extension StatsRangePresetLabels on StatsRangePreset {
   String get label => switch (this) {
-        StatsRangePreset.thisWeek => 'This week',
-        StatsRangePreset.lastWeek => 'Last week',
-        StatsRangePreset.thisMonth => 'This month',
-        StatsRangePreset.last30 => 'Last 30 days',
-      };
+    StatsRangePreset.thisWeek => 'This week',
+    StatsRangePreset.lastWeek => 'Last week',
+    StatsRangePreset.thisMonth => 'This month',
+    StatsRangePreset.last30 => 'Last 30 days',
+  };
 }
 
 class StatsRange {
@@ -65,8 +64,7 @@ class StatsRange {
     required this.preset,
   });
 
-  bool contains(DateTime when) =>
-      !when.isBefore(start) && when.isBefore(end);
+  bool contains(DateTime when) => !when.isBefore(start) && when.isBefore(end);
 
   /// Number of calendar days the range spans. Uses calendar-day distance,
   /// not elapsed hours: a DST week is 167/169 hours but still 7 days.
@@ -79,10 +77,7 @@ DateTime weekStartOf(DateTime when) {
   return shiftLocalDay(day, -(day.weekday - 1));
 }
 
-StatsRange statsRangeFor(
-  StatsRangePreset preset, {
-  DateTime? now,
-}) {
+StatsRange statsRangeFor(StatsRangePreset preset, {DateTime? now}) {
   final at = now ?? DateTime.now();
   switch (preset) {
     case StatsRangePreset.thisWeek:
@@ -179,7 +174,8 @@ class AssignmentTimeRow {
   /// took twice as long as the estimate, 2.0 = half as long. Null when
   /// nothing was recorded.
   double? get accuracy =>
-      trackedMinutes <= 0 ? null : estimateMinutes / trackedMinutes;}
+      trackedMinutes <= 0 ? null : estimateMinutes / trackedMinutes;
+}
 
 /// Per-day breakdown feeding the range totals.
 class DayAccounting {
@@ -287,12 +283,12 @@ GoalKind goalKindOf(Node node) {
 }
 
 String goalKindLabel(GoalKind kind) => switch (kind) {
-      GoalKind.checklist => 'Checklist',
-      GoalKind.automated => 'Automated',
-      GoalKind.money => 'Money',
-      GoalKind.time => 'Time',
-      GoalKind.anki => 'Review',
-    };
+  GoalKind.checklist => 'Checklist',
+  GoalKind.automated => 'Automated',
+  GoalKind.money => 'Money',
+  GoalKind.time => 'Time',
+  GoalKind.anki => 'Review',
+};
 
 /// A goal finished inside the range.
 class CompletedGoalRow {
@@ -358,8 +354,9 @@ class GoalRangeReport {
     this.automatedGoalCount = 0,
   });
 
-  double get checklistPct =>
-      checklistTotal <= 0 ? 0 : (checklistDone / checklistTotal).clamp(0.0, 1.0);
+  double get checklistPct => checklistTotal <= 0
+      ? 0
+      : (checklistDone / checklistTotal).clamp(0.0, 1.0);
 
   double get effortPct => effortTargetMinutes <= 0
       ? 0
@@ -453,18 +450,20 @@ List<_Span> _splitByDay(_Span span) {
     // an hour early. shiftLocalDay always lands on the next midnight.
     final dayEnd = shiftLocalDay(_startOfDay(cursor), 1);
     final pieceEnd = span.end.isBefore(dayEnd) ? span.end : dayEnd;
-    out.add(_Span(
-      start: cursor,
-      end: pieceEnd,
-      groupKey: span.groupKey,
-      label: span.label,
-      classLabel: span.classLabel,
-      title: span.title,
-      templateKey: span.templateKey,
-      nodeId: span.nodeId,
-      tracked: span.tracked,
-      estimateMinutes: span.estimateMinutes,
-    ));
+    out.add(
+      _Span(
+        start: cursor,
+        end: pieceEnd,
+        groupKey: span.groupKey,
+        label: span.label,
+        classLabel: span.classLabel,
+        title: span.title,
+        templateKey: span.templateKey,
+        nodeId: span.nodeId,
+        tracked: span.tracked,
+        estimateMinutes: span.estimateMinutes,
+      ),
+    );
     cursor = pieceEnd;
   }
   return out;
@@ -504,34 +503,40 @@ int _overlapWith(List<_Span> spans, List<_Span> others) {
   return total;
 }
 
-  /// Appends [node]'s report as a span on its day.
-  void _addNodeSpans(List<Node> nodes, List<_Span> out, StatsRange range) {
-    final byId = {for (final node in nodes) node.id: node};
-    for (final node in nodes) {
-      final start = node.actualStart;
-      final end = node.actualEnd;
-      if (start == null || end == null || !end.isAfter(start)) continue;
-      if (!range.contains(start)) continue;
-      final minutes = end.difference(start).inMinutes;
+/// Appends [node]'s report as a span on its day.
+void _addNodeSpans(List<Node> nodes, List<_Span> out, StatsRange range) {
+  final byId = {for (final node in nodes) node.id: node};
+  for (final node in nodes) {
+    // One span per run: the aggregate actual span would count the gaps
+    // between sessions as study time.
+    for (final session in node.recordedSessions) {
+      if (!session.isValid) continue;
+      if (!range.contains(session.start)) continue;
+      final minutes = session.duration.inMinutes;
       if (minutes <= 0) continue;
       // A class-node membership unifies manual and imported work under one
       // class key; provenance ids remain the fallback for unbound work.
       final classNode =
           node.classNodeId == null ? null : byId[node.classNodeId];
       final scope = node.classNodeId ?? node.feedId ?? node.classId;
-      out.add(_Span(
-        start: start,
-        end: end,
-        groupKey: scope ?? 'unassigned',
-        label: classNode?.title ?? node.classLabel ?? 'No class',
-        classLabel: classNode?.title ?? node.classLabel,
-        title: node.title,
-        templateKey: node.isHomework ? assignmentTemplateKey(node.title) : null,
-        nodeId: node.id,
-        tracked: true,
-      ));
+      out.add(
+        _Span(
+          start: session.start,
+          end: session.end,
+          groupKey: scope ?? 'unassigned',
+          label: classNode?.title ?? node.classLabel ?? 'No class',
+          classLabel: classNode?.title ?? node.classLabel,
+          title: node.title,
+          templateKey: node.isHomework
+              ? assignmentTemplateKey(node.title)
+              : null,
+          nodeId: node.id,
+          tracked: true,
+        ),
+      );
     }
   }
+}
 
 /// Builds the assignment/class time report for one range.
 ///
@@ -568,23 +573,25 @@ AssignmentTimeReport buildAssignmentTimeReport({
     final scope = linked == null
         ? (slice.classLabel?.trim() ?? 'unassigned')
         : (linked.classNodeId ?? linked.feedId ?? linked.classId ?? label);
-    plannedSpans.add(_Span(
-      start: slice.start,
-      end: slice.end,
-      groupKey: scope,
-      label: label,
-      classLabel: classNode?.title ?? linked?.classLabel ?? slice.classLabel,
-      title: linked?.title ?? slice.title,
-      templateKey: isAssignment ? assignmentTemplateKey(linked.title) : null,
-      nodeId: slice.taskId ?? slice.eventId,
-      estimateMinutes: linked == null
-          ? 0
-          : resolveAssignmentEstimate(
-              node: linked,
-              rules: rules,
-              efforts: efforts,
-            ).minutes,
-    ));
+    plannedSpans.add(
+      _Span(
+        start: slice.start,
+        end: slice.end,
+        groupKey: scope,
+        label: label,
+        classLabel: classNode?.title ?? linked?.classLabel ?? slice.classLabel,
+        title: linked?.title ?? slice.title,
+        templateKey: isAssignment ? assignmentTemplateKey(linked.title) : null,
+        nodeId: slice.taskId ?? slice.eventId,
+        estimateMinutes: linked == null
+            ? 0
+            : resolveAssignmentEstimate(
+                node: linked,
+                rules: rules,
+                efforts: efforts,
+              ).minutes,
+      ),
+    );
   }
 
   final trackedSpans = <_Span>[];
@@ -604,17 +611,19 @@ AssignmentTimeReport buildAssignmentTimeReport({
     final eventId = entry.eventId;
     if (eventId != null && backedEventIds.contains(eventId)) continue;
     if (!range.contains(entry.start)) continue;
-    trackedSpans.add(_Span(
-      start: entry.start,
-      end: entry.end.isAfter(entry.start)
-          ? entry.end
-          : entry.start.add(const Duration(minutes: 1)),
-      groupKey: 'unassigned',
-      label: 'No class',
-      title: entry.title,
-      nodeId: 'entry:${entry.eventId ?? entry.start.microsecondsSinceEpoch}',
-      tracked: true,
-    ));
+    trackedSpans.add(
+      _Span(
+        start: entry.start,
+        end: entry.end.isAfter(entry.start)
+            ? entry.end
+            : entry.start.add(const Duration(minutes: 1)),
+        groupKey: 'unassigned',
+        label: 'No class',
+        title: entry.title,
+        nodeId: 'entry:${entry.eventId ?? entry.start.microsecondsSinceEpoch}',
+        tracked: true,
+      ),
+    );
   }
 
   // Bucket by day, then union planned vs. tracked inside the waking window
@@ -695,7 +704,13 @@ AssignmentTimeReport buildAssignmentTimeReport({
       final counted = countedPerPlanned[i];
       if (counted <= 0) continue;
       plannedTotal += counted;
-      _addTo(byClass, span.groupKey, span.label, span.classLabel, planned: counted);
+      _addTo(
+        byClass,
+        span.groupKey,
+        span.label,
+        span.classLabel,
+        planned: counted,
+      );
       if (span.templateKey != null) {
         _addTo(
           byType,
@@ -710,7 +725,12 @@ AssignmentTimeReport buildAssignmentTimeReport({
     for (final span in clippedTracked) {
       trackedTotal += span.minutes;
       _addTo(
-          byClass, span.groupKey, span.label, span.classLabel, tracked: span.minutes);
+        byClass,
+        span.groupKey,
+        span.label,
+        span.classLabel,
+        tracked: span.minutes,
+      );
       if (span.templateKey != null) {
         _addTo(
           byType,
@@ -739,23 +759,26 @@ AssignmentTimeReport buildAssignmentTimeReport({
     if (tracked <= 0 && planned <= 0) continue;
     final start = node.actualStart ?? node.schedule?.start;
     if (start == null || !range.contains(start)) continue;
-    rows.add(AssignmentTimeRow(
-      nodeId: nodeId,
-      title: node.title,
-      classLabel: node.classLabel,
-      templateKey: node.isHomework ? assignmentTemplateKey(node.title) : null,
-      typeLabel:
-          node.isHomework ? _typeLabel(node.title, assignmentTemplateKey(node.title)) : null,
-      trackedMinutes: tracked,
-      plannedMinutes: planned,
-      estimateMinutes: resolveAssignmentEstimate(
-        node: node,
-        rules: rules,
-        efforts: efforts,
-      ).minutes,
-      done: node.isDone,
-      when: start,
-    ));
+    rows.add(
+      AssignmentTimeRow(
+        nodeId: nodeId,
+        title: node.title,
+        classLabel: node.classLabel,
+        templateKey: node.isHomework ? assignmentTemplateKey(node.title) : null,
+        typeLabel: node.isHomework
+            ? _typeLabel(node.title, assignmentTemplateKey(node.title))
+            : null,
+        trackedMinutes: tracked,
+        plannedMinutes: planned,
+        estimateMinutes: resolveAssignmentEstimate(
+          node: node,
+          rules: rules,
+          efforts: efforts,
+        ).minutes,
+        done: node.isDone,
+        when: start,
+      ),
+    );
   }
 
   final completed = nodes.where((n) {
@@ -767,8 +790,9 @@ AssignmentTimeReport buildAssignmentTimeReport({
   final scheduled = nodes.where((n) => n.hasCalendarBlock).length;
 
   rows.sort((a, b) {
-    final byTime = (b.trackedMinutes + b.plannedMinutes)
-        .compareTo(a.trackedMinutes + a.plannedMinutes);
+    final byTime = (b.trackedMinutes + b.plannedMinutes).compareTo(
+      a.trackedMinutes + a.plannedMinutes,
+    );
     if (byTime != 0) return byTime;
     return a.title.compareTo(b.title);
   });
@@ -823,8 +847,10 @@ String _typeLabel(String title, String templateKey) {
 
 String _titleCase(String value) => value
     .split(' ')
-    .map((word) =>
-        word.isEmpty ? word : '${word[0].toUpperCase()}${word.substring(1)}')
+    .map(
+      (word) =>
+          word.isEmpty ? word : '${word[0].toUpperCase()}${word.substring(1)}',
+    )
     .join(' ');
 
 /// Builds the non-time-goal summary for one range.
@@ -891,11 +917,9 @@ GoalRangeReport buildGoalRangeReport({
     if (node.isDone) {
       final doneAt = node.completedAt;
       if (doneAt != null && range.contains(doneAt)) {
-        completed.add(CompletedGoalRow(
-          node: node,
-          kind: kind,
-          completedAt: doneAt,
-        ));
+        completed.add(
+          CompletedGoalRow(node: node, kind: kind, completedAt: doneAt),
+        );
       }
       // Done leaves still count toward the checklist ratio, so 3-of-5
       // stays honest instead of silently losing the ticks.

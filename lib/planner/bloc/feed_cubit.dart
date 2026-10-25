@@ -80,13 +80,13 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     CanvasService? canvasService,
     this.assignmentRulesProvider,
     this.estimatesCubit,
-  })  : _calendarCubit = calendarCubit,
-        _nodeCubit = nodeCubit,
-        _icalService = icalService,
-        _googleService = googleService,
-        _proxyBase = proxyBase,
-        _canvasService = canvasService,
-        super(const []);
+  }) : _calendarCubit = calendarCubit,
+       _nodeCubit = nodeCubit,
+       _icalService = icalService,
+       _googleService = googleService,
+       _proxyBase = proxyBase,
+       _canvasService = canvasService,
+       super(const []);
 
   @override
   String get storagePrefix => StableStorageKeys.feed;
@@ -124,14 +124,16 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     emit(state.where((f) => f.id != feedId).toList());
     final cascade = _removeClassData(feedId);
     UndoCubit.instance?.record(
-      ChangeRecord(entries: [
-        StateSnapshot(
-          cubitId: changeId,
-          stateBefore: feedBefore,
-          stateAfter: state,
-        ),
-        ...cascade,
-      ]),
+      ChangeRecord(
+        entries: [
+          StateSnapshot(
+            cubitId: changeId,
+            stateBefore: feedBefore,
+            stateAfter: state,
+          ),
+          ...cascade,
+        ],
+      ),
     );
   }
 
@@ -146,8 +148,9 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   void removeOrphanedClass(String classId) {
     if (classId.isEmpty || byId(classId) != null) return;
     final hasEvents = _calendarCubit.state.any((e) => e.feedId == classId);
-    final hasNodes = _nodeCubit.state
-        .any((n) => n.classId == classId && n.sourceEventId != null);
+    final hasNodes = _nodeCubit.state.any(
+      (n) => n.classId == classId && n.sourceEventId != null,
+    );
     if (!hasEvents && !hasNodes) return;
     final entries = _removeClassData(classId);
     UndoCubit.instance?.record(ChangeRecord(entries: entries));
@@ -178,11 +181,13 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
       final estimatesBefore = estimates.state;
       estimates.forgetFeed(classId);
       if (!identical(estimatesBefore, estimates.state)) {
-        snapshots.add(StateSnapshot(
-          cubitId: estimates.changeId,
-          stateBefore: estimatesBefore,
-          stateAfter: estimates.state,
-        ));
+        snapshots.add(
+          StateSnapshot(
+            cubitId: estimates.changeId,
+            stateBefore: estimatesBefore,
+            stateAfter: estimates.state,
+          ),
+        );
       }
     }
     return snapshots;
@@ -313,9 +318,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
       // Feed-scoped like the refetch this replaces: another feed mirroring
       // the same master must not lose its rows.
       for (final e in _calendarCubit.state)
-        if (e.feedId == event.feedId &&
-            key != null &&
-            seriesKeyFor(e) == key)
+        if (e.feedId == event.feedId && key != null && seriesKeyFor(e) == key)
           e.id,
     });
   }
@@ -370,8 +373,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
     if (feed == null) {
       return 'This event can only be edited locally.';
     }
-    final remoteId =
-        series ? seriesRemoteId(updated) : updated.sourceUid;
+    final remoteId = series ? seriesRemoteId(updated) : updated.sourceUid;
     if (remoteId == null || remoteId.isEmpty) {
       return 'This event can only be edited locally.';
     }
@@ -420,7 +422,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
           feed.calendarId!.isEmpty) {
         return (
           error: 'Choose a Google calendar to save online.',
-          created: null
+          created: null,
         );
       }
       final stamp = DateTime.now().microsecondsSinceEpoch;
@@ -532,7 +534,9 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
       );
     } on GoogleCalendarException catch (e) {
       _updateFeedStatus(
-          feed.id, error: e.needsReconnect ? googleReconnectMessage : e.message);
+        feed.id,
+        error: e.needsReconnect ? googleReconnectMessage : e.message,
+      );
       return null;
     } catch (_) {
       return null;
@@ -667,32 +671,35 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
       // them keeps the un-check sticky across re-syncs.
       final optOuts = <String>{
         for (final entry in previous.entries)
-          if (!entry.value.isTask &&
-              isNodeCandidate(entry.value, feed, now))
+          if (!entry.value.isTask && isNodeCandidate(entry.value, feed, now))
             entry.key,
       };
       final events = fresh.map((event) {
         final old = previous[event.id];
         if (old != null) {
           if (old.isTask) {
-            return preserveLocalFeedMetadata(event.copyWith(
-              isTask: old.isTask,
-              done: old.done,
-              completedAt: old.completedAt,
-              clearCompletedAt: !old.done || old.completedAt == null,
-              taskId: old.taskId,
-              clearTaskId: old.taskId == null,
-              placeId: old.placeId,
-              clearPlaceId: old.placeId == null,
-              assignees: old.assignees,
-              actualStart: old.actualStart,
-              clearActualStart: old.actualStart == null,
-              actualEnd: old.actualEnd,
-              clearActualEnd: old.actualEnd == null,
-              timerStartedAt: old.timerStartedAt,
-              clearTimerStartedAt: old.timerStartedAt == null,
-              failed: old.failed,
-            ), old);
+            return preserveLocalFeedMetadata(
+              event.copyWith(
+                isTask: old.isTask,
+                done: old.done,
+                completedAt: old.completedAt,
+                clearCompletedAt: !old.done || old.completedAt == null,
+                taskId: old.taskId,
+                clearTaskId: old.taskId == null,
+                placeId: old.placeId,
+                clearPlaceId: old.placeId == null,
+                assignees: old.assignees,
+                sessions: old.sessions,
+                actualStart: old.actualStart,
+                clearActualStart: old.actualStart == null,
+                actualEnd: old.actualEnd,
+                clearActualEnd: old.actualEnd == null,
+                timerStartedAt: old.timerStartedAt,
+                clearTimerStartedAt: old.timerStartedAt == null,
+                failed: old.failed,
+              ),
+              old,
+            );
           }
           // The task flag is local-only (Google never stores it), so a
           // lost calendar flag must not wipe the mark while its backing
@@ -702,17 +709,41 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
           final backing = _nodeCubit.nodesForEventId(event.id);
           if (backing.isNotEmpty) {
             final shadow = backing.first;
-            return preserveLocalFeedMetadata(event.copyWith(
-              isTask: true,
-              done: shadow.isDone,
-              completedAt: shadow.completedAt,
-              clearCompletedAt:
-                  !shadow.isDone || shadow.completedAt == null,
+            return preserveLocalFeedMetadata(
+              event.copyWith(
+                isTask: true,
+                done: shadow.isDone,
+                completedAt: shadow.completedAt,
+                clearCompletedAt: !shadow.isDone || shadow.completedAt == null,
+                taskId: old.taskId,
+                clearTaskId: old.taskId == null,
+                placeId: old.placeId,
+                clearPlaceId: old.placeId == null,
+                assignees: shadow.assignees,
+                sessions: old.sessions,
+                actualStart: old.actualStart,
+                clearActualStart: old.actualStart == null,
+                actualEnd: old.actualEnd,
+                clearActualEnd: old.actualEnd == null,
+                timerStartedAt: old.timerStartedAt,
+                clearTimerStartedAt: old.timerStartedAt == null,
+                failed: old.failed,
+              ),
+              old,
+            );
+          }
+          return preserveLocalFeedMetadata(
+            event.copyWith(
+              isTask: old.isTask,
+              done: old.done,
+              completedAt: old.completedAt,
+              clearCompletedAt: !old.done || old.completedAt == null,
               taskId: old.taskId,
               clearTaskId: old.taskId == null,
               placeId: old.placeId,
               clearPlaceId: old.placeId == null,
-              assignees: shadow.assignees,
+              assignees: old.assignees,
+              sessions: old.sessions,
               actualStart: old.actualStart,
               clearActualStart: old.actualStart == null,
               actualEnd: old.actualEnd,
@@ -720,26 +751,9 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
               timerStartedAt: old.timerStartedAt,
               clearTimerStartedAt: old.timerStartedAt == null,
               failed: old.failed,
-            ), old);
-          }
-          return preserveLocalFeedMetadata(event.copyWith(
-            isTask: old.isTask,
-            done: old.done,
-            completedAt: old.completedAt,
-            clearCompletedAt: !old.done || old.completedAt == null,
-            taskId: old.taskId,
-            clearTaskId: old.taskId == null,
-            placeId: old.placeId,
-            clearPlaceId: old.placeId == null,
-            assignees: old.assignees,
-            actualStart: old.actualStart,
-            clearActualStart: old.actualStart == null,
-            actualEnd: old.actualEnd,
-            clearActualEnd: old.actualEnd == null,
-            timerStartedAt: old.timerStartedAt,
-            clearTimerStartedAt: old.timerStartedAt == null,
-            failed: old.failed,
-          ), old);
+            ),
+            old,
+          );
         }
         // Same heal for events the calendar has never seen (or lost):
         // a surviving node re-asserts the mark.
@@ -845,7 +859,8 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
         PlannerEvent(
           id: '${feed.id}:demo-kickoff',
           subject: 'Mock sync for ${feed.name}',
-          notes: 'This calendar was added during the demo — real '
+          notes:
+              'This calendar was added during the demo — real '
               'calendars list here after a Google connect.',
           start: DateTime(today.year, today.month, today.day + 1, 18),
           end: DateTime(today.year, today.month, today.day + 1, 20),
@@ -935,9 +950,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
       for (final event in events) {
         final feedId = event.feedId;
         if (feedId == null || !markedByFeed.containsKey(feedId)) continue;
-        perFeed
-            .putIfAbsent(feedId, () => [])
-            .add(byId[event.id] ?? event);
+        perFeed.putIfAbsent(feedId, () => []).add(byId[event.id] ?? event);
       }
       for (final entry in perFeed.entries) {
         _calendarCubit.replaceFeedEvents(entry.key, entry.value);
@@ -957,10 +970,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
             doneIds.contains(_assignmentIdOf(node.sourceEventId) ?? -1))
           () {
             nodesChanged = true;
-            return node.copyWith(
-              status: NodeStatus.done,
-              completedAt: now,
-            );
+            return node.copyWith(status: NodeStatus.done, completedAt: now);
           }()
         else
           node,
@@ -1050,6 +1060,7 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
   }
 
   @override
-  Map<String, dynamic> toJson(List<Feed> state) =>
-      {'feeds': state.map((f) => f.toJson()).toList()};
+  Map<String, dynamic> toJson(List<Feed> state) => {
+    'feeds': state.map((f) => f.toJson()).toList(),
+  };
 }

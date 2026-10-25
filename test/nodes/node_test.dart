@@ -621,6 +621,72 @@ void main() {
       expect(cubit.byId('b')?.reportedDuration, const Duration(minutes: 30));
     });
 
+    test('stopping twice keeps both recorded sessions', () {
+      final cubit = NodeCubit();
+      cubit.addNode(node('a'));
+      final firstStart = DateTime(2026, 9, 12, 9);
+      final firstEnd = DateTime(2026, 9, 12, 9, 20);
+      final secondStart = DateTime(2026, 9, 12, 14);
+      final secondEnd = DateTime(2026, 9, 12, 14, 15);
+      cubit.startTracking('a', now: firstStart);
+      cubit.stopTracking('a', now: firstEnd);
+      cubit.startTracking('a', now: secondStart);
+      cubit.stopTracking('a', now: secondEnd);
+      final logged = cubit.byId('a')!;
+      expect(logged.sessions, hasLength(2));
+      expect(logged.recordedSessions.first.start, firstStart);
+      expect(logged.recordedSessions.last.start, secondStart);
+      // Advances use the earliest start and latest end; reported time is
+      // the sum of the runs, not the gap between them.
+      expect(logged.actualStart, firstStart);
+      expect(logged.actualEnd, secondEnd);
+      expect(logged.reportedDuration, const Duration(minutes: 35));
+
+      final secondId = logged.recordedSessions.last.id;
+      cubit.updateSession(
+        'a',
+        secondId,
+        secondStart.add(const Duration(minutes: 5)),
+        secondEnd.add(const Duration(minutes: 5)),
+      );
+      final edited = cubit.byId('a')!;
+      expect(edited.sessions, hasLength(2));
+      expect(edited.reportedDuration, const Duration(minutes: 35));
+
+      cubit.removeSession('a', edited.recordedSessions.first.id);
+      final oneLeft = cubit.byId('a')!;
+      expect(oneLeft.sessions, hasLength(1));
+      expect(
+        oneLeft.recordedSessions.single.start,
+        secondStart.add(const Duration(minutes: 5)),
+      );
+      expect(oneLeft.actualStart, secondStart.add(const Duration(minutes: 5)));
+      expect(oneLeft.reportedDuration, const Duration(minutes: 15));
+    });
+
+    test('setReported never collapses a multi-run record', () {
+      final cubit = NodeCubit();
+      cubit.addNode(node('a'));
+      final firstStart = DateTime(2026, 9, 12, 9);
+      final firstEnd = DateTime(2026, 9, 12, 9, 20);
+      final secondStart = DateTime(2026, 9, 14, 14);
+      final secondEnd = DateTime(2026, 9, 14, 14, 15);
+      cubit.startTracking('a', now: firstStart);
+      cubit.stopTracking('a', now: firstEnd);
+      cubit.startTracking('a', now: secondStart);
+      cubit.stopTracking('a', now: secondEnd);
+
+      // The editor's Adjust sheet is prefilled with the aggregate span; if
+      // it reached setReported it would turn 35 minutes into a 53-hour run.
+      cubit.setReported('a', firstStart, secondEnd);
+
+      final saved = cubit.byId('a')!;
+      expect(saved.recordedSessions, hasLength(2));
+      expect(saved.reportedDuration, const Duration(minutes: 35));
+      expect(saved.actualStart, firstStart);
+      expect(saved.actualEnd, secondEnd);
+    });
+
     test('setTimerStart moves the start but keeps recording', () {
       final cubit = NodeCubit();
       cubit.addNode(node('a'));
@@ -949,10 +1015,11 @@ void main() {
       final cubit2 = NodeCubit();
       cubit2.ensureNodeForFeedEvent(allDay);
       expect(cubit2.byId('evt:allday-1')?.schedule?.allDay, isTrue);
-      expect(cubit2.byId('evt:allday-1')?.schedule?.start,
-          DateTime(2030, 3, 2));
       expect(
-          cubit2.byId('evt:allday-1')?.schedule?.end, DateTime(2030, 3, 4));
+        cubit2.byId('evt:allday-1')?.schedule?.start,
+        DateTime(2030, 3, 2),
+      );
+      expect(cubit2.byId('evt:allday-1')?.schedule?.end, DateTime(2030, 3, 4));
     });
   });
 
@@ -1209,24 +1276,39 @@ void main() {
 
   group('leaf money/time progress (refs #69)', () {
     test('leaf money with recorded actual shows nonzero without maps', () {
-      final leaf = node('m',
-          money: const MoneyFacet(targetAmount: 100, actualAmount: 50));
+      final leaf = node(
+        'm',
+        money: const MoneyFacet(targetAmount: 100, actualAmount: 50),
+      );
       final progress = progressForest([leaf]);
       expect(progress['m'], closeTo(0.5, 0.001));
       expect(
-          leafProgress(node('m2',
-              money:
-                  const MoneyFacet(targetAmount: 100, actualAmount: 50))),
-          closeTo(0.5, 0.001));
+        leafProgress(
+          node(
+            'm2',
+            money: const MoneyFacet(targetAmount: 100, actualAmount: 50),
+          ),
+        ),
+        closeTo(0.5, 0.001),
+      );
     });
 
     test('leaf money linked via cubit shows nonzero without maps', () {
       final cubit = NodeCubit();
-      cubit.addNode(node('save',
+      cubit.addNode(
+        node(
+          'save',
           money: const MoneyFacet(
-              targetAmount: 100, direction: MoneyDirection.spend)));
+            targetAmount: 100,
+            direction: MoneyDirection.spend,
+          ),
+        ),
+      );
       cubit.linkTransaction(
-          nodeId: 'save', transactionId: 'tx-1', transactionAmount: -100);
+        nodeId: 'save',
+        transactionId: 'tx-1',
+        transactionAmount: -100,
+      );
       final progress = progressForest(cubit.state);
       expect(progress['save'], closeTo(1.0, 0.001));
     });
@@ -1234,29 +1316,36 @@ void main() {
     test('leaf effort with reported time shows nonzero without maps', () {
       final start = DateTime(2026, 9, 12, 9);
       final end = start.add(const Duration(minutes: 30));
-      final leaf = node('e',
-          effort: const EffortFacet(targetMinutes: 60),
-          actualStart: start,
-          actualEnd: end);
+      final leaf = node(
+        'e',
+        effort: const EffortFacet(targetMinutes: 60),
+        actualStart: start,
+        actualEnd: end,
+      );
       final progress = progressForest([leaf]);
       expect(progress['e'], closeTo(0.5, 0.001));
       expect(
-          leafProgress(node('e2',
-              effort: const EffortFacet(targetMinutes: 60),
-              actualStart: start,
-              actualEnd: end)),
-          closeTo(0.5, 0.001));
+        leafProgress(
+          node(
+            'e2',
+            effort: const EffortFacet(targetMinutes: 60),
+            actualStart: start,
+            actualEnd: end,
+          ),
+        ),
+        closeTo(0.5, 0.001),
+      );
     });
 
     test('plain parent detects money in direct children', () {
       final nodes = [
         node('p'),
-        node('c1',
-            parents: ['p'],
-            money: const MoneyFacet(targetAmount: 100, actualAmount: 100)),
-        node('c2',
-            parents: ['p'],
-            money: const MoneyFacet(targetAmount: 300)),
+        node(
+          'c1',
+          parents: ['p'],
+          money: const MoneyFacet(targetAmount: 100, actualAmount: 100),
+        ),
+        node('c2', parents: ['p'], money: const MoneyFacet(targetAmount: 300)),
       ];
       final progress = progressForest(nodes);
       // Money flavor: 100 / (100 + 300) = 0.25. Plain average would be
@@ -1268,14 +1357,18 @@ void main() {
       final start = DateTime(2026, 9, 12, 9);
       final nodes = [
         node('p'),
-        node('c1',
-            parents: ['p'],
-            effort: const EffortFacet(targetMinutes: 30),
-            actualStart: start,
-            actualEnd: start.add(const Duration(minutes: 30))),
-        node('c2',
-            parents: ['p'],
-            effort: const EffortFacet(targetMinutes: 90)),
+        node(
+          'c1',
+          parents: ['p'],
+          effort: const EffortFacet(targetMinutes: 30),
+          actualStart: start,
+          actualEnd: start.add(const Duration(minutes: 30)),
+        ),
+        node(
+          'c2',
+          parents: ['p'],
+          effort: const EffortFacet(targetMinutes: 90),
+        ),
       ];
       final progress = progressForest(nodes);
       // Effort flavor: 30 / (30 + 90) = 0.25. Plain average would be 0.5.

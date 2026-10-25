@@ -278,13 +278,10 @@ class NodeTile extends StatelessWidget {
                 ),
             ],
           ),
-          // Toggl-style: tap a recording/reported line to correct it
-          // (move the start while running, edit the interval after).
+          // Running timers can correct a late start here. Finished
+          // recordings are adjusted from the Calendar's report chips.
           if (workLine != null)
-            live.isTracking ||
-                    (!failed &&
-                        live.hasReported &&
-                        live.reportedDuration != null)
+            live.isTracking
                 ? InkWell(
                     onTap: () =>
                         showEditNodeTimerSheet(context, nodeId: live.id),
@@ -561,10 +558,7 @@ class NodeTile extends StatelessWidget {
           duration: const Duration(seconds: 4),
           // Action snackbars persist forever by default; this one must go.
           persist: false,
-          action: SnackBarAction(
-            label: 'Undo',
-            onPressed: undoCubit.undo,
-          ),
+          action: SnackBarAction(label: 'Undo', onPressed: undoCubit.undo),
         ),
       );
   }

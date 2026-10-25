@@ -28,19 +28,18 @@ class MockStorage extends Mock implements Storage {}
 
 class _TestPlaidCubit extends PlaidCubit {
   _TestPlaidCubit()
-      : super(
-          service: PlaidService(
-            baseUrl: 'https://plaid.test',
-            userId: 'test-user',
-            client: MockClient((_) async => http.Response('{}', 200)),
-          ),
-        );
+    : super(
+        service: PlaidService(
+          baseUrl: 'https://plaid.test',
+          userId: 'test-user',
+          client: MockClient((_) async => http.Response('{}', 200)),
+        ),
+      );
 
   void seedConnected(String itemId) {
-    emit(state.copyWith(
-      status: PlaidConnectionStatus.connected,
-      itemId: itemId,
-    ));
+    emit(
+      state.copyWith(status: PlaidConnectionStatus.connected, itemId: itemId),
+    );
   }
 }
 
@@ -54,11 +53,11 @@ class _Row {
 /// In-memory stand-in for the FastAPI server (same pull/push semantics).
 class FakeSyncClient extends SyncClient {
   FakeSyncClient()
-      : super(
-          serverBase: () => '',
-          accessToken: () => 'tok',
-          refreshAccessToken: () async => 'tok',
-        );
+    : super(
+        serverBase: () => '',
+        accessToken: () => 'tok',
+        refreshAccessToken: () async => 'tok',
+      );
 
   final store = <String, Map<String, _Row>>{};
   var pushCalls = 0;
@@ -70,8 +69,10 @@ class FakeSyncClient extends SyncClient {
   }
 
   @override
-  Future<Map<String, dynamic>> login(String email, String password) async =>
-      {'access_token': 'a', 'refresh_token': 'r'};
+  Future<Map<String, dynamic>> login(String email, String password) async => {
+    'access_token': 'a',
+    'refresh_token': 'r',
+  };
 
   @override
   Future<Map<String, dynamic>> register(String email, String password) async =>
@@ -83,8 +84,9 @@ class FakeSyncClient extends SyncClient {
     List<String>? collections,
   }) async {
     final out = <SyncRecord>[];
-    final sinceDt =
-        since == null || since.isEmpty ? null : DateTime.parse(since);
+    final sinceDt = since == null || since.isEmpty
+        ? null
+        : DateTime.parse(since);
     for (final coll in store.entries) {
       if (collections != null &&
           collections.isNotEmpty &&
@@ -93,14 +95,16 @@ class FakeSyncClient extends SyncClient {
       }
       for (final e in coll.value.entries) {
         if (sinceDt != null && !e.value.updatedAt.isAfter(sinceDt)) continue;
-        out.add(SyncRecord(
-          collection: coll.key,
-          itemId: e.key,
-          data: Map<String, dynamic>.from(e.value.data),
-          deleted: e.value.deleted,
-          rev: 1,
-          updatedAt: e.value.updatedAt,
-        ));
+        out.add(
+          SyncRecord(
+            collection: coll.key,
+            itemId: e.key,
+            data: Map<String, dynamic>.from(e.value.data),
+            deleted: e.value.deleted,
+            rev: 1,
+            updatedAt: e.value.updatedAt,
+          ),
+        );
       }
     }
     out.sort((a, b) => a.updatedAt.compareTo(b.updatedAt));
@@ -109,26 +113,28 @@ class FakeSyncClient extends SyncClient {
 
   @override
   Future<({List<SyncRecord> applied, Set<String> guarded})> push(
-      List<Map<String, dynamic>> changes) async {
+    List<Map<String, dynamic>> changes,
+  ) async {
     pushCalls++;
     final applied = <SyncRecord>[];
     for (final c in changes) {
-      final coll =
-          store.putIfAbsent(c['collection'] as String, () => {});
+      final coll = store.putIfAbsent(c['collection'] as String, () => {});
       final now = _tick();
       coll[c['item_id'] as String] = _Row(
         Map<String, dynamic>.from(c['data'] as Map? ?? {}),
         c['deleted'] as bool? ?? false,
         now,
       );
-      applied.add(SyncRecord(
-        collection: c['collection'] as String,
-        itemId: c['item_id'] as String,
-        data: Map<String, dynamic>.from(c['data'] as Map? ?? {}),
-        deleted: c['deleted'] as bool? ?? false,
-        rev: 1,
-        updatedAt: now,
-      ));
+      applied.add(
+        SyncRecord(
+          collection: c['collection'] as String,
+          itemId: c['item_id'] as String,
+          data: Map<String, dynamic>.from(c['data'] as Map? ?? {}),
+          deleted: c['deleted'] as bool? ?? false,
+          rev: 1,
+          updatedAt: now,
+        ),
+      );
     }
     return (applied: applied, guarded: const <String>{});
   }
@@ -148,7 +154,9 @@ class _IncompletePullClient extends FakeSyncClient {
   }) async {
     if (failPull) {
       throw const SyncException(
-          500, 'Sync server omitted the cursor for an incomplete pull');
+        500,
+        'Sync server omitted the cursor for an incomplete pull',
+      );
     }
     return super.pull(since: since, collections: collections);
   }
@@ -230,8 +238,9 @@ void main() {
     await a.signIn();
     await b.signIn();
 
-    a.nodes.addNode(Node(
-        id: 't1', title: 'Buy milk', createdAt: DateTime(2026)));
+    a.nodes.addNode(
+      Node(id: 't1', title: 'Buy milk', createdAt: DateTime(2026)),
+    );
     await a.engine.syncNow();
     expect(a.engine.status.value, EngineStatus.idle);
 
@@ -259,42 +268,46 @@ void main() {
     expect(a.nodes.byId('t1')?.title, 'B edit');
   });
 
-  test('undo after a pull keeps pulled items and pushes no tombstone',
-      () async {
-    final undo = UndoCubit();
-    addTearDown(undo.close);
-    final server = FakeSyncClient();
-    final a = _Device(server);
-    await a.signIn();
+  test(
+    'undo after a pull keeps pulled items and pushes no tombstone',
+    () async {
+      final undo = UndoCubit();
+      addTearDown(undo.close);
+      final server = FakeSyncClient();
+      final a = _Device(server);
+      await a.signIn();
 
-    a.nodes.addNode(Node(id: 't1', title: 'original', createdAt: DateTime(2026)));
-    await a.engine.syncNow();
-    a.nodes.updateNode(a.nodes.byId('t1')!.copyWith(title: 'edited'));
-    expect(undo.canUndo, isTrue);
+      a.nodes.addNode(
+        Node(id: 't1', title: 'original', createdAt: DateTime(2026)),
+      );
+      await a.engine.syncNow();
+      a.nodes.updateNode(a.nodes.byId('t1')!.copyWith(title: 'edited'));
+      expect(undo.canUndo, isTrue);
 
-    // Another device creates t2 directly on the server (newer than a's
-    // cursor, so the next pull delivers it like a background sync would).
-    server.store.putIfAbsent('nodes', () => {})['t2'] = _Row(
-      Node(id: 't2', title: 'from B', createdAt: DateTime(2026)).toJson(),
-      false,
-      server._tick(),
-    );
-    await a.engine.syncNow();
+      // Another device creates t2 directly on the server (newer than a's
+      // cursor, so the next pull delivers it like a background sync would).
+      server.store.putIfAbsent('nodes', () => {})['t2'] = _Row(
+        Node(id: 't2', title: 'from B', createdAt: DateTime(2026)).toJson(),
+        false,
+        server._tick(),
+      );
+      await a.engine.syncNow();
 
-    expect(a.nodes.byId('t2')?.title, 'from B');
-    // Item-scoped undo survives the pull: the edit reverts, the pulled
-    // item stays, and history is preserved.
-    expect(undo.canUndo, isTrue);
-    undo.undo();
-    expect(a.nodes.byId('t1')?.title, 'original');
-    expect(a.nodes.byId('t2')?.title, 'from B');
+      expect(a.nodes.byId('t2')?.title, 'from B');
+      // Item-scoped undo survives the pull: the edit reverts, the pulled
+      // item stays, and history is preserved.
+      expect(undo.canUndo, isTrue);
+      undo.undo();
+      expect(a.nodes.byId('t1')?.title, 'original');
+      expect(a.nodes.byId('t2')?.title, 'from B');
 
-    // The next push must not tombstone the pulled item.
-    await a.engine.syncNow();
-    expect(server.store['nodes']?['t2']?.deleted, isFalse);
-    expect(a.engine.protectedDeletions.value, isEmpty);
-    expect(a.nodes.byId('t2')?.title, 'from B');
-  });
+      // The next push must not tombstone the pulled item.
+      await a.engine.syncNow();
+      expect(server.store['nodes']?['t2']?.deleted, isFalse);
+      expect(a.engine.protectedDeletions.value, isEmpty);
+      expect(a.nodes.byId('t2')?.title, 'from B');
+    },
+  );
 
   test('delete on A propagates as tombstone to B', () async {
     final server = FakeSyncClient();
@@ -314,35 +327,38 @@ void main() {
     expect(b.nodes.byId('t1'), isNull);
   });
 
-  test('mass deletion from a wiped device is withheld, not propagated',
-      () async {
-    final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
-    await a.signIn();
-    await b.signIn();
+  test(
+    'mass deletion from a wiped device is withheld, not propagated',
+    () async {
+      final server = FakeSyncClient();
+      final a = _Device(server);
+      final b = _Device(server);
+      await a.signIn();
+      await b.signIn();
 
-    for (var i = 0; i < 6; i++) {
-      a.nodes.addNode(
-          Node(id: 't$i', title: 'n$i', createdAt: DateTime(2026)));
-    }
-    await a.engine.syncNow();
-    await b.engine.syncNow();
-    expect(b.nodes.state.length, 6);
+      for (var i = 0; i < 6; i++) {
+        a.nodes.addNode(
+          Node(id: 't$i', title: 'n$i', createdAt: DateTime(2026)),
+        );
+      }
+      await a.engine.syncNow();
+      await b.engine.syncNow();
+      expect(b.nodes.state.length, 6);
 
-    // Simulate local storage loss on A: the cubit empties while the sync
-    // bookkeeping survives (applyJson emits state without touching meta).
-    a.nodes.applyJson({'nodes': const []});
-    expect(a.nodes.state, isEmpty);
+      // Simulate local storage loss on A: the cubit empties while the sync
+      // bookkeeping survives (applyJson emits state without touching meta).
+      a.nodes.applyJson({'nodes': const []});
+      expect(a.nodes.state, isEmpty);
 
-    await a.engine.syncNow();
+      await a.engine.syncNow();
 
-    // The guard held the tombstones; the server and B keep the data.
-    expect(a.engine.protectedDeletions.value, ['nodes']);
-    await b.engine.syncNow();
-    expect(b.nodes.state.length, 6);
-    expect(server.store['nodes']?.length, 6);
-  });
+      // The guard held the tombstones; the server and B keep the data.
+      expect(a.engine.protectedDeletions.value, ['nodes']);
+      await b.engine.syncNow();
+      expect(b.nodes.state.length, 6);
+      expect(server.store['nodes']?.length, 6);
+    },
+  );
 
   test('settings server URL stays per-device', () async {
     final server = FakeSyncClient();
@@ -354,84 +370,93 @@ void main() {
     await a.engine.syncNow();
     expect(a.settings.state.icalProxyBase, 'http://phone:8000');
 
-    final pushed =
-        server.store['settings']?['singleton']?.data ?? const {};
+    final pushed = server.store['settings']?['singleton']?.data ?? const {};
     expect(pushed.containsKey('icalProxyBase'), isFalse);
   });
 
-  test('settings and Plaid singletons do not ping-pong between devices', () async {
-    final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
-    await a.signIn();
-    await b.signIn();
+  test(
+    'settings and Plaid singletons do not ping-pong between devices',
+    () async {
+      final server = FakeSyncClient();
+      final a = _Device(server);
+      final b = _Device(server);
+      await a.signIn();
+      await b.signIn();
 
-    a.settings.setAnkiConnectHost('http://desktop:8765');
-    b.settings.setAnkiConnectHost('http://phone-lan:8765');
-    a.plaid.seedConnected('item-1');
+      a.settings.setAnkiConnectHost('http://desktop:8765');
+      b.settings.setAnkiConnectHost('http://phone-lan:8765');
+      a.plaid.seedConnected('item-1');
 
-    await a.engine.syncNow();
-    expect(server.store['settings']?['singleton']?.data['ankiConnectHost'],
-        isNull);
-    expect(server.store['plaid']?['singleton']?.data, {
-      'userId': a.plaid.state.userId,
-      'itemId': 'item-1',
-    });
+      await a.engine.syncNow();
+      expect(
+        server.store['settings']?['singleton']?.data['ankiConnectHost'],
+        isNull,
+      );
+      expect(server.store['plaid']?['singleton']?.data, {
+        'userId': a.plaid.state.userId,
+        'itemId': 'item-1',
+      });
 
-    await b.engine.syncNow();
-    expect(b.settings.state.ankiConnectHost, 'http://phone-lan:8765');
-    expect(a.settings.state.ankiConnectHost, 'http://desktop:8765');
-    expect(b.plaid.state.itemId, 'item-1');
-    expect(b.plaid.state.isConnected, isFalse);
+      await b.engine.syncNow();
+      expect(b.settings.state.ankiConnectHost, 'http://phone-lan:8765');
+      expect(a.settings.state.ankiConnectHost, 'http://desktop:8765');
+      expect(b.plaid.state.itemId, 'item-1');
+      expect(b.plaid.state.isConnected, isFalse);
 
-    // A disconnected device must not overwrite the active identity or push
-    // its per-device host when its next sync sees no remote changes.
-    final pushesBeforeNoopSync = server.pushCalls;
-    await b.engine.syncNow();
-    expect(server.pushCalls, pushesBeforeNoopSync);
-    expect(server.store['settings']?['singleton']?.data['ankiConnectHost'],
-        isNull);
-    expect(server.store['plaid']?['singleton']?.data['itemId'], 'item-1');
+      // A disconnected device must not overwrite the active identity or push
+      // its per-device host when its next sync sees no remote changes.
+      final pushesBeforeNoopSync = server.pushCalls;
+      await b.engine.syncNow();
+      expect(server.pushCalls, pushesBeforeNoopSync);
+      expect(
+        server.store['settings']?['singleton']?.data['ankiConnectHost'],
+        isNull,
+      );
+      expect(server.store['plaid']?['singleton']?.data['itemId'], 'item-1');
 
-    // An explicit disconnect is represented by itemId:null and must clear
-    // the identity on the other device without a false-status echo.
-    await a.plaid.disconnect();
-    await a.engine.syncNow();
-    expect(server.store['plaid']?['singleton']?.data['itemId'], isNull);
-    await b.engine.syncNow();
-    expect(b.plaid.state.itemId, isNull);
-    expect(b.plaid.state.isConnected, isFalse);
+      // An explicit disconnect is represented by itemId:null and must clear
+      // the identity on the other device without a false-status echo.
+      await a.plaid.disconnect();
+      await a.engine.syncNow();
+      expect(server.store['plaid']?['singleton']?.data['itemId'], isNull);
+      await b.engine.syncNow();
+      expect(b.plaid.state.itemId, isNull);
+      expect(b.plaid.state.isConnected, isFalse);
 
-    final pushesBeforeDisconnectNoop = server.pushCalls;
-    await b.engine.syncNow();
-    expect(server.pushCalls, pushesBeforeDisconnectNoop);
-    expect(server.store['plaid']?['singleton']?.data['itemId'], isNull);
-  });
+      final pushesBeforeDisconnectNoop = server.pushCalls;
+      await b.engine.syncNow();
+      expect(server.pushCalls, pushesBeforeDisconnectNoop);
+      expect(server.store['plaid']?['singleton']?.data['itemId'], isNull);
+    },
+  );
 
-  test('task completion and visible hours sync; calendar view stays per-device',
-      () async {
-    final server = FakeSyncClient();
-    final phone = _Device(server);
-    final desktop = _Device(server);
-    await phone.signIn();
-    await desktop.signIn();
+  test(
+    'task completion and visible hours sync; calendar view stays per-device',
+    () async {
+      final server = FakeSyncClient();
+      final phone = _Device(server);
+      final desktop = _Device(server);
+      await phone.signIn();
+      await desktop.signIn();
 
-    final desktopView = desktop.settings.state.defaultCalendarView;
-    phone.settings.setDefaultCalendarView(CalendarView.day);
-    phone.settings.setDayHours(7, 22);
-    phone.nodes.addNode(Node(
-      id: 'weekly-plan-task',
-      title: 'Prepare weekly plan',
-      createdAt: DateTime(2026),
-    ));
-    await phone.engine.syncNow();
-    phone.nodes.toggleDone(
-      'weekly-plan-task',
-      now: DateTime.utc(2026, 10, 18, 14),
-    );
-    await phone.engine.syncNow();
+      final desktopView = desktop.settings.state.defaultCalendarView;
+      phone.settings.setDefaultCalendarView(CalendarView.day);
+      phone.settings.setDayHours(7, 22);
+      phone.nodes.addNode(
+        Node(
+          id: 'weekly-plan-task',
+          title: 'Prepare weekly plan',
+          createdAt: DateTime(2026),
+        ),
+      );
+      await phone.engine.syncNow();
+      phone.nodes.toggleDone(
+        'weekly-plan-task',
+        now: DateTime.utc(2026, 10, 18, 14),
+      );
+      await phone.engine.syncNow();
 
-    await desktop.engine.syncNow();
+      await desktop.engine.syncNow();
 
     // The phone's day default never roams: each device keeps its own
     // visible window (refs #50).
@@ -451,61 +476,70 @@ void main() {
     );
   });
 
-  test('a local mutation triggers an automatic sync without the timer',
-      () async {
-    final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
-    await a.signIn();
-    await b.signIn();
-    a.engine.startAutoSyncOnChanges(debounce: const Duration(milliseconds: 10));
-    addTearDown(a.engine.stopAutoSyncOnChanges);
+  test(
+    'a local mutation triggers an automatic sync without the timer',
+    () async {
+      final server = FakeSyncClient();
+      final a = _Device(server);
+      final b = _Device(server);
+      await a.signIn();
+      await b.signIn();
+      a.engine.startAutoSyncOnChanges(
+        debounce: const Duration(milliseconds: 10),
+      );
+      addTearDown(a.engine.stopAutoSyncOnChanges);
 
-    a.nodes.addNode(
-        Node(id: 't1', title: 'Buy milk', createdAt: DateTime(2026)));
+      a.nodes.addNode(
+        Node(id: 't1', title: 'Buy milk', createdAt: DateTime(2026)),
+      );
 
-    // No manual syncNow: the debounced watcher pushes the edit on its own.
-    await Future.delayed(const Duration(milliseconds: 500));
-    expect(server.store['nodes']?['t1']?.data['title'], 'Buy milk');
-    // The follow-up pull lands no new records, so nothing retriggers:
-    // exactly one push, no sync storm.
-    expect(server.pushCalls, 1);
+      // No manual syncNow: the debounced watcher pushes the edit on its own.
+      await Future.delayed(const Duration(milliseconds: 500));
+      expect(server.store['nodes']?['t1']?.data['title'], 'Buy milk');
+      // The follow-up pull lands no new records, so nothing retriggers:
+      // exactly one push, no sync storm.
+      expect(server.pushCalls, 1);
 
-    await b.engine.syncNow();
-    expect(b.nodes.byId('t1')?.title, 'Buy milk');
-  });
+      await b.engine.syncNow();
+      expect(b.nodes.byId('t1')?.title, 'Buy milk');
+    },
+  );
 
-  test('a running timer survives a conflicting pull (server-wins except timers)',
-      () async {
-    final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
-    await a.signIn();
-    await b.signIn();
+  test(
+    'a running timer survives a conflicting pull (server-wins except timers)',
+    () async {
+      final server = FakeSyncClient();
+      final a = _Device(server);
+      final b = _Device(server);
+      await a.signIn();
+      await b.signIn();
 
-    a.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
-    await a.engine.syncNow();
-    await b.engine.syncNow(); // B baselines on v1
+      a.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
+      await a.engine.syncNow();
+      await b.engine.syncNow(); // B baselines on v1
 
-    // A starts a timer but has not pushed yet (e.g. rebuilt before sync).
-    final t0 = DateTime(2026, 9, 12, 9);
-    a.nodes.startTracking('t1', now: t0);
+      // A starts a timer but has not pushed yet (e.g. rebuilt before sync).
+      final t0 = DateTime(2026, 9, 12, 9);
+      a.nodes.startTracking('t1', now: t0);
 
-    // B renames the node and syncs: the server copy advances without the
-    // timer, so A's next pull is a true conflict.
-    b.nodes.updateNode(b.nodes.byId('t1')!.copyWith(title: 'B edit'));
-    await b.engine.syncNow();
+      // B renames the node and syncs: the server copy advances without the
+      // timer, so A's next pull is a true conflict.
+      b.nodes.updateNode(b.nodes.byId('t1')!.copyWith(title: 'B edit'));
+      await b.engine.syncNow();
 
-    await a.engine.syncNow();
+      await a.engine.syncNow();
 
-    // The rename lands (server wins), but the live timer is not stopped.
-    final live = a.nodes.byId('t1')!;
-    expect(live.title, 'B edit');
-    expect(live.isTracking, isTrue);
-    expect(live.timerStartedAt!.isAtSameMomentAs(t0), isTrue);
-    expect(server.store['nodes']?['t1']?.data['timerStartedAt'],
-        t0.toUtc().toIso8601String());
-  });
+      // The rename lands (server wins), but the live timer is not stopped.
+      final live = a.nodes.byId('t1')!;
+      expect(live.title, 'B edit');
+      expect(live.isTracking, isTrue);
+      expect(live.timerStartedAt!.isAtSameMomentAs(t0), isTrue);
+      expect(
+        server.store['nodes']?['t1']?.data['timerStartedAt'],
+        t0.toUtc().toIso8601String(),
+      );
+    },
+  );
 
   test('conflicting running timers keep the earliest start', () async {
     final server = FakeSyncClient();
@@ -525,11 +559,21 @@ void main() {
     await b.engine.syncNow();
 
     // The true (earliest) start wins on both sides.
-    expect(b.nodes.byId('t1')!.timerStartedAt!
-        .isAtSameMomentAs(DateTime(2026, 9, 12, 8, 30)), isTrue);
+    expect(
+      b.nodes
+          .byId('t1')!
+          .timerStartedAt!
+          .isAtSameMomentAs(DateTime(2026, 9, 12, 8, 30)),
+      isTrue,
+    );
     await a.engine.syncNow();
-    expect(a.nodes.byId('t1')!.timerStartedAt!
-        .isAtSameMomentAs(DateTime(2026, 9, 12, 8, 30)), isTrue);
+    expect(
+      a.nodes
+          .byId('t1')!
+          .timerStartedAt!
+          .isAtSameMomentAs(DateTime(2026, 9, 12, 8, 30)),
+      isTrue,
+    );
   });
 
   test('remote edit propagates to a device with no local changes', () async {
@@ -578,9 +622,56 @@ void main() {
     final live = a.nodes.byId('t1')!;
     expect(live.title, 'v1');
     expect(live.isTracking, isFalse);
-    expect(live.actualStart!.isAtSameMomentAs(DateTime(2026, 9, 12, 9)), isTrue);
-    expect(live.actualEnd!.isAtSameMomentAs(DateTime(2026, 9, 12, 9, 30)), isTrue);
+    expect(
+      live.actualStart!.isAtSameMomentAs(DateTime(2026, 9, 12, 9)),
+      isTrue,
+    );
+    expect(
+      live.actualEnd!.isAtSameMomentAs(DateTime(2026, 9, 12, 9, 30)),
+      isTrue,
+    );
   });
+
+  test(
+    'a newer local run keeps an older run recorded on another device',
+    () async {
+      final server = FakeSyncClient();
+      final a = _Device(server);
+      final b = _Device(server);
+      await a.signIn();
+      await b.signIn();
+
+      a.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
+      await a.engine.syncNow();
+      await b.engine.syncNow(); // B baselines on the empty node
+
+      // B records a run and pushes it.
+      b.nodes.startTracking('t1', now: DateTime(2026, 9, 12, 10));
+      b.nodes.stopTracking('t1', now: DateTime(2026, 9, 12, 10, 30));
+      await b.engine.syncNow();
+
+      // A records a newer run while offline (no push yet).
+      a.nodes.startTracking('t1', now: DateTime(2026, 9, 12, 11));
+      a.nodes.stopTracking('t1', now: DateTime(2026, 9, 12, 11, 30));
+
+      // The pull must not erase A's newer run, and must not drop B's either.
+      await a.engine.syncNow();
+
+      final sessions = a.nodes.byId('t1')!.recordedSessions;
+      expect(sessions, hasLength(2));
+      expect(sessions.first.start, DateTime(2026, 9, 12, 10));
+      expect(sessions.last.start, DateTime(2026, 9, 12, 11));
+      expect(sessions.last.end, DateTime(2026, 9, 12, 11, 30));
+      // The aggregate span covers both runs for older readers.
+      final live = a.nodes.byId('t1')!;
+      expect(live.actualStart, DateTime(2026, 9, 12, 10));
+      expect(live.actualEnd, DateTime(2026, 9, 12, 11, 30));
+      // The union is pushed back so B converges on both runs too.
+      expect(server.store['nodes']?['t1']?.data['sessions'], hasLength(2));
+      await b.engine.syncNow();
+      expect(b.nodes.byId('t1')!.recordedSessions, hasLength(2));
+    },
+  );
 
   test('old remote actuals never stop a restarted timer', () async {
     final server = FakeSyncClient();
@@ -618,115 +709,130 @@ void main() {
   });
 
   test('contentHash is stable and sensitive', () {
-    expect(
-      contentHash(const {'a': 1}),
-      contentHash(const {'a': 1}),
-    );
+    expect(contentHash(const {'a': 1}), contentHash(const {'a': 1}));
     expect(contentHash(const {'a': 1}), isNot(contentHash(const {'a': 2})));
   });
 
-  test('switching accounts or signing out never leaks previous user data into next account',
-      () async {
+  test(
+    'switching accounts or signing out never leaks previous user data into next account',
+    () async {
+      final server = FakeSyncClient();
+      final shared = _Device(server);
+
+      await shared.auth.login('alice@example.com', 'password123');
+      shared.nodes.addNode(
+        Node(
+          id: 'alice-secret',
+          title: 'Alice secret task',
+          createdAt: DateTime(2026),
+        ),
+      );
+      await shared.engine.syncNow();
+      expect(server.store['nodes']?.containsKey('alice-secret'), isTrue);
+
+      // Case 2: Alice also adds an UNSYNCED offline item before signing out, then
+      // the app restarts (fresh SyncEngine constructed from persisted SyncMetaCubit)
+      // and Bob signs in. Zero of Alice's items leak to Bob's cloud, AND Alice's
+      // unsynced item is preserved in SyncMetaCubit.accountSnapshots across the
+      // restart so it comes back when Alice signs back in.
+      shared.nodes.addNode(
+        Node(
+          id: 'alice-unsynced',
+          title: 'Offline draft',
+          createdAt: DateTime(2026),
+        ),
+      );
+      shared.engine.signOut();
+      expect(shared.nodes.byId('alice-unsynced'), isNotNull);
+      expect(shared.meta.state.items, isEmpty);
+      expect(shared.meta.state.lastEmail, 'alice@example.com');
+
+      // Simulate app restart: re-hydrate SyncMetaCubit from JSON and build a
+      // fresh SyncEngine over the existing cubits.
+      final rehydratedMeta = SyncMetaCubit();
+      rehydratedMeta.emit(
+        rehydratedMeta.fromJson(shared.meta.toJson(shared.meta.state))!,
+      );
+      final restartedEngine = SyncEngine(
+        client: server,
+        auth: shared.auth,
+        meta: rehydratedMeta,
+        events: shared.events,
+        feeds: shared.feeds,
+        nodes: shared.nodes,
+        transactions: TransactionsCubit(),
+        places: PlacesCubit(),
+        reporting: ReportingCubit(),
+        tracking: TrackingCubit(),
+        settings: shared.settings,
+        waterfall: WaterfallCubit(
+          nodeCubit: shared.nodes,
+          transactionsCubit: TransactionsCubit(),
+          plaidCubit: PlaidCubit(),
+        ),
+        plaid: PlaidCubit(),
+      );
+
+      // Simulate Bob's empty cloud account on the server.
+      server.store.clear();
+
+      await shared.auth.login('bob@example.com', 'password123');
+      rehydratedMeta
+          .reset(); // AuthPage resets cursor/items, preserving lastEmail
+      await restartedEngine.syncNow();
+
+      expect(shared.nodes.byId('alice-secret'), isNull);
+      expect(shared.nodes.byId('alice-unsynced'), isNull);
+      expect(
+        server.store['nodes']?.containsKey('alice-secret') ?? false,
+        isFalse,
+      );
+      expect(
+        server.store['nodes']?.containsKey('alice-unsynced') ?? false,
+        isFalse,
+      );
+
+      // When Alice signs back in later, her unsynced offline item is restored
+      // from the persisted snapshot!
+      await shared.auth.login('alice@example.com', 'password123');
+      rehydratedMeta.reset();
+      await restartedEngine.syncNow();
+      expect(shared.nodes.byId('alice-unsynced')?.title, 'Offline draft');
+    },
+  );
+
+  test(
+    'sign out, edit offline, same-account re-login keeps the offline edit',
+    () async {
+      final server = FakeSyncClient();
+      final d = _Device(server);
+      await d.signIn();
+      d.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
+      await d.engine.syncNow();
+      expect(server.store['nodes']?.containsKey('t1'), isTrue);
+
+      // Sign out (keeps on-device data), edit + add while signed out.
+      d.engine.signOut();
+      d.nodes.updateNode(d.nodes.byId('t1')!.copyWith(title: 'offline edit'));
+      d.nodes.addNode(
+        Node(id: 't2', title: 'offline new', createdAt: DateTime(2026)),
+      );
+
+      // Same account signs back in (AuthPage resets cursor/items).
+      await d.auth.login('a@example.com', 'password123');
+      d.meta.reset();
+      await d.engine.syncNow();
+
+      // Nothing is wiped to the sign-out-time snapshot; both items push.
+      expect(d.nodes.byId('t1')?.title, 'offline edit');
+      expect(d.nodes.byId('t2')?.title, 'offline new');
+      expect(server.store['nodes']?['t1']?.data['title'], 'offline edit');
+      expect(server.store['nodes']?.containsKey('t2'), isTrue);
+    },
+  );
+
+  test('signOut mid-sync fences in-flight sync so meta stays reset', () async {
     final server = FakeSyncClient();
-    final shared = _Device(server);
-
-    await shared.auth.login('alice@example.com', 'password123');
-    shared.nodes.addNode(
-      Node(id: 'alice-secret', title: 'Alice secret task', createdAt: DateTime(2026)),
-    );
-    await shared.engine.syncNow();
-    expect(server.store['nodes']?.containsKey('alice-secret'), isTrue);
-
-    // Case 2: Alice also adds an UNSYNCED offline item before signing out, then
-    // the app restarts (fresh SyncEngine constructed from persisted SyncMetaCubit)
-    // and Bob signs in. Zero of Alice's items leak to Bob's cloud, AND Alice's
-    // unsynced item is preserved in SyncMetaCubit.accountSnapshots across the
-    // restart so it comes back when Alice signs back in.
-    shared.nodes.addNode(
-      Node(id: 'alice-unsynced', title: 'Offline draft', createdAt: DateTime(2026)),
-    );
-    shared.engine.signOut();
-    expect(shared.nodes.byId('alice-unsynced'), isNotNull);
-    expect(shared.meta.state.items, isEmpty);
-    expect(shared.meta.state.lastEmail, 'alice@example.com');
-
-    // Simulate app restart: re-hydrate SyncMetaCubit from JSON and build a
-    // fresh SyncEngine over the existing cubits.
-    final rehydratedMeta = SyncMetaCubit();
-    rehydratedMeta.emit(
-      rehydratedMeta.fromJson(shared.meta.toJson(shared.meta.state))!,
-    );
-    final restartedEngine = SyncEngine(
-      client: server,
-      auth: shared.auth,
-      meta: rehydratedMeta,
-      events: shared.events,
-      feeds: shared.feeds,
-      nodes: shared.nodes,
-      transactions: TransactionsCubit(),
-      places: PlacesCubit(),
-      reporting: ReportingCubit(),
-      tracking: TrackingCubit(),
-      settings: shared.settings,
-      waterfall: WaterfallCubit(
-        nodeCubit: shared.nodes,
-        transactionsCubit: TransactionsCubit(),
-        plaidCubit: PlaidCubit(),
-      ),
-      plaid: PlaidCubit(),
-    );
-
-    // Simulate Bob's empty cloud account on the server.
-    server.store.clear();
-
-    await shared.auth.login('bob@example.com', 'password123');
-    rehydratedMeta.reset(); // AuthPage resets cursor/items, preserving lastEmail
-    await restartedEngine.syncNow();
-
-    expect(shared.nodes.byId('alice-secret'), isNull);
-    expect(shared.nodes.byId('alice-unsynced'), isNull);
-    expect(server.store['nodes']?.containsKey('alice-secret') ?? false, isFalse);
-    expect(server.store['nodes']?.containsKey('alice-unsynced') ?? false, isFalse);
-
-    // When Alice signs back in later, her unsynced offline item is restored
-    // from the persisted snapshot!
-    await shared.auth.login('alice@example.com', 'password123');
-    rehydratedMeta.reset();
-    await restartedEngine.syncNow();
-    expect(shared.nodes.byId('alice-unsynced')?.title, 'Offline draft');
-  });
-
-  test('sign out, edit offline, same-account re-login keeps the offline edit',
-      () async {
-    final server = FakeSyncClient();
-    final d = _Device(server);
-    await d.signIn();
-    d.nodes.addNode(
-      Node(id: 't1', title: 'v1', createdAt: DateTime(2026)),
-    );
-    await d.engine.syncNow();
-    expect(server.store['nodes']?.containsKey('t1'), isTrue);
-
-    // Sign out (keeps on-device data), edit + add while signed out.
-    d.engine.signOut();
-    d.nodes.updateNode(d.nodes.byId('t1')!.copyWith(title: 'offline edit'));
-    d.nodes.addNode(
-      Node(id: 't2', title: 'offline new', createdAt: DateTime(2026)),
-    );
-
-    // Same account signs back in (AuthPage resets cursor/items).
-    await d.auth.login('a@example.com', 'password123');
-    d.meta.reset();
-    await d.engine.syncNow();
-
-    // Nothing is wiped to the sign-out-time snapshot; both items push.
-    expect(d.nodes.byId('t1')?.title, 'offline edit');
-    expect(d.nodes.byId('t2')?.title, 'offline new');
-    expect(server.store['nodes']?['t1']?.data['title'], 'offline edit');
-    expect(server.store['nodes']?.containsKey('t2'), isTrue);
-  });
-
-  test('signOut mid-sync fences in-flight sync so meta stays reset', () async {    final server = FakeSyncClient();
     final d = _Device(server);
     await d.signIn();
     d.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
@@ -742,110 +848,119 @@ void main() {
     expect(d.nodes.byId('t1')?.title, 'v1');
   });
 
-  test('returning to account A reseeds meta so conflicts merge instead of clobber',
-      () async {
-    final server = FakeSyncClient();
-    final shared = _Device(server);
+  test(
+    'returning to account A reseeds meta so conflicts merge instead of clobber',
+    () async {
+      final server = FakeSyncClient();
+      final shared = _Device(server);
 
-    // Alice syncs t1, then makes an offline edit + an offline-only t2.
-    await shared.auth.login('alice@example.com', 'password123');
-    shared.nodes.addNode(
-      Node(id: 't1', title: 'v1', createdAt: DateTime(2026)),
-    );
-    await shared.engine.syncNow();
-    expect(server.store['nodes']?.containsKey('t1'), isTrue);
-    shared.nodes.updateNode(shared.nodes.byId('t1')!.copyWith(title: 'A edit'));
-    shared.nodes.addNode(
-      Node(id: 't2', title: 'Offline only', createdAt: DateTime(2026)),
-    );
-    shared.engine.signOut();
+      // Alice syncs t1, then makes an offline edit + an offline-only t2.
+      await shared.auth.login('alice@example.com', 'password123');
+      shared.nodes.addNode(
+        Node(id: 't1', title: 'v1', createdAt: DateTime(2026)),
+      );
+      await shared.engine.syncNow();
+      expect(server.store['nodes']?.containsKey('t1'), isTrue);
+      shared.nodes.updateNode(
+        shared.nodes.byId('t1')!.copyWith(title: 'A edit'),
+      );
+      shared.nodes.addNode(
+        Node(id: 't2', title: 'Offline only', createdAt: DateTime(2026)),
+      );
+      shared.engine.signOut();
 
-    // Fresh engine over rehydrated meta (simulates app restart).
-    final rehydratedMeta = SyncMetaCubit();
-    rehydratedMeta.emit(
-      rehydratedMeta.fromJson(shared.meta.toJson(shared.meta.state))!,
-    );
-    final restartedEngine = SyncEngine(
-      client: server,
-      auth: shared.auth,
-      meta: rehydratedMeta,
-      events: shared.events,
-      feeds: shared.feeds,
-      nodes: shared.nodes,
-      transactions: TransactionsCubit(),
-      places: PlacesCubit(),
-      reporting: ReportingCubit(),
-      tracking: TrackingCubit(),
-      settings: shared.settings,
-      waterfall: WaterfallCubit(
-        nodeCubit: shared.nodes,
-        transactionsCubit: TransactionsCubit(),
-        plaidCubit: PlaidCubit(),
-      ),
-      plaid: PlaidCubit(),
-    );
+      // Fresh engine over rehydrated meta (simulates app restart).
+      final rehydratedMeta = SyncMetaCubit();
+      rehydratedMeta.emit(
+        rehydratedMeta.fromJson(shared.meta.toJson(shared.meta.state))!,
+      );
+      final restartedEngine = SyncEngine(
+        client: server,
+        auth: shared.auth,
+        meta: rehydratedMeta,
+        events: shared.events,
+        feeds: shared.feeds,
+        nodes: shared.nodes,
+        transactions: TransactionsCubit(),
+        places: PlacesCubit(),
+        reporting: ReportingCubit(),
+        tracking: TrackingCubit(),
+        settings: shared.settings,
+        waterfall: WaterfallCubit(
+          nodeCubit: shared.nodes,
+          transactionsCubit: TransactionsCubit(),
+          plaidCubit: PlaidCubit(),
+        ),
+        plaid: PlaidCubit(),
+      );
 
-    // Bob uses the device meanwhile; server-side change to t1 lands from
-    // another device while Alice is away.
-    server.store.clear();
-    await shared.auth.login('bob@example.com', 'password123');
-    rehydratedMeta.reset();
-    await restartedEngine.syncNow();
-    expect(shared.nodes.byId('t1'), isNull);
-    expect(shared.nodes.byId('t2'), isNull);
+      // Bob uses the device meanwhile; server-side change to t1 lands from
+      // another device while Alice is away.
+      server.store.clear();
+      await shared.auth.login('bob@example.com', 'password123');
+      rehydratedMeta.reset();
+      await restartedEngine.syncNow();
+      expect(shared.nodes.byId('t1'), isNull);
+      expect(shared.nodes.byId('t2'), isNull);
 
-    // Seed the server-side newer version of t1 directly.
-    server.store['nodes'] = {
-      't1': _Row({'id': 't1', 'title': 'Server edit'}, false,
-          DateTime.utc(2026, 9, 13)),
-    };
+      // Seed the server-side newer version of t1 directly.
+      server.store['nodes'] = {
+        't1': _Row(
+          {'id': 't1', 'title': 'Server edit'},
+          false,
+          DateTime.utc(2026, 9, 13),
+        ),
+      };
 
-    // Alice returns: offline-only t2 must survive and push; t1 is a true
-    // conflict (both sides edited) so documented server-wins applies but
-    // the merge runs through the normal conflict path with reseeded meta.
-    await shared.auth.login('alice@example.com', 'password123');
-    rehydratedMeta.reset();
-    await restartedEngine.syncNow();
-    expect(shared.nodes.byId('t2')?.title, 'Offline only');
-    expect(shared.nodes.byId('t1')?.title, 'Server edit');
-    expect(server.store['nodes']?.containsKey('t2'), isTrue);
-  });
+      // Alice returns: offline-only t2 must survive and push; t1 is a true
+      // conflict (both sides edited) so documented server-wins applies but
+      // the merge runs through the normal conflict path with reseeded meta.
+      await shared.auth.login('alice@example.com', 'password123');
+      rehydratedMeta.reset();
+      await restartedEngine.syncNow();
+      expect(shared.nodes.byId('t2')?.title, 'Offline only');
+      expect(shared.nodes.byId('t1')?.title, 'Server edit');
+      expect(server.store['nodes']?.containsKey('t2'), isTrue);
+    },
+  );
 
-  test('preserved running timer is pushed to the server on the same sync',
-      () async {
-    final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
-    await a.signIn();
-    await b.signIn();
+  test(
+    'preserved running timer is pushed to the server on the same sync',
+    () async {
+      final server = FakeSyncClient();
+      final a = _Device(server);
+      final b = _Device(server);
+      await a.signIn();
+      await b.signIn();
 
-    a.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
-    await a.engine.syncNow();
-    await b.engine.syncNow(); // B baselines on v1
+      a.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
+      await a.engine.syncNow();
+      await b.engine.syncNow(); // B baselines on v1
 
-    // A starts a timer but has not pushed yet.
-    final t0 = DateTime(2026, 9, 12, 9);
-    a.nodes.startTracking('t1', now: t0);
+      // A starts a timer but has not pushed yet.
+      final t0 = DateTime(2026, 9, 12, 9);
+      a.nodes.startTracking('t1', now: t0);
 
-    // B renames and syncs: the server copy advances without the timer.
-    b.nodes.updateNode(b.nodes.byId('t1')!.copyWith(title: 'B edit'));
-    await b.engine.syncNow();
+      // B renames and syncs: the server copy advances without the timer.
+      b.nodes.updateNode(b.nodes.byId('t1')!.copyWith(title: 'B edit'));
+      await b.engine.syncNow();
 
-    // A's pull keeps the live timer AND the same sync pushes it back so
-    // the server (and B) learn the start instead of dropping it forever.
-    await a.engine.syncNow();
-    expect(a.nodes.byId('t1')?.isTracking, isTrue);
+      // A's pull keeps the live timer AND the same sync pushes it back so
+      // the server (and B) learn the start instead of dropping it forever.
+      await a.engine.syncNow();
+      expect(a.nodes.byId('t1')?.isTracking, isTrue);
 
-    final stored = server.store['nodes']?['t1']?.data;
-    expect(stored, isNotNull);
-    expect(stored!['title'], 'B edit');
-    expect(stored['timerStartedAt'], isNotNull);
-    expect(DateTime.parse(stored['timerStartedAt'] as String).toLocal(), t0);
+      final stored = server.store['nodes']?['t1']?.data;
+      expect(stored, isNotNull);
+      expect(stored!['title'], 'B edit');
+      expect(stored['timerStartedAt'], isNotNull);
+      expect(DateTime.parse(stored['timerStartedAt'] as String).toLocal(), t0);
 
-    await b.engine.syncNow();
-    expect(b.nodes.byId('t1')?.isTracking, isTrue);
-    expect(b.nodes.byId('t1')?.timerStartedAt, t0);
-  });
+      await b.engine.syncNow();
+      expect(b.nodes.byId('t1')?.isTracking, isTrue);
+      expect(b.nodes.byId('t1')?.timerStartedAt, t0);
+    },
+  );
 
   test('identical change on both sides does not push twice', () async {
     final server = FakeSyncClient();

@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/common/time/time_session.dart';
 import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
@@ -237,19 +238,21 @@ class NodeEventLink {
         final event = calendar.byId(eventId);
         if (event == null) continue;
         if (!event.isTask && event.taskId == null && !event.done) continue;
-        calUpdates.add(event.copyWith(
-          isTask: false,
-          clearTaskId: true,
-          done: false,
-          clearCompletedAt: true,
-        ));
+        calUpdates.add(
+          event.copyWith(
+            isTask: false,
+            clearTaskId: true,
+            done: false,
+            clearCompletedAt: true,
+          ),
+        );
       }
       if (calUpdates.isNotEmpty) calendar.updateEvents(calUpdates);
     });
     return removed;
   }
 
-/// Marks an event as actionable, creating its backing node.
+  /// Marks an event as actionable, creating its backing node.
   static void markEventAsNode(
     CalendarCubit calendar,
     NodeCubit nodes,
@@ -444,16 +447,13 @@ class NodeEventLink {
       final settled = nodes.byId(nodeId) ?? node;
       final linked = _linkedTaskEvents(calendar, settled);
       if (linked.isEmpty) return;
-      if (wasTracking &&
-          settled.actualStart != null &&
-          settled.actualEnd != null) {
+      if (wasTracking && settled.recordedSessions.isNotEmpty) {
         calendar.updateEvents([
           for (final event in linked)
-            event.copyWith(
-              actualStart: settled.actualStart,
-              actualEnd: settled.actualEnd,
-              clearTimerStartedAt: true,
-            ),
+            _eventWithSessions(
+              event,
+              settled.recordedSessions,
+            ).copyWith(clearTimerStartedAt: true),
         ]);
         return;
       }
@@ -487,12 +487,38 @@ class NodeEventLink {
     RevertableHydratedCubit.atomic([nodes, calendar], () {
       calendar.stopTracking(eventId, now: at);
       final stopped = calendar.byId(eventId) ?? event;
-      if (backing != null &&
-          stopped.actualStart != null &&
-          stopped.actualEnd != null) {
-        nodes.setReported(backing.id, stopped.actualStart!, stopped.actualEnd!);
+      if (backing != null && stopped.recordedSessions.isNotEmpty) {
+        // Merge rather than replace: the node may already hold sessions
+        // recorded while the event ran on its own.
+        var merged = nodes.byId(backing.id) ?? backing;
+        for (final session in stopped.recordedSessions) {
+          merged = merged.copyWith(
+            sessions: withSession(merged.recordedSessions, session),
+          );
+        }
+        nodes.setSessions(backing.id, merged.recordedSessions);
       }
     });
+  }
+
+  /// Copies the node's runs onto an event, keeping runs recorded directly
+  /// on the event instead of replacing its list.
+  static PlannerEvent _eventWithSessions(
+    PlannerEvent event,
+    List<TimeSession> sessions,
+  ) {
+    var combined = event.recordedSessions;
+    for (final session in sessions) {
+      combined = withSession(combined, session);
+    }
+    final span = sessionSpan(combined);
+    return event.copyWith(
+      sessions: combined,
+      actualStart: span?.start,
+      clearActualStart: span == null,
+      actualEnd: span?.end,
+      clearActualEnd: span == null,
+    );
   }
 
   /// Every task-event linked to [node]: the direct `calendarEventId` /

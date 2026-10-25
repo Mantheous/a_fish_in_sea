@@ -1,3 +1,4 @@
+import '../../common/time/time_session.dart';
 import '../../nodes/model/node.dart';
 import '../../reporting/model/reported_entry.dart';
 import '../model/event_reschedule.dart';
@@ -9,6 +10,34 @@ const String reportDisplayIdPrefix = 'report:';
 const String reportLiveDisplayIdPrefix = '${reportDisplayIdPrefix}live:';
 const String reportTimerDisplayIdPrefix = '${reportDisplayIdPrefix}timer:';
 
+/// Separates the owner id from the recorded session id inside a timer
+/// report display id. `#` never appears in ids the app generates.
+const String reportSessionSeparator = '#';
+
+/// Display id for a timer block owned by an event or a calendar-less node.
+/// [sessionId] keeps sibling recordings of one task distinct.
+String reportTimerDisplayIdFor(String ownerId, {String? sessionId}) =>
+    sessionId == null || sessionId.isEmpty
+    ? '$reportTimerDisplayIdPrefix$ownerId'
+    : '$reportTimerDisplayIdPrefix$ownerId$reportSessionSeparator$sessionId';
+
+/// Owner id encoded in a timer/live display id (`report:timer:<id>` or
+/// `report:live:<id>`), which is an event id for event-backed blocks and a
+/// node id for node-only blocks. Null for manual entry ids and non-reports.
+String? reportOwnerIdForDisplayId(String displayId) {
+  final String raw;
+  if (displayId.startsWith(reportTimerDisplayIdPrefix)) {
+    raw = displayId.substring(reportTimerDisplayIdPrefix.length);
+  } else if (displayId.startsWith(reportLiveDisplayIdPrefix)) {
+    raw = displayId.substring(reportLiveDisplayIdPrefix.length);
+  } else {
+    return null;
+  }
+  final cut = raw.indexOf(reportSessionSeparator);
+  final owner = cut < 0 ? raw : raw.substring(0, cut);
+  return owner.isEmpty ? null : owner;
+}
+
 class ReportBlock {
   final String displayId;
   final String title;
@@ -18,6 +47,10 @@ class ReportBlock {
   final String? eventId;
   final String? entryId;
   final ReportStatus? status;
+
+  /// The recorded run this block shows, when it is one of several. Null
+  /// for accepted entries, live blocks, and legacy single intervals.
+  final String? sessionId;
 
   /// True when the block resolves to an event or task node, so the lane can
   /// offer a play button that records another report for it. Ownerless
@@ -33,6 +66,7 @@ class ReportBlock {
     this.eventId,
     this.entryId,
     this.status,
+    this.sessionId,
     this.recordable = false,
   });
 
@@ -46,6 +80,7 @@ class ReportBlock {
         eventId: eventId,
         entryId: entryId,
         status: status,
+        sessionId: sessionId,
         recordable: recordable,
       );
 }
@@ -68,19 +103,6 @@ ReportBlock resizedReportBlock(
 }
 
 bool isReportDisplayId(String id) => id.startsWith(reportDisplayIdPrefix);
-
-/// Owner id encoded in a timer/live display id (`report:timer:<id>` or
-/// `report:live:<id>`), which is an event id for event-backed blocks and a
-/// node id for node-only blocks. Null for manual entry ids and non-reports.
-String? reportOwnerIdForDisplayId(String displayId) {
-  for (final prefix in [reportTimerDisplayIdPrefix, reportLiveDisplayIdPrefix]) {
-    if (displayId.startsWith(prefix)) {
-      final id = displayId.substring(prefix.length);
-      return id.isEmpty ? null : id;
-    }
-  }
-  return null;
-}
 
 /// Finds an existing reported entry linked to [eventId], preferring a
 /// manual (accepted) entry over an auto-generated one.
@@ -218,24 +240,30 @@ List<ReportBlock> buildReportBlocks({
           recordable: true,
         ),
       );
-      continue;
     }
 
-    final reported = _reportedInterval(event, linked);
-    if (reported != null) {
-      blocks.add(
-        ReportBlock(
-          displayId: '$reportTimerDisplayIdPrefix${event.id}',
-          title: event.subject,
-          start: reported.start,
-          end: reported.end,
-          kind: ReportBlockKind.timer,
-          eventId: event.id,
-          recordable: true,
-        ),
-      );
+    final sessions = _recordedSessions(event, linked);
+    if (sessions.isNotEmpty) {
+      final hasMultiple = sessions.length > 1;
+      for (final session in sessions) {
+        blocks.add(
+          ReportBlock(
+            displayId: hasMultiple
+                ? reportTimerDisplayIdFor(event.id, sessionId: session.id)
+                : '$reportTimerDisplayIdPrefix${event.id}',
+            title: event.subject,
+            start: session.start,
+            end: session.end,
+            kind: ReportBlockKind.timer,
+            eventId: event.id,
+            sessionId: session.id,
+            recordable: true,
+          ),
+        );
+      }
       continue;
     }
+    if (liveStart != null) continue;
 
     final matches = acceptedByEvent[event.id];
     if (matches != null) {
@@ -291,23 +319,20 @@ List<ReportBlock> buildReportBlocks({
           recordable: true,
         ),
       );
-      continue;
     }
-    final actualStart = node.actualStart;
-    final actualEnd = node.actualEnd;
-    if (actualStart != null && actualEnd != null) {
-      var end = actualEnd;
-      if (!end.isAfter(actualStart)) {
-        end = actualStart.add(const Duration(minutes: 1));
-      }
+    for (final session in node.recordedSessions) {
+      final many = node.sessions.length > 1;
       blocks.add(
         ReportBlock(
-          displayId: '$reportTimerDisplayIdPrefix${node.id}',
+          displayId: many
+              ? reportTimerDisplayIdFor(node.id, sessionId: session.id)
+              : '$reportTimerDisplayIdPrefix${node.id}',
           title: node.title,
-          start: actualStart,
-          end: end,
+          start: session.start,
+          end: session.end,
           kind: ReportBlockKind.timer,
           eventId: null,
+          sessionId: session.id,
           recordable: true,
         ),
       );
@@ -342,30 +367,38 @@ DateTime? _firstTrackingStart(List<Node> linked) {
   return null;
 }
 
-_DateRange? _reportedInterval(PlannerEvent event, List<Node> linked) {
-  if (event.actualStart != null && event.actualEnd != null) {
-    final start = event.actualStart!;
-    var end = event.actualEnd!;
-    if (!end.isAfter(start)) end = start.add(const Duration(minutes: 1));
-    return _DateRange(start, end);
+/// Every distinct recorded run on an event and the tasks linked to it.
+///
+/// Task-event pairs mirror the same sessions, so ids dedupe the copies.
+/// When any side carries an explicit session list, legacy aggregate
+/// intervals are ignored: those spans would otherwise show up as an extra
+/// block after the first multi-session stop.
+List<TimeSession> _recordedSessions(PlannerEvent event, List<Node> linked) {
+  final explicit = <String, TimeSession>{};
+  for (final session in event.sessions) {
+    explicit[session.id] = session;
   }
   for (final node in linked) {
-    if (node.actualStart != null && node.actualEnd != null) {
-      final start = node.actualStart!;
-      var end = node.actualEnd!;
-      if (!end.isAfter(start)) end = start.add(const Duration(minutes: 1));
-      return _DateRange(start, end);
+    for (final session in node.sessions) {
+      explicit[session.id] = session;
     }
   }
-  return null;
+  if (explicit.isNotEmpty) return _sortedSessions(explicit.values);
+
+  final legacy = <String, TimeSession>{};
+  for (final session in event.recordedSessions) {
+    legacy[session.id] = session;
+  }
+  for (final node in linked) {
+    for (final session in node.recordedSessions) {
+      legacy[session.id] = session;
+    }
+  }
+  return _sortedSessions(legacy.values);
 }
 
-class _DateRange {
-  final DateTime start;
-  final DateTime end;
-
-  const _DateRange(this.start, this.end);
-}
+List<TimeSession> _sortedSessions(Iterable<TimeSession> sessions) =>
+    sessions.toList()..sort((a, b) => a.start.compareTo(b.start));
 
 PlannerEvent reportBlockToDisplayEvent(
   ReportBlock block, {

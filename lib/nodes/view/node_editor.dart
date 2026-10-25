@@ -732,13 +732,15 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                           ],
                         ),
                       ),
-                      TextButton(
-                        onPressed: () =>
-                            showEditNodeTimerSheet(context, nodeId: e.id),
-                        child: Text(
-                          trackingLine != null ? 'Edit start' : 'Adjust',
+                      if (trackingLine != null ||
+                          live.recordedSessions.length <= 1)
+                        TextButton(
+                          onPressed: () =>
+                              showEditNodeTimerSheet(context, nodeId: e.id),
+                          child: Text(
+                            trackingLine != null ? 'Edit start' : 'Adjust',
+                          ),
                         ),
-                      ),
                     ],
                   );
                 },

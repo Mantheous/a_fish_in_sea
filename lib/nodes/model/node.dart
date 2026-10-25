@@ -12,6 +12,7 @@ export 'node_recurrence.dart';
 
 import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/common/time/planned_actual.dart';
+import 'package:a_fish_in_sea/common/time/time_session.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/planner/model/task_assignee.dart';
 
@@ -522,6 +523,13 @@ class Node extends Equatable {
   final String? classLabel;
 
   // Time reporting, mirroring Task actuals.
+  //
+  // [sessions] keeps every completed run of the timer. The legacy
+  // [actualStart]/[actualEnd] pair remains the aggregate span (earliest
+  // start, latest end) so readers written before sessions existed keep
+  // working. Payloads from before this field simply have no `sessions`
+  // key and are lifted on read by [recordedSessions].
+  final List<TimeSession> sessions;
   final DateTime? actualStart;
   final DateTime? actualEnd;
   final DateTime? timerStartedAt;
@@ -556,6 +564,7 @@ class Node extends Equatable {
     this.feedId,
     this.classId,
     this.classLabel,
+    this.sessions = const [],
     this.actualStart,
     this.actualEnd,
     this.timerStartedAt,
@@ -567,7 +576,18 @@ class Node extends Equatable {
   bool get isDone => status == NodeStatus.done;
   bool get isOpen => status == NodeStatus.open;
   bool get isTracking => timerStartedAt != null;
-  bool get hasReported => actualStart != null && actualEnd != null;
+
+  /// Every recorded run, oldest first. Falls back to the legacy single
+  /// interval when a payload predates [sessions]. Once a payload carries an
+  /// explicit list, that list is authoritative: the legacy pair is only its
+  /// aggregate span, and lifting it too would count the gaps as work.
+  List<TimeSession> get recordedSessions {
+    if (sessions.isNotEmpty) return sessions;
+    final legacy = TimeSession.legacySession(actualStart, actualEnd);
+    return legacy == null ? const [] : [legacy];
+  }
+
+  bool get hasReported => recordedSessions.isNotEmpty;
 
   /// Imported or class-assigned homework: provenance, an explicit class
   /// node, or both. A manual task with no class remains a personal task.
@@ -618,12 +638,9 @@ class Node extends Equatable {
   bool get hasAnki => anki != null;
   bool get isAutomatedGoal => hasMetrics;
 
-  Duration? get reportedDuration {
-    final s = actualStart;
-    final e = actualEnd;
-    if (s == null || e == null || !e.isAfter(s)) return null;
-    return e.difference(s);
-  }
+  /// Total time across every recorded session — not the aggregate span,
+  /// which would count the gaps between sessions as work.
+  Duration? get reportedDuration => totalSessionDuration(recordedSessions);
 
   /// The plan next to the occurrence, in one object.
   ///
@@ -693,6 +710,7 @@ class Node extends Equatable {
     bool clearClassId = false,
     String? classLabel,
     bool clearClassLabel = false,
+    List<TimeSession>? sessions,
     DateTime? actualStart,
     bool clearActualStart = false,
     DateTime? actualEnd,
@@ -740,6 +758,7 @@ class Node extends Equatable {
         classId: clearClassId ? null : (classId ?? this.classId),
         classLabel:
             clearClassLabel ? null : (classLabel ?? this.classLabel),
+        sessions: sessions ?? this.sessions,
         actualStart:
             clearActualStart ? null : (actualStart ?? this.actualStart),
         actualEnd: clearActualEnd ? null : (actualEnd ?? this.actualEnd),
@@ -836,6 +855,7 @@ class Node extends Equatable {
       feedId: json['feedId'] as String?,
       classId: json['classId'] as String?,
       classLabel: json['classLabel'] as String?,
+      sessions: TimeSession.listFromJson(json['sessions']),
       actualStart: _tryTimerDate(json['actualStart']),
       actualEnd: _tryTimerDate(json['actualEnd']),
       timerStartedAt: _tryTimerDate(json['timerStartedAt']),
@@ -877,6 +897,7 @@ class Node extends Equatable {
         'feedId': feedId,
         'classId': classId,
         'classLabel': classLabel,
+        'sessions': sessions.map((s) => s.toJson()).toList(),
         'actualStart': actualStart?.toUtc().toIso8601String(),
         'actualEnd': actualEnd?.toUtc().toIso8601String(),
         'timerStartedAt': timerStartedAt?.toUtc().toIso8601String(),
@@ -913,6 +934,7 @@ class Node extends Equatable {
         feedId,
         classId,
         classLabel,
+        sessions,
         actualStart,
         actualEnd,
         timerStartedAt,

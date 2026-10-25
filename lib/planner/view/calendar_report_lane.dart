@@ -53,6 +53,7 @@ class ReportLaneView extends StatefulWidget {
     this.snapMinutes = 5,
     this.onIntervalChanged,
     this.onRecord,
+    this.onDeleted,
     this.isRtl = false,
     this.scrollOffset = 0,
     this.pixelsPerMinute,
@@ -83,6 +84,9 @@ class ReportLaneView extends StatefulWidget {
   /// Starts another recording for the report's task. Null hides the chip's
   /// play button; live chips never show it.
   final ValueChanged<ReportBlock>? onRecord;
+
+  /// Deletes a selected recording. Live recordings never call this.
+  final ValueChanged<ReportBlock>? onDeleted;
 
   final bool isRtl;
 
@@ -320,6 +324,9 @@ class _ReportLaneViewState extends State<ReportLaneView> {
                       onRecord: widget.onRecord == null || !block.recordable
                           ? null
                           : () => widget.onRecord!(block),
+                      onDelete: block.kind == ReportBlockKind.live
+                          ? null
+                          : () => widget.onDeleted?.call(block),
                     ),
                   ),
                 );

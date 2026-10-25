@@ -1,3 +1,4 @@
+import '../../common/time/time_session.dart';
 import '../bloc/node_cubit.dart';
 import '../model/node.dart';
 import '../../planner/bloc/calendar_cubit.dart';
@@ -204,6 +205,7 @@ class RecurringGoalLink {
           completedAt: merged.completedAt,
           clearCompletedAt: merged.completedAt == null,
           failed: merged.status == NodeStatus.failed,
+          sessions: merged.sessions,
           actualStart: merged.actualStart,
           clearActualStart: merged.actualStart == null,
           actualEnd: merged.actualEnd,
@@ -254,6 +256,11 @@ class RecurringGoalLink {
     };
     // Distinct reports or active timers might be separate work. Preserve both.
     if (intervals.length > 1 || timers.length > 1) return null;
+    final sessions = <String, TimeSession>{
+      for (final n in records)
+        for (final session in n.recordedSessions) session.id: session,
+      for (final session in event.recordedSessions) session.id: session,
+    };
     final statuses = {for (final n in records) n.status};
     if (event.done) statuses.add(NodeStatus.done);
     if (event.failed) statuses.add(NodeStatus.failed);
@@ -301,6 +308,8 @@ class RecurringGoalLink {
       status: status,
       completedAt: status == NodeStatus.done ? completed : null,
       clearCompletedAt: status != NodeStatus.done,
+      sessions: sessions.values.toList()
+        ..sort((a, b) => a.start.compareTo(b.start)),
       actualStart: start,
       actualEnd: end,
       timerStartedAt: timers.isEmpty ? null : timers.single,

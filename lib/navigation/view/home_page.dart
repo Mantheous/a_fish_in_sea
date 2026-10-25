@@ -62,12 +62,8 @@ class _HomePageState extends State<HomePage> {
       calendarCubit.eventsOnDay(today),
     );
     final nodeCubit = context.watch<NodeCubit>();
-    final dueNodes = feedCubit.visibleNodes(
-      nodeCubit.overdueAndTodayAt(today),
-    );
-    final weekNodes = feedCubit.visibleNodes(
-      nodeCubit.dueThisWeekAt(today),
-    );
+    final dueNodes = feedCubit.visibleNodes(nodeCubit.overdueAndTodayAt(today));
+    final weekNodes = feedCubit.visibleNodes(nodeCubit.dueThisWeekAt(today));
     final favoriteNodes = feedCubit.visibleNodes(nodeCubit.favorites);
     // One aggregation pass per build for all favorite rows; null when the
     // section is empty so an empty Home never walks the store.
@@ -98,7 +94,8 @@ class _HomePageState extends State<HomePage> {
                 context.read<NavigationCubit>().setPage(PlannerPage.nodes),
             child: favoriteProgress == null
                 ? const _EmptyLine(
-                    'No favorite goals — star a goal to pin it here')
+                    'No favorite goals — star a goal to pin it here',
+                  )
                 : Column(
                     children: [
                       for (final node in favoriteNodes.take(5))
@@ -131,8 +128,7 @@ class _HomePageState extends State<HomePage> {
                 ? const _EmptyLine('No events today')
                 : Column(
                     children: [
-                      for (final event in todayEvents)
-                        _EventLine(event: event),
+                      for (final event in todayEvents) _EventLine(event: event),
                     ],
                   ),
           ),
@@ -178,12 +174,12 @@ class _SectionCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text(title, style: Theme.of(context).textTheme.titleMedium),
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                 ),
-                TextButton(
-                  onPressed: onMore,
-                  child: const Text('See all'),
-                ),
+                TextButton(onPressed: onMore, child: const Text('See all')),
               ],
             ),
             child,
@@ -225,8 +221,8 @@ class _NodeLine extends StatelessWidget {
     final status = failed
         ? 'Failed'
         : overdue
-            ? 'Overdue'
-            : 'Due today';
+        ? 'Overdue'
+        : 'Due today';
     return ListTile(
       dense: true,
       contentPadding: EdgeInsets.zero,
@@ -243,9 +239,7 @@ class _NodeLine extends StatelessWidget {
       subtitle: Text(
         status,
         style: theme.textTheme.labelSmall?.copyWith(
-          color: overdue || failed
-              ? theme.colorScheme.error
-              : null,
+          color: overdue || failed ? theme.colorScheme.error : null,
         ),
       ),
     );
@@ -325,8 +319,8 @@ class _AssignmentLine extends StatelessWidget {
       subtitle: Text(
         failed ? '$dueLabel · failed' : dueLabel,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: failed ? Theme.of(context).colorScheme.error : null,
-            ),
+          color: failed ? Theme.of(context).colorScheme.error : null,
+        ),
       ),
     );
   }
@@ -464,8 +458,8 @@ class _TrackingCardState extends State<_TrackingCard> {
               !gpsAvailable
                   ? 'Recording started (no GPS on this device) — add test points from Day review.'
                   : background
-                      ? 'Recording location every $interval min — see the Stats tab.'
-                      : 'Recording while the app is open. Allow notifications to keep recording in the background.',
+                  ? 'Recording location every $interval min — see the Stats tab.'
+                  : 'Recording while the app is open. Allow notifications to keep recording in the background.',
             ),
           ),
         );
@@ -494,14 +488,14 @@ class _TrackingCardState extends State<_TrackingCard> {
               children: [
                 Icon(
                   recording ? Icons.radio_button_checked : Icons.timeline,
-                  color: recording
-                      ? Theme.of(context).colorScheme.error
-                      : null,
+                  color: recording ? Theme.of(context).colorScheme.error : null,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text('Day tracking',
-                      style: Theme.of(context).textTheme.titleMedium),
+                  child: Text(
+                    'Day tracking',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                 ),
                 TextButton(
                   onPressed: () => Navigator.of(context).push(
@@ -517,10 +511,10 @@ class _TrackingCardState extends State<_TrackingCard> {
               !settings.trackingEnabled
                   ? 'Turned off in Settings.'
                   : recording
-                      ? 'Recording… $todayCount points today.'
-                      : todayCount > 0
-                          ? '$todayCount points recorded today.'
-                          : 'Record your path to auto-report your day.',
+                  ? 'Recording… $todayCount points today.'
+                  : todayCount > 0
+                  ? '$todayCount points recorded today.'
+                  : 'Record your path to auto-report your day.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 8),
@@ -536,10 +530,8 @@ class _TrackingCardState extends State<_TrackingCard> {
               label: Text(recording ? 'Stop recording' : 'Start recording'),
               style: recording
                   ? FilledButton.styleFrom(
-                      backgroundColor:
-                          Theme.of(context).colorScheme.error,
-                      foregroundColor:
-                          Theme.of(context).colorScheme.onError,
+                      backgroundColor: Theme.of(context).colorScheme.error,
+                      foregroundColor: Theme.of(context).colorScheme.onError,
                     )
                   : null,
             ),
@@ -633,20 +625,23 @@ class _TimeTrackingCardState extends State<_TimeTrackingCard> {
                 const Icon(Icons.timer_outlined),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text('Time tracking',
-                      style: Theme.of(context).textTheme.titleMedium),
+                  child: Text(
+                    'Time tracking',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                 ),
                 TextButton(
-                  onPressed: () => context
-                      .read<NavigationCubit>()
-                      .setPage(PlannerPage.tasks),
+                  onPressed: () => context.read<NavigationCubit>().setPage(
+                    PlannerPage.tasks,
+                  ),
                   child: const Text('Tasks'),
                 ),
               ],
             ),
             if (selection.isEmpty)
               const _EmptyLine(
-                  'No nodes to track — add one with the + button.'),
+                'No nodes to track — add one with the + button.',
+              ),
             if (selection.recording != null) ...[
               const _TimeGroupLabel('Recording now'),
               _NodeTrackLine(
@@ -667,26 +662,17 @@ class _TimeTrackingCardState extends State<_TimeTrackingCard> {
             if (selection.previous.isNotEmpty) ...[
               const _TimeGroupLabel('Just before'),
               for (final node in selection.previous)
-                _NodeTrackLine(
-                  node: liveById[node.id] ?? node,
-                  now: now,
-                ),
+                _NodeTrackLine(node: liveById[node.id] ?? node, now: now),
             ],
             if (selection.next.isNotEmpty) ...[
               const _TimeGroupLabel('Up next'),
               for (final node in selection.next)
-                _NodeTrackLine(
-                  node: liveById[node.id] ?? node,
-                  now: now,
-                ),
+                _NodeTrackLine(node: liveById[node.id] ?? node, now: now),
             ],
             if (selection.unscheduled.isNotEmpty) ...[
               const _TimeGroupLabel('No planned time'),
               for (final node in selection.unscheduled)
-                _NodeTrackLine(
-                  node: liveById[node.id] ?? node,
-                  now: now,
-                ),
+                _NodeTrackLine(node: liveById[node.id] ?? node, now: now),
             ],
           ],
         ),
@@ -731,30 +717,35 @@ class _NodeTrackLine extends StatelessWidget {
     final plannedEnd = live.schedule?.end;
     final plannedLine = plannedStart != null && plannedEnd != null
         ? 'Planned ${_homeTimeFormat.format(plannedStart)} – '
-            '${_homeTimeFormat.format(plannedEnd)}'
+              '${_homeTimeFormat.format(plannedEnd)}'
         : (live.schedule?.due != null
-            ? 'Due ${_homeDueFormat.format(live.schedule!.due!)}'
-            : 'No planned time');
+              ? 'Due ${_homeDueFormat.format(live.schedule!.due!)}'
+              : 'No planned time');
     final reported = live.reportedDuration;
     final elapsed = live.timerStartedAt == null
         ? null
         : now.difference(live.timerStartedAt!);
-    final isReportedShown = reported != null &&
-        live.actualStart != null &&
-        live.actualEnd != null;
+    final sessions = live.recordedSessions;
+    final isReportedShown = reported != null && sessions.isNotEmpty;
+    final reportLabel = reported == null
+        ? null
+        : reported.inMinutes == 0
+        ? '${reported.inSeconds}s'
+        : '${reported.inMinutes}m';
     final statusLine = failed
         ? 'Marked as failed'
         : live.isTracking
-            ? 'Recording ${formatStopwatch(elapsed ?? Duration.zero)}'
-            : isReportedShown
-                ? 'Reported ${_homeTimeFormat.format(live.actualStart!)} – '
-                    '${_homeTimeFormat.format(live.actualEnd!)} '
-                    '(${reported.inMinutes == 0 ? '${reported.inSeconds}s' : '${reported.inMinutes}m'})'
-                : null;
-    // Toggl-style: the status line opens the correction sheet — a late
-    // press is fixed by moving the start, a finished session by editing
-    // the interval. Only when there is something to correct.
-    final canEditTimer = live.isTracking || isReportedShown;
+        ? 'Recording ${formatStopwatch(elapsed ?? Duration.zero)}'
+        : isReportedShown
+        ? sessions.length > 1
+              ? 'Reported ${sessions.length} sessions · $reportLabel'
+              : 'Reported ${_homeTimeFormat.format(sessions.single.start)} – '
+                    '${_homeTimeFormat.format(sessions.single.end)} '
+                    '($reportLabel)'
+        : null;
+    // Only a running timer is corrected here (move its start). Finished
+    // recordings are edited as chips in Calendar → Plan + Report.
+    final canEditTimer = live.isTracking;
     return InkWell(
       onTap: () => showNodeEditor(context, existing: live),
       child: Padding(
@@ -782,10 +773,8 @@ class _NodeTrackLine extends StatelessWidget {
                   Text(plannedLine, style: theme.textTheme.labelSmall),
                   if (canEditTimer)
                     InkWell(
-                      onTap: () => showEditNodeTimerSheet(
-                        context,
-                        nodeId: live.id,
-                      ),
+                      onTap: () =>
+                          showEditNodeTimerSheet(context, nodeId: live.id),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -796,8 +785,8 @@ class _NodeTrackLine extends StatelessWidget {
                                 color: failed
                                     ? theme.colorScheme.error
                                     : live.isTracking
-                                        ? theme.colorScheme.primary
-                                        : null,
+                                    ? theme.colorScheme.primary
+                                    : null,
                                 fontWeight: live.isTracking || failed
                                     ? FontWeight.w600
                                     : null,
@@ -820,8 +809,8 @@ class _NodeTrackLine extends StatelessWidget {
                         color: failed
                             ? theme.colorScheme.error
                             : live.isTracking
-                                ? theme.colorScheme.primary
-                                : null,
+                            ? theme.colorScheme.primary
+                            : null,
                         fontWeight: live.isTracking || failed
                             ? FontWeight.w600
                             : null,
@@ -835,8 +824,7 @@ class _NodeTrackLine extends StatelessWidget {
               FilledButton.icon(
                 onPressed: () => stopNodeAndFinish(context, live.id),
                 icon: const Icon(Icons.stop, size: 16),
-                label: Text(
-                    formatStopwatch(elapsed ?? Duration.zero)),
+                label: Text(formatStopwatch(elapsed ?? Duration.zero)),
               )
             else
               OutlinedButton.icon(

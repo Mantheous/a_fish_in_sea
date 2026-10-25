@@ -1,3 +1,5 @@
+import 'package:a_fish_in_sea/common/time/time_session.dart';
+
 /// Canonical server timestamp for sync metadata.
 String syncRecordStamp(DateTime timestamp) =>
     timestamp.toUtc().toIso8601String();
@@ -11,6 +13,7 @@ void preserveRunningTimer(
   Map<String, dynamic>? local,
   Map<String, dynamic> merged,
 ) {
+  preserveRecordedSessions(collection, local, merged);
   if (collection != 'nodes' && collection != 'events') return;
   final localStart = local?['timerStartedAt'];
   if (localStart is! String || localStart.isEmpty) return;
@@ -31,4 +34,69 @@ void preserveRunningTimer(
   if (remoteEnd == null || !remoteEnd.isAfter(localDt)) {
     merged['timerStartedAt'] = localStart;
   }
+}
+
+/// Preserves not-yet-pushed recorded runs during server-wins conflict
+/// resolution. A remote payload with an older latest run must not erase a
+/// session this device just finished, and an old-client payload that only
+/// knows the legacy `actualStart`/`actualEnd` pair must not erase runs this
+/// device already has.
+///
+/// Remote wins when both sides carry the same session id, so two devices
+/// that edited one run converge instead of ping-ponging forever. Local runs
+/// with new ids are appended; a legacy-only aggregate that overlaps them is
+/// ignored so the gap between two runs is never counted as extra work.
+void preserveRecordedSessions(
+  String collection,
+  Map<String, dynamic>? local,
+  Map<String, dynamic> merged,
+) {
+  if (collection != 'nodes' && collection != 'events') return;
+  final localExplicit = TimeSession.listFromJson(local?['sessions']);
+  final localLegacy = _legacySession(local);
+  final remoteExplicit = TimeSession.listFromJson(merged['sessions']);
+  final remoteLegacy = _legacySession(merged);
+  final localSessions = localExplicit.isNotEmpty
+      ? localExplicit
+      : [if (localLegacy != null) localLegacy];
+
+  var combined = remoteExplicit;
+  if (combined.isEmpty &&
+      remoteLegacy != null &&
+      !_overlapsAny(remoteLegacy, localSessions)) {
+    combined = [remoteLegacy];
+  }
+  for (final session in localSessions) {
+    if (sessionById(combined, session.id) != null) continue;
+    // A legacy-only local pair is usually the aggregate of the remote runs;
+    // adding it would count the gaps between them as work.
+    if (localExplicit.isEmpty && _overlapsAny(session, combined)) continue;
+    combined = withSession(combined, session);
+  }
+  if (combined.isEmpty) return;
+  merged['sessions'] = [for (final session in combined) session.toJson()];
+  final span = sessionSpan(combined);
+  if (span != null) {
+    merged['actualStart'] = span.start.toUtc().toIso8601String();
+    merged['actualEnd'] = span.end.toUtc().toIso8601String();
+  }
+}
+
+TimeSession? _legacySession(Map<String, dynamic>? payload) {
+  if (payload == null) return null;
+  return TimeSession.legacySession(
+    _payloadDate(payload['actualStart']),
+    _payloadDate(payload['actualEnd']),
+  );
+}
+
+bool _overlapsAny(TimeSession session, Iterable<TimeSession> others) =>
+    others.any(
+      (other) =>
+          session.start.isBefore(other.end) && session.end.isAfter(other.start),
+    );
+
+DateTime? _payloadDate(Object? raw) {
+  if (raw is! String || raw.isEmpty) return null;
+  return DateTime.tryParse(raw)?.toLocal();
 }

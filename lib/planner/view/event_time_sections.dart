@@ -50,16 +50,18 @@ class TaskTimeSection extends StatelessWidget {
         ? plannedEnd.difference(plannedStart).inMinutes
         : 0;
     final reported = node.reportedDuration;
+    final sessions = node.recordedSessions;
     final lines = <String>[
       'Planned ${timeFormatter.format(plannedStart)} – '
           '${timeFormatter.format(plannedEnd)} (${plannedMin}m)',
       if (node.isTracking && node.timerStartedAt != null)
         'Recording since ${timeFormatter.format(node.timerStartedAt!)}',
-      if (reported != null &&
-          node.actualStart != null &&
-          node.actualEnd != null)
-        'Reported ${timeFormatter.format(node.actualStart!)} – '
-            '${timeFormatter.format(node.actualEnd!)} (${reported.inMinutes}m)',
+      if (reported != null && sessions.isNotEmpty)
+        sessions.length > 1
+            ? 'Reported ${sessions.length} sessions · ${reported.inMinutes}m'
+            : 'Reported ${timeFormatter.format(sessions.single.start)} – '
+                  '${timeFormatter.format(sessions.single.end)} '
+                  '(${reported.inMinutes}m)',
       if (failed) 'Marked as failed',
     ];
     final nodeId = node.id;
@@ -81,7 +83,8 @@ class TaskTimeSection extends StatelessWidget {
                 color: line.startsWith('Marked as failed')
                     ? theme.colorScheme.error
                     : null,
-                fontWeight: line.startsWith('Recording') ||
+                fontWeight:
+                    line.startsWith('Recording') ||
                         line.startsWith('Marked as failed')
                     ? FontWeight.w600
                     : null,
@@ -116,10 +119,8 @@ class TaskTimeSection extends StatelessWidget {
                 ),
               if (node.isTracking)
                 TextButton.icon(
-                  onPressed: () => showEditNodeTimerSheet(
-                    context,
-                    nodeId: nodeId,
-                  ),
+                  onPressed: () =>
+                      showEditNodeTimerSheet(context, nodeId: nodeId),
                   icon: const Icon(Icons.edit, size: 16),
                   label: const Text('Edit start'),
                 ),
@@ -135,14 +136,12 @@ class TaskTimeSection extends StatelessWidget {
                   } catch (_) {}
                 },
                 style: OutlinedButton.styleFrom(
-                  foregroundColor:
-                      failed ? null : theme.colorScheme.error,
+                  foregroundColor: failed ? null : theme.colorScheme.error,
                 ),
                 child: Text(failed ? 'Unfail' : 'Mark failed'),
               ),
               TextButton(
-                onPressed: () =>
-                    showFollowUpScheduler(context, nodeId: nodeId),
+                onPressed: () => showFollowUpScheduler(context, nodeId: nodeId),
                 child: const Text('Follow-up'),
               ),
               if (node.hasReported && !node.isTracking)
@@ -157,15 +156,6 @@ class TaskTimeSection extends StatelessWidget {
                     } catch (_) {}
                   },
                   child: const Text('Clear reported'),
-                ),
-              if (node.hasReported && !node.isTracking)
-                TextButton.icon(
-                  onPressed: () => showEditNodeTimerSheet(
-                    context,
-                    nodeId: nodeId,
-                  ),
-                  icon: const Icon(Icons.tune, size: 16),
-                  label: const Text('Adjust'),
                 ),
             ],
           ),
@@ -217,16 +207,18 @@ class TimeReportSection extends StatelessWidget {
     final timeFormatter = DateFormat('h:mm a');
     final plannedMin = live.plannedDuration.inMinutes;
     final reported = live.reportedDuration;
+    final sessions = live.recordedSessions;
     final lines = <String>[
       'Planned ${timeFormatter.format(live.start)} – '
           '${timeFormatter.format(live.end)} (${plannedMin}m)',
       if (live.isTracking && live.timerStartedAt != null)
         'Recording since ${timeFormatter.format(live.timerStartedAt!)}',
-      if (reported != null &&
-          live.actualStart != null &&
-          live.actualEnd != null)
-        'Reported ${timeFormatter.format(live.actualStart!)} – '
-            '${timeFormatter.format(live.actualEnd!)} (${reported.inMinutes}m)',
+      if (reported != null && sessions.isNotEmpty)
+        sessions.length > 1
+            ? 'Reported ${sessions.length} sessions · ${reported.inMinutes}m'
+            : 'Reported ${timeFormatter.format(sessions.single.start)} – '
+                  '${timeFormatter.format(sessions.single.end)} '
+                  '(${reported.inMinutes}m)',
       if (live.failed) 'Marked as failed',
     ];
     final eventId = live.id;
@@ -252,7 +244,8 @@ class TimeReportSection extends StatelessWidget {
                 color: line.startsWith('Marked as failed')
                     ? theme.colorScheme.error
                     : null,
-                fontWeight: line.startsWith('Recording') ||
+                fontWeight:
+                    line.startsWith('Recording') ||
                         line.startsWith('Marked as failed')
                     ? FontWeight.w600
                     : null,
@@ -277,10 +270,8 @@ class TimeReportSection extends StatelessWidget {
                 ),
               if (isTracking)
                 TextButton.icon(
-                  onPressed: () => showEditEventTimerSheet(
-                    context,
-                    eventId: eventId,
-                  ),
+                  onPressed: () =>
+                      showEditEventTimerSheet(context, eventId: eventId),
                   icon: const Icon(Icons.edit, size: 16),
                   label: const Text('Edit start'),
                 ),
@@ -288,29 +279,18 @@ class TimeReportSection extends StatelessWidget {
               // calendar events just record time.
               if (isTask)
                 OutlinedButton(
-                  onPressed: () => context
-                      .read<CalendarCubit>()
-                      .setFailed(eventId, !failed),
+                  onPressed: () =>
+                      context.read<CalendarCubit>().setFailed(eventId, !failed),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: failed
-                        ? null
-                        : theme.colorScheme.error,
+                    foregroundColor: failed ? null : theme.colorScheme.error,
                   ),
                   child: Text(failed ? 'Unfail' : 'Mark failed'),
                 ),
               if (hasReported && !isTracking)
                 TextButton(
-                  onPressed: () => context
-                      .read<CalendarCubit>()
-                      .clearReported(eventId),
-                  child: const Text('Clear reported'),
-                ),
-              if (hasReported && !isTracking)
-                TextButton.icon(
                   onPressed: () =>
-                      showAdjustTimerSheet(context, eventId: eventId),
-                  icon: const Icon(Icons.tune, size: 16),
-                  label: const Text('Adjust'),
+                      context.read<CalendarCubit>().clearReported(eventId),
+                  child: const Text('Clear reported'),
                 ),
             ],
           ),
@@ -442,9 +422,7 @@ class _AdjustTimerSheetState extends State<_AdjustTimerSheet> {
                     if (!end.isAfter(start)) {
                       end = start.add(minEventDuration);
                     }
-                    calendar.updateEvent(
-                      live.copyWith(actualStart: start, actualEnd: end),
-                    );
+                    calendar.setReported(live.id, start, end);
                     Navigator.of(context).pop();
                   },
                   child: const Text('Save'),

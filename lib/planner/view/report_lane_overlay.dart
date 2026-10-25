@@ -30,6 +30,7 @@ class ReportLaneOverlay extends StatelessWidget {
     required this.onTap,
     required this.onIntervalChanged,
     this.onRecord,
+    this.onDeleted,
   });
 
   final PlanGridTracker tracker;
@@ -59,6 +60,9 @@ class ReportLaneOverlay extends StatelessWidget {
   /// Starts another recording for a report's task; null hides the chip's
   /// play button.
   final ValueChanged<ReportBlock>? onRecord;
+
+  /// Deletes one recorded run without touching the task's other runs.
+  final ValueChanged<ReportBlock>? onDeleted;
 
   @override
   Widget build(BuildContext context) {
@@ -103,6 +107,7 @@ class ReportLaneOverlay extends StatelessWidget {
                   onTap: onTap,
                   onIntervalChanged: onIntervalChanged,
                   onRecord: onRecord,
+                  onDeleted: onDeleted,
                 ),
               ),
             ),

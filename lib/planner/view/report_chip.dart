@@ -26,6 +26,7 @@ class ReportChip extends StatelessWidget {
     required this.visualHeight,
     required this.onTap,
     this.onRecord,
+    this.onDelete,
     this.onResizeStart,
     this.onResizeUpdate,
     this.onResizeEnd,
@@ -43,6 +44,9 @@ class ReportChip extends StatelessWidget {
   /// Starts another recording for the report's task. Null hides the chip's
   /// play button; live chips never show it.
   final VoidCallback? onRecord;
+
+  /// Deletes this recorded run without touching the task's other runs.
+  final VoidCallback? onDelete;
   final ValueChanged<bool>? onResizeStart;
   final GestureDragUpdateCallback? onResizeUpdate;
   final VoidCallback? onResizeEnd;
@@ -256,9 +260,48 @@ class ReportChip extends StatelessWidget {
                         ),
                       ),
                     ),
+                  if (selected &&
+                      onDelete != null &&
+                      (hitHeight.isInfinite || hitHeight >= 12) &&
+                      (width.isInfinite || width >= 28))
+                    Positioned(top: 1, right: 1, child: _deleteBadge()),
                 ],
               );
             },
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Small × on a selected chip. The chip sits on a dense time grid, so the
+  /// badge is kept to 16px and overlaid on the top-right corner.
+  Widget _deleteBadge() {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onDelete,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Tooltip(
+          message: 'Delete recorded time',
+          child: Semantics(
+            button: true,
+            label: 'Delete recorded time',
+            child: Container(
+              key: ValueKey('report-delete:${block.displayId}'),
+              width: 16,
+              height: 16,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(color: color, width: 1.5),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black38, blurRadius: 2),
+                ],
+              ),
+              child: Icon(Icons.close, size: 11, color: color),
+            ),
           ),
         ),
       ),

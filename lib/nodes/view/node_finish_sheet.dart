@@ -92,8 +92,11 @@ Future<void> showFollowUpScheduler(
     snap = context.read<SettingsCubit>().state.snapMinutes;
   } catch (_) {}
 
-  final seed =
-      draftSeedForFollowUp(node, estimate: estimate, snapMinutes: snap);
+  final seed = draftSeedForFollowUp(
+    node,
+    estimate: estimate,
+    snapMinutes: snap,
+  );
 
   CalendarDraftCubit? drafts;
   try {
@@ -167,13 +170,18 @@ class _FinishSheet extends StatelessWidget {
     final theme = Theme.of(context);
     final timeFormat = DateFormat('h:mm a');
     final reported = node.reportedDuration;
-    final reportedLine = reported != null &&
-            node.actualStart != null &&
-            node.actualEnd != null
-        ? 'Recorded ${timeFormat.format(node.actualStart!)} – '
-            '${timeFormat.format(node.actualEnd!)} '
-            '(${reported.inMinutes == 0 ? '${reported.inSeconds}s' : '${reported.inMinutes}m'})'
-        : 'Recording saved.';
+    final sessions = node.recordedSessions;
+    final durationLabel = reported == null
+        ? null
+        : reported.inMinutes == 0
+        ? '${reported.inSeconds}s'
+        : '${reported.inMinutes}m';
+    final reportedLine = reported == null || sessions.isEmpty
+        ? 'Recording saved.'
+        : sessions.length > 1
+        ? 'Recorded ${sessions.length} sessions · $durationLabel'
+        : 'Recorded ${timeFormat.format(sessions.single.start)} – '
+              '${timeFormat.format(sessions.single.end)} ($durationLabel)';
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
@@ -181,8 +189,7 @@ class _FinishSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Work session saved',
-                style: theme.textTheme.titleMedium),
+            Text('Work session saved', style: theme.textTheme.titleMedium),
             const SizedBox(height: 4),
             Text(node.title, style: theme.textTheme.bodyLarge),
             const SizedBox(height: 4),
@@ -247,4 +254,3 @@ class _FinishSheet extends StatelessWidget {
     );
   }
 }
-

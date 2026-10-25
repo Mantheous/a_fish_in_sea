@@ -34,6 +34,7 @@ PlannerEvent preserveLocalFieldsOnWrite(
       placeId: local.placeId,
       clearPlaceId: local.placeId == null,
       assignees: local.assignees,
+      sessions: local.sessions,
       actualStart: local.actualStart,
       clearActualStart: local.actualStart == null,
       actualEnd: local.actualEnd,

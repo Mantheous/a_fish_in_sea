@@ -7,8 +7,16 @@ import 'package:mocktail/mocktail.dart';
 
 class MockStorage extends Mock implements Storage {}
 
-PlannerEvent event(String id, DateTime start, {Duration length = const Duration(hours: 1)}) =>
-    PlannerEvent(id: id, subject: 'Event $id', start: start, end: start.add(length));
+PlannerEvent event(
+  String id,
+  DateTime start, {
+  Duration length = const Duration(hours: 1),
+}) => PlannerEvent(
+  id: id,
+  subject: 'Event $id',
+  start: start,
+  end: start.add(length),
+);
 
 void main() {
   late Storage storage;
@@ -79,6 +87,33 @@ void main() {
       expect(done.reportedDuration, const Duration(minutes: 45));
     });
 
+    test('stopping twice keeps both recorded sessions', () {
+      final cubit = CalendarCubit();
+      cubit.addEvent(event('e1', DateTime(2026, 9, 7, 9)));
+      final firstStart = DateTime(2026, 9, 7, 9, 2);
+      final firstEnd = DateTime(2026, 9, 7, 9, 47);
+      final secondStart = DateTime(2026, 9, 7, 15);
+      final secondEnd = DateTime(2026, 9, 7, 15, 10);
+      cubit.startTracking('e1', now: firstStart);
+      cubit.stopTracking('e1', now: firstEnd);
+      cubit.startTracking('e1', now: secondStart);
+      cubit.stopTracking('e1', now: secondEnd);
+      final logged = cubit.byId('e1')!;
+      expect(logged.sessions, hasLength(2));
+      expect(logged.actualStart, firstStart);
+      expect(logged.actualEnd, secondEnd);
+      expect(logged.reportedDuration, const Duration(minutes: 55));
+
+      final removedId = logged.recordedSessions.first.id;
+      cubit.removeSession('e1', removedId);
+      final remaining = cubit.byId('e1')!;
+      expect(remaining.sessions, hasLength(1));
+      expect(remaining.recordedSessions.single.start, secondStart);
+      expect(remaining.actualStart, secondStart);
+      expect(remaining.actualEnd, secondEnd);
+      expect(remaining.reportedDuration, const Duration(minutes: 10));
+    });
+
     test('starting a second timer saves the first', () {
       final cubit = CalendarCubit();
       cubit.addEvent(event('e1', DateTime(2026, 9, 7, 9)));
@@ -93,13 +128,15 @@ void main() {
 
     test('all-day events cannot be tracked', () {
       final cubit = CalendarCubit();
-      cubit.addEvent(PlannerEvent(
-        id: 'all',
-        subject: 'All day',
-        start: DateTime(2026, 9, 7),
-        end: DateTime(2026, 9, 8),
-        allDay: true,
-      ));
+      cubit.addEvent(
+        PlannerEvent(
+          id: 'all',
+          subject: 'All day',
+          start: DateTime(2026, 9, 7),
+          end: DateTime(2026, 9, 8),
+          allDay: true,
+        ),
+      );
       cubit.startTracking('all', now: DateTime(2026, 9, 7, 9));
       expect(cubit.byId('all')?.isTracking, isFalse);
       expect(cubit.activeTrackingId, isNull);
@@ -162,8 +199,11 @@ void main() {
       final t0 = DateTime(2026, 9, 7, 9, 5);
       cubit.startTracking('e1', now: t0);
       final corrected = DateTime(2026, 9, 7, 8, 40);
-      cubit.setTimerStart('e1', corrected,
-          now: t0.add(const Duration(minutes: 30)));
+      cubit.setTimerStart(
+        'e1',
+        corrected,
+        now: t0.add(const Duration(minutes: 30)),
+      );
       final live = cubit.byId('e1')!;
       expect(live.isTracking, isTrue);
       expect(live.timerStartedAt, corrected);
@@ -176,18 +216,21 @@ void main() {
       final t0 = DateTime(2026, 9, 7, 9, 5);
       cubit.startTracking('e1', now: t0);
       cubit.setTimerStart(
-          'e1', t0.add(const Duration(hours: 3)),
-          now: t0.add(const Duration(minutes: 20)));
-      expect(cubit.byId('e1')?.timerStartedAt,
-          t0.add(const Duration(minutes: 20)));
+        'e1',
+        t0.add(const Duration(hours: 3)),
+        now: t0.add(const Duration(minutes: 20)),
+      );
+      expect(
+        cubit.byId('e1')?.timerStartedAt,
+        t0.add(const Duration(minutes: 20)),
+      );
       expect(cubit.byId('e1')?.isTracking, isTrue);
       cubit.setTimerStart('e2', t0, now: t0);
       expect(cubit.byId('e2')?.isTracking, isFalse);
       cubit.setTimerStart('missing', t0, now: t0);
     });
 
-    test('setReported writes the interval and takes over a running timer',
-        () {
+    test('setReported writes the interval and takes over a running timer', () {
       final cubit = CalendarCubit();
       cubit.addEvent(event('e1', DateTime(2026, 9, 7, 9)));
       cubit.addEvent(event('e2', DateTime(2026, 9, 7, 10)));
@@ -198,14 +241,15 @@ void main() {
       expect(live.isTracking, isFalse);
       expect(live.reportedDuration, const Duration(hours: 1, minutes: 5));
       // Manual entry without ever starting the timer.
-      cubit.setReported('e2',
-          DateTime(2026, 9, 7, 10), DateTime(2026, 9, 7, 10, 45));
-      expect(cubit.byId('e2')?.reportedDuration,
-          const Duration(minutes: 45));
+      cubit.setReported(
+        'e2',
+        DateTime(2026, 9, 7, 10),
+        DateTime(2026, 9, 7, 10, 45),
+      );
+      expect(cubit.byId('e2')?.reportedDuration, const Duration(minutes: 45));
       // Non-positive ranges floor to one minute, never vanish.
       cubit.setReported('e2', t0, t0);
-      expect(cubit.byId('e2')?.reportedDuration,
-          const Duration(minutes: 1));
+      expect(cubit.byId('e2')?.reportedDuration, const Duration(minutes: 1));
     });
   });
 
@@ -214,21 +258,25 @@ void main() {
       final now = DateTime(2026, 9, 7, 10, 30);
       final slices = [
         TrackedSlice(
-            event: event('prev', DateTime(2026, 9, 7, 8)),
-            start: DateTime(2026, 9, 7, 8),
-            end: DateTime(2026, 9, 7, 9)),
+          event: event('prev', DateTime(2026, 9, 7, 8)),
+          start: DateTime(2026, 9, 7, 8),
+          end: DateTime(2026, 9, 7, 9),
+        ),
         TrackedSlice(
-            event: event('now', DateTime(2026, 9, 7, 10)),
-            start: DateTime(2026, 9, 7, 10),
-            end: DateTime(2026, 9, 7, 11)),
+          event: event('now', DateTime(2026, 9, 7, 10)),
+          start: DateTime(2026, 9, 7, 10),
+          end: DateTime(2026, 9, 7, 11),
+        ),
         TrackedSlice(
-            event: event('next1', DateTime(2026, 9, 7, 12)),
-            start: DateTime(2026, 9, 7, 12),
-            end: DateTime(2026, 9, 7, 13)),
+          event: event('next1', DateTime(2026, 9, 7, 12)),
+          start: DateTime(2026, 9, 7, 12),
+          end: DateTime(2026, 9, 7, 13),
+        ),
         TrackedSlice(
-            event: event('next2', DateTime(2026, 9, 7, 14)),
-            start: DateTime(2026, 9, 7, 14),
-            end: DateTime(2026, 9, 7, 15)),
+          event: event('next2', DateTime(2026, 9, 7, 14)),
+          start: DateTime(2026, 9, 7, 14),
+          end: DateTime(2026, 9, 7, 15),
+        ),
       ];
       final sel = selectNowNext(slices, now);
       expect(sel.current.map((s) => s.event.id), ['now']);

@@ -769,6 +769,7 @@ class _CalendarPageState extends State<CalendarPage> {
                                     _selectedReportId,
                                 onIntervalChanged: _adjustReportedInterval,
                                 onRecord: _recordReport,
+                                onDeleted: _deleteReportedBlock,
                                 colorFor: (block) =>
                                     _projection.reportColorById[block
                                         .displayId] ??
@@ -1840,8 +1841,8 @@ class _CalendarPageState extends State<CalendarPage> {
         displayId,
       );
     } catch (_) {}
-    var eventId = entry?.eventId;
-    eventId ??= reportOwnerIdForDisplayId(displayId);
+    final eventId =
+        entry?.eventId ?? reportOwnerIdForDisplayId(displayId);
     if (eventId != null) {
       final event = calendar.byId(eventId);
       if (event != null) {
@@ -1971,6 +1972,41 @@ class _CalendarPageState extends State<CalendarPage> {
           : 'Recording another report · $title',
       onUndo: undo.undo,
     );
+  }
+
+  /// Drops one recorded run (or manual entry) from the Plan + Report
+  /// column. The chip is the only place a single run can be deleted, so the
+  /// task's other recordings stay intact.
+  void _deleteReportedBlock(ReportBlock block) {
+    var deleted = false;
+    try {
+      deleted = deleteReportedBlock(
+        reporting: context.read<ReportingCubit>(),
+        calendar: context.read<CalendarCubit>(),
+        nodes: context.read<NodeCubit>(),
+        block: block,
+      );
+      if (deleted) {
+        final undo = context.read<UndoCubit>();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Deleted ${block.title.isEmpty ? 'report' : block.title} · '
+              '${_calendarTimeFormat.format(block.start)} – '
+              '${_calendarTimeFormat.format(block.end)}',
+            ),
+            action: SnackBarAction(label: 'Undo', onPressed: undo.undo),
+          ),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Couldn’t delete that report — please try again.'),
+        ),
+      );
+    }
   }
 
   PlannerEvent _asDraft(PlannerEvent event) => PlannerEvent(

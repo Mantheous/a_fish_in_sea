@@ -63,8 +63,14 @@ class AssignmentEffortSample extends Equatable {
   });
 
   @override
-  List<Object?> get props =>
-      [feedId, templateKey, classLabel, title, actualStart, minutes];
+  List<Object?> get props => [
+    feedId,
+    templateKey,
+    classLabel,
+    title,
+    actualStart,
+    minutes,
+  ];
 }
 
 /// Aggregate time knowledge for one classified assignment type.
@@ -140,8 +146,7 @@ class AssignmentTypeEffort extends Equatable {
     return out < 0 ? out + _minutesPerDay : out;
   }
 
-  double? get averagePerSession =>
-      samples <= 0 ? null : totalMinutes / samples;
+  double? get averagePerSession => samples <= 0 ? null : totalMinutes / samples;
 
   /// Scope key shared with [AssignmentGroup] and [AssignmentRule].
   String get groupKey => '$feedId|$templateKey';
@@ -157,20 +162,19 @@ class AssignmentTypeEffort extends Equatable {
     int? minMinutes,
     int? maxMinutes,
     DateTime? updatedAt,
-  }) =>
-      AssignmentTypeEffort(
-        feedId: feedId,
-        templateKey: templateKey,
-        samples: samples ?? this.samples,
-        totalMinutes: totalMinutes ?? this.totalMinutes,
-        minutes: minutes ?? this.minutes,
-        startMinutes: startMinutes ?? this.startMinutes,
-        minMinutes: minMinutes ?? this.minMinutes,
-        maxMinutes: maxMinutes ?? this.maxMinutes,
-        updatedAt: updatedAt ?? this.updatedAt,
-        classLabel: clearClassLabel ? null : (classLabel ?? this.classLabel),
-        displayName: displayName ?? this.displayName,
-      );
+  }) => AssignmentTypeEffort(
+    feedId: feedId,
+    templateKey: templateKey,
+    samples: samples ?? this.samples,
+    totalMinutes: totalMinutes ?? this.totalMinutes,
+    minutes: minutes ?? this.minutes,
+    startMinutes: startMinutes ?? this.startMinutes,
+    minMinutes: minMinutes ?? this.minMinutes,
+    maxMinutes: maxMinutes ?? this.maxMinutes,
+    updatedAt: updatedAt ?? this.updatedAt,
+    classLabel: clearClassLabel ? null : (classLabel ?? this.classLabel),
+    displayName: displayName ?? this.displayName,
+  );
 
   factory AssignmentTypeEffort.fromJson(Map<String, dynamic> json) {
     final feedId = json['feedId'];
@@ -180,7 +184,8 @@ class AssignmentTypeEffort extends Equatable {
         templateKey is! String ||
         templateKey.isEmpty) {
       throw const FormatException(
-          'AssignmentTypeEffort needs feedId/templateKey');
+        'AssignmentTypeEffort needs feedId/templateKey',
+      );
     }
     DateTime updatedAt = DateTime.fromMillisecondsSinceEpoch(0);
     final rawUpdated = json['updatedAt'];
@@ -188,16 +193,21 @@ class AssignmentTypeEffort extends Equatable {
       updatedAt = DateTime.tryParse(rawUpdated)?.toLocal() ?? updatedAt;
     }
     final minutes = _clampedIntList(json['minutes'], max: _minutesPerDay * 2);
-    final startMinutes =
-        _clampedIntList(json['startMinutes'], max: _minutesPerDay - 1);
+    final startMinutes = _clampedIntList(
+      json['startMinutes'],
+      max: _minutesPerDay - 1,
+    );
     var samples = (json['samples'] as num?)?.toInt() ?? minutes.length;
     if (samples < 0) samples = 0;
-    var totalMinutes = (json['totalMinutes'] as num?)?.toInt() ??
+    var totalMinutes =
+        (json['totalMinutes'] as num?)?.toInt() ??
         minutes.fold<int>(0, (a, b) => a + b);
     if (totalMinutes < 0) totalMinutes = 0;
-    final minMinutes = (json['minMinutes'] as num?)?.toInt() ??
+    final minMinutes =
+        (json['minMinutes'] as num?)?.toInt() ??
         (minutes.isEmpty ? 0 : minutes.reduce(math.min));
-    final maxMinutes = (json['maxMinutes'] as num?)?.toInt() ??
+    final maxMinutes =
+        (json['maxMinutes'] as num?)?.toInt() ??
         (minutes.isEmpty ? 0 : minutes.reduce(math.max));
     return AssignmentTypeEffort(
       feedId: feedId,
@@ -215,32 +225,32 @@ class AssignmentTypeEffort extends Equatable {
   }
 
   Map<String, dynamic> toJson() => {
-        'feedId': feedId,
-        'templateKey': templateKey,
-        'classLabel': classLabel,
-        'displayName': displayName,
-        'samples': samples,
-        'totalMinutes': totalMinutes,
-        'minutes': minutes,
-        'startMinutes': startMinutes,
-        'minMinutes': minMinutes,
-        'maxMinutes': maxMinutes,
-        'updatedAt': updatedAt.toIso8601String(),
-      };
+    'feedId': feedId,
+    'templateKey': templateKey,
+    'classLabel': classLabel,
+    'displayName': displayName,
+    'samples': samples,
+    'totalMinutes': totalMinutes,
+    'minutes': minutes,
+    'startMinutes': startMinutes,
+    'minMinutes': minMinutes,
+    'maxMinutes': maxMinutes,
+    'updatedAt': updatedAt.toIso8601String(),
+  };
 
   @override
   List<Object?> get props => [
-        feedId,
-        templateKey,
-        classLabel,
-        displayName,
-        samples,
-        totalMinutes,
-        minutes,
-        startMinutes,
-        minMinutes,
-        maxMinutes,
-      ];
+    feedId,
+    templateKey,
+    classLabel,
+    displayName,
+    samples,
+    totalMinutes,
+    minutes,
+    startMinutes,
+    minMinutes,
+    maxMinutes,
+  ];
 }
 
 List<int> _clampedIntList(Object? raw, {required int max}) {
@@ -264,36 +274,45 @@ int? _median(List<int> values) {
   return ((sorted[mid - 1] + sorted[mid]) / 2).round();
 }
 
-/// Build one sample from a homework node that has a recorded session.
+/// Build one sample from a homework node's first recorded session.
 /// Null when the node is not classified homework or has no report.
 AssignmentEffortSample? effortSampleFromNode(Node node) {
-  if (!node.isHomework) return null;
-  final start = node.actualStart;
-  final end = node.actualEnd;
-  if (start == null || end == null) return null;
+  final samples = effortSamplesFromNode(node);
+  return samples.isEmpty ? null : samples.first;
+}
+
+/// One sample per recorded run: several short sittings should teach the
+/// estimate the same way one long sitting does.
+List<AssignmentEffortSample> effortSamplesFromNode(Node node) {
+  if (!node.isHomework) return const [];
   final scope = node.feedId ?? node.classId;
-  if (scope == null || scope.isEmpty) return null;
-  final minutes = end.difference(start).inMinutes;
-  // A 0-minute report is a stray stop/start, not a study session.
-  if (minutes <= 0) return null;
+  if (scope == null || scope.isEmpty) return const [];
   final key = assignmentTemplateKey(node.title);
-  if (key.isEmpty) return null;
-  return AssignmentEffortSample(
-    feedId: scope,
-    templateKey: key,
-    classLabel: node.classLabel,
-    title: node.title,
-    actualStart: start,
-    minutes: minutes,
-  );
+  if (key.isEmpty) return const [];
+  final out = <AssignmentEffortSample>[];
+  for (final session in node.recordedSessions) {
+    final minutes = session.duration.inMinutes;
+    // A 0-minute report is a stray stop/start, not a study session.
+    if (!session.isValid || minutes <= 0) continue;
+    out.add(
+      AssignmentEffortSample(
+        feedId: scope,
+        templateKey: key,
+        classLabel: node.classLabel,
+        title: node.title,
+        actualStart: session.start,
+        minutes: minutes,
+      ),
+    );
+  }
+  return out;
 }
 
 /// Every recorded session across [nodes], oldest first.
 List<AssignmentEffortSample> collectEffortSamples(List<Node> nodes) {
   final out = <AssignmentEffortSample>[];
   for (final node in nodes) {
-    final sample = effortSampleFromNode(node);
-    if (sample != null) out.add(sample);
+    out.addAll(effortSamplesFromNode(node));
   }
   out.sort((a, b) {
     final at = a.actualStart;
@@ -345,19 +364,21 @@ List<AssignmentTypeEffort> learnEffortIndex(
         displayName = m.title.trim();
       }
     }
-    out.add(AssignmentTypeEffort(
-      feedId: members.first.feedId,
-      templateKey: members.first.templateKey,
-      classLabel: members.first.classLabel ?? prior?.classLabel,
-      displayName: displayName,
-      samples: allMinutes.length,
-      totalMinutes: allMinutes.fold<int>(0, (a, b) => a + b),
-      minutes: recentMinutes,
-      startMinutes: recentStarts,
-      minMinutes: allMinutes.reduce(math.min),
-      maxMinutes: allMinutes.reduce(math.max),
-      updatedAt: at,
-    ));
+    out.add(
+      AssignmentTypeEffort(
+        feedId: members.first.feedId,
+        templateKey: members.first.templateKey,
+        classLabel: members.first.classLabel ?? prior?.classLabel,
+        displayName: displayName,
+        samples: allMinutes.length,
+        totalMinutes: allMinutes.fold<int>(0, (a, b) => a + b),
+        minutes: recentMinutes,
+        startMinutes: recentStarts,
+        minMinutes: allMinutes.reduce(math.min),
+        maxMinutes: allMinutes.reduce(math.max),
+        updatedAt: at,
+      ),
+    );
   }
   for (final e in existing) {
     if (!out.any((o) => o.groupKey == e.groupKey)) out.add(e);
@@ -423,8 +444,12 @@ class AssignmentEstimate extends Equatable {
   });
 
   @override
-  List<Object?> get props =>
-      [minutes, preferredStartMinute, source, effort?.groupKey];
+  List<Object?> get props => [
+    minutes,
+    preferredStartMinute,
+    source,
+    effort?.groupKey,
+  ];
 }
 
 /// Resolve the estimate for one node.
