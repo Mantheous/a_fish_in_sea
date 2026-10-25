@@ -1,6 +1,7 @@
 import 'package:equatable/equatable.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 
+import '../../common/persistence/stable_storage_keys.dart';
 import '../model/node.dart';
 
 /// Day vs hour/minute granularity for scheduling a node.
@@ -30,6 +31,9 @@ class SchedulePrefsState extends Equatable {
 /// as day instead of wiping the pref.
 class SchedulePrefsCubit extends HydratedCubit<SchedulePrefsState> {
   SchedulePrefsCubit() : super(const SchedulePrefsState());
+
+  @override
+  String get storagePrefix => StableStorageKeys.schedulePrefs;
 
   void setGranularity(ScheduleGranularity value) {
     if (value == state.lastUsed) return;

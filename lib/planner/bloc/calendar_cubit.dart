@@ -1,10 +1,14 @@
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
+import '../../common/persistence/stable_storage_keys.dart';
 import '../../common/undo/revertable_hydrated_cubit.dart';
 import '../model/planner_event.dart';
 
 class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
   CalendarCubit() : super(const []);
+
+  @override
+  String get storagePrefix => StableStorageKeys.calendar;
 
   // Indexed lookup: rebuilt once per state change instead of once per tile.
   List<PlannerEvent>? _indexSource;

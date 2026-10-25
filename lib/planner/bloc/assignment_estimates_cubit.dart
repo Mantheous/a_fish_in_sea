@@ -1,3 +1,4 @@
+import '../../common/persistence/stable_storage_keys.dart';
 import '../../common/undo/revertable_hydrated_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../model/assignment_estimate.dart';
@@ -16,6 +17,9 @@ import '../model/assignment_estimate.dart';
 /// skipped so one bad row never wipes the rest.
 class AssignmentEstimatesCubit extends RevertableHydratedCubit<List<AssignmentTypeEffort>> {
   AssignmentEstimatesCubit() : super(const []);
+
+  @override
+  String get storagePrefix => StableStorageKeys.assignmentEstimates;
 
   AssignmentTypeEffort? forType({
     required String? feedId,

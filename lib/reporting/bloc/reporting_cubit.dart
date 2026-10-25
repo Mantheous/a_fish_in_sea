@@ -1,9 +1,13 @@
+import '../../common/persistence/stable_storage_keys.dart';
 import '../../common/undo/revertable_hydrated_cubit.dart';
 import '../model/reported_entry.dart';
 import '../reporting_logic.dart';
 
 class ReportingCubit extends RevertableHydratedCubit<Map<String, List<ReportedEntry>>> {
   ReportingCubit() : super(const {});
+
+  @override
+  String get storagePrefix => StableStorageKeys.reporting;
 
   List<ReportedEntry> entriesForDay(DateTime day) =>
       state[dayKey(day)] ?? const [];

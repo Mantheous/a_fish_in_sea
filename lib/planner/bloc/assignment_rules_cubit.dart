@@ -1,3 +1,4 @@
+import '../../common/persistence/stable_storage_keys.dart';
 import '../../common/undo/revertable_hydrated_cubit.dart';
 import '../model/assignment_rule.dart';
 
@@ -14,6 +15,9 @@ import '../model/assignment_rule.dart';
 /// sheet, each a single undoable NodeCubit write.
 class AssignmentRulesCubit extends RevertableHydratedCubit<List<AssignmentRule>> {
   AssignmentRulesCubit() : super(const []);
+
+  @override
+  String get storagePrefix => StableStorageKeys.assignmentRules;
 
   AssignmentRule? byId(String id) {
     for (final rule in state) {

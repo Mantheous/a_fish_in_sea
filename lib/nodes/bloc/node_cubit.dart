@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/common/persistence/stable_storage_keys.dart';
 import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/budget.dart';
 import 'package:a_fish_in_sea/finances/model/expense.dart';
@@ -25,6 +26,9 @@ import '../service/node_tree_ops.dart';
 /// link in directly (no tags anywhere).
 class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   NodeCubit() : super(const []);
+
+  @override
+  String get storagePrefix => StableStorageKeys.node;
 
   // ── Lookups (indexed; rebuilt once per state change, not per tile) ────
 

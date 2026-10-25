@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:equatable/equatable.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:hydrated_bloc/hydrated_bloc.dart';
+import 'package:a_fish_in_sea/common/persistence/stable_storage_keys.dart';
 import 'package:a_fish_in_sea/finances/model/granularity.dart';
 import 'package:a_fish_in_sea/finances/model/ledger_entry.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
@@ -150,6 +151,9 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
     // Initial build
     rebuild();
   }
+
+  @override
+  String get storagePrefix => StableStorageKeys.waterfall;
 
   /// Coalesces rapid source emits (e.g. per-template instance generation)
   /// into one rebuild on the next microtask.

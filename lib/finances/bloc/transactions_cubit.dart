@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/common/persistence/stable_storage_keys.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
 
@@ -7,6 +8,9 @@ import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
 /// operation is assigning an expense to a transaction for reconciliation.
 class TransactionsCubit extends RevertableHydratedCubit<List<Transaction>> {
   TransactionsCubit() : super([]);
+
+  @override
+  String get storagePrefix => StableStorageKeys.transactions;
 
   // ── Import from Plaid ───────────────────────────────────────────────
 

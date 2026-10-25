@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
+import '../../common/persistence/stable_storage_keys.dart';
 import '../model/color_prefs.dart';
 
 /// Mobile phones start on the day view; web desktop and desktop start on week.
@@ -111,6 +112,9 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
 
   SettingsCubit()
       : super(SettingsState(defaultCalendarView: platformDefaultCalendarView));
+
+  @override
+  String get storagePrefix => StableStorageKeys.settings;
 
   void setIcalProxyBase(String url) =>
       emit(state.copyWith(icalProxyBase: url.trim()));
