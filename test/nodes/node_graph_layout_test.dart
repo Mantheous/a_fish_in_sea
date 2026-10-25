@@ -110,6 +110,66 @@ void main() {
       expect(links.where((e) => e.primary).length, 1);
     });
 
+    test('shared task sits below every parent, not just the first', () {
+      // `task` feeds both `a` (row 1) and `e` (row 3). Depth-first placement
+      // used to claim it under `a`, leaving it level with `d` and above its
+      // other parent `e`.
+      final nodes = [
+        goal('root', due: DateTime(2026, 1, 1)),
+        goal('a', parents: ['root'], due: DateTime(2026, 1, 2)),
+        goal('c', parents: ['root'], due: DateTime(2026, 1, 3)),
+        goal('d', parents: ['c'], due: DateTime(2026, 1, 4)),
+        goal('e', parents: ['d'], due: DateTime(2026, 1, 5)),
+        goal('task', parents: ['a', 'e'], due: DateTime(2026, 1, 6)),
+      ];
+      final layout = layoutNodeGraph(nodes: nodes);
+      final byId = {for (final p in layout.placements) p.node.id: p};
+
+      expect(byId['root']!.depth, 0);
+      expect(byId['a']!.depth, 1);
+      expect(byId['c']!.depth, 1);
+      expect(byId['d']!.depth, 2);
+      expect(byId['e']!.depth, 3);
+      expect(byId['task']!.depth, 4);
+      expect(byId['task']!.placementParentId, 'e');
+
+      // The whole DAG lays out strictly downward: no connector goes up.
+      for (final edge in layout.edges) {
+        final parent = byId[edge.parentId]!;
+        final child = byId[edge.childId]!;
+        expect(
+          parent.rect.bottom,
+          lessThan(child.rect.top),
+          reason: '${edge.parentId} must sit above ${edge.childId}',
+        );
+      }
+    });
+
+    test('deep parent never ends up below a shared child', () {
+      // Same DAG with the shallow parent sorted first and the deep parent
+      // claimed through a different branch, so placement order cannot be
+      // what keeps the rows right.
+      final nodes = [
+        goal('root'),
+        goal('shallow', parents: ['root'], created: DateTime(2026, 1, 2)),
+        goal('mid', parents: ['root'], created: DateTime(2026, 1, 3)),
+        goal('deep', parents: ['mid'], created: DateTime(2026, 1, 4)),
+        goal('deeper', parents: ['deep'], created: DateTime(2026, 1, 5)),
+        goal('task', parents: ['shallow', 'deeper'], created: DateTime(2025, 1, 1)),
+      ];
+      final layout = layoutNodeGraph(nodes: nodes);
+      final byId = {for (final p in layout.placements) p.node.id: p};
+      expect(byId['shallow']!.depth, 1);
+      expect(byId['deeper']!.depth, 3);
+      expect(byId['task']!.depth, 4);
+      for (final edge in layout.edges) {
+        expect(
+          byId[edge.parentId]!.rect.bottom,
+          lessThan(byId[edge.childId]!.rect.top),
+        );
+      }
+    });
+
     test('search filter ignores collapse so matches stay reachable', () {
       final nodes = [
         goal('root'),
