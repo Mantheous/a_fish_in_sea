@@ -46,12 +46,14 @@ class GraphNodePlacement {
   /// Canvas-space card rectangle (top-left + fixed card size).
   final Rect rect;
 
-  /// Row in the layered layout. Roots are 0.
+  /// Row in the layered layout. Roots are 0 and every child row is strictly
+  /// below all of its parents, so a shared node is placed on the row after
+  /// its deepest parent.
   final int depth;
 
   /// Parent this node is drawn under. Null for roots. A shared node is
-  /// placed once, under the first parent that claims it; every other parent
-  /// still gets a connector (see [GraphEdge.primary]).
+  /// placed once, under its deepest parent; every other parent still gets a
+  /// connector (see [GraphEdge.primary]).
   final String? placementParentId;
 
   /// Direct children in the full goal set (not just the displayed ones).
@@ -133,6 +135,11 @@ class NodeGraphLayout {
 /// every parent centered over its children, and shared children drawn once
 /// with connectors from each parent (their extra edges curve across).
 ///
+/// Rows are longest-path depths: a node sits one row below its *deepest*
+/// parent, never level with or above any parent. A task feeding several
+/// goals at different levels therefore hangs under the deepest one instead
+/// of appearing beside an ancestor.
+///
 /// Collapse: ids in [collapsedIds] hide their whole subtree; those nodes
 /// still render with a badge ([GraphNodePlacement.hiddenDescendants]) so the
 /// hidden part is discoverable. When [visibleIds] is non-null (search or a
@@ -210,8 +217,52 @@ NodeGraphLayout layoutNodeGraph({
     }
   }
 
-  // Claim placement children in DFS order: the first parent to reach a
-  // shared node places it, later parents only get a connector.
+  // Row of every displayed node: one below its deepest displayed parent
+  // (the longest path from any root), so a shared node can never render
+  // above a goal it feeds. Depth-first placement used to put a shared task
+  // under the first parent that reached it, which left it level with — or
+  // above — a deeper parent that also claims it. DAG validation prevents
+  // cycles; the visiting set only keeps this from recursing forever.
+  final ranks = <String, int>{};
+  int rankOf(String id, Set<String> visiting) {
+    final cached = ranks[id];
+    if (cached != null) return cached;
+    if (!visiting.add(id)) return 0;
+    var rank = 0;
+    for (final parent in byId[id]!.parentIds) {
+      if (parent == id || !displayed.contains(parent)) continue;
+      final candidate = rankOf(parent, visiting) + 1;
+      if (candidate > rank) rank = candidate;
+    }
+    visiting.remove(id);
+    ranks[id] = rank;
+    return rank;
+  }
+
+  for (final id in displayed.toList()) {
+    rankOf(id, <String>{});
+  }
+
+  // Claim placement children: a shared node is placed under its deepest
+  // parent, so its row is exactly one below that parent. Equal-rank parents
+  // keep the first one that reached the node, matching the old tidy order.
+  final placementParent = <String, String?>{};
+  for (final id in displayed) {
+    final node = byId[id]!;
+    String? chosen;
+    var chosenRank = -1;
+    for (final parent in node.parentIds) {
+      if (parent == id || !displayed.contains(parent)) continue;
+      final parentRank = ranks[parent] ?? 0;
+      if (parentRank > chosenRank ||
+          (parentRank == chosenRank && parent == displayParent[id])) {
+        chosen = parent;
+        chosenRank = parentRank;
+      }
+    }
+    placementParent[id] = chosen;
+  }
+
   final placementChildren = <String, List<String>>{};
   final placed = <String>{};
 
@@ -219,7 +270,9 @@ NodeGraphLayout layoutNodeGraph({
     if (!placed.add(id)) return;
     final kids = <Node>[];
     for (final kid in children[id] ?? const <Node>[]) {
-      if (displayed.contains(kid.id) && !placed.contains(kid.id)) {
+      if (displayed.contains(kid.id) &&
+          !placed.contains(kid.id) &&
+          placementParent[kid.id] == id) {
         kids.add(kid);
       }
     }
@@ -230,10 +283,21 @@ NodeGraphLayout layoutNodeGraph({
   }
 
   final displayRoots =
-      displayed.where((id) => displayParent[id] == null).toList()
+      displayed.where((id) => placementParent[id] == null).toList()
         ..sort((a, b) => order[a]!.compareTo(order[b]!));
+  final layoutRoots = <String>[];
   for (final root in displayRoots) {
+    layoutRoots.add(root);
     collect(root);
+  }
+  // Defensive: a cycle-invalid graph has no placement root, so nothing above
+  // reached its members. Lay them out as extra roots — a broken graph must
+  // not render a blank canvas.
+  for (final id in displayed) {
+    if (!placed.contains(id)) {
+      layoutRoots.add(id);
+      collect(id);
+    }
   }
 
   // Tidy tree sizing: a subtree is at least one card wide, otherwise the
@@ -306,7 +370,7 @@ NodeGraphLayout layoutNodeGraph({
   }
 
   var cursorX = style.padding;
-  for (final root in displayRoots) {
+  for (final root in layoutRoots) {
     position(root, cursorX, 0);
     cursorX += subtreeWidth(root) + style.rootGap;
   }
@@ -326,7 +390,7 @@ NodeGraphLayout layoutNodeGraph({
         node: node,
         rect: rect,
         depth: depths[id] ?? 0,
-        placementParentId: displayParent[id],
+        placementParentId: placementParent[id],
         childCount: directKids.length,
         hiddenDescendants: collapsed ? _descendantCount(id, children) : 0,
         collapsed: collapsed,
