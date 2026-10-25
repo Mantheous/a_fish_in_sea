@@ -1,25 +1,33 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../planner/bloc/calendar_cubit.dart';
+import '../bloc/node_cubit.dart';
 import '../model/node.dart';
+import '../service/node_event_link.dart';
 import '../service/node_graph_layout.dart';
 import 'node_editor.dart';
+import 'node_finish_sheet.dart';
+import 'node_graph_action_bar.dart';
 import 'node_graph_card.dart';
 
 /// Graphical top-down view of the goal DAG, following the board in
 /// `docs/goal-tree-issue-4.png`: layered cards joined by curved connectors.
 ///
-/// An alternative to the list views, not a replacement: tap a card to edit
-/// (same editor as everywhere else) and tap the −/+ badge under a card to
-/// collapse or expand that subtree. Each card also grows the tree in place:
-/// its `↓` button creates a subgoal beneath it and its `↑` button creates a
-/// parent goal above it. Pan and zoom to move around large trees. Repeating
-/// templates and goals with a very wide fan-out start collapsed so their
-/// generated instances or subgoal walls don't flood the graph. Folding is
-/// reported through [onCollapsedChanged] and can be restored with
-/// [collapsedIds], so leaving the Goals tab and coming back shows the same
-/// graph.
+/// An alternative to the list views, not a replacement: tap a card to select
+/// it, tap it again to edit (same editor as everywhere else). A selected
+/// card floats an action bar with the goal's quick controls — record time
+/// toward it, edit, add a subgoal or parent, mark it complete — while the
+/// −/+ badge under a card collapses or expands that subtree. Each card also
+/// grows the tree in place: its `↓` button creates a subgoal beneath it and
+/// its `↑` button creates a parent goal above it. Pan and zoom to move around
+/// large trees. Repeating templates and goals with a very wide fan-out start
+/// collapsed so their generated instances or subgoal walls don't flood the
+/// graph. Folding is reported through [onCollapsedChanged] and can be
+/// restored with [collapsedIds], so leaving the Goals tab and coming back
+/// shows the same graph.
 class NodeGraphView extends StatefulWidget {
   const NodeGraphView({
     super.key,
@@ -96,6 +104,11 @@ class _NodeGraphViewState extends State<NodeGraphView> {
   final Set<String> _collapsed = <String>{};
   bool _seeded = false;
 
+  /// The goal whose action bar is showing. Selection is transient view state
+  /// (never persisted): it clears on a background tap, the bar's ✕, a
+  /// collapse that hides the card, and a tab switch.
+  String? _selectedId;
+
   /// Most recently added goal. The viewport pans just enough to show it
   /// without changing zoom, so growing the tree is visible even when the
   /// new card lands outside the current view (e.g. a new parent root to
@@ -106,12 +119,20 @@ class _NodeGraphViewState extends State<NodeGraphView> {
   @override
   void didUpdateWidget(covariant NodeGraphView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // Deleting or filtering out the selected goal leaves no card to act on;
+    // never keep an invisible selection pointing at a missing node.
+    if (_selectedId != null &&
+        !widget.nodes.any((node) => node.id == _selectedId)) {
+      _selectedId = null;
+    }
     if (widget.expandToken != oldWidget.expandToken) {
       final withKids = _parentIds(widget.nodes);
       _seeded = true;
       _collapsed
         ..clear()
         ..addAll(widget.expandAll ? const <String>[] : withKids);
+      // Collapse-all folds the selected card out of view.
+      if (!widget.expandAll) _selectedId = null;
       _reportCollapsed();
     }
   }
@@ -193,16 +214,27 @@ class _NodeGraphViewState extends State<NodeGraphView> {
         onClearFilters: widget.onClearFilters,
       );
     }
+    // The selection is only actionable while its card is on screen: a
+    // collapse or a filter that hides it also hides the bar.
+    GraphNodePlacement? selectedPlacement;
+    if (_selectedId != null) {
+      for (final placement in layout.placements) {
+        if (placement.node.id == _selectedId) {
+          selectedPlacement = placement;
+          break;
+        }
+      }
+    }
+    final selectedNode = selectedPlacement?.node;
     final canvas = _GraphCanvas(
       layout: layout,
       progress: widget.progress,
       matches: widget.matchedIds,
+      selectedId: selectedNode?.id,
       showToggles: !restricted,
-      onEdit: (node) => showNodeEditor(context, existing: node),
-      onToggle: (id) => setState(() {
-        if (!_collapsed.remove(id)) _collapsed.add(id);
-        _reportCollapsed();
-      }),
+      onCardTap: _selectOrEdit,
+      onBackgroundTap: _clearSelection,
+      onToggle: _toggleCollapsed,
       onAddSubgoal: _addSubgoal,
       onAddParent: _addParent,
     );
@@ -239,17 +271,121 @@ class _NodeGraphViewState extends State<NodeGraphView> {
                 : '$shown of ${widget.nodes.length} goals',
           ),
         ),
-        Positioned(
-          left: 12,
-          bottom: 10,
-          child: _GraphPill(
-            text: widget.filterActive
-                ? 'Filtered-out goals collapse · links stay visible'
-                : 'Tap to edit · ↓ / ↑ add goals · −/+ collapses',
+        if (selectedNode != null)
+          Positioned(
+            left: 12,
+            right: 12,
+            bottom: 10,
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: NodeGraphActionBar(
+                key: nodeGraphActionBarKey,
+                node: selectedNode,
+                onRecord: () => _toggleRecording(selectedNode),
+                onEdit: () => showNodeEditor(context, existing: selectedNode),
+                onAddSubgoal: selectedNode.instanceOfId == null
+                    ? () => _addSubgoal(selectedNode)
+                    : null,
+                onAddParent: selectedNode.instanceOfId == null
+                    ? () => _addParent(selectedNode)
+                    : null,
+                onToggleDone: selectedNode.isUnbounded
+                    ? null
+                    : () => _toggleDone(selectedNode),
+                onClose: _clearSelection,
+              ),
+            ),
+          )
+        else
+          Positioned(
+            left: 12,
+            bottom: 10,
+            child: _GraphPill(
+              text: widget.filterActive
+                  ? 'Filtered-out goals collapse · links stay visible'
+                  : 'Tap to select · tap again to edit · −/+ collapses',
+            ),
           ),
-        ),
       ],
     );
+  }
+
+  /// Card tap: the first tap selects the goal and opens its action bar; a
+  /// tap on the already-selected card opens the editor, the same as before.
+  void _selectOrEdit(Node node) {
+    if (_selectedId == node.id) {
+      showNodeEditor(context, existing: node);
+      return;
+    }
+    setState(() => _selectedId = node.id);
+  }
+
+  void _clearSelection() {
+    if (_selectedId == null) return;
+    setState(() => _selectedId = null);
+  }
+
+  /// Folds or unfolds [id] and drops a selection that the fold hides.
+  void _toggleCollapsed(String id) {
+    final collapsing = !_collapsed.contains(id);
+    final selection = _selectedId;
+    setState(() {
+      if (!_collapsed.remove(id)) _collapsed.add(id);
+      if (collapsing &&
+          selection != null &&
+          selection != id &&
+          _hasAncestor(widget.nodes, selection, id)) {
+        _selectedId = null;
+      }
+    });
+    _reportCollapsed();
+  }
+
+  /// True when [ancestorId] is one of [nodeId]'s ancestors in [nodes].
+  /// Walks every parent (the goal tree is a DAG, so a goal can sit under
+  /// more than one parent).
+  static bool _hasAncestor(List<Node> nodes, String nodeId, String ancestorId) {
+    final byId = {for (final node in nodes) node.id: node};
+    final pending = <String>[...?byId[nodeId]?.parentIds];
+    final seen = <String>{};
+    while (pending.isNotEmpty) {
+      final id = pending.removeLast();
+      if (!seen.add(id)) continue;
+      if (id == ancestorId) return true;
+      pending.addAll(byId[id]?.parentIds ?? const <String>[]);
+    }
+    return false;
+  }
+
+  /// Starts the selected goal's timer, or stops it through the same finish
+  /// flow the task rows use (which mirrors the run onto linked events).
+  void _toggleRecording(Node node) {
+    if (node.isTracking) {
+      stopNodeAndFinish(context, node.id);
+      return;
+    }
+    try {
+      NodeEventLink.startNodeTracking(
+        context.read<NodeCubit>(),
+        context.read<CalendarCubit>(),
+        node.id,
+      );
+    } catch (_) {}
+  }
+
+  /// Marks the selected goal complete, or reopens it when it is done.
+  void _toggleDone(Node node) {
+    try {
+      NodeEventLink.toggleNodeDone(
+        context.read<NodeCubit>(),
+        context.read<CalendarCubit>(),
+        node.id,
+      );
+    } catch (_) {
+      try {
+        context.read<NodeCubit>().toggleDone(node.id);
+      } catch (_) {}
+    }
   }
 
   /// "Add subgoal": the new goal is created with [parent] pre-selected as
@@ -546,8 +682,10 @@ class _GraphCanvas extends StatelessWidget {
     required this.layout,
     required this.progress,
     required this.matches,
+    required this.selectedId,
     required this.showToggles,
-    required this.onEdit,
+    required this.onCardTap,
+    required this.onBackgroundTap,
     required this.onToggle,
     required this.onAddSubgoal,
     required this.onAddParent,
@@ -556,8 +694,16 @@ class _GraphCanvas extends StatelessWidget {
   final NodeGraphLayout layout;
   final Map<String, double> progress;
   final Set<String> matches;
+
+  /// The goal whose card paints the selection ring, if any.
+  final String? selectedId;
+
   final bool showToggles;
-  final ValueChanged<Node> onEdit;
+  final ValueChanged<Node> onCardTap;
+
+  /// A tap on empty canvas clears the selection.
+  final VoidCallback onBackgroundTap;
+
   final ValueChanged<String> onToggle;
   final ValueChanged<Node> onAddSubgoal;
   final ValueChanged<Node> onAddParent;
@@ -569,6 +715,12 @@ class _GraphCanvas extends StatelessWidget {
       child: Stack(
         clipBehavior: Clip.none,
         children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onBackgroundTap,
+            ),
+          ),
           Positioned.fill(
             child: CustomPaint(
               painter: _GraphEdgePainter(
@@ -591,8 +743,9 @@ class _GraphCanvas extends StatelessWidget {
                 placement: placement,
                 progress: progress[placement.node.id] ?? 0,
                 isMatch: matches.contains(placement.node.id),
+                selected: placement.node.id == selectedId,
                 showToggle: showToggles,
-                onEdit: () => onEdit(placement.node),
+                onTap: () => onCardTap(placement.node),
                 onToggle: () => onToggle(placement.node.id),
                 onAddSubgoal: () => onAddSubgoal(placement.node),
                 onAddParent: () => onAddParent(placement.node),

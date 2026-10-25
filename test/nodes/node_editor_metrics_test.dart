@@ -241,7 +241,10 @@ void main() {
     await tester.pump();
     await tester.pump();
 
+    // Goals lands on the graph: select the card, then edit from its bar.
     await tester.tap(find.text('Midterm review'));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('graph-action-edit')));
     await tester.pumpAndSettle();
     // The parent picker is inline now: the class is a recent goal, so
     // tapping its row is the whole flow.

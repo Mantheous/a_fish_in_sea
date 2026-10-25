@@ -5,20 +5,22 @@ import '../service/node_graph_layout.dart';
 
 /// One goal card on the graph canvas.
 ///
-/// Tapping the card opens the editor, like every other goal surface. The
-/// footer carries the quick tree actions: a −/+ badge collapses or expands
-/// the subtree, and the two small arrows grow the tree in place — `↓`
-/// creates a subgoal under this goal, `↑` creates a parent goal above it.
-/// Generated instances get neither action: their structure is owned by the
-/// template that produced them.
+/// Tapping the card selects it; tapping the selected card opens the editor,
+/// and the selection's action bar offers the same edit plus recording and
+/// goal controls. The footer carries the quick tree actions: a −/+ badge
+/// collapses or expands the subtree, and the two small arrows grow the tree
+/// in place — `↓` creates a subgoal under this goal, `↑` creates a parent
+/// goal above it. Generated instances get neither action: their structure is
+/// owned by the template that produced them.
 class NodeGraphCard extends StatelessWidget {
   const NodeGraphCard({
     super.key,
     required this.placement,
     required this.progress,
     required this.isMatch,
+    required this.selected,
     required this.showToggle,
-    required this.onEdit,
+    required this.onTap,
     required this.onToggle,
     required this.onAddSubgoal,
     required this.onAddParent,
@@ -27,8 +29,14 @@ class NodeGraphCard extends StatelessWidget {
   final GraphNodePlacement placement;
   final double progress;
   final bool isMatch;
+
+  /// True while this card is the graph's selected goal.
+  final bool selected;
+
   final bool showToggle;
-  final VoidCallback onEdit;
+
+  /// Card tap: select on the first tap, edit on the next.
+  final VoidCallback onTap;
   final VoidCallback onToggle;
   final VoidCallback onAddSubgoal;
   final VoidCallback onAddParent;
@@ -38,10 +46,10 @@ class NodeGraphCard extends StatelessWidget {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final node = placement.node;
-    if (placement.compact) return _compactCard(context, node);
+    if (placement.compact) return _compactCard(context, node, selected);
     final isRoot = node.parentIds.isEmpty;
     final fill = _fill(theme, node);
-    final border = isMatch
+    final border = selected || isMatch
         ? scheme.primary
         : isRoot
         ? scheme.primary.withValues(alpha: 0.55)
@@ -56,18 +64,21 @@ class NodeGraphCard extends StatelessWidget {
     // parent, so neither add action is offered.
     final canGrow = node.instanceOfId == null;
     return Tooltip(
-      message: _tooltip(node),
+      message: _tooltip(node, selected),
       waitDuration: const Duration(milliseconds: 600),
       child: Material(
         color: fill,
-        elevation: 1,
+        elevation: selected ? 6 : 1,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(isRoot ? 28 : 10),
-          side: BorderSide(color: border, width: isMatch ? 2 : 1),
+          side: BorderSide(
+            color: border,
+            width: selected ? 3 : isMatch ? 2 : 1,
+          ),
         ),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
-          onTap: onEdit,
+          onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(9, 6, 9, 5),
             child: Column(
@@ -130,23 +141,30 @@ class NodeGraphCard extends StatelessWidget {
   /// A filtered-out ancestor, collapsed to a small path marker. It keeps
   /// the connector visible and stays tappable, but reads as context rather
   /// than as a matching goal.
-  Widget _compactCard(BuildContext context, Node node) {
+  Widget _compactCard(BuildContext context, Node node, bool selected) {
     final scheme = Theme.of(context).colorScheme;
     final title = node.title.isEmpty ? '(untitled)' : node.title;
     return Tooltip(
-      message: '$title\nfiltered out · shown to keep the link',
+      message:
+          '$title\nfiltered out · shown to keep the link\n'
+          '${selected ? 'selected · tap again to edit' : 'tap to select'}',
       waitDuration: const Duration(milliseconds: 500),
       child: Opacity(
         opacity: 0.82,
         child: Material(
-          color: scheme.surfaceContainerHighest,
+          color: selected
+              ? scheme.primaryContainer
+              : scheme.surfaceContainerHighest,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(999),
-            side: BorderSide(color: scheme.outlineVariant),
+            side: BorderSide(
+              color: selected ? scheme.primary : scheme.outlineVariant,
+              width: selected ? 2 : 1,
+            ),
           ),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
-            onTap: onEdit,
+            onTap: onTap,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8),
               child: Row(
@@ -280,7 +298,7 @@ class NodeGraphCard extends StatelessWidget {
     );
   }
 
-  String _tooltip(Node node) {
+  String _tooltip(Node node, bool selected) {
     final parts = <String>[node.title.isEmpty ? '(untitled)' : node.title];
     parts.add(
       node.isUnbounded
@@ -290,7 +308,7 @@ class NodeGraphCard extends StatelessWidget {
     if (node.isDone) parts.add('done');
     if (node.status == NodeStatus.failed) parts.add('failed');
     if (node.isTracking) parts.add('recording');
-    parts.add('tap to edit');
+    parts.add(selected ? 'selected · tap again to edit' : 'tap to select');
     return parts.join('\n');
   }
 
