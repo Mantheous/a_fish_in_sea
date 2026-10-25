@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
+import '../../common/time/local_date.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_event_link.dart';
@@ -9,7 +10,10 @@ import '../../nodes/service/node_event_sync.dart';
 import '../../nodes/view/node_finish_sheet.dart';
 import '../../nodes/view/timer_edit_sheet.dart';
 import '../bloc/calendar_cubit.dart';
+import '../bloc/settings_cubit.dart';
+import '../model/event_reschedule.dart';
 import '../model/planner_event.dart';
+import '../../reporting/view/time_range_dial.dart';
 
 /// Time-tracking sections for the event detail/editor sheets.
 ///
@@ -291,6 +295,142 @@ class TimeReportSection extends StatelessWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Bottom sheet with the circular [TimeRangeDial] for correcting a
+/// timer-logged interval (`actualStart`/`actualEnd`) on a calendar event.
+/// Saves once via [CalendarCubit.updateEvent], so dragging the handles is
+/// a single undoable change.
+Future<void> showAdjustTimerSheet(
+  BuildContext context, {
+  required String eventId,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    builder: (sheetContext) => Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
+      ),
+      child: _AdjustTimerSheet(eventId: eventId),
+    ),
+  );
+}
+
+class _AdjustTimerSheet extends StatefulWidget {
+  final String eventId;
+
+  const _AdjustTimerSheet({required this.eventId});
+
+  @override
+  State<_AdjustTimerSheet> createState() => _AdjustTimerSheetState();
+}
+
+class _AdjustTimerSheetState extends State<_AdjustTimerSheet> {
+  late DateTime _day;
+  late int _dayOffset;
+  late TimeOfDay _start;
+  late TimeOfDay _end;
+  bool _ready = false;
+
+  @override
+  void initState() {
+    super.initState();
+    PlannerEvent? live;
+    try {
+      live = context.read<CalendarCubit>().byId(widget.eventId);
+    } catch (_) {}
+    final actualStart = live?.actualStart ?? live?.start;
+    final actualEnd = live?.actualEnd ?? live?.end;
+    if (actualStart == null || actualEnd == null) {
+      final now = DateTime.now();
+      _day = localDay(now);
+      _dayOffset = 0;
+      _start = TimeOfDay.fromDateTime(now);
+      _end = TimeOfDay.fromDateTime(now.add(const Duration(hours: 1)));
+    } else {
+      _day = localDay(actualStart);
+      final endDay = localDay(actualEnd);
+      // Calendar-day distance: on a 23-hour spring-forward day a fixed
+      // 24h `inDays` rounds an overnight session down to 0.
+      _dayOffset = localDayDistance(_day, endDay).clamp(0, 1);
+      _start = TimeOfDay.fromDateTime(actualStart);
+      _end = TimeOfDay.fromDateTime(actualEnd);
+    }
+    _ready = true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_ready) return const SizedBox.shrink();
+    var snap = 5;
+    try {
+      snap = context.read<SettingsCubit>().state.snapMinutes;
+    } catch (_) {}
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Adjust reported time',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            Center(
+              child: TimeRangeDial(
+                start: _start,
+                end: _end,
+                snapMinutes: snap,
+                onStartChanged: (v) => setState(() => _start = v),
+                onEndChanged: (v) => setState(() => _end = v),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: () {
+                    CalendarCubit calendar;
+                    try {
+                      calendar = context.read<CalendarCubit>();
+                    } catch (_) {
+                      Navigator.of(context).pop();
+                      return;
+                    }
+                    final live = calendar.byId(widget.eventId);
+                    if (live == null || !live.hasReported) {
+                      Navigator.of(context).pop();
+                      return;
+                    }
+                    final start = DateTime(_day.year, _day.month, _day.day,
+                        _start.hour, _start.minute);
+                    var end = shiftByCalendarDays(
+                      DateTime(_day.year, _day.month, _day.day, _end.hour,
+                          _end.minute),
+                      _dayOffset,
+                    );
+                    if (!end.isAfter(start)) {
+                      end = start.add(minEventDuration);
+                    }
+                    calendar.setReported(live.id, start, end);
+                    Navigator.of(context).pop();
+                  },
+                  child: const Text('Save'),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

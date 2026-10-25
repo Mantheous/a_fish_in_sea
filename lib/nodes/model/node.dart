@@ -10,6 +10,7 @@ export 'class_node.dart';
 export 'node_calendar_link.dart';
 export 'node_recurrence.dart';
 
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/common/time/planned_actual.dart';
 import 'package:a_fish_in_sea/common/time/time_session.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
@@ -660,9 +661,7 @@ class Node extends Equatable {
   bool isOverdueAt(DateTime now) {
     final due = schedule?.due;
     if (due == null || isDone) return false;
-    final today = DateTime(now.year, now.month, now.day);
-    final dueDay = DateTime(due.year, due.month, due.day);
-    return dueDay.isBefore(today);
+    return localDay(due).isBefore(localDay(now));
   }
 
   Node copyWith({
@@ -787,7 +786,7 @@ class Node extends Equatable {
     DateTime createdAt = DateTime.fromMillisecondsSinceEpoch(0);
     final rawCreated = json['createdAt'];
     if (rawCreated is String) {
-      createdAt = DateTime.tryParse(rawCreated) ?? createdAt;
+      createdAt = DateTime.tryParse(rawCreated)?.toLocal() ?? createdAt;
     }
     // `metrics` is the current list shape; a legacy single `auto` map
     // loads as a one-item list so nothing written by the first automated
@@ -952,7 +951,11 @@ String? _stringOrNull(Object? raw) {
 DateTime? _tryDate(Object? raw) {
   if (raw == null) return null;
   if (raw is! String || raw.isEmpty) return null;
-  return DateTime.tryParse(raw);
+  // Wall-clock fields (due/start/end/completedAt) live in local time. A
+  // payload written with an offset (old data, another device) parses as
+  // UTC and would otherwise read as the wrong local day; toLocal is a
+  // no-op for the zone-less strings this app writes.
+  return DateTime.tryParse(raw)?.toLocal();
 }
 
 /// Timer instants serialize as UTC strings (so they compare across

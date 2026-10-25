@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
+import '../../common/time/local_date.dart';
 import '../model/color_prefs.dart';
 import '../model/planner_event.dart';
 import 'event_colors.dart';
@@ -111,7 +112,7 @@ class PlannerCalendarDataSource extends CalendarDataSource {
   DateTime getEndTime(int index) {
     final event = _events[index];
     if (event.allDay && !event.end.isAfter(event.start)) {
-      return event.start.add(const Duration(days: 1));
+      return shiftLocalDay(event.start, 1);
     }
     return event.end;
   }

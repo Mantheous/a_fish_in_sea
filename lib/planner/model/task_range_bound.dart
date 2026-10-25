@@ -1,5 +1,7 @@
 import 'package:equatable/equatable.dart';
 
+import '../../common/time/local_date.dart';
+
 /// Hard bounds for day-offset bounds. Parsing clamps into this window.
 const int taskDateRangeMinOffset = -365;
 const int taskDateRangeMaxOffset = 365;
@@ -81,17 +83,17 @@ class TaskRangeBound extends Equatable {
   /// or null when unbounded. [firstDayOfWeek] is 1 = Monday … 7 = Sunday
   /// and sets which day opens the week for weekday bounds.
   DateTime? resolve(DateTime now, {int firstDayOfWeek = 1}) {
-    final today = DateTime(now.year, now.month, now.day);
+    final today = localDay(now);
     switch (kind) {
       case TaskRangeBoundKind.unbounded:
         return null;
       case TaskRangeBoundKind.offset:
-        return today.add(Duration(days: offsetDays));
+        return shiftLocalDay(today, offsetDays);
       case TaskRangeBoundKind.weekday:
         final startOffset = (today.weekday - firstDayOfWeek + 7) % 7;
-        final weekStart = today.subtract(Duration(days: startOffset));
+        final weekStart = shiftLocalDay(today, -startOffset);
         final position = (weekday - firstDayOfWeek + 7) % 7;
-        return weekStart.add(Duration(days: position + weeksOut * 7));
+        return shiftLocalDay(weekStart, position + weeksOut * 7);
     }
   }
 

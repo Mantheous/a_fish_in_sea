@@ -1,5 +1,6 @@
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
+import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/view/nodes_page.dart';
@@ -45,6 +46,12 @@ void main() {
         actualStart: start,
         actualEnd: now,
       ),
+      Node(
+        id: 'habit',
+        title: 'Temple weekly',
+        createdAt: now,
+        recurrence: const NodeRecurrence(frequency: TimeScale.weekly),
+      ),
     ]);
 
     await tester.pumpWidget(
@@ -76,5 +83,6 @@ void main() {
     await tester.pump();
     expect(find.text('Scripture study'), findsOneWidget);
     expect(find.textContaining('2h / 2h'), findsOneWidget);
+    expect(find.text('Temple weekly'), findsOneWidget);
   });
 }

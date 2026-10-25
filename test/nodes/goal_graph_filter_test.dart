@@ -137,6 +137,7 @@ void main() {
       });
       expect(matched(const GoalGraphFilter(kind: GoalKindFilter.automated)), {
         'auto',
+        'habit',
       });
       expect(matched(const GoalGraphFilter(kind: GoalKindFilter.homework)), {
         'homework',

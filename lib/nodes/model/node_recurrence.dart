@@ -62,5 +62,7 @@ class NodeRecurrence extends Equatable {
   ];
 }
 
-DateTime? _tryDate(Object? raw) =>
-    raw is String ? DateTime.tryParse(raw) : null;
+DateTime? _tryDate(Object? raw) {
+  if (raw is! String) return null;
+  return DateTime.tryParse(raw)?.toLocal();
+}

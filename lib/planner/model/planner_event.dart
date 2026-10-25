@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/common/time/planned_actual.dart';
 import 'package:a_fish_in_sea/common/time/time_session.dart';
 
@@ -109,7 +110,8 @@ class PlannerEvent extends Equatable {
 
   DateTime get endOfDay {
     if (!allDay) return end;
-    return DateTime(end.year, end.month, end.day, 23, 59, 59);
+    final day = localDay(end);
+    return DateTime(day.year, day.month, day.day, 23, 59, 59);
   }
 
   PlannerEvent copyWith({
@@ -178,35 +180,36 @@ class PlannerEvent extends Equatable {
   );
 
   factory PlannerEvent.fromJson(Map<String, dynamic> json) => PlannerEvent(
-    id: json['id'] as String,
-    subject: json['subject'] as String,
-    notes: json['notes'] as String?,
-    location: json['location'] as String?,
-    start: DateTime.parse(json['start'] as String),
-    end: DateTime.parse(json['end'] as String),
-    allDay: json['allDay'] as bool? ?? false,
-    recurrenceRule: json['recurrenceRule'] as String? ?? '',
-    feedId: json['feedId'] as String?,
-    sourceUid: json['sourceUid'] as String?,
-    seriesId: json['seriesId'] as String?,
-    classLabel: json['classLabel'] as String?,
-    colorValue: json['colorValue'] as int?,
-    taskId: json['taskId'] as String?,
-    isTask: json['isTask'] as bool? ?? false,
-    done: json['done'] as bool? ?? false,
-    completedAt: json['completedAt'] == null
-        ? null
-        : DateTime.parse(json['completedAt'] as String),
-    placeId: json['placeId'] as String?,
-    sessions: TimeSession.listFromJson(json['sessions']),
-    actualStart: _tryTimerDate(json['actualStart']),
-    actualEnd: _tryTimerDate(json['actualEnd']),
-    timerStartedAt: _tryTimerDate(json['timerStartedAt']),
-    failed: json['failed'] as bool? ?? false,
-    assignees: _assigneesFromJson(json['assignees']),
-    tagIds: _tagIdsFromJson(json['tagIds']),
-    reminderMinutesBefore: _reminderFromJson(json['reminderMinutesBefore']),
-  );
+        id: json['id'] as String,
+        subject: json['subject'] as String,
+        notes: json['notes'] as String?,
+        location: json['location'] as String?,
+        start: DateTime.parse(json['start'] as String).toLocal(),
+        end: DateTime.parse(json['end'] as String).toLocal(),
+        allDay: json['allDay'] as bool? ?? false,
+        recurrenceRule: json['recurrenceRule'] as String? ?? '',
+        feedId: json['feedId'] as String?,
+        sourceUid: json['sourceUid'] as String?,
+        seriesId: json['seriesId'] as String?,
+        classLabel: json['classLabel'] as String?,
+        colorValue: json['colorValue'] as int?,
+        taskId: json['taskId'] as String?,
+        isTask: json['isTask'] as bool? ?? false,
+        done: json['done'] as bool? ?? false,
+        completedAt: json['completedAt'] == null
+            ? null
+            : DateTime.parse(json['completedAt'] as String).toLocal(),
+        placeId: json['placeId'] as String?,
+        sessions: TimeSession.listFromJson(json['sessions']),
+        actualStart: _tryTimerDate(json['actualStart']),
+        actualEnd: _tryTimerDate(json['actualEnd']),
+        timerStartedAt: _tryTimerDate(json['timerStartedAt']),
+        failed: json['failed'] as bool? ?? false,
+        assignees: _assigneesFromJson(json['assignees']),
+        tagIds: _tagIdsFromJson(json['tagIds']),
+        reminderMinutesBefore:
+            _reminderFromJson(json['reminderMinutesBefore']),
+      );
 
   static int? _reminderFromJson(Object? raw) {
     if (raw == null) return null;

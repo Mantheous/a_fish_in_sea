@@ -1,3 +1,4 @@
+import '../../common/time/local_date.dart';
 import '../model/node.dart';
 import 'node_tree_ops.dart';
 
@@ -108,7 +109,9 @@ class GoalGraphFilter {
     GoalKindFilter.money => node.money != null,
     GoalKindFilter.time => node.effort != null,
     GoalKindFilter.repeating => node.isTemplate,
-    GoalKindFilter.automated => node.isAutomatedGoal,
+    // Repeating goals generate their own occurrences, so the automated
+    // bucket includes them alongside goals measured from data.
+    GoalKindFilter.automated => node.isAutomatedGoal || node.isTemplate,
     GoalKindFilter.homework =>
       node.isHomework ||
       node.isClassNode ||
@@ -119,24 +122,26 @@ class GoalGraphFilter {
 
   bool _matchesDate(Node node, DateTime now, {int firstDayOfWeek = 1}) {
     final day = _dayOf(node);
-    final today = DateTime(now.year, now.month, now.day);
+    final today = localDay(now);
     switch (date) {
       case GoalDateFilter.any:
         return true;
       case GoalDateFilter.overdue:
         return node.isOverdueAt(now);
       case GoalDateFilter.today:
-        return day != null && _sameDay(day, today);
+        return day != null && isSameLocalDay(day, today);
       case GoalDateFilter.thisWeek:
         if (day == null) return false;
         final startOffset = (today.weekday - firstDayOfWeek + 7) % 7;
-        final weekStart = today.subtract(Duration(days: startOffset));
-        final weekEnd = weekStart.add(const Duration(days: 7));
-        return !day.isBefore(weekStart) && day.isBefore(weekEnd);
+        final weekStart = shiftLocalDay(today, -startOffset);
+        final weekEnd = shiftLocalDay(weekStart, 7);
+        final dayOnly = localDay(day);
+        return !dayOnly.isBefore(weekStart) && dayOnly.isBefore(weekEnd);
       case GoalDateFilter.thisMonth:
-        return day != null &&
-            day.year == today.year &&
-            day.month == today.month;
+        final dayOnly = day == null ? null : localDay(day);
+        return dayOnly != null &&
+            dayOnly.year == today.year &&
+            dayOnly.month == today.month;
       case GoalDateFilter.noDate:
         return day == null;
     }
@@ -146,9 +151,6 @@ class GoalGraphFilter {
     final schedule = node.schedule;
     return schedule?.due ?? schedule?.start ?? schedule?.end;
   }
-
-  static bool _sameDay(DateTime a, DateTime b) =>
-      a.year == b.year && a.month == b.month && a.day == b.day;
 
   @override
   bool operator ==(Object other) =>

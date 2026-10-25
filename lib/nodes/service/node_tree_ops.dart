@@ -1,3 +1,4 @@
+import '../../common/time/local_date.dart';
 import '../model/node.dart';
 
 /// Result of [planBreakdown]: one slice per child step to create.
@@ -72,7 +73,7 @@ List<DateTime>? _spreadDues({
   final schedule = parent.schedule;
   DateTime? end = schedule?.due ?? schedule?.end;
   DateTime start = schedule?.start ?? now;
-  end ??= start.add(Duration(days: count));
+  end ??= shiftByCalendarDays(start, count);
   if (start.isAfter(end)) start = end;
   final spanMs = end.millisecondsSinceEpoch - start.millisecondsSinceEpoch;
   return [

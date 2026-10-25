@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 
@@ -56,8 +57,7 @@ String _squashWhitespace(String s) => s.replaceAll(RegExp(r'\s+'), '');
 /// [NodeCubit.importFromFeed] uses to create homework nodes). Extracted so
 /// [FeedCubit] can mark [PlannerEvent.isTask] with the identical heuristic.
 bool isNodeCandidate(PlannerEvent event, Feed feed, DateTime now) {
-  final cutoff =
-      now.subtract(const Duration(days: nodeImportLookbackDays));
+  final cutoff = shiftLocalDay(localDay(now), -nodeImportLookbackDays);
   // Windows open early: judge staleness by the due end, not the open start.
   if (event.end.isBefore(cutoff)) return false;
   if (feed.kind == FeedKind.canvas &&

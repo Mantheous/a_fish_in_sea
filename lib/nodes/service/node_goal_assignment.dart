@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
 
 import '../bloc/node_cubit.dart';
@@ -35,6 +36,36 @@ class NodeGoalAssignment {
     return null;
   }
 
+  /// The recurring task that already owns [series], when one exists.
+  ///
+  /// A calendar series has at most one recurring task representation. The
+  /// template's generated instances are its canonical work items, so a goal
+  /// assignment must attach the template rather than mint a second shadow
+  /// task per occurrence (those shadows are what returned after deletion
+  /// and flooded the Tasks list with duplicates).
+  static Node? recurringOwnerForSeries(NodeCubit nodes, String? series) {
+    if (series == null || series.isEmpty) return null;
+    for (final node in nodes.state) {
+      if (!node.isTemplate || node.money != null) continue;
+      final link = node.calendarLink;
+      if (link?.isEnabled == false) continue;
+      if (link?.seriesKey == series) return node;
+    }
+    return null;
+  }
+
+  /// [recurringOwnerForSeries] for one event, using the same identity the
+  /// goal link/reconcile path uses.
+  static Node? recurringOwnerForEvent(
+    NodeCubit nodes,
+    CalendarCubit calendar,
+    String eventId,
+  ) {
+    final event = calendar.byId(eventId);
+    if (event == null) return null;
+    return recurringOwnerForSeries(nodes, calendarGoalSeriesKey(event));
+  }
+
   /// Every cached event in the seed's series (or just the seed when it is
   /// not part of a series). Mirrors the editor's series-wide apply, so
   /// assigning a repeating event catches every occurrence.
@@ -52,8 +83,7 @@ class NodeGoalAssignment {
 
   /// Start of [now]'s calendar day (local). Series tasking treats anything
   /// starting today or later as "future"; anything before is past.
-  static DateTime startOfDay(DateTime now) =>
-      DateTime(now.year, now.month, now.day);
+  static DateTime startOfDay(DateTime now) => localDay(now);
 
   /// True when [event]'s occurrence has not yet passed: it starts on or
   /// after [now]'s calendar day. Task due dates land on the occurrence's
@@ -169,6 +199,17 @@ class NodeGoalAssignment {
           ),
         ),
       );
+    }
+    // A series assignment attaches the recurring template, not each event.
+    // Remove that single edge so every generated instance leaves the goal.
+    final owner = includeSeries
+        ? recurringOwnerForSeries(nodes, calendarGoalSeriesKey(seed))
+        : null;
+    if (owner != null &&
+        owner.id != goalId &&
+        owner.parentIds.contains(goalId)) {
+      final error = unassignNodeFromGoal(nodes, owner.id, goalId);
+      return (error: error, removed: error == null ? 1 : 0);
     }
     final linked = [
       for (final event in targets)
@@ -320,6 +361,30 @@ class NodeGoalAssignment {
             'This goal is connected to another calendar series. Unassign that series first.',
         assigned: 0,
       );
+    }
+    // This series already has a recurring task. Attach that template to the
+    // goal — its generated instances are the work — instead of creating one
+    // event shadow per occurrence. A template goal keeps the old behavior:
+    // it binds the series through its own calendarLink.
+    final owner = goal.isTemplate
+        ? null
+        : recurringOwnerForSeries(nodes, series);
+    if (owner != null && owner.id != goal.id) {
+      if (includeSeries) {
+        final already = owner.parentIds.contains(goal.id);
+        final error = already
+            ? null
+            : assignNodeToGoal(nodes, owner.id, goal.id);
+        return (error: error, assigned: error == null && !already ? 1 : 0);
+      }
+      final occurrence = backingNodeFor(nodes, calendar, eventId);
+      if (occurrence != null && occurrence.id != owner.id) {
+        final already = occurrence.parentIds.contains(goal.id);
+        final error = already
+            ? null
+            : assignNodeToGoal(nodes, occurrence.id, goal.id);
+        return (error: error, assigned: error == null && !already ? 1 : 0);
+      }
     }
     var targets = [seed];
     if (includeSeries) {

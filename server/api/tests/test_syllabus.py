@@ -77,6 +77,45 @@ def test_extract_roundtrip_with_faked_llm(client: TestClient, monkeypatch):
     assert body["model"]
 
 
+def test_client_local_today_wins_over_server_clock(
+    client: TestClient, monkeypatch
+):
+    seen: dict[str, str] = {}
+
+    async def fake_chat(base, model, system, user):
+        seen["user"] = user
+        return ("[]", None)
+
+    monkeypatch.setattr(llm, "call_ollama_chat", fake_chat)
+    r = client.post(
+        "/api/syllabus/extract",
+        json={"text": "homework", "today": "2026-10-25"},
+    )
+    assert r.status_code == 200, r.text
+    # Relative dates ("next Friday") must resolve in the user's zone, not
+    # the (usually UTC) server's.
+    assert "Today is 2026-10-25." in seen["user"]
+
+
+def test_invalid_client_today_falls_back_to_server_date(
+    client: TestClient, monkeypatch
+):
+    seen: dict[str, str] = {}
+
+    async def fake_chat(base, model, system, user):
+        seen["user"] = user
+        return ("[]", None)
+
+    monkeypatch.setattr(llm, "call_ollama_chat", fake_chat)
+    r = client.post(
+        "/api/syllabus/extract",
+        json={"text": "homework", "today": "not-a-date"},
+    )
+    assert r.status_code == 200, r.text
+    assert "Today is not-a-date" not in seen["user"]
+    assert "Today is " in seen["user"]
+
+
 def test_llm_failure_is_502(client: TestClient, monkeypatch):
     async def fake_chat(base, model, system, user):
         return None, "Ollama unreachable: boom"

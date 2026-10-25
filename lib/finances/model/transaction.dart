@@ -121,7 +121,7 @@ class Transaction extends Equatable {
       id: json['id'] as String,
       accountId: json['accountId'] as String,
       amount: (json['amount'] as num).toDouble(),
-      date: DateTime.parse(json['date'] as String),
+      date: DateTime.parse(json['date'] as String).toLocal(),
       name: json['name'] as String,
       category: json['category'] as String?,
       pending: json['pending'] as bool? ?? false,
@@ -172,10 +172,12 @@ class Transaction extends Equatable {
 
   static DateTime _parseDate(String dateStr) {
     try {
-      return DateTime.parse(dateStr);
+      // Plaid often sends a date-only string; these are budget days, so
+      // normalize any instants to the device's local day.
+      return DateTime.parse(dateStr).toLocal();
     } catch (_) {
       try {
-        return HttpDate.parse(dateStr);
+        return HttpDate.parse(dateStr).toLocal();
       } catch (_) {
         // Fallback if both fail
         return DateTime.now();

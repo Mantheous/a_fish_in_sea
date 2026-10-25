@@ -311,6 +311,11 @@ class NodeEventLink {
       NodeGoalAssignment.isRepeatingEvent(e);
   static String? seriesKeyOf(PlannerEvent e) =>
       NodeGoalAssignment.seriesKeyOf(e);
+  static Node? recurringOwnerForEvent(
+    CalendarCubit calendar,
+    NodeCubit nodes,
+    String eventId,
+  ) => NodeGoalAssignment.recurringOwnerForEvent(nodes, calendar, eventId);
   static List<PlannerEvent> seriesMembers(CalendarCubit c, PlannerEvent e) =>
       NodeGoalAssignment.seriesMembers(c, e);
   static DateTime startOfDay(DateTime now) =>

@@ -55,13 +55,19 @@ Future<List<SyllabusDraft>> extractSyllabusViaServer(
   }
 
   final httpClient = client ?? http.Client();
+  // Resolve relative dates ("next Friday") against the user's local day,
+  // never the server's clock: the API host is usually UTC.
+  final now = DateTime.now();
+  final today = '${now.year.toString().padLeft(4, '0')}-'
+      '${now.month.toString().padLeft(2, '0')}-'
+      '${now.day.toString().padLeft(2, '0')}';
   final http.Response response;
   try {
     response = await httpClient
         .post(
           uri,
           headers: const {'Content-Type': 'application/json'},
-          body: jsonEncode({'text': payload}),
+          body: jsonEncode({'text': payload, 'today': today}),
         )
         .timeout(timeout);
   } catch (e) {

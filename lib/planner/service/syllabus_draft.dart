@@ -39,7 +39,7 @@ class SyllabusDraft extends Equatable {
     DateTime? due;
     final rawDue = json['due'];
     if (rawDue is String && rawDue.isNotEmpty) {
-      due = DateTime.tryParse(rawDue);
+      due = DateTime.tryParse(rawDue)?.toLocal();
     }
     final notes = (json['notes'] as String?)?.trim();
     return SyllabusDraft(

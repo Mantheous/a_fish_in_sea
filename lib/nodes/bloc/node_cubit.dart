@@ -1,4 +1,5 @@
 import 'package:a_fish_in_sea/common/persistence/stable_storage_keys.dart';
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/budget.dart';
 import 'package:a_fish_in_sea/finances/model/expense.dart';
@@ -432,14 +433,13 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   List<Node> get overdueAndToday => overdueAndTodayAt(DateTime.now());
 
   List<Node> overdueAndTodayAt(DateTime now) {
-    final today = DateTime(now.year, now.month, now.day);
-    final tomorrow = today.add(const Duration(days: 1));
+    final today = localDay(now);
+    final tomorrow = shiftLocalDay(today, 1);
     return state.where((n) {
       if (!n.isOpen || n.isTemplate || n.isUnbounded) return false;
       final due = n.schedule?.due;
       if (due == null) return false;
-      final day = DateTime(due.year, due.month, due.day);
-      return day.isBefore(tomorrow);
+      return localDay(due).isBefore(tomorrow);
     }).toList()..sort(_byDueThenCreated);
   }
 
@@ -448,12 +448,12 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   List<Node> get overdue => overdueAt(DateTime.now());
 
   List<Node> overdueAt(DateTime now) {
-    final today = DateTime(now.year, now.month, now.day);
+    final today = localDay(now);
     return state.where((n) {
       if (!n.isOpen || n.isTemplate || n.isUnbounded) return false;
       final due = n.schedule?.due;
       if (due == null) return false;
-      return due.isBefore(today);
+      return localDay(due).isBefore(today);
     }).toList()..sort(_byDueThenCreated);
   }
 
@@ -463,13 +463,14 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   List<Node> get dueToday => dueTodayAt(DateTime.now());
 
   List<Node> dueTodayAt(DateTime now) {
-    final today = DateTime(now.year, now.month, now.day);
-    final tomorrow = today.add(const Duration(days: 1));
+    final today = localDay(now);
+    final tomorrow = shiftLocalDay(today, 1);
     return state.where((n) {
       if (!n.isOpen || n.isTemplate || n.isUnbounded) return false;
       final due = n.schedule?.due;
       if (due == null) return false;
-      return !due.isBefore(today) && due.isBefore(tomorrow);
+      final day = localDay(due);
+      return !day.isBefore(today) && day.isBefore(tomorrow);
     }).toList()..sort(_byDueThenCreated);
   }
 
@@ -482,18 +483,20 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   List<Node> get dueThisWeek => dueThisWeekAt(DateTime.now());
 
   List<Node> dueThisWeekAt(DateTime now) {
-    final today = DateTime(now.year, now.month, now.day);
+    final today = localDay(now);
     // DateTime.weekday: Monday = 1 … Sunday = 7. Days until Sunday;
     // Sunday itself rolls forward to next Sunday.
-    var daysToSunday = DateTime.sunday - now.weekday;
+    var daysToSunday = DateTime.sunday - today.weekday;
     if (daysToSunday <= 0) daysToSunday += 7;
     // +1 so a due date on Sunday itself is still inside the window.
-    final endExclusive = today.add(Duration(days: daysToSunday + 1));
+    // Calendar-day stepping keeps DST weeks (167/169 hours) intact.
+    final endExclusive = shiftLocalDay(today, daysToSunday + 1);
     return state.where((n) {
       if (!n.isOpen || n.isTemplate || n.isUnbounded) return false;
       final due = n.schedule?.due;
       if (due == null) return false;
-      return !due.isBefore(today) && due.isBefore(endExclusive);
+      final day = localDay(due);
+      return !day.isBefore(today) && day.isBefore(endExclusive);
     }).toList()..sort(_byDueThenCreated);
   }
 
@@ -1593,7 +1596,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       final d = block!.end!.difference(block.start!);
       if (d.inMinutes > 0) length = d;
     }
-    final day = DateTime(date.year, date.month, date.day);
+    final day = localDay(date);
     ScheduleFacet? schedule;
     if (block != null) {
       final dueTime = block.due;
@@ -2192,7 +2195,9 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       changed++;
       next.add(
         n.copyWith(
-          schedule: s!.copyWith(due: base.add(Duration(days: newOffsetDays))),
+          schedule: s!.copyWith(
+            due: shiftByCalendarDays(base, newOffsetDays),
+          ),
         ),
       );
     }

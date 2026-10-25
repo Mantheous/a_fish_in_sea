@@ -461,13 +461,13 @@ class _NodeBody extends StatelessWidget {
             );
           case _NodeView.automated:
             final items = matching(
-              goals.where((n) => n.isAutomatedGoal).toList(),
+              goals.where((n) => n.isAutomatedGoal || n.isTemplate).toList(),
             );
             if (items.isEmpty) {
               return const Center(
                 child: Text(
                   'No automated goals yet.\n'
-                  'Edit a goal and turn on Automated goal.',
+                  'Edit a goal and turn on Automated goal or Repeats.',
                   textAlign: TextAlign.center,
                 ),
               );

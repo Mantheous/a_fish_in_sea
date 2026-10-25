@@ -458,25 +458,23 @@ void main() {
 
       await desktop.engine.syncNow();
 
-      // The phone's day default never roams: each device keeps its own
-      // visible window (refs #50).
-      expect(desktop.settings.state.defaultCalendarView, desktopView);
-      expect(
-        server.store['settings']?['singleton']?.data.containsKey(
-          'defaultCalendarView',
-        ),
-        isFalse,
-      );
-      // Visible hours and the completed task still sync across devices.
-      expect(desktop.settings.state.dayStartHour, 7);
-      expect(desktop.settings.state.dayEndHour, 22);
-      expect(desktop.nodes.byId('weekly-plan-task')?.isDone, isTrue);
-      expect(
-        desktop.nodes.byId('weekly-plan-task')?.completedAt,
-        DateTime.utc(2026, 10, 18, 14),
-      );
-    },
-  );
+    // The phone's day default never roams: each device keeps its own
+    // visible window (refs #50).
+    expect(desktop.settings.state.defaultCalendarView, desktopView);
+    expect(
+      server.store['settings']?['singleton']?.data
+          .containsKey('defaultCalendarView'),
+      isFalse,
+    );
+    // Visible hours and the completed task still sync across devices.
+    expect(desktop.settings.state.dayStartHour, 7);
+    expect(desktop.settings.state.dayEndHour, 22);
+    expect(desktop.nodes.byId('weekly-plan-task')?.isDone, isTrue);
+    expect(
+      desktop.nodes.byId('weekly-plan-task')?.completedAt?.toUtc(),
+      DateTime.utc(2026, 10, 18, 14),
+    );
+  });
 
   test(
     'a local mutation triggers an automatic sync without the timer',

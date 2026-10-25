@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import '../../common/time/local_date.dart';
 import '../model/planner_event.dart';
 import '../../demo/demo_data.dart';
 import '../../demo/demo_mode.dart';
@@ -425,7 +426,7 @@ class GoogleCalendarService {
     final localStart = start.isUtc ? start.toLocal() : start;
     var localEnd = end.isUtc ? end.toLocal() : end;
     if (!localEnd.isAfter(localStart)) {
-      localEnd = allDay ? localStart.add(const Duration(days: 1)) : localStart;
+      localEnd = allDay ? shiftLocalDay(localStart, 1) : localStart;
     }
     return PlannerEvent(
       id: 'gcal:$feedId:$id',

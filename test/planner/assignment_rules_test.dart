@@ -279,12 +279,19 @@ void main() {
       kind: FeedKind.learningSuite,
     );
 
+    // Feed imports are ignored once the window is older than the import
+    // lookback, so anchor the fixture to today instead of a fixed October
+    // date that rots out of range after a week.
+    final anchor = DateTime.now();
+    DateTime at(int days) =>
+        DateTime(anchor.year, anchor.month, anchor.day + days);
+
     PlannerEvent window(String uid, String subject) => PlannerEvent(
           id: 'hw:math290:$uid',
           subject: subject,
           notes: 'Before doing the quiz, watch the video',
-          start: DateTime(2026, 10, 12),
-          end: DateTime(2026, 10, 15),
+          start: at(0),
+          end: at(3),
           allDay: true,
           sourceUid: uid,
         );
@@ -297,14 +304,13 @@ void main() {
         lsFeed,
       );
       expect(nodes.state, hasLength(1));
-      // DTSTART Oct 12 DTEND Oct 15 (exclusive) → due Oct 14.
-      expect(nodes.state.single.schedule?.due, DateTime(2026, 10, 14));
-      expect(nodes.state.single.schedule?.start, DateTime(2026, 10, 12));
-      expect(nodes.state.single.schedule?.end, DateTime(2026, 10, 15));
+      // DTSTART today, DTEND +3 days (exclusive) → due +2 days.
+      expect(nodes.state.single.schedule?.due, at(2));
+      expect(nodes.state.single.schedule?.start, at(0));
+      expect(nodes.state.single.schedule?.end, at(3));
     });
 
-    test('fresh window imports keep allDay so rules match the due date',
-        () {
+    test('fresh window imports keep allDay so rules match the due date', () {
       UndoCubit();
       final nodes = NodeCubit();
       nodes.importFromFeed(
@@ -321,7 +327,7 @@ void main() {
         end: s.end,
         allDay: s.allDay,
       );
-      expect(base, DateTime(2026, 10, 14));
+      expect(base, at(2));
       expect(assignmentShiftOf(due: s.due, base: base), 0);
     });
 
@@ -330,33 +336,30 @@ void main() {
       final nodes = NodeCubit();
       final ev = window('wq-17-18', 'Video Quiz Sections 17 and 18');
       nodes.importFromFeed([ev], lsFeed);
-      // Simulate a pre-fix import sitting on the exclusive end (Oct 15).
+      // Simulate a pre-fix import sitting on the exclusive end (+3 days).
       final wrong = nodes.byId('hw:math290:wq-17-18')!;
       nodes.updateNode(wrong.copyWith(
-        schedule: wrong.schedule!.copyWith(due: DateTime(2026, 10, 15)),
+        schedule: wrong.schedule!.copyWith(due: at(3)),
       ));
       // Hand-edited item far from either base.
       final hand = PlannerEvent(
         id: 'hw:math290:hand-1',
         subject: 'Video Quiz Section 19',
         notes: 'Before doing the quiz, watch the video',
-        start: DateTime(2026, 10, 14),
-        end: DateTime(2026, 10, 17),
+        start: at(2),
+        end: at(5),
         allDay: true,
         sourceUid: 'hand-1',
       );
       nodes.importFromFeed([hand], lsFeed);
       final handNode = nodes.byId('hw:math290:hand-1')!;
       nodes.updateNode(handNode.copyWith(
-        schedule: handNode.schedule!
-            .copyWith(due: DateTime(2026, 11, 1)),
+        schedule: handNode.schedule!.copyWith(due: at(30)),
       ));
 
       nodes.importFromFeed([ev, hand], lsFeed);
-      expect(nodes.byId('hw:math290:wq-17-18')?.schedule?.due,
-          DateTime(2026, 10, 14));
-      expect(nodes.byId('hw:math290:hand-1')?.schedule?.due,
-          DateTime(2026, 11, 1));
+      expect(nodes.byId('hw:math290:wq-17-18')?.schedule?.due, at(2));
+      expect(nodes.byId('hw:math290:hand-1')?.schedule?.due, at(30));
     });
 
     test('resync heals the all-day flag on pre-fix windows', () {
@@ -367,17 +370,16 @@ void main() {
       // Simulate a pre-fix import: due on the exclusive end, allDay lost.
       final wrong = nodes.byId('hw:math290:wq-17-18')!;
       nodes.updateNode(wrong.copyWith(
-        schedule: wrong.schedule!
-            .copyWith(due: DateTime(2026, 10, 15), allDay: false),
+        schedule: wrong.schedule!.copyWith(due: at(3), allDay: false),
       ));
       expect(nodes.byId('hw:math290:wq-17-18')?.schedule?.allDay, isFalse);
 
       nodes.importFromFeed([ev], lsFeed);
       final healed = nodes.byId('hw:math290:wq-17-18')?.schedule;
-      expect(healed?.due, DateTime(2026, 10, 14));
+      expect(healed?.due, at(2));
       expect(healed?.allDay, isTrue);
-      expect(healed?.start, DateTime(2026, 10, 12));
-      expect(healed?.end, DateTime(2026, 10, 15));
+      expect(healed?.start, at(0));
+      expect(healed?.end, at(3));
     });
   });
 }

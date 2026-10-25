@@ -629,6 +629,47 @@ void main() {
       );
       expect(report.trackedNotPlannedMinutes, 30);
     });
+
+    test('DST weeks stay seven calendar days', () {
+      // US fall-back Sunday Nov 1 2026: the week is 169 hours long. The
+      // old `start + 7*24h` ended Sunday at 23:00 and reported 6 days.
+      final range = statsRangeFor(
+        StatsRangePreset.thisWeek,
+        now: DateTime(2026, 11, 1, 12),
+      );
+      expect(range.start, DateTime(2026, 10, 26));
+      expect(range.end, DateTime(2026, 11, 2));
+      expect(range.days, 7);
+      expect(range.contains(DateTime(2026, 11, 1, 23, 59)), isTrue);
+      expect(range.contains(DateTime(2026, 11, 2, 0, 1)), isFalse);
+    });
+
+    test('overnight sessions split across a fall-back midnight', () {
+      // A 13-hour real session from 20:00 Nov 1 to 09:00 Nov 2 spans the
+      // 25-hour day. Before the fix, the second split recomputed the same
+      // 23:00 day end and looped forever.
+      final entry = ReportedEntry(
+        id: 'r1',
+        title: 'Late session',
+        start: DateTime(2026, 11, 1, 20),
+        end: DateTime(2026, 11, 2, 9),
+        status: ReportStatus.attended,
+        auto: false,
+      );
+      final report = buildAssignmentTimeReport(
+        range: StatsRange(
+          start: DateTime(2026, 11, 1),
+          end: DateTime(2026, 11, 3),
+          preset: StatsRangePreset.last30,
+        ),
+        plannedSlices: const [],
+        nodes: const [],
+        reportedEntries: [entry],
+      );
+      // Waking window clips the post-midnight piece to 07:00–09:00.
+      expect(report.days, hasLength(2));
+      expect(report.trackedMinutes, 240 + 120);
+    });
   });
 
   group('buildGoalRangeReport', () {
