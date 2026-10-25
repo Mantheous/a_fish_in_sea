@@ -136,6 +136,37 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('goals with more than five subgoals start collapsed', (
+    tester,
+  ) async {
+    final nodes = NodeCubit();
+    nodes.emitSilent([
+      goal('wide', title: 'Wide goal'),
+      for (var i = 1; i <= 6; i++)
+        goal('wide-$i', title: 'Wide child $i', parents: ['wide']),
+      goal('narrow', title: 'Narrow goal'),
+      for (var i = 1; i <= 5; i++)
+        goal('narrow-$i', title: 'Narrow child $i', parents: ['narrow']),
+    ]);
+    await tester.pumpWidget(harness(nodes));
+    await tester.pump();
+    await openGraph(tester);
+
+    expect(find.text('Wide goal'), findsOneWidget);
+    expect(find.text('Wide child 1'), findsNothing);
+    expect(find.text('+6'), findsOneWidget, reason: 'hidden-count badge');
+    // Five subgoals is still readable, so that goal stays expanded.
+    expect(find.text('Narrow child 1'), findsOneWidget);
+    expect(find.text('Narrow child 5'), findsOneWidget);
+
+    // The default is only a seed: expanding by hand reveals the children.
+    await tester.tap(find.byKey(const ValueKey('graph-toggle-wide')));
+    await tester.pump();
+    expect(find.text('Wide child 1'), findsOneWidget);
+    expect(find.text('Wide child 6'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('search in graph view shows matches despite collapse', (
     tester,
   ) async {
