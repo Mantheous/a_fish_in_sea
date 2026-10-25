@@ -25,6 +25,7 @@ import 'package:a_fish_in_sea/nodes/view/node_graph_view.dart';
 import 'package:a_fish_in_sea/nodes/view/node_finish_sheet.dart';
 import 'package:a_fish_in_sea/nodes/view/task_rollup_tile.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 
 enum _NodeView {
   graph,
@@ -73,6 +74,29 @@ class _NodesPageState extends State<NodesPage> {
   final GlobalKey _focusKey = GlobalKey();
   NavigationCubit? _nav;
   VoidCallback? _focusListener;
+
+  @override
+  void initState() {
+    super.initState();
+    // One structural pass per page load: create/adopt the Homework
+    // container and one class child per discovered class. Idempotent and
+    // additive; feed names only improve the class titles.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Map<String, String> feedNames = const {};
+      try {
+        feedNames = {
+          for (final feed in context.read<FeedCubit>().state)
+            feed.id: feed.name,
+        };
+      } catch (_) {}
+      try {
+        context.read<NodeCubit>().ensureHomeworkStructure(
+          feedNames: feedNames,
+        );
+      } catch (_) {}
+    });
+  }
 
   @override
   void didChangeDependencies() {

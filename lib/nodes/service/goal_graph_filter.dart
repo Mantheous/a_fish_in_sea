@@ -108,7 +108,10 @@ class GoalGraphFilter {
     GoalKindFilter.time => node.effort != null,
     GoalKindFilter.repeating => node.isTemplate,
     GoalKindFilter.automated => node.isAutomatedGoal,
-    GoalKindFilter.homework => node.isHomework,
+    GoalKindFilter.homework =>
+      node.isHomework ||
+      node.isClassNode ||
+      (node.auto?.homeworkOnly ?? false),
     GoalKindFilter.anki => node.anki != null,
     GoalKindFilter.unbounded => node.isUnbounded,
   };
