@@ -1,3 +1,4 @@
+import '../../common/time/local_date.dart';
 import '../../planner/bloc/calendar_cubit.dart';
 import '../../planner/bloc/feed_cubit.dart';
 import '../reporting_logic.dart';
@@ -49,8 +50,11 @@ List<PlannedSlice> _deriveDaySlices(
   FeedCubit feeds,
   DateTime day,
 ) {
-  final dayStart = DateTime(day.year, day.month, day.day);
-  final dayEnd = dayStart.add(const Duration(days: 1));
+  final dayStart = localDay(day);
+  // Calendar-day end, not +24h: fall-back days are 25 hours long, so a
+  // fixed duration would drop the last hour (or swallow an hour of the
+  // next day on spring-forward).
+  final dayEnd = shiftLocalDay(dayStart, 1);
   final onDay = calendar.eventsOnDay(day);
   final visible = feeds.visibleEvents(onDay);
   final slices = <PlannedSlice>[];

@@ -1,9 +1,10 @@
 import 'package:equatable/equatable.dart';
 import 'package:intl/intl.dart';
 
+import '../../common/time/local_date.dart';
 import 'task_range_bound.dart';
 
-DateTime _day(DateTime d) => DateTime(d.year, d.month, d.day);
+DateTime _day(DateTime d) => localDay(d);
 
 final _shortFormat = DateFormat('MMM d');
 

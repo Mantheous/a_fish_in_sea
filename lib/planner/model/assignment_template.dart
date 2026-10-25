@@ -23,6 +23,8 @@
 /// Pure functions only: no Flutter, no cubits, fully unit-testable.
 library;
 
+import '../../common/time/local_date.dart';
+
 /// Normalize one assignment title to its repeating-type template key.
 String assignmentTemplateKey(String title) {
   var s = title.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
@@ -206,14 +208,15 @@ DateTime? assignmentBaseDue({
   required bool allDay,
 }) {
   if (start == null || end == null) return null;
-  final isWindow =
-      allDay && end.difference(start) > const Duration(days: 1);
+  final isWindow = allDay && localDayDistance(start, end) > 1;
   if (!isWindow) return start;
-  return end.subtract(const Duration(days: 1));
+  return shiftByCalendarDays(end, -1);
 }
 
-/// How far [due] sits from [base], in whole days. Null when unknown.
+/// How far [due] sits from [base], in whole calendar days. Null when
+/// unknown. Calendar-day distance (not elapsed hours) so a DST week still
+/// reads as exactly 7 days.
 int? assignmentShiftOf({required DateTime? due, required DateTime? base}) {
   if (due == null || base == null) return null;
-  return due.difference(base).inDays;
+  return localDayDistance(base, due);
 }

@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 
 /// A goal-based spending bucket for a recurring period.
@@ -84,51 +85,63 @@ class Budget extends Equatable {
 
   /// Returns the start of the current budget period that contains [date].
   DateTime currentPeriodStart(DateTime date) {
+    final day = localDay(date);
     switch (period) {
       case TimeScale.daily:
-        return DateTime(date.year, date.month, date.day);
+        return day;
       case TimeScale.weekly:
-        final weekday = date.weekday; // 1=Mon
-        return DateTime(date.year, date.month, date.day - (weekday - 1));
+        final weekday = day.weekday; // 1=Mon
+        return shiftLocalDay(day, -(weekday - 1));
       case TimeScale.biweekly:
-        // Align to startDate's biweekly cadence
-        final daysSinceStart = date.difference(startDate).inDays;
+        // Align to startDate's biweekly cadence. Calendar-day distance, not
+        // elapsed hours: a DST change must not shift the period boundary.
+        final start = localDay(startDate);
+        final daysSinceStart = localDayDistance(start, day);
         final periodIndex = daysSinceStart ~/ 14;
-        return startDate.add(Duration(days: periodIndex * 14));
+        return shiftLocalDay(start, periodIndex * 14);
       case TimeScale.monthly:
-        return DateTime(date.year, date.month, 1);
+        return DateTime(day.year, day.month, 1);
       case TimeScale.quarterly:
-        final quarterMonth = ((date.month - 1) ~/ 3) * 3 + 1;
-        return DateTime(date.year, quarterMonth, 1);
+        final quarterMonth = ((day.month - 1) ~/ 3) * 3 + 1;
+        return DateTime(day.year, quarterMonth, 1);
       case TimeScale.yearly:
-        return DateTime(date.year, 1, 1);
+        return DateTime(day.year, 1, 1);
       case TimeScale.custom:
         final days = customPeriodDays ?? 30;
-        final daysSinceStart = date.difference(startDate).inDays;
+        final start = localDay(startDate);
+        final daysSinceStart = localDayDistance(start, day);
         final periodIndex = daysSinceStart ~/ days;
-        return startDate.add(Duration(days: periodIndex * days));
+        return shiftLocalDay(start, periodIndex * days);
     }
   }
 
-  /// Returns the end of the current budget period that contains [date].
+  /// Returns the inclusive end of the current budget period containing
+  /// [date] (the last millisecond before the next period starts).
   DateTime currentPeriodEnd(DateTime date) {
     final start = currentPeriodStart(date);
     switch (period) {
       case TimeScale.daily:
-        return start.add(const Duration(days: 1)).subtract(const Duration(milliseconds: 1));
+        return shiftLocalDay(start, 1)
+            .subtract(const Duration(milliseconds: 1));
       case TimeScale.weekly:
-        return start.add(const Duration(days: 7)).subtract(const Duration(milliseconds: 1));
+        return shiftLocalDay(start, 7)
+            .subtract(const Duration(milliseconds: 1));
       case TimeScale.biweekly:
-        return start.add(const Duration(days: 14)).subtract(const Duration(milliseconds: 1));
+        return shiftLocalDay(start, 14)
+            .subtract(const Duration(milliseconds: 1));
       case TimeScale.monthly:
-        return DateTime(start.year, start.month + 1, 1).subtract(const Duration(milliseconds: 1));
+        return DateTime(start.year, start.month + 1, 1)
+            .subtract(const Duration(milliseconds: 1));
       case TimeScale.quarterly:
-        return DateTime(start.year, start.month + 3, 1).subtract(const Duration(milliseconds: 1));
+        return DateTime(start.year, start.month + 3, 1)
+            .subtract(const Duration(milliseconds: 1));
       case TimeScale.yearly:
-        return DateTime(start.year + 1, 1, 1).subtract(const Duration(milliseconds: 1));
+        return DateTime(start.year + 1, 1, 1)
+            .subtract(const Duration(milliseconds: 1));
       case TimeScale.custom:
         final days = customPeriodDays ?? 30;
-        return start.add(Duration(days: days)).subtract(const Duration(milliseconds: 1));
+        return shiftLocalDay(start, days)
+            .subtract(const Duration(milliseconds: 1));
     }
   }
 
@@ -145,9 +158,10 @@ class Budget extends Equatable {
         orElse: () => TimeScale.monthly,
       ),
       customPeriodDays: json['customPeriodDays'] as int?,
-      startDate: DateTime.parse(json['startDate'] as String),
-      endDate:
-          json['endDate'] != null ? DateTime.parse(json['endDate'] as String) : null,
+      startDate: DateTime.parse(json['startDate'] as String).toLocal(),
+      endDate: json['endDate'] != null
+          ? DateTime.parse(json['endDate'] as String).toLocal()
+          : null,
       isRecurring: json['isRecurring'] as bool? ?? true,
       autoRollover: json['autoRollover'] as bool? ?? true,
       rolloverAmount: (json['rolloverAmount'] as num?)?.toDouble() ?? 0.0,

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import '../common/time/local_date.dart';
 import 'model/place.dart';
 import 'model/reported_entry.dart';
 import 'model/tracked_point.dart';
@@ -210,8 +211,9 @@ DayStats computeDayStats({
   );
 }
 
-String dayKey(DateTime day) =>
-    '${day.year.toString().padLeft(4, '0')}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+String dayKey(DateTime day) {
+  final local = localDay(day);
+  return '${local.year.toString().padLeft(4, '0')}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}';
+}
 
-bool isSameDay(DateTime a, DateTime b) =>
-    a.year == b.year && a.month == b.month && a.day == b.day;
+bool isSameDay(DateTime a, DateTime b) => isSameLocalDay(a, b);

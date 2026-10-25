@@ -60,12 +60,22 @@ async def syllabus_extract(
     text = text[:15000]
     base = llm.ollama_base()
     model = llm.syllabus_model()
-    today = dt.date.today().isoformat()
+    # "Today" must be the user's local day, not the server's: an LLM is
+    # being asked to resolve relative dates ("next Friday") from it, and
+    # the server usually runs in UTC while the user can be a day ahead or
+    # behind. The client sends its local date; validate and fall back.
+    today = dt.date.today()
+    raw_today = body.get("today")
+    if isinstance(raw_today, str):
+        try:
+            today = dt.date.fromisoformat(raw_today.strip()[:10])
+        except ValueError:
+            pass
     content, err = await llm.call_ollama_chat(
         base,
         model,
         llm.SYSTEM_PROMPT,
-        f"Today is {today}.\n\nSyllabus text:\n{text}",
+        f"Today is {today.isoformat()}.\n\nSyllabus text:\n{text}",
     )
     if err is not None:
         return JSONResponse(status_code=502, content={"error": err})

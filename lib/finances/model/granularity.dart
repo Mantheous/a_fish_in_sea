@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/finances/model/ledger_entry.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 
@@ -90,13 +91,14 @@ DisplayGranularity granularityForScale(TimeScale scale) {
 /// existing period implementation in the repo — so a budget row and a
 /// ledger bucket covering the same week agree.
 DateTime bucketStartFor(DisplayGranularity granularity, DateTime date) {
+  final day = localDay(date);
   switch (granularity) {
     case DisplayGranularity.daily:
-      return DateTime(date.year, date.month, date.day);
+      return day;
     case DisplayGranularity.weekly:
-      return DateTime(date.year, date.month, date.day - (date.weekday - 1));
+      return shiftLocalDay(day, -(day.weekday - 1));
     case DisplayGranularity.monthly:
-      return DateTime(date.year, date.month, 1);
+      return DateTime(day.year, day.month, 1);
   }
 }
 
@@ -197,8 +199,5 @@ List<LedgerBucket> groupLedgerEntries({
 
 /// Whole days between two dates, ignoring the time of day. Negative for
 /// dates in the past.
-int _wholeDaysOut(DateTime date, DateTime today) {
-  final from = DateTime(today.year, today.month, today.day);
-  final to = DateTime(date.year, date.month, date.day);
-  return to.difference(from).inDays;
-}
+int _wholeDaysOut(DateTime date, DateTime today) =>
+    localDayDistance(today, date);

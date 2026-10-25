@@ -176,7 +176,7 @@ class Expense extends Equatable {
       id: json['id'] as String,
       name: json['name'] as String,
       amount: (json['amount'] as num).toDouble(),
-      date: DateTime.parse(json['date'] as String),
+      date: DateTime.parse(json['date'] as String).toLocal(),
       category: json['category'] as String?,
       notes: json['notes'] as String?,
       parentExpenseId: json['parentExpenseId'] as String?,

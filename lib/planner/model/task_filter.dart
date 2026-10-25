@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 
+import '../../common/time/local_date.dart';
 import '../../nodes/model/node.dart';
 import 'task_date_range.dart';
 
@@ -30,7 +31,7 @@ enum TaskFilterKind { both, personal, homework }
 /// always reads as planned and an untinted one as unplanned.
 enum TaskFilterPlanned { all, plannedOnly, unplannedOnly }
 
-DateTime _day(DateTime d) => DateTime(d.year, d.month, d.day);
+DateTime _day(DateTime d) => localDay(d);
 
 /// Pure date-window check shared by view filters and the highlight rule.
 ///
@@ -63,25 +64,28 @@ bool taskFilterDateMatches(
       return _day(due) == _day(now);
     case TaskFilterDate.tomorrow:
       if (due == null) return showUndated;
-      return _day(due) == _day(now).add(const Duration(days: 1));
+      return _day(due) == shiftLocalDay(_day(now), 1);
     case TaskFilterDate.thisWeek:
       if (due == null) return showUndated;
       final today = _day(now);
-      if (_day(due).isBefore(today)) return false;
+      final dueDay = _day(due);
+      if (dueDay.isBefore(today)) return false;
       // today through the next occurrence of the week's last day
       // (the day before firstDayOfWeek), rolling forward when today is
       // already that day — mirrors the legacy "today through Sunday".
       final lastDayOfWeek = firstDayOfWeek == 1 ? 7 : firstDayOfWeek - 1;
-      var daysToEnd = lastDayOfWeek - now.weekday;
+      var daysToEnd = lastDayOfWeek - today.weekday;
       if (daysToEnd <= 0) daysToEnd += 7;
-      final endExclusive = today.add(Duration(days: daysToEnd + 1));
-      return _day(due).isBefore(endExclusive);
+      // Calendar-day stepping, not 24h durations: a DST week is 167 or
+      // 169 hours long, so `add(Duration(days: 1))` can skip a day.
+      final endExclusive = shiftLocalDay(today, daysToEnd + 1);
+      return dueDay.isBefore(endExclusive);
     case TaskFilterDate.next7Days:
       if (due == null) return showUndated;
       final today = _day(now);
-      final endExclusive = today.add(const Duration(days: 7));
-      final day = _day(due);
-      return !day.isBefore(today) && day.isBefore(endExclusive);
+      final endExclusive = shiftLocalDay(today, 7);
+      final dueDay = _day(due);
+      return !dueDay.isBefore(today) && dueDay.isBefore(endExclusive);
   }
 }
 

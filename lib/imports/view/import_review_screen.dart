@@ -346,7 +346,7 @@ class _UpdateLine extends StatelessWidget {
 String _formatWhen(StagedItem item) {
   final raw = item.when;
   if (raw.isEmpty) return '';
-  final dt = DateTime.tryParse(raw);
+  final dt = DateTime.tryParse(raw)?.toLocal();
   if (dt == null) return raw;
   if (item.isNode) {
     // The scraper writes end-of-day (23:59) when only a date is known;
@@ -356,7 +356,8 @@ String _formatWhen(StagedItem item) {
     return endOfDay ? date : '$date · ${_reviewTimeFormat.format(dt)}';
   }
   final endRaw = item.data['end'];
-  final end = endRaw is String ? DateTime.tryParse(endRaw) : null;
+  final end =
+      endRaw is String ? DateTime.tryParse(endRaw)?.toLocal() : null;
   final start = '${_reviewDateFormat.format(dt)} · ${_reviewTimeFormat.format(dt)}';
   if (end == null) return start;
   return '$start – ${_reviewTimeFormat.format(end)}';
@@ -369,11 +370,11 @@ String? _oldWhen(StagedItem item) {
     final sched = existing['schedule'];
     final due = sched is Map ? sched['due'] : null;
     if (due is! String || due.isEmpty) return null;
-    final dt = DateTime.tryParse(due);
+    final dt = DateTime.tryParse(due)?.toLocal();
     return dt == null ? due : _reviewDateFormat.format(dt);
   }
   final start = existing['start'];
   if (start is! String || start.isEmpty) return null;
-  final dt = DateTime.tryParse(start);
+  final dt = DateTime.tryParse(start)?.toLocal();
   return dt == null ? start : _reviewDateFormat.format(dt);
 }

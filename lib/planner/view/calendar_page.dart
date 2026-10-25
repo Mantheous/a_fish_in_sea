@@ -5,6 +5,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
+import '../../common/time/local_date.dart';
 import '../../common/undo/undo_bar.dart';
 import '../../common/undo/undo_cubit.dart';
 import '../../navigation/view/app_drawer.dart';
@@ -303,14 +304,13 @@ class _CalendarPageState extends State<CalendarPage> {
   /// time-slot grid is visible (the month view keeps its agenda chips).
   List<DateTime> _visibleDaysForLane() {
     final display = _controller.displayDate ?? DateTime.now();
-    final day = DateTime(display.year, display.month, display.day);
+    final day = localDay(display);
     if (_view == CalendarView.day) return [day];
     // Back up to the week's first day per the firstDayOfWeek setting.
-    final firstDayOfWeek =
-        context.read<SettingsCubit>().state.firstDayOfWeek;
+    final firstDayOfWeek = context.read<SettingsCubit>().state.firstDayOfWeek;
     final startOffset = (day.weekday - firstDayOfWeek + 7) % 7;
-    final start = day.subtract(Duration(days: startOffset));
-    return [for (var i = 0; i < 7; i++) start.add(Duration(days: i))];
+    final start = shiftLocalDay(day, -startOffset);
+    return [for (var i = 0; i < 7; i++) shiftLocalDay(start, i)];
   }
 
   @override
@@ -2380,9 +2380,8 @@ class _CalendarPageState extends State<CalendarPage> {
         ? 0
         : ((globalPosition.dy - origin.dy) / _pairedDragPixelsPerMinute)
               .round();
-    _pairedDragDropTime = original.start.add(
-      Duration(days: days, minutes: minutes),
-    );
+    _pairedDragDropTime = shiftByCalendarDays(original.start, days)
+        .add(Duration(minutes: minutes));
   }
 
   Future<void> _onPairedPlanDragEnd(PlannerEvent event) async {
@@ -2537,12 +2536,8 @@ class _CalendarPageState extends State<CalendarPage> {
       // up front — only recurring series need occurrence expansion, and
       // expansion is the expensive part of this tap path.
       final enabled = feedCubit.enabledFeedIds;
-      final dayStart = DateTime(
-        tappedDate.year,
-        tappedDate.month,
-        tappedDate.day,
-      );
-      final dayEnd = dayStart.add(const Duration(days: 1));
+      final dayStart = localDay(tappedDate);
+      final dayEnd = shiftLocalDay(dayStart, 1);
       final candidates = <PlannerEvent>[];
       for (final event in cubit.state) {
         if (event.recurrenceRule.isEmpty) continue;

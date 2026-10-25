@@ -56,8 +56,8 @@ class ReportedEntry extends Equatable {
         eventId: json['eventId'] as String?,
         placeId: json['placeId'] as String?,
         title: json['title'] as String,
-        start: DateTime.parse(json['start'] as String),
-        end: DateTime.parse(json['end'] as String),
+        start: DateTime.parse(json['start'] as String).toLocal(),
+        end: DateTime.parse(json['end'] as String).toLocal(),
         status: ReportStatus.values.firstWhere(
           (e) => e.name == json['status'],
           orElse: () => ReportStatus.partial,

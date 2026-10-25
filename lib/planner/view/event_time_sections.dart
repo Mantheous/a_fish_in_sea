@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
+import '../../common/time/local_date.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_event_link.dart';
@@ -366,18 +367,16 @@ class _AdjustTimerSheetState extends State<_AdjustTimerSheet> {
     final actualEnd = live?.actualEnd ?? live?.end;
     if (actualStart == null || actualEnd == null) {
       final now = DateTime.now();
-      _day = DateTime(now.year, now.month, now.day);
+      _day = localDay(now);
       _dayOffset = 0;
       _start = TimeOfDay.fromDateTime(now);
       _end = TimeOfDay.fromDateTime(now.add(const Duration(hours: 1)));
     } else {
-      _day = DateTime(
-        actualStart.year,
-        actualStart.month,
-        actualStart.day,
-      );
-      final endDay = DateTime(actualEnd.year, actualEnd.month, actualEnd.day);
-      _dayOffset = endDay.difference(_day).inDays.clamp(0, 1);
+      _day = localDay(actualStart);
+      final endDay = localDay(actualEnd);
+      // Calendar-day distance: on a 23-hour spring-forward day a fixed
+      // 24h `inDays` rounds an overnight session down to 0.
+      _dayOffset = localDayDistance(_day, endDay).clamp(0, 1);
       _start = TimeOfDay.fromDateTime(actualStart);
       _end = TimeOfDay.fromDateTime(actualEnd);
     }
@@ -435,9 +434,11 @@ class _AdjustTimerSheetState extends State<_AdjustTimerSheet> {
                     }
                     final start = DateTime(_day.year, _day.month, _day.day,
                         _start.hour, _start.minute);
-                    var end = DateTime(_day.year, _day.month, _day.day,
-                            _end.hour, _end.minute)
-                        .add(Duration(days: _dayOffset));
+                    var end = shiftByCalendarDays(
+                      DateTime(_day.year, _day.month, _day.day, _end.hour,
+                          _end.minute),
+                      _dayOffset,
+                    );
                     if (!end.isAfter(start)) {
                       end = start.add(minEventDuration);
                     }

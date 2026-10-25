@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 
+import '../../common/time/local_date.dart';
 import 'task_assignee.dart';
 
 class Task extends Equatable {
@@ -69,16 +70,12 @@ class Task extends Equatable {
 
   bool get isOverdue {
     if (done || due == null) return false;
-    final now = DateTime.now();
-    return due!.isBefore(DateTime(now.year, now.month, now.day));
+    return localDay(due!).isBefore(localDay(DateTime.now()));
   }
 
   bool get isDueToday {
     if (done || due == null) return false;
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    return !due!.isBefore(today) &&
-        due!.isBefore(today.add(const Duration(days: 1)));
+    return isSameLocalDay(due!, DateTime.now());
   }
 
   Task copyWith({
@@ -137,21 +134,23 @@ class Task extends Equatable {
         id: json['id'] as String,
         title: json['title'] as String,
         notes: json['notes'] as String?,
-        due: json['due'] == null ? null : DateTime.parse(json['due'] as String),
+        due: json['due'] == null
+            ? null
+            : DateTime.parse(json['due'] as String).toLocal(),
         done: json['done'] as bool? ?? false,
         completedAt: json['completedAt'] == null
             ? null
-            : DateTime.parse(json['completedAt'] as String),
+            : DateTime.parse(json['completedAt'] as String).toLocal(),
         sourceEventId: json['sourceEventId'] as String?,
         classId: json['classId'] as String?,
         classLabel: json['classLabel'] as String?,
         calendarEventId: json['calendarEventId'] as String?,
         plannedStart: json['plannedStart'] == null
             ? null
-            : DateTime.tryParse(json['plannedStart'] as String),
+            : DateTime.tryParse(json['plannedStart'] as String)?.toLocal(),
         plannedEnd: json['plannedEnd'] == null
             ? null
-            : DateTime.tryParse(json['plannedEnd'] as String),
+            : DateTime.tryParse(json['plannedEnd'] as String)?.toLocal(),
         actualStart: _tryTimerDate(json['actualStart']),
         actualEnd: _tryTimerDate(json['actualEnd']),
         timerStartedAt: _tryTimerDate(json['timerStartedAt']),

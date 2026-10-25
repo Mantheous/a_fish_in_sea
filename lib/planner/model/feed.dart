@@ -134,7 +134,7 @@ class Feed extends Equatable {
         calendarId: json['calendarId'] as String?,
         lastSyncAt: json['lastSyncAt'] == null
             ? null
-            : DateTime.parse(json['lastSyncAt'] as String),
+            : DateTime.parse(json['lastSyncAt'] as String).toLocal(),
         lastError: json['lastError'] as String?,
       );
 

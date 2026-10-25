@@ -1,3 +1,4 @@
+import '../../common/time/local_date.dart';
 import 'planner_event.dart';
 
 const Duration minEventDuration = Duration(minutes: 15);
@@ -19,10 +20,8 @@ DateTime snapToInterval(DateTime value, int snapMinutes) {
   final totalMinutes = stripped.hour * 60 + stripped.minute;
   final snapped =
       ((totalMinutes + snapMinutes ~/ 2) ~/ snapMinutes) * snapMinutes;
-  if (snapped >= 24 * 60) {
-    final day = DateTime(stripped.year, stripped.month, stripped.day);
-    return day.add(const Duration(days: 1));
-  }
+  // DateTime rolls 24:00 into the next day at local midnight, so snapping
+  // past 23:59 keeps the calendar date right across DST (never +24h).
   return DateTime(
     stripped.year,
     stripped.month,
@@ -41,12 +40,12 @@ PlannerEvent shiftEvent(
       ? event.end.difference(event.start)
       : const Duration(hours: 1);
   if (event.allDay) {
-    final day = DateTime(
-      droppingTime.year,
-      droppingTime.month,
-      droppingTime.day,
-    );
-    return event.copyWith(start: day, end: day.add(duration));
+    final day = localDay(droppingTime);
+    // All-day spans count calendar days, not elapsed hours: dragging across
+    // a DST change must not shorten or lengthen the window.
+    final days = localDayDistance(event.start, event.end);
+    final span = days < 1 ? 1 : days;
+    return event.copyWith(start: day, end: shiftLocalDay(day, span));
   }
   final start = snapToInterval(droppingTime, snapMinutes);
   return event.copyWith(start: start, end: start.add(duration));
@@ -69,8 +68,7 @@ PlannerEvent resizeEvent(
   return event.copyWith(start: start, end: end);
 }
 
-bool isSameDay(DateTime a, DateTime b) =>
-    a.year == b.year && a.month == b.month && a.day == b.day;
+bool isSameDay(DateTime a, DateTime b) => isSameLocalDay(a, b);
 
 /// Returns an updated draft that follows the calendar to the currently
 /// visible dates, or `null` when no travel is needed.
@@ -92,13 +90,17 @@ PlannerEvent? travelGhostToVisible(
   if (!visibleDates.any((d) => isSameDay(d, anchor))) {
     anchor = visibleDates[visibleDates.length ~/ 2];
   }
-  final anchorDay = DateTime(anchor.year, anchor.month, anchor.day);
+  final anchorDay = localDay(anchor);
   if (isSameDay(anchorDay, draft.start)) return null;
   final duration = draft.end.isAfter(draft.start)
       ? draft.end.difference(draft.start)
       : const Duration(hours: 1);
   if (draft.allDay) {
-    return draft.copyWith(start: anchorDay, end: anchorDay.add(duration));
+    final days = localDayDistance(draft.start, draft.end);
+    return draft.copyWith(
+      start: anchorDay,
+      end: shiftLocalDay(anchorDay, days < 1 ? 1 : days),
+    );
   }
   final start = snapToInterval(
     DateTime(

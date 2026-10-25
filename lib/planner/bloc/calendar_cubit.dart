@@ -1,6 +1,7 @@
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
 import '../../common/persistence/stable_storage_keys.dart';
+import '../../common/time/local_date.dart';
 import '../../common/undo/revertable_hydrated_cubit.dart';
 import '../model/planner_event.dart';
 
@@ -277,14 +278,14 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
   }
 
   List<PlannerEvent> eventsOnDay(DateTime day) {
-    final dayStart = DateTime(day.year, day.month, day.day);
+    final dayStart = localDay(day);
     // Memoized by (state identity, day): Home + Stats + DayReview call this
     // repeatedly for the same day within a build.
     _byIdMap; // ensures _dayCacheSource/_dayCache are fresh
     if (identical(state, _dayCacheSource) && _dayCache.containsKey(dayStart)) {
       return _dayCache[dayStart]!;
     }
-    final dayEnd = dayStart.add(const Duration(days: 1));
+    final dayEnd = shiftLocalDay(dayStart, 1);
     final result = <PlannerEvent>[];
     for (final event in state) {
       // Fast path: non-recurring events need only a range check — skip the

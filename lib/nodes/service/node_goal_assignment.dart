@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
 
 import '../bloc/node_cubit.dart';
@@ -82,8 +83,7 @@ class NodeGoalAssignment {
 
   /// Start of [now]'s calendar day (local). Series tasking treats anything
   /// starting today or later as "future"; anything before is past.
-  static DateTime startOfDay(DateTime now) =>
-      DateTime(now.year, now.month, now.day);
+  static DateTime startOfDay(DateTime now) => localDay(now);
 
   /// True when [event]'s occurrence has not yet passed: it starts on or
   /// after [now]'s calendar day. Task due dates land on the occurrence's

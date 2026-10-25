@@ -1,4 +1,5 @@
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
@@ -43,7 +44,7 @@ class _TransactionAssignmentDialogState
       _ensured = true;
       try {
         final nodeCubit = context.read<NodeCubit>();
-        final fromDate = transaction.date.subtract(const Duration(days: 30));
+        final fromDate = shiftByCalendarDays(transaction.date, -30);
         final horizon = DateTime.now().add(const Duration(days: 365));
         for (final template in nodeCubit.state) {
           if (template.isTemplate && template.money != null) {
@@ -92,8 +93,8 @@ class _TransactionAssignmentDialogState
           if (da == null && db == null) return 0;
           if (da == null) return 1;
           if (db == null) return -1;
-          final diffA = (da.difference(transaction.date).inDays).abs();
-          final diffB = (db.difference(transaction.date).inDays).abs();
+          final diffA = localDayDistance(transaction.date, da).abs();
+          final diffB = localDayDistance(transaction.date, db).abs();
           return diffA.compareTo(diffB);
         });
 

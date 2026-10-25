@@ -17,7 +17,7 @@ class TrackedPoint extends Equatable {
 
   factory TrackedPoint.fromJson(Map<String, dynamic> json) => TrackedPoint(
         id: json['id'] as String,
-        timestamp: DateTime.parse(json['timestamp'] as String),
+        timestamp: DateTime.parse(json['timestamp'] as String).toLocal(),
         lat: (json['lat'] as num).toDouble(),
         lng: (json['lng'] as num).toDouble(),
         accuracy: (json['accuracy'] as num?)?.toDouble(),

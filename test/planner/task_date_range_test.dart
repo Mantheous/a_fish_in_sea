@@ -57,6 +57,36 @@ void main() {
           DateTime(2026, 11, 1));
     });
 
+    test('offset and weekday bounds land on calendar days across DST', () {
+      // Fall-back Sunday Nov 1 2026 (25 hours long).
+      final fallBack = DateTime(2026, 11, 1, 12);
+      const tomorrowOnly = TaskDateRange(
+        start: TaskRangeBound.offset(1),
+        end: TaskRangeBound.offset(1),
+      );
+      expect(tomorrowOnly.startDate(fallBack), DateTime(2026, 11, 2));
+      expect(tomorrowOnly.endDate(fallBack), DateTime(2026, 11, 2));
+      expect(
+          tomorrowOnly.matches(DateTime(2026, 11, 2, 0, 1), fallBack), isTrue);
+      expect(tomorrowOnly.matches(DateTime(2026, 11, 2, 23, 59), fallBack),
+          isTrue);
+      expect(tomorrowOnly.matches(DateTime(2026, 11, 1, 23, 59), fallBack),
+          isFalse);
+
+      // Spring-forward Sunday Mar 8 2026 (23 hours long).
+      final spring = DateTime(2026, 3, 8, 12);
+      expect(tomorrowOnly.startDate(spring), DateTime(2026, 3, 9));
+      expect(tomorrowOnly.matches(DateTime(2026, 3, 9, 0, 30), spring), isTrue);
+      expect(tomorrowOnly.matches(DateTime(2026, 3, 8, 23, 59), spring),
+          isFalse);
+
+      // Monday-of-next-week is still the Monday after the transition.
+      const nextMonday =
+          TaskRangeBound.weekday(weekday: DateTime.monday, weeksOut: 1);
+      expect(nextMonday.resolve(fallBack), DateTime(2026, 11, 2));
+      expect(nextMonday.resolve(spring), DateTime(2026, 3, 9));
+    });
+
     test('weekday anchors can reach last week', () {
       // Saturday Oct 17: Sunday of last week is Oct 11 — the Sunday
       // before this Monday-start week, unreachable when weeksOut
