@@ -347,6 +347,49 @@ void main() {
     expect(nodes.byId('e1'), isNull);
   });
 
+  test('a large shadow backlog converges in capped passes', () {
+    nodes.addNode(
+      Node(
+        id: 'goal',
+        title: 'Daily Scripture Study',
+        createdAt: day,
+        recurrence: const NodeRecurrence(frequency: TimeScale.daily),
+        calendarLink: const NodeCalendarLink(
+          seriesKey: 'personal-calendar|series:scripture',
+        ),
+      ),
+    );
+    nodes.generateInstances(
+      templateId: 'goal',
+      from: day,
+      horizon: day.add(const Duration(days: 60)),
+    );
+    nodes.addNode(
+      Node(
+        id: 'auto',
+        title: '7h scripture',
+        createdAt: day,
+        auto: const AutoFacet(target: 420),
+      ),
+    );
+    for (var i = 0; i < 55; i++) {
+      final e = event('e$i', offset: i);
+      calendar.addEvent(e);
+      nodes.ensureNodeForFeedEvent(calendar.byId(e.id)!);
+      nodes.reparent(e.id, ['auto']);
+    }
+    int shadows() => nodes.state
+        .where((n) => n.id.startsWith('e') && n.parentIds.contains('auto'))
+        .length;
+    expect(shadows(), 55);
+
+    RecurringGoalLink.reconcile(calendar, nodes);
+    expect(shadows(), 5);
+    RecurringGoalLink.reconcile(calendar, nodes);
+    expect(shadows(), 0);
+    expect(nodes.byId('goal')!.parentIds, contains('auto'));
+  });
+
   test('a goal-assigned event shadow merges into the recurring owner', () {
     seed(assigned: false, linked: true);
     nodes.addNode(
