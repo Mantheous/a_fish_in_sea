@@ -188,6 +188,54 @@ void main() {
       expect(complete['homework']!.derived, isTrue);
     });
 
+    test('homework with a cap metric still requires its classes', () {
+      final homework = _node(
+        'homework',
+        auto: const AutoFacet(
+          metric: AutoMetric.minutes,
+          target: 1800,
+          comparison: AutoComparison.atMost,
+        ),
+      );
+      final cls = _node(
+        'cmlit',
+        parents: const ['homework'],
+        classFacet: const ClassFacet(
+          sources: [ClassSource(feedId: 'feed:ls', classLabel: 'CMLIT 201')],
+        ),
+        auto: const AutoFacet(metric: AutoMetric.allDone),
+      );
+      final task = _node(
+        'essay',
+        parents: const ['cmlit'],
+        classNodeId: 'cmlit',
+        status: NodeStatus.done,
+        completedAt: _now,
+        actualStart: _now.subtract(const Duration(minutes: 60)),
+        actualEnd: _now,
+      );
+      final nodes = [homework, cls, task];
+      final readings = metricReadingsForNodes(nodes, now: _now);
+      expect(readings['homework']!.satisfied, isTrue);
+      expect(
+        goalCompletionForest(nodes, readings: readings)['homework']!.complete,
+        isTrue,
+      );
+
+      final open = _node(
+        'open',
+        parents: const ['cmlit'],
+        classNodeId: 'cmlit',
+      );
+      final reopened = [...nodes, open];
+      final reopenedReadings = metricReadingsForNodes(reopened, now: _now);
+      expect(
+        goalCompletionForest(reopened, readings: reopenedReadings)['homework']!
+            .complete,
+        isFalse,
+      );
+    });
+
     test('a time metric completes without ticking its event child', () {
       final goal = _node(
         'work',

@@ -89,16 +89,6 @@ GoalCompletion _compute(
       derived: node.hasMetrics || (byParent[node.id]?.isNotEmpty ?? false),
     );
   }
-  // Metrics define completion when present. A time goal's reported
-  // session is work even when its child tile was never manually ticked;
-  // containers that also need "all work done" get an explicit AllDone
-  // metric (the editor adds one before a cap on a container).
-  if (node.hasMetrics) {
-    return GoalCompletion(
-      complete: node.isDone || (readings[node.id]?.satisfied ?? false),
-      derived: true,
-    );
-  }
   if (node.isTemplate) {
     // A recurring template's instances are a repetition history, not a
     // finite container; completing it would mean "every future instance
@@ -109,6 +99,23 @@ GoalCompletion _compute(
     for (final kid in byParent[node.id] ?? const <Node>[])
       if (kid.status != NodeStatus.skipped && !kid.isUnbounded) kid,
   ];
+  // Metrics define completion when present. A time goal's reported
+  // session is work even when its child tile was never manually ticked;
+  // containers that need "all work done" get an explicit AllDone metric.
+  // A class child is the exception: a Homework goal with a legacy cap
+  // metric still has to finish its classes.
+  if (node.hasMetrics) {
+    var complete = node.isDone || (readings[node.id]?.satisfied ?? false);
+    if (kids.any((kid) => kid.isClassNode)) {
+      for (final kid in kids) {
+        if (!visit(kid.id, stack).complete) {
+          complete = false;
+          break;
+        }
+      }
+    }
+    return GoalCompletion(complete: complete, derived: true);
+  }
   if (kids.isEmpty) {
     return GoalCompletion(complete: node.isDone, derived: false);
   }
