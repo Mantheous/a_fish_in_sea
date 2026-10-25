@@ -22,6 +22,7 @@ Node node(
   NodeRecurrence? recurrence,
   String? instanceOf,
   String? sourceEventId,
+  bool? taskFlag,
 }) => Node(
   id: id,
   title: id,
@@ -30,6 +31,7 @@ Node node(
   status: status,
   isFavorite: favorite,
   isUnbounded: unbounded,
+  taskFlag: taskFlag,
   schedule: (due == null && start == null && end == null)
       ? null
       : ScheduleFacet(due: due, start: start, end: end),
@@ -104,6 +106,7 @@ void main() {
   group('kind, status, and starred filters', () {
     final nodes = [
       node('task', due: DateTime(2026, 10, 14)),
+      node('flagged', taskFlag: true),
       node('money', money: const MoneyFacet(targetAmount: 100, isFixed: true)),
       node('effort', effort: const EffortFacet(targetMinutes: 60)),
       node(
@@ -125,6 +128,7 @@ void main() {
     test('kinds split by facet', () {
       expect(matched(const GoalGraphFilter(kind: GoalKindFilter.task)), {
         'task',
+        'flagged',
       });
       expect(matched(const GoalGraphFilter(kind: GoalKindFilter.money)), {
         'money',

@@ -546,6 +546,7 @@ class Node extends Equatable {
     this.isUnbounded = false,
     this.isTracked = true,
     this.isFavorite = false,
+    this.taskFlag,
     this.schedule,
     this.money,
     this.effort,
@@ -576,6 +577,18 @@ class Node extends Equatable {
   bool get isDone => status == NodeStatus.done;
   bool get isOpen => status == NodeStatus.open;
   bool get isTracking => timerStartedAt != null;
+
+  /// Explicit task classification, or null to fall back to [isPlainTask].
+  ///
+  /// The goal editor's Task switch (and starting a recording) writes this,
+  /// so a goal with a special facet can still be treated as concrete work.
+  /// Null keeps older payloads and untouched nodes on the derived rule.
+  final bool? taskFlag;
+
+  /// Whether this node is concrete work: an explicit task flag wins, and
+  /// plain scheduled leaves fall back to the legacy shape rule so existing
+  /// data classifies exactly as it did before the flag existed.
+  bool get isTask => taskFlag ?? isPlainTask;
 
   /// Every recorded run, oldest first. Falls back to the legacy single
   /// interval when a payload predates [sessions]. Once a payload carries an
@@ -676,6 +689,8 @@ class Node extends Equatable {
     bool? isUnbounded,
     bool? isTracked,
     bool? isFavorite,
+    bool? taskFlag,
+    bool clearTaskFlag = false,
     ScheduleFacet? schedule,
     bool clearSchedule = false,
     MoneyFacet? money,
@@ -731,6 +746,7 @@ class Node extends Equatable {
         isUnbounded: isUnbounded ?? this.isUnbounded,
         isTracked: isTracked ?? this.isTracked,
         isFavorite: isFavorite ?? this.isFavorite,
+        taskFlag: clearTaskFlag ? null : (taskFlag ?? this.taskFlag),
         schedule: clearSchedule ? null : (schedule ?? this.schedule),
         money: clearMoney ? null : (money ?? this.money),
         effort: clearEffort ? null : (effort ?? this.effort),
@@ -809,6 +825,11 @@ class Node extends Equatable {
       // as bounded instead of dropping the whole node.
       isUnbounded: json['isUnbounded'] == true,
       isFavorite: json['isFavorite'] == true,
+      // Null means "derive from the node's shape" (pre-flag payloads and
+      // nodes the user never classified). Only a real bool is stored, so a
+      // corrupt value falls back to that derivation instead of dropping
+      // the goal.
+      taskFlag: json['isTask'] is bool ? json['isTask'] as bool : null,
       isTracked: () {
         final raw = json['isTracked'] ?? json['tracked'];
         if (raw == null) return true;
@@ -876,6 +897,7 @@ class Node extends Equatable {
         'isTracked': isTracked,
         'tracked': isTracked,
         'isFavorite': isFavorite,
+        if (taskFlag != null) 'isTask': taskFlag,
         'schedule': schedule?.toJson(),
         'money': money?.toJson(),
         'effort': effort?.toJson(),
@@ -916,6 +938,7 @@ class Node extends Equatable {
         isUnbounded,
         isTracked,
         isFavorite,
+        taskFlag,
         schedule,
         money,
         effort,
