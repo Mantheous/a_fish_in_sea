@@ -14,7 +14,9 @@ import 'node_editor.dart';
 /// collapse or expand that subtree. Pan and zoom to move around large
 /// trees. Repeating templates and goals with a very wide fan-out start
 /// collapsed so their generated instances or subgoal walls don't flood the
-/// graph.
+/// graph. Folding is reported through [onCollapsedChanged] and can be
+/// restored with [collapsedIds], so leaving the Goals tab and coming back
+/// shows the same graph.
 class NodeGraphView extends StatefulWidget {
   const NodeGraphView({
     super.key,
@@ -28,6 +30,8 @@ class NodeGraphView extends StatefulWidget {
     this.fitToken = 0,
     this.expandAll = false,
     this.expandToken = 0,
+    this.collapsedIds,
+    this.onCollapsedChanged,
     this.onClearFilters,
   });
 
@@ -64,6 +68,16 @@ class NodeGraphView extends StatefulWidget {
   final bool expandAll;
   final int expandToken;
 
+  /// Folded subtree ids carried across page visits. Null means "seed the
+  /// defaults": repeating templates and goals with more than five direct
+  /// subgoals start collapsed. A non-null set is the user's own fold state
+  /// and is used as-is, so a manual expand survives a tab switch.
+  final Set<String>? collapsedIds;
+
+  /// Reports the folded set whenever it changes (default seed, a toggle, or
+  /// the page-level expand/collapse-all), so the owner can keep it.
+  final ValueChanged<Set<String>>? onCollapsedChanged;
+
   /// Clears the active filter from the graph's empty state.
   final VoidCallback? onClearFilters;
 
@@ -77,17 +91,50 @@ class _NodeGraphViewState extends State<NodeGraphView> {
   static const int _autoCollapseSubgoals = 5;
 
   final Set<String> _collapsed = <String>{};
-  bool _seededDefaults = false;
+  bool _seeded = false;
 
   @override
   void didUpdateWidget(covariant NodeGraphView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.expandToken != oldWidget.expandToken) {
       final withKids = _parentIds(widget.nodes);
+      _seeded = true;
       _collapsed
         ..clear()
         ..addAll(widget.expandAll ? const <String>[] : withKids);
+      _reportCollapsed();
     }
+  }
+
+  /// One-time seed, once goals exist. A set carried in
+  /// [NodeGraphView.collapsedIds] wins: that is the fold state from an
+  /// earlier visit to the page. Otherwise habits/budgets generate an
+  /// instance per period and goals with more than [_autoCollapseSubgoals]
+  /// direct subgoals flood the canvas, so both start folded — the first
+  /// screen shows the shape of the tree, not one goal's whole fan-out.
+  void _seedIfNeeded() {
+    if (_seeded || widget.nodes.isEmpty) return;
+    _seeded = true;
+    final saved = widget.collapsedIds;
+    _collapsed.addAll(saved ?? _defaultCollapsed(widget.nodes));
+    if (saved == null) _reportCollapsed();
+  }
+
+  static Set<String> _defaultCollapsed(List<Node> nodes) => {
+    for (final n in nodes)
+      if (n.isTemplate) n.id,
+    ..._wideParents(nodes),
+  };
+
+  /// Hands the current folded set to the owner. Deferred to after the frame:
+  /// the seed runs during build and the expand-all path runs inside
+  /// [didUpdateWidget], so the owner must not rebuild mid-frame.
+  void _reportCollapsed() {
+    final notify = widget.onCollapsedChanged;
+    if (notify == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) notify(Set<String>.unmodifiable(_collapsed));
+    });
   }
 
   /// Parent ids that have at least one child in [nodes].
@@ -121,18 +168,7 @@ class _NodeGraphViewState extends State<NodeGraphView> {
 
   @override
   Widget build(BuildContext context) {
-    if (!_seededDefaults && widget.nodes.isNotEmpty) {
-      // One-time seed: habits/budgets generate an instance per period, so
-      // drawing every instance by default would bury the actual tree. Goals
-      // with more than [_autoCollapseSubgoals] direct subgoals start folded
-      // for the same reason: the first screen shows the shape of the tree,
-      // not one goal's whole fan-out. Expanding one by hand sticks.
-      _seededDefaults = true;
-      _collapsed.addAll(
-        widget.nodes.where((n) => n.isTemplate).map((n) => n.id),
-      );
-      _collapsed.addAll(_wideParents(widget.nodes));
-    }
+    _seedIfNeeded();
     final restricted = widget.visibleIds != null;
     final layout = layoutNodeGraph(
       nodes: widget.nodes,
@@ -155,6 +191,7 @@ class _NodeGraphViewState extends State<NodeGraphView> {
       onEdit: (node) => showNodeEditor(context, existing: node),
       onToggle: (id) => setState(() {
         if (!_collapsed.remove(id)) _collapsed.add(id);
+        _reportCollapsed();
       }),
     );
     final shown = restricted
