@@ -53,6 +53,20 @@ class _HomeworkTaskListState extends State<HomeworkTaskList>
   final Set<String> _collapsed = {};
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      try {
+        final feeds = context.read<FeedCubit>().state;
+        context.read<NodeCubit>().ensureHomeworkStructure(
+          feedNames: {for (final feed in feeds) feed.id: feed.name},
+        );
+      } catch (_) {}
+    });
+  }
+
+  @override
   bool get wantKeepAlive => true;
 
   @override
