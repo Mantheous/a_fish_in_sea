@@ -1840,10 +1840,12 @@ class _CalendarPageState extends State<CalendarPage> {
     } catch (_) {}
     final eventId =
         entry?.eventId ?? reportOwnerIdForDisplayId(displayId);
-    final event = calendar.byId(eventId);
-    if (event != null) {
-      _openDetail(event, reportId: displayId);
-      return;
+    if (eventId != null) {
+      final event = calendar.byId(eventId);
+      if (event != null) {
+        _openDetail(event, reportId: displayId);
+        return;
+      }
     }
     if (entry != null && mounted) {
       final start = entry.start;
@@ -1905,6 +1907,7 @@ class _CalendarPageState extends State<CalendarPage> {
     if (block.kind == ReportBlockKind.live || !block.recordable) return;
     final calendar = context.read<CalendarCubit>();
     final ownerId = block.eventId ?? reportOwnerIdForDisplayId(block.displayId);
+    if (ownerId == null) return;
     final event = calendar.byId(ownerId);
     NodeCubit? nodes;
     try {

@@ -1169,9 +1169,13 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   /// correction). Takes manual control: a running timer is cleared and
   /// the given start/end become the record. A non-positive range is
   /// floored to one minute.
+  ///
+  /// Never collapses a multi-run record: the editor's Adjust sheet shows
+  /// the aggregate span, so applying it here would turn two short runs into
+  /// one multi-day run. Individual runs are edited via [updateSession].
   void setReported(String id, DateTime start, DateTime end) {
     final node = byId(id);
-    if (node == null) return;
+    if (node == null || node.recordedSessions.length > 1) return;
     final safeEnd = end.isAfter(start)
         ? end
         : start.add(const Duration(minutes: 1));

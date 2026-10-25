@@ -74,7 +74,9 @@ class PlannerEvent extends Equatable {
   bool get isTracking => timerStartedAt != null;
 
   /// Every recorded run, oldest first. Falls back to the legacy single
-  /// interval when a payload predates [sessions].
+  /// interval when a payload predates [sessions]. Once a payload carries an
+  /// explicit list, that list is authoritative: the legacy pair is only its
+  /// aggregate span, and lifting it too would count the gaps as work.
   List<TimeSession> get recordedSessions {
     if (sessions.isNotEmpty) return sessions;
     final legacy = TimeSession.legacySession(actualStart, actualEnd);

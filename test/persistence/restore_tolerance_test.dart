@@ -854,6 +854,53 @@ void main() {
       expect(corrupt.recordedSessions.single.id, second.id);
     });
 
+    test('an aggregate pair beside sessions is not counted twice', () {
+      final first = TimeSession(
+        id: 'ts:first',
+        start: _day,
+        end: _day.add(const Duration(minutes: 20)),
+      );
+      final node = Node(
+        id: 'n1',
+        title: 'Call mom',
+        createdAt: _day,
+        sessions: [first],
+        actualStart: first.start,
+        actualEnd: first.end,
+      );
+      // The legacy pair is the aggregate span, not another run. A sync that
+      // sees a legacy-only interval lifts it before this point; reading a
+      // payload that has both must not add the gaps as work.
+      final json = node.toJson()
+        ..['actualStart'] = first.start.toUtc().toIso8601String()
+        ..['actualEnd'] = first.end
+            .add(const Duration(hours: 2))
+            .toUtc()
+            .toIso8601String();
+      final restored = Node.fromJson(json);
+      expect(restored.sessions, hasLength(1));
+      expect(restored.recordedSessions, hasLength(1));
+      expect(restored.reportedDuration, const Duration(minutes: 20));
+
+      final event = PlannerEvent(
+        id: 'e1',
+        subject: 'Study',
+        start: _day,
+        end: _day.add(const Duration(hours: 3)),
+        sessions: [first],
+      );
+      final eventJson = event.toJson()
+        ..['actualStart'] = first.start.toUtc().toIso8601String()
+        ..['actualEnd'] = first.end
+            .add(const Duration(hours: 2))
+            .toUtc()
+            .toIso8601String();
+      expect(
+        PlannerEvent.fromJson(eventJson).reportedDuration,
+        const Duration(minutes: 20),
+      );
+    });
+
     test('unknown enum values fall back instead of throwing', () {
       final rule = RecurringRule(
         id: 'r1',

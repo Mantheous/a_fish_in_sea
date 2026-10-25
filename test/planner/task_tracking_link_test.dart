@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/common/time/time_session.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
@@ -248,6 +249,52 @@ void main() {
       expect(calendar.byId('e1')?.actualStart,
           nodes.byId('n1')?.actualStart);
       expect(calendar.byId('e1')?.actualEnd, nodes.byId('n1')?.actualEnd);
+    });
+
+    test('event-only runs survive task-side session edits', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      final eventOnly = TimeSession(
+        id: 'ts:event-only',
+        start: DateTime(2026, 10, 13, 6),
+        end: DateTime(2026, 10, 13, 6, 15),
+      );
+      calendar.addEvent(
+        evt('e1', taskId: 'n1').copyWith(
+          sessions: [eventOnly],
+          actualStart: eventOnly.start,
+          actualEnd: eventOnly.end,
+        ),
+      );
+      nodes.addNode(taskNode('n1', calendarEventId: 'e1'));
+
+      final taskStart = DateTime(2026, 10, 13, 8);
+      final taskEnd = DateTime(2026, 10, 13, 8, 10);
+      final taskId = TimeSession.idFor(taskStart, taskEnd);
+      nodes.addSession('n1', taskStart, taskEnd);
+      NodeEventSync.setNodeSession(
+        nodes,
+        calendar,
+        'n1',
+        taskId,
+        taskStart,
+        taskEnd,
+      );
+
+      final mirrored = calendar.byId('e1')!;
+      expect(
+        mirrored.recordedSessions.map((s) => s.id),
+        containsAll(['ts:event-only', taskId]),
+      );
+      expect(mirrored.reportedDuration, const Duration(minutes: 25));
+
+      // Deleting the task run must propagate without taking the event-only
+      // run with it.
+      NodeEventSync.removeNodeSession(nodes, calendar, 'n1', taskId);
+      expect(
+        calendar.byId('e1')?.recordedSessions.map((s) => s.id),
+        ['ts:event-only'],
+      );
     });
 
     test('starting a node stops a running plain event timer', () {

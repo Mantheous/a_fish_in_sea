@@ -21,18 +21,21 @@ String reportTimerDisplayIdFor(String ownerId, {String? sessionId}) =>
     ? '$reportTimerDisplayIdPrefix$ownerId'
     : '$reportTimerDisplayIdPrefix$ownerId$reportSessionSeparator$sessionId';
 
-/// Strips the display-id prefix and per-session suffix, returning the id
-/// of the event/node that owns the block.
-String reportOwnerIdForDisplayId(String displayId) {
-  final raw = displayId.startsWith(reportTimerDisplayIdPrefix)
-      ? displayId.substring(reportTimerDisplayIdPrefix.length)
-      : displayId.startsWith(reportLiveDisplayIdPrefix)
-      ? displayId.substring(reportLiveDisplayIdPrefix.length)
-      : displayId.startsWith(reportDisplayIdPrefix)
-      ? displayId.substring(reportDisplayIdPrefix.length)
-      : displayId;
+/// Owner id encoded in a timer/live display id (`report:timer:<id>` or
+/// `report:live:<id>`), which is an event id for event-backed blocks and a
+/// node id for node-only blocks. Null for manual entry ids and non-reports.
+String? reportOwnerIdForDisplayId(String displayId) {
+  final String raw;
+  if (displayId.startsWith(reportTimerDisplayIdPrefix)) {
+    raw = displayId.substring(reportTimerDisplayIdPrefix.length);
+  } else if (displayId.startsWith(reportLiveDisplayIdPrefix)) {
+    raw = displayId.substring(reportLiveDisplayIdPrefix.length);
+  } else {
+    return null;
+  }
   final cut = raw.indexOf(reportSessionSeparator);
-  return cut < 0 ? raw : raw.substring(0, cut);
+  final owner = cut < 0 ? raw : raw.substring(0, cut);
+  return owner.isEmpty ? null : owner;
 }
 
 class ReportBlock {
@@ -241,10 +244,13 @@ List<ReportBlock> buildReportBlocks({
 
     final sessions = _recordedSessions(event, linked);
     if (sessions.isNotEmpty) {
+      final hasMultiple = sessions.length > 1;
       for (final session in sessions) {
         blocks.add(
           ReportBlock(
-            displayId: reportTimerDisplayIdFor(event.id, sessionId: session.id),
+            displayId: hasMultiple
+                ? reportTimerDisplayIdFor(event.id, sessionId: session.id)
+                : '$reportTimerDisplayIdPrefix${event.id}',
             title: event.subject,
             start: session.start,
             end: session.end,
@@ -315,9 +321,12 @@ List<ReportBlock> buildReportBlocks({
       );
     }
     for (final session in node.recordedSessions) {
+      final many = node.sessions.length > 1;
       blocks.add(
         ReportBlock(
-          displayId: reportTimerDisplayIdFor(node.id, sessionId: session.id),
+          displayId: many
+              ? reportTimerDisplayIdFor(node.id, sessionId: session.id)
+              : '$reportTimerDisplayIdPrefix${node.id}',
           title: node.title,
           start: session.start,
           end: session.end,

@@ -76,14 +76,17 @@ bool applyReportedInterval({
     if (event == null) return false;
     if (sessionId != null) {
       calendar.updateSession(eventId, sessionId, start, safeEnd);
-    } else {
-      calendar.updateEvent(
-        event.copyWith(
-          actualStart: start,
-          actualEnd: safeEnd,
-          clearTimerStartedAt: true,
-        ),
+    } else if (event.recordedSessions.length == 1) {
+      // A legacy block without a session id still targets its one run;
+      // writing actuals alone would leave the older list in charge.
+      calendar.updateSession(
+        eventId,
+        event.recordedSessions.single.id,
+        start,
+        safeEnd,
       );
+    } else {
+      calendar.setReported(eventId, start, safeEnd);
     }
     return true;
   }
@@ -91,6 +94,7 @@ bool applyReportedInterval({
   // Nodes recorded off the calendar carry the node id in their display id.
   if (block.displayId.startsWith(reportTimerDisplayIdPrefix)) {
     final nodeId = reportOwnerIdForDisplayId(block.displayId);
+    if (nodeId == null) return false;
     final node = nodes.byId(nodeId);
     if (node == null) return false;
     if (sessionId != null) {
@@ -99,6 +103,15 @@ bool applyReportedInterval({
         calendar,
         node.id,
         sessionId,
+        start,
+        safeEnd,
+      );
+    } else if (node.recordedSessions.length == 1) {
+      NodeEventSync.setNodeSession(
+        nodes,
+        calendar,
+        node.id,
+        node.recordedSessions.single.id,
         start,
         safeEnd,
       );
@@ -154,6 +167,7 @@ bool deleteReportedBlock({
 
   if (block.displayId.startsWith(reportTimerDisplayIdPrefix)) {
     final nodeId = reportOwnerIdForDisplayId(block.displayId);
+    if (nodeId == null) return false;
     final node = nodes.byId(nodeId);
     if (node == null) return false;
     if (sessionId != null) {

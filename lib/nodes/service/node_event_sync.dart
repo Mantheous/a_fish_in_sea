@@ -96,7 +96,7 @@ class NodeEventSync {
       nodes.setReported(nodeId, start, end);
       final saved = nodes.byId(nodeId);
       if (saved == null) return;
-      _mirrorSessions(calendar, saved);
+      _mirrorSessions(calendar, saved, replace: true);
     });
   }
 
@@ -132,25 +132,48 @@ class NodeEventSync {
       nodes.removeSession(nodeId, sessionId);
       final saved = nodes.byId(nodeId);
       if (saved == null) return;
-      _mirrorSessions(calendar, saved);
+      _mirrorSessions(calendar, saved, removeSessionId: sessionId);
     });
   }
 
-  static void _mirrorSessions(CalendarCubit calendar, Node saved) {
+  static void _mirrorSessions(
+    CalendarCubit calendar,
+    Node saved, {
+    String? removeSessionId,
+    bool replace = false,
+  }) {
     final updates = [
       for (final event in _linkedEvents(calendar, saved))
-        _eventWithSessions(event, saved.recordedSessions),
+        _eventWithSessions(
+          event,
+          saved.recordedSessions,
+          removeSessionId: removeSessionId,
+          replace: replace,
+        ),
     ];
     if (updates.isNotEmpty) calendar.updateEvents(updates);
   }
 
+  /// Unions the task's runs into the event's own list instead of replacing
+  /// it: a run recorded directly on the event (for example a failed stop
+  /// that never reached the task) must survive a task-side edit. A manual
+  /// report correction ([replace]) intentionally rewrites the mirror.
   static PlannerEvent _eventWithSessions(
     PlannerEvent event,
-    List<TimeSession> sessions,
-  ) {
-    final span = sessionSpan(sessions);
+    List<TimeSession> sessions, {
+    String? removeSessionId,
+    bool replace = false,
+  }) {
+    var combined = replace ? <TimeSession>[] : event.recordedSessions;
+    if (removeSessionId != null) {
+      combined = withoutSession(combined, removeSessionId);
+    }
+    for (final session in sessions) {
+      combined = withSession(combined, session);
+    }
+    final span = sessionSpan(combined);
     return event.copyWith(
-      sessions: sessions,
+      sessions: combined,
       actualStart: span?.start,
       clearActualStart: span == null,
       actualEnd: span?.end,

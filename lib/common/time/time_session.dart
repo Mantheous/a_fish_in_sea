@@ -106,6 +106,28 @@ TimeSession? sessionById(Iterable<TimeSession> sessions, String? id) {
   return null;
 }
 
+/// Lifts a legacy `actualStart`/`actualEnd` pair into [sessions] unless it
+/// already describes exactly the same span.
+///
+/// Normal multi-run records store the aggregate span in the legacy pair, so
+/// this is a no-op for them. A pair that disagrees with the list came from an
+/// older build or a sync that only carried the legacy keys; keeping it as a
+/// run prevents the next session edit from silently erasing that time.
+List<TimeSession> sessionsWithLegacySpan(
+  Iterable<TimeSession> sessions,
+  DateTime? start,
+  DateTime? end,
+) {
+  final legacy = TimeSession.legacySession(start, end);
+  final current = [...sessions]..sort((a, b) => a.start.compareTo(b.start));
+  if (legacy == null) return current;
+  final span = sessionSpan(current);
+  if (span != null && span.start == legacy.start && span.end == legacy.end) {
+    return current;
+  }
+  return withSession(current, legacy);
+}
+
 /// Earliest start and latest end across [sessions], i.e. the aggregate span
 /// stored in `actualStart`/`actualEnd`. Null when the list is empty.
 ({DateTime start, DateTime end})? sessionSpan(Iterable<TimeSession> sessions) {

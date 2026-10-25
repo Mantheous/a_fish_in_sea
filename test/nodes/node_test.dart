@@ -663,6 +663,29 @@ void main() {
       expect(oneLeft.reportedDuration, const Duration(minutes: 15));
     });
 
+    test('setReported never collapses a multi-run record', () {
+      final cubit = NodeCubit();
+      cubit.addNode(node('a'));
+      final firstStart = DateTime(2026, 9, 12, 9);
+      final firstEnd = DateTime(2026, 9, 12, 9, 20);
+      final secondStart = DateTime(2026, 9, 14, 14);
+      final secondEnd = DateTime(2026, 9, 14, 14, 15);
+      cubit.startTracking('a', now: firstStart);
+      cubit.stopTracking('a', now: firstEnd);
+      cubit.startTracking('a', now: secondStart);
+      cubit.stopTracking('a', now: secondEnd);
+
+      // The editor's Adjust sheet is prefilled with the aggregate span; if
+      // it reached setReported it would turn 35 minutes into a 53-hour run.
+      cubit.setReported('a', firstStart, secondEnd);
+
+      final saved = cubit.byId('a')!;
+      expect(saved.recordedSessions, hasLength(2));
+      expect(saved.reportedDuration, const Duration(minutes: 35));
+      expect(saved.actualStart, firstStart);
+      expect(saved.actualEnd, secondEnd);
+    });
+
     test('setTimerStart moves the start but keeps recording', () {
       final cubit = NodeCubit();
       cubit.addNode(node('a'));

@@ -38,30 +38,29 @@ void preserveRunningTimer(
 
 /// Preserves not-yet-pushed recorded runs during server-wins conflict
 /// resolution. A remote payload with an older latest run must not erase a
-/// session this device just finished; deletes still win because they leave
-/// the local latest end unchanged.
+/// session this device just finished, and an old-client payload that only
+/// knows the legacy `actualStart`/`actualEnd` pair must not erase runs this
+/// device already has.
 ///
-/// The kept runs are unioned with the remote list (by session id) so a
-/// session recorded on another device is not dropped just because this
-/// device also has a newer one. The aggregate `actualStart`/`actualEnd`
-/// span is recomputed from the union to stay consistent for older readers.
+/// The kept runs are unioned with the remote list (by session id). A session
+/// deleted locally can be resurrected when another device still has it; that
+/// is deliberately preferred over silently losing recorded time, which is
+/// unrecoverable. The aggregate `actualStart`/`actualEnd` span is recomputed
+/// from the union to stay consistent for older readers.
 void preserveRecordedSessions(
   String collection,
   Map<String, dynamic>? local,
   Map<String, dynamic> merged,
 ) {
   if (collection != 'nodes' && collection != 'events') return;
-  final localSessions = TimeSession.listFromJson(local?['sessions']);
+  final localSessions = _sessionsWithOwnLegacy(local);
   if (localSessions.isEmpty) return;
-  final localLatest = _latestSessionEnd(localSessions);
-  if (localLatest == null) return;
-  final remoteSessions = TimeSession.listFromJson(merged['sessions']);
-  final remoteLatest = _latestSessionEnd(remoteSessions);
-  if (remoteLatest != null && !localLatest.isAfter(remoteLatest)) return;
+  final remoteSessions = _sessionsWithOwnLegacy(merged);
   var combined = remoteSessions;
   for (final session in localSessions) {
     combined = withSession(combined, session);
   }
+  if (combined.isEmpty) return;
   merged['sessions'] = [for (final session in combined) session.toJson()];
   final span = sessionSpan(combined);
   if (span != null) {
@@ -70,11 +69,19 @@ void preserveRecordedSessions(
   }
 }
 
-DateTime? _latestSessionEnd(List<TimeSession> sessions) {
-  DateTime? latest;
-  for (final session in sessions) {
-    if (!session.isValid) continue;
-    if (latest == null || session.end.isAfter(latest)) latest = session.end;
-  }
-  return latest;
+/// Sessions plus a legacy-only interval that disagrees with them. Compares
+/// against this payload's own span, not the merged span, so an older aggregate
+/// pair is not mistaken for an extra run.
+List<TimeSession> _sessionsWithOwnLegacy(Map<String, dynamic>? payload) {
+  if (payload == null) return const [];
+  return sessionsWithLegacySpan(
+    TimeSession.listFromJson(payload['sessions']),
+    _payloadDate(payload['actualStart']),
+    _payloadDate(payload['actualEnd']),
+  );
+}
+
+DateTime? _payloadDate(Object? raw) {
+  if (raw is! String || raw.isEmpty) return null;
+  return DateTime.tryParse(raw)?.toLocal();
 }
