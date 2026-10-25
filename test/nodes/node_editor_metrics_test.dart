@@ -143,16 +143,13 @@ void main() {
     expect(task.classLabel, 'CMLIT 201');
   });
 
-  testWidgets('saving a legacy classId-only node keeps its feed id',
-      (tester) async {
+  testWidgets('saving a legacy classId-only node keeps its feed id', (
+    tester,
+  ) async {
     final nodes = NodeCubit();
     addTearDown(nodes.close);
     final now = DateTime(2026, 10, 25);
-    final homework = Node(
-      id: 'homework',
-      title: 'Homework',
-      createdAt: now,
-    );
+    final homework = Node(id: 'homework', title: 'Homework', createdAt: now);
     final cls = Node(
       id: 'cmlit',
       title: 'CMLIT 201',
@@ -186,8 +183,7 @@ void main() {
           home: Scaffold(
             body: Builder(
               builder: (context) => TextButton(
-                onPressed: () =>
-                    showNodeEditor(context, existing: legacy),
+                onPressed: () => showNodeEditor(context, existing: legacy),
                 child: const Text('open'),
               ),
             ),
@@ -210,16 +206,13 @@ void main() {
     expect(saved.classLabel, 'CMLIT 201');
   });
 
-  testWidgets('adding a class in the Parents picker assigns the class',
-      (tester) async {
+  testWidgets('adding a class in the Parents picker assigns the class', (
+    tester,
+  ) async {
     final nodes = NodeCubit();
     addTearDown(nodes.close);
     final now = DateTime(2026, 10, 25);
-    final homework = Node(
-      id: 'homework',
-      title: 'Homework',
-      createdAt: now,
-    );
+    final homework = Node(id: 'homework', title: 'Homework', createdAt: now);
     final cls = Node(
       id: 'cmlit',
       title: 'CMLIT 201',
@@ -228,11 +221,7 @@ void main() {
       classFacet: const ClassFacet(),
       auto: const AutoFacet(metric: AutoMetric.allDone),
     );
-    final review = Node(
-      id: 'review',
-      title: 'Midterm review',
-      createdAt: now,
-    );
+    final review = Node(id: 'review', title: 'Midterm review', createdAt: now);
     nodes.emitSilent([homework, cls, review]);
     tester.view.physicalSize = const Size(900, 1800);
     tester.view.devicePixelRatio = 1.0;
@@ -254,9 +243,12 @@ void main() {
 
     await tester.tap(find.text('Midterm review'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Add parent'));
+    // The parent picker is inline now: the class is a recent goal, so
+    // tapping its row is the whole flow.
+    final classRow = find.text('CMLIT 201').last;
+    await tester.ensureVisible(classRow);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('CMLIT 201').last);
+    await tester.tap(classRow);
     await tester.pumpAndSettle();
     final save = find.widgetWithText(FilledButton, 'Save');
     await tester.ensureVisible(save);
