@@ -15,8 +15,8 @@ import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_editor_schedule.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
-import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
 import 'package:a_fish_in_sea/nodes/view/auto_goal_fields.dart';
+import 'package:a_fish_in_sea/nodes/view/parents_field.dart';
 import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
@@ -213,7 +213,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
               maxLines: 3,
             ),
             const SizedBox(height: 12),
-            _ParentsField(
+            ParentsField(
               selected: _parents,
               excludeId: e?.id,
               onChanged: (next) => setState(() => _parents = next),
@@ -1176,80 +1176,6 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
           action: SnackBarAction(label: 'Undo', onPressed: undo.undo),
         ),
       );
-  }
-}
-
-class _ParentsField extends StatelessWidget {
-  final List<String> selected;
-  final String? excludeId;
-  final ValueChanged<List<String>> onChanged;
-
-  const _ParentsField({
-    required this.selected,
-    required this.excludeId,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final nodes = goalNodes(context.watch<NodeCubit>().state);
-    final names = {for (final n in nodes) n.id: n.title};
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Parents', style: Theme.of(context).textTheme.labelLarge),
-        const SizedBox(height: 4),
-        Wrap(
-          spacing: 8,
-          children: [
-            for (final id in selected)
-              Chip(
-                label: Text(
-                  names[id] ?? 'node',
-                  overflow: TextOverflow.ellipsis,
-                ),
-                deleteIcon: const Icon(Icons.close, size: 16),
-                onDeleted: () =>
-                    onChanged(selected.where((p) => p != id).toList()),
-              ),
-            ActionChip(
-              avatar: const Icon(Icons.add, size: 16),
-              label: const Text('Add parent'),
-              onPressed: () => _pick(context, nodes),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Future<void> _pick(BuildContext context, List<Node> nodes) async {
-    final excluded = <String>{if (excludeId != null) excludeId!};
-    if (excludeId != null) {
-      excluded.addAll(descendantIds(excludeId!, nodes));
-    }
-    final candidates = nodes.where((n) => !excluded.contains(n.id)).toList();
-    if (candidates.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('No eligible parents')));
-      return;
-    }
-    final picked = await showDialog<String>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('Add parent'),
-        children: [
-          for (final n in candidates)
-            SimpleDialogOption(
-              onPressed: () => Navigator.of(ctx).pop(n.id),
-              child: Text(n.title, overflow: TextOverflow.ellipsis),
-            ),
-        ],
-      ),
-    );
-    if (picked != null && !selected.contains(picked)) {
-      onChanged([...selected, picked]);
-    }
   }
 }
 
