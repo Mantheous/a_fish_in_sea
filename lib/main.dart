@@ -7,6 +7,7 @@ import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
 import 'package:a_fish_in_sea/demo/demo_cubit.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/planner_shell.dart';
+import 'package:a_fish_in_sea/nodes/bloc/goals_view_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/service/recurring_goal_coordinator.dart';
 import 'package:a_fish_in_sea/nodes/bloc/schedule_prefs_cubit.dart';
@@ -88,6 +89,10 @@ class MyApp extends StatelessWidget {
         // Demo mode is intentionally NOT hydrated: it must never persist.
         BlocProvider(create: (_) => DemoCubit()),
         BlocProvider(create: (_) => NavigationCubit()),
+        // Goals-page view state (view, search, filter, graph folding) kept
+        // above the page so switching tabs and coming back shows the same
+        // page. Never hydrated: view state, not data.
+        BlocProvider(create: (_) => GoalsViewCubit()),
         BlocProvider(create: (_) => SettingsCubit()),
         // Auth owns the sync-server identity. The SyncClient closure reads
         // Settings/Auth state lazily (same pattern as FeedCubit.proxyBase).

@@ -7,6 +7,7 @@ import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
+import 'package:a_fish_in_sea/nodes/bloc/goals_view_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/auto_goal.dart';
@@ -27,18 +28,6 @@ import 'package:a_fish_in_sea/nodes/view/task_rollup_tile.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 
-enum _NodeView {
-  graph,
-  all,
-  leaves,
-  automated,
-  favorites,
-  due,
-  scheduled,
-  money,
-  habits,
-}
-
 final _nodesDateFormat = DateFormat('EEE, MMM d');
 
 class NodesPage extends StatefulWidget {
@@ -52,18 +41,29 @@ class _NodesPageState extends State<NodesPage> {
   // The graph is the landing view. It is the only view that keeps the
   // relationships between goals visible, and filtering collapses
   // non-matching ancestors into path markers instead of deleting them.
-  _NodeView _view = _NodeView.graph;
+  GoalsViewMode _view = GoalsViewMode.graph;
   final TextEditingController _search = TextEditingController();
   String _query = '';
   bool _expandAll = false;
   int _expandToken = 0;
 
   /// Filter selection from the filter menu. Transient UI state only:
-  /// never persisted, and cleared by a "Show in goals" reveal.
+  /// never persisted to storage, and cleared by a "Show in goals" reveal.
   GoalGraphFilter _filter = const GoalGraphFilter();
 
   /// Bumped when the filter changes so the graph re-fits its viewport.
   int _fitToken = 0;
+
+  /// Graph subtrees folded by the user. Null until the graph seeds its
+  /// defaults; kept in [GoalsViewCubit] so a tab switch does not re-fold
+  /// what the user expanded.
+  Set<String>? _collapsedIds;
+
+  /// Keeps this page's view state while another tab is showing. Absent in
+  /// widget tests that mount the page without it; the page then simply
+  /// starts from defaults.
+  GoalsViewCubit? _viewState;
+  bool _restoredView = false;
 
   /// Pending "Show in goals" reveal from [NavigationCubit]: the target is
   /// shown in the All tree with its ancestor chain expanded and itself
@@ -119,7 +119,51 @@ class _NodesPageState extends State<NodesPage> {
         _focusListener = null;
       }
     }
+    _restoreViewState();
     _onFocusRevision();
+  }
+
+  /// Adopts the view state kept by [GoalsViewCubit] (if one is provided)
+  /// before the first build, so a tab switch lands on the same view, search,
+  /// filter, and folded graph subtrees. A pending "Show in goals" reveal is
+  /// applied afterwards and deliberately resets those.
+  void _restoreViewState() {
+    if (_restoredView) return;
+    _restoredView = true;
+    try {
+      final cubit = context.read<GoalsViewCubit>();
+      final saved = cubit.state;
+      _viewState = cubit;
+      _view = saved.mode;
+      _query = saved.query;
+      _filter = saved.filter;
+      _expandAll = saved.expandAll;
+      _collapsedIds = saved.collapsedIds;
+      if (saved.query.isNotEmpty) {
+        _search.value = TextEditingValue(
+          text: saved.query,
+          selection: TextSelection.collapsed(offset: saved.query.length),
+        );
+      }
+    } catch (_) {
+      _viewState = null;
+    }
+  }
+
+  /// Saves a snapshot of the page's view state after every change, so the
+  /// page can restore itself after another tab replaced it.
+  void _persistView() {
+    final cubit = _viewState;
+    if (cubit == null) return;
+    cubit.save(
+      GoalsViewState(
+        mode: _view,
+        query: _query,
+        filter: _filter,
+        expandAll: _expandAll,
+        collapsedIds: _collapsedIds,
+      ),
+    );
   }
 
   @override
@@ -157,13 +201,14 @@ class _NodesPageState extends State<NodesPage> {
     setState(() {
       _focusNodeId = id;
       _expandedIds = ancestors;
-      _view = _NodeView.all;
+      _view = GoalsViewMode.all;
       _expandToken++;
       _query = '';
       _search.clear();
       _filter = const GoalGraphFilter();
       _fitToken++;
     });
+    _persistView();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final ctx = _focusKey.currentContext;
@@ -210,7 +255,10 @@ class _NodesPageState extends State<NodesPage> {
                       border: OutlineInputBorder(),
                       isDense: true,
                     ),
-                    onChanged: (v) => setState(() => _query = v),
+                    onChanged: (v) {
+                      setState(() => _query = v);
+                      _persistView();
+                    },
                   ),
                 ),
                 const SizedBox(width: 4),
@@ -234,16 +282,25 @@ class _NodesPageState extends State<NodesPage> {
                     icon: Icon(
                       _expandAll ? Icons.unfold_less : Icons.unfold_more,
                     ),
-                    onPressed: () => setState(() {
-                      _expandAll = !_expandAll;
-                      _expandToken++;
-                    }),
+                    onPressed: () {
+                      setState(() {
+                        _expandAll = !_expandAll;
+                        _expandToken++;
+                      });
+                      _persistView();
+                    },
                   ),
                 ),
               ],
             ),
           ),
-          _ViewRow(view: _view, onView: (v) => setState(() => _view = v)),
+          _ViewRow(
+            view: _view,
+            onView: (v) {
+              setState(() => _view = v);
+              _persistView();
+            },
+          ),
           GoalFilterSummaryBar(
             filter: _filter,
             topicTitle: topicTitle,
@@ -261,6 +318,11 @@ class _NodesPageState extends State<NodesPage> {
               focusNodeId: _focusNodeId,
               expandedIds: _expandedIds,
               focusKey: _focusKey,
+              collapsedIds: _collapsedIds,
+              onCollapsedChanged: (ids) {
+                _collapsedIds = ids;
+                _persistView();
+              },
             ),
           ),
         ],
@@ -273,6 +335,7 @@ class _NodesPageState extends State<NodesPage> {
       _filter = next;
       _fitToken++;
     });
+    _persistView();
   }
 
   Future<void> _openFilters() async {
@@ -290,8 +353,8 @@ class _NodesPageState extends State<NodesPage> {
 }
 
 class _ViewRow extends StatelessWidget {
-  final _NodeView view;
-  final ValueChanged<_NodeView> onView;
+  final GoalsViewMode view;
+  final ValueChanged<GoalsViewMode> onView;
 
   const _ViewRow({required this.view, required this.onView});
 
@@ -302,7 +365,7 @@ class _ViewRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Row(
         children: [
-          for (final v in _NodeView.values)
+          for (final v in GoalsViewMode.values)
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: ChoiceChip(
@@ -316,21 +379,21 @@ class _ViewRow extends StatelessWidget {
     );
   }
 
-  static String _label(_NodeView v) => switch (v) {
-    _NodeView.leaves => 'Open list',
-    _NodeView.all => 'Goal tree',
-    _NodeView.automated => 'Automated',
-    _NodeView.favorites => 'Favorites',
-    _NodeView.graph => 'Graph',
-    _NodeView.due => 'Due',
-    _NodeView.scheduled => 'Scheduled',
-    _NodeView.money => 'Money',
-    _NodeView.habits => 'Repeating',
+  static String _label(GoalsViewMode v) => switch (v) {
+    GoalsViewMode.leaves => 'Open list',
+    GoalsViewMode.all => 'Goal tree',
+    GoalsViewMode.automated => 'Automated',
+    GoalsViewMode.favorites => 'Favorites',
+    GoalsViewMode.graph => 'Graph',
+    GoalsViewMode.due => 'Due',
+    GoalsViewMode.scheduled => 'Scheduled',
+    GoalsViewMode.money => 'Money',
+    GoalsViewMode.habits => 'Repeating',
   };
 }
 
 class _NodeBody extends StatelessWidget {
-  final _NodeView view;
+  final GoalsViewMode view;
   final String query;
   final GoalGraphFilter filter;
   final int fitToken;
@@ -347,6 +410,10 @@ class _NodeBody extends StatelessWidget {
   final Set<String> expandedIds;
   final GlobalKey? focusKey;
 
+  /// Graph fold state carried across page visits; null = seed defaults.
+  final Set<String>? collapsedIds;
+  final ValueChanged<Set<String>>? onCollapsedChanged;
+
   const _NodeBody({
     required this.view,
     required this.filter,
@@ -358,6 +425,8 @@ class _NodeBody extends StatelessWidget {
     this.focusNodeId,
     this.expandedIds = const {},
     this.focusKey,
+    this.collapsedIds,
+    this.onCollapsedChanged,
   });
 
   @override
@@ -434,13 +503,13 @@ class _NodeBody extends StatelessWidget {
         }
 
         switch (view) {
-          case _NodeView.leaves:
+          case GoalsViewMode.leaves:
             final items = matching(leafNodes(nodes));
             if (items.isEmpty) {
               return const Center(child: Text('No leaf nodes.'));
             }
             return flatList(items);
-          case _NodeView.all:
+          case GoalsViewMode.all:
             return _NodeTree(
               nodes: goals,
               progress: progress,
@@ -459,7 +528,7 @@ class _NodeBody extends StatelessWidget {
               expandedIds: expandedIds,
               focusKey: focusKey,
             );
-          case _NodeView.automated:
+          case GoalsViewMode.automated:
             final items = matching(
               goals.where((n) => n.isAutomatedGoal || n.isTemplate).toList(),
             );
@@ -473,7 +542,7 @@ class _NodeBody extends StatelessWidget {
               );
             }
             return flatList(items);
-          case _NodeView.favorites:
+          case GoalsViewMode.favorites:
             final items = matching(goals.where((n) => n.isFavorite).toList());
             if (items.isEmpty) {
               return const Center(
@@ -484,7 +553,7 @@ class _NodeBody extends StatelessWidget {
               );
             }
             return flatList(items);
-          case _NodeView.graph:
+          case GoalsViewMode.graph:
             String? topicTitle;
             final topicId = filter.topicRootId;
             if (topicId != null) {
@@ -508,28 +577,30 @@ class _NodeBody extends StatelessWidget {
               fitToken: fitToken,
               expandAll: expandAll,
               expandToken: expandToken,
+              collapsedIds: collapsedIds,
+              onCollapsedChanged: onCollapsedChanged,
               onClearFilters: onClearFilters,
             );
-          case _NodeView.due:
+          case GoalsViewMode.due:
             final queue = matching(priorityQueue(goals, now));
             if (queue.isEmpty) {
               return const Center(child: Text('Nothing due.'));
             }
             return flatList(queue);
-          case _NodeView.scheduled:
+          case GoalsViewMode.scheduled:
             final items = matching(calendarNodes(goals));
             if (items.isEmpty) {
               return const Center(child: Text('Nothing scheduled.'));
             }
             return flatList(items);
-          case _NodeView.money:
+          case GoalsViewMode.money:
             final items = matching(ledgerNodes(goals))
               ..sort((a, b) => _nodeDate(a).compareTo(_nodeDate(b)));
             if (items.isEmpty) {
               return const Center(child: Text('No money nodes yet.'));
             }
             return flatList(items);
-          case _NodeView.habits:
+          case GoalsViewMode.habits:
             final items = matching(goals.where((n) => n.isTemplate).toList());
             if (items.isEmpty) {
               return const Center(

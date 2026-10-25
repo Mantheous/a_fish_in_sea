@@ -2,6 +2,7 @@ import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
+import 'package:a_fish_in_sea/nodes/bloc/goals_view_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/view/nodes_page.dart';
@@ -56,9 +57,10 @@ void main() {
     ),
   ];
 
-  Widget harness(NodeCubit nodes) => MultiBlocProvider(
+  Widget harness(NodeCubit nodes, {GoalsViewCubit? view}) => MultiBlocProvider(
     providers: [
       BlocProvider.value(value: nodes),
+      BlocProvider.value(value: view ?? GoalsViewCubit()),
       BlocProvider(create: (_) => TransactionsCubit()),
       BlocProvider(create: (_) => CalendarCubit()),
       BlocProvider(create: (_) => UndoCubit()),
@@ -164,6 +166,157 @@ void main() {
     await tester.pump();
     expect(find.text('Wide child 1'), findsOneWidget);
     expect(find.text('Wide child 6'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('graph fold state survives leaving the page and coming back', (
+    tester,
+  ) async {
+    final nodes = NodeCubit();
+    nodes.emitSilent([
+      goal('wide', title: 'Wide goal'),
+      for (var i = 1; i <= 6; i++)
+        goal('wide-$i', title: 'Wide child $i', parents: ['wide']),
+    ]);
+    final view = GoalsViewCubit();
+    addTearDown(view.close);
+    await tester.pumpWidget(harness(nodes, view: view));
+    await tester.pump();
+    await openGraph(tester);
+
+    // The default fold is recorded for the next visit.
+    expect(find.text('Wide child 1'), findsNothing);
+    await tester.pump();
+    expect(view.state.collapsedIds, contains('wide'));
+
+    await tester.tap(find.byKey(const ValueKey('graph-toggle-wide')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Wide child 1'), findsOneWidget);
+    expect(view.state.collapsedIds, isNot(contains('wide')));
+
+    // Navigate to another tab: the page is replaced and its state disposed.
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    await tester.pump();
+    await tester.pumpWidget(harness(nodes, view: view));
+    await tester.pump();
+
+    expect(
+      find.text('Wide child 1'),
+      findsOneWidget,
+      reason: 'a manual expand survives the tab switch',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('search survives leaving the page and coming back', (
+    tester,
+  ) async {
+    final nodes = NodeCubit();
+    nodes.emitSilent(sample());
+    final view = GoalsViewCubit();
+    addTearDown(view.close);
+    await tester.pumpWidget(harness(nodes, view: view));
+    await tester.pump();
+    await openGraph(tester);
+
+    await tester.enterText(find.byType(TextField).first, 'Grandchild');
+    await tester.pump();
+    expect(find.text('Grandchild goal'), findsOneWidget);
+    // Plain search keeps matches + ancestors; unrelated branches drop out.
+    expect(find.text('Daily habit'), findsNothing);
+
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    await tester.pump();
+    await tester.pumpWidget(harness(nodes, view: view));
+    await tester.pump();
+
+    expect(find.text('Grandchild'), findsOneWidget, reason: 'query kept');
+    expect(find.text('Grandchild goal'), findsOneWidget);
+    expect(
+      find.text('Daily habit'),
+      findsNothing,
+      reason: 'the search still restricts the graph',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('filter survives leaving the page and coming back', (
+    tester,
+  ) async {
+    final today = DateTime.now();
+    final nodes = NodeCubit();
+    nodes.emitSilent([
+      goal('root', title: 'Root goal'),
+      goal('mid', title: 'Middle goal', parents: ['root']),
+      Node(
+        id: 'leaf',
+        title: 'Due today leaf',
+        parentIds: const ['mid'],
+        createdAt: DateTime(2026, 1, 1),
+        schedule: ScheduleFacet(due: today),
+      ),
+      Node(
+        id: 'sibling',
+        title: 'Later sibling',
+        parentIds: const ['root'],
+        createdAt: DateTime(2026, 1, 1),
+        schedule: ScheduleFacet(due: today.add(const Duration(days: 20))),
+      ),
+    ]);
+    final view = GoalsViewCubit();
+    addTearDown(view.close);
+    await tester.pumpWidget(harness(nodes, view: view));
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('goal-filter-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('goal-filter-date-today')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('goal-filter-apply')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('1 of 4 goals'), findsOneWidget);
+
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    await tester.pump();
+    await tester.pumpWidget(harness(nodes, view: view));
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('graph-node-leaf')),
+      findsOneWidget,
+      reason: 'the filter still scopes the graph',
+    );
+    expect(find.byKey(const ValueKey('graph-node-sibling')), findsNothing);
+    expect(find.textContaining('1 of 4 goals'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the selected goals view survives leaving the page', (
+    tester,
+  ) async {
+    final nodes = NodeCubit();
+    nodes.emitSilent(sample());
+    final view = GoalsViewCubit();
+    addTearDown(view.close);
+    await tester.pumpWidget(harness(nodes, view: view));
+    await tester.pump();
+
+    await tester.tap(find.text('Open list'));
+    await tester.pump();
+    final listChip = find.ancestor(
+      of: find.text('Open list'),
+      matching: find.byType(ChoiceChip),
+    );
+    expect(tester.widget<ChoiceChip>(listChip).selected, isTrue);
+
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    await tester.pump();
+    await tester.pumpWidget(harness(nodes, view: view));
+    await tester.pump();
+
+    expect(tester.widget<ChoiceChip>(listChip).selected, isTrue);
+    expect(find.byKey(const ValueKey('graph-node-root')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
