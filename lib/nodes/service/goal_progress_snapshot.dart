@@ -1,6 +1,7 @@
 import '../../finances/model/transaction.dart';
 import '../model/node.dart';
 import 'auto_goal.dart';
+import 'goal_completion.dart';
 import 'node_progress.dart';
 
 /// One build's worth of goal-progress data: the goal subset, per-goal
@@ -29,7 +30,13 @@ class GoalProgressSnapshot {
   /// Percent complete in 0–1 per goal id.
   final Map<String, double> progress;
 
-  /// Automated readings keyed by goal id (absent for non-automated goals).
+  /// Every metric reading for every metric goal, in display order.
+  final Map<String, GoalMetricsReading> metricReadings;
+
+  /// Derived completion per goal (metric goals and containers).
+  final Map<String, GoalCompletion> completion;
+
+  /// Primary metric reading per goal, kept for existing tiles.
   final Map<String, AutoGoalReading> autoReadings;
 
   const GoalProgressSnapshot({
@@ -39,6 +46,8 @@ class GoalProgressSnapshot {
     required this.txnAmountsById,
     required this.moneyActualByNodeId,
     required this.progress,
+    required this.metricReadings,
+    required this.completion,
     required this.autoReadings,
   });
 
@@ -49,6 +58,10 @@ class GoalProgressSnapshot {
   int childCountOf(String id) => byParent[id]?.length ?? 0;
 
   AutoGoalReading? readingOf(String id) => autoReadings[id];
+
+  GoalMetricsReading? metricsOf(String id) => metricReadings[id];
+
+  GoalCompletion? completionOf(String id) => completion[id];
 
   double moneyActualOf(String id) {
     final node = byId[id];
@@ -126,19 +139,25 @@ GoalProgressSnapshot buildGoalProgressSnapshot({
       if (n.reportedDuration != null)
         n.id: n.reportedDuration!.inMinutes.toDouble(),
   };
-  final autoReadings = autoReadingsForNodes(
+  final metricReadings = metricReadingsForNodes(
     nodes,
     now: now,
     transactions: transactions,
   );
+  final autoReadings = {
+    for (final entry in metricReadings.entries)
+      if (entry.value.primary != null) entry.key: entry.value.primary!,
+  };
   final progress = progressForest(
     goals,
     moneyActualByNodeId: moneyActualByNodeId,
     timeActualByNodeId: timeActualByNodeId,
     autoProgressByNodeId: {
-      for (final entry in autoReadings.entries) entry.key: entry.value.progress,
+      for (final entry in metricReadings.entries)
+        entry.key: entry.value.progress,
     },
   );
+  final completion = goalCompletionForest(goals, readings: metricReadings);
   final indexes = buildNodeIndexes(goals);
   return GoalProgressSnapshot(
     goals: goals,
@@ -147,6 +166,8 @@ GoalProgressSnapshot buildGoalProgressSnapshot({
     txnAmountsById: txnAmounts,
     moneyActualByNodeId: moneyActualByNodeId,
     progress: progress,
+    metricReadings: metricReadings,
+    completion: completion,
     autoReadings: autoReadings,
   );
 }

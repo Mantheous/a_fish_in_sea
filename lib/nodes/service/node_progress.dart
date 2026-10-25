@@ -13,7 +13,7 @@ double leafProgress(
 }) {
   // Automated goals report through their own evaluator; when the caller
   // did not supply a reading the goal is unconfigured for this build.
-  if (node.auto != null) return (autoProgress ?? 0).clamp(0.0, 1.0);
+  if (node.hasMetrics) return (autoProgress ?? 0).clamp(0.0, 1.0);
   if (node.money != null) {
     final target = node.money!.effectiveTarget;
     if (target <= 0) return node.isDone ? 1.0 : 0.0;
@@ -84,7 +84,7 @@ Map<String, double> progressForest(
     }
     // An automated goal's value is a query, not its children: explicit
     // automation wins over both leaf facets and subtree aggregation.
-    if (node.auto != null) {
+    if (node.hasMetrics) {
       return (autoProgressByNodeId[node.id] ?? 0).clamp(0.0, 1.0);
     }
     final kids = byParent[node.id] ?? const <Node>[];
@@ -535,6 +535,11 @@ Set<String> ancestorIds(String nodeId, List<Node> all) {
 /// Those live in Tasks/Calendar; Nodes is the goal tree.
 bool isGoalNode(Node n) =>
     (n.isInstance && n.calendarLink != null) ||
+    // Manual work assigned to a class is user-built: it belongs in the
+    // goal tree under the class node. Feed-imported homework stays out.
+    (n.classNodeId != null &&
+        n.sourceEventId == null &&
+        n.feedId == null) ||
     (!n.isHomework && n.calendarEventId == null);
 
 /// Goal-tree subset of [all].

@@ -102,9 +102,15 @@ void main() {
       );
       expect(Node.fromJson(automated.toJson()), automated);
 
-      final legacy = automated.toJson()..remove('auto');
+      final legacy = automated.toJson()
+        ..remove('auto')
+        ..remove('metrics')
+        ..remove('extraMetrics');
       expect(Node.fromJson(legacy).auto, isNull);
-      final corrupt = automated.toJson()..['auto'] = 'not-a-map';
+      final corrupt = automated.toJson()
+        ..['auto'] = 'not-a-map'
+        ..remove('metrics')
+        ..remove('extraMetrics');
       expect(Node.fromJson(corrupt).id, 'a');
       expect(Node.fromJson(corrupt).auto, isNull);
     });

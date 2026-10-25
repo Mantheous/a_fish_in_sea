@@ -23,12 +23,12 @@ void main() {
     HydratedBloc.storage = storage;
   });
 
-  testWidgets('editor saves an automated goal from the New node dialog', (
+  testWidgets('editor saves a goal with a time metric from New node', (
     tester,
   ) async {
     final nodes = NodeCubit();
     addTearDown(nodes.close);
-    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.physicalSize = const Size(900, 1800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -52,10 +52,12 @@ void main() {
       'Scripture study',
     );
 
-    final automation = find.widgetWithText(SwitchListTile, 'Automated goal');
-    await tester.ensureVisible(automation);
+    final addMetric = find.text('Add metric');
+    await tester.ensureVisible(addMetric);
     await tester.pumpAndSettle();
-    await tester.tap(automation);
+    await tester.tap(addMetric);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Minutes').last);
     await tester.pumpAndSettle();
 
     final target = find.byWidgetPredicate(
@@ -78,9 +80,67 @@ void main() {
     expect(tester.takeException(), isNull);
     final saved = nodes.state.single;
     expect(saved.title, 'Scripture study');
+    expect(saved.metrics, hasLength(1));
     expect(saved.auto, isNotNull);
     expect(saved.auto!.target, 420);
     expect(saved.auto!.source, AutoSource.tasks);
     expect(saved.auto!.period, TimeScale.weekly);
+  });
+
+  testWidgets('editor assigns a manual task to a new class', (tester) async {
+    final nodes = NodeCubit();
+    addTearDown(nodes.close);
+    nodes.emitSilent([
+      Node(id: 'homework', title: 'Homework', createdAt: DateTime(2026, 10, 1)),
+    ]);
+    tester.view.physicalSize = const Size(900, 1800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MultiBlocProvider(
+        providers: [
+          BlocProvider.value(value: nodes),
+          BlocProvider(create: (_) => TransactionsCubit()),
+          BlocProvider(create: (_) => CalendarCubit()),
+          BlocProvider(create: (_) => UndoCubit()),
+        ],
+        child: const MaterialApp(home: NodesPage()),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.add));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Title').first,
+      'Midterm review',
+    );
+
+    await tester.tap(find.byTooltip('Pick class'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'New class name'),
+      'CMLIT 201',
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Create'));
+    await tester.pumpAndSettle();
+
+    final save = find.widgetWithText(FilledButton, 'Add');
+    await tester.ensureVisible(save);
+    await tester.pumpAndSettle();
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    final task = nodes.state.firstWhere((n) => n.title == 'Midterm review');
+    final cls = nodes.state.firstWhere((n) => n.isClassNode);
+    expect(cls.title, 'CMLIT 201');
+    expect(cls.parentIds, contains('homework'));
+    expect(task.classNodeId, cls.id);
+    expect(task.parentIds, contains(cls.id));
+    expect(task.isHomework, isTrue);
+    expect(task.classLabel, 'CMLIT 201');
   });
 }

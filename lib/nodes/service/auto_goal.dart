@@ -105,6 +105,10 @@ class AutoGoalReading {
   /// Contributing rows: tasks or transactions.
   final int matched;
 
+  /// [AutoMetric.allDone] only: completed and total leaf work items.
+  final int doneCount;
+  final int totalCount;
+
   final DateTime windowStart;
   final DateTime windowEnd;
 
@@ -117,13 +121,17 @@ class AutoGoalReading {
     required this.matched,
     required this.windowStart,
     required this.windowEnd,
+    this.doneCount = 0,
+    this.totalCount = 0,
   });
 
   String get actualLabel => formatAutoValue(facet.metric, actual);
   String get targetLabel => formatAutoValue(facet.metric, target);
 
-  /// "6h 20m / 7h" or "$14.20 / $20.00".
-  String get summary => '$actualLabel / $targetLabel';
+  /// "6h 20m / 7h", "$14.20 / $20.00", or "3 of 5 done".
+  String get summary => facet.metric == AutoMetric.allDone
+      ? '$doneCount of $totalCount done'
+      : '$actualLabel / $targetLabel';
 
   /// "· 4 tasks" (empty when nothing matched).
   String get matchedLabel {
@@ -148,8 +156,9 @@ AutoGoalReading evaluateAutoGoal(
   required List<Node> nodes,
   List<Transaction> transactions = const [],
   DateTime? at,
+  AutoFacet? facetOverride,
 }) {
-  final facet = goal.auto;
+  final facet = facetOverride ?? goal.auto;
   final when = at ?? now;
   if (facet == null) {
     return AutoGoalReading(
@@ -167,11 +176,21 @@ AutoGoalReading evaluateAutoGoal(
 
   var actual = 0.0;
   var matched = 0;
+  var doneCount = 0;
+  var totalCount = 0;
 
   switch (facet.source) {
     case AutoSource.tasks:
       final pool = _taskPool(goal, facet, nodes);
       switch (facet.metric) {
+        case AutoMetric.allDone:
+          final work = _leafWork(pool, nodes);
+          totalCount = work.length;
+          doneCount = work.where((n) => n.isDone).length;
+          matched = totalCount;
+          actual = totalCount == 0
+              ? 0
+              : doneCount / totalCount * 100.0;
         case AutoMetric.minutes:
         case AutoMetric.averageMinutes:
           final days = <DateTime>{};
@@ -233,17 +252,20 @@ AutoGoalReading evaluateAutoGoal(
         case AutoMetric.averageMinutes:
         case AutoMetric.days:
         case AutoMetric.percentDone:
+        case AutoMetric.allDone:
           actual = 0;
       }
   }
 
-  final target = facet.target;
+  final allDone = facet.metric == AutoMetric.allDone;
+  final target = allDone ? 100.0 : facet.target;
   final progress = _progress(facet, actual, target);
-  final satisfied =
-      target > 0 &&
-      (facet.comparison == AutoComparison.atMost
-          ? actual <= target
-          : actual >= target);
+  final satisfied = allDone
+      ? totalCount > 0 && doneCount == totalCount
+      : target > 0 &&
+            (facet.comparison == AutoComparison.atMost
+                ? actual <= target
+                : actual >= target);
 
   return AutoGoalReading(
     facet: facet,
@@ -254,32 +276,69 @@ AutoGoalReading evaluateAutoGoal(
     matched: matched,
     windowStart: window.start,
     windowEnd: window.end,
+    doneCount: doneCount,
+    totalCount: totalCount,
   );
 }
 
-/// Readings for every automated goal in [nodes], keyed by node id.
-Map<String, AutoGoalReading> autoReadingsForNodes(
+/// All metric readings for one goal, in display order.
+///
+/// The first reading is the primary one shown on the row/progress bar.
+/// [satisfied] is true only when every metric passes: metrics are all
+/// statistics on the same goal and none is inherently "just a guardrail".
+class GoalMetricsReading {
+  final List<AutoGoalReading> readings;
+
+  const GoalMetricsReading(this.readings);
+
+  AutoGoalReading? get primary => readings.isEmpty ? null : readings.first;
+
+  bool get hasMetrics => readings.isNotEmpty;
+
+  bool get satisfied =>
+      readings.isNotEmpty && readings.every((reading) => reading.satisfied);
+
+  double get progress =>
+      (primary?.progress ?? 0).clamp(0.0, 1.0);
+
+  /// Primary summary, with a "+N" suffix when more metrics exist.
+  String get summary {
+    final first = primary;
+    if (first == null) return 'no metrics';
+    if (readings.length == 1) return first.summary;
+    return '${first.summary} · +${readings.length - 1}';
+  }
+}
+
+/// Readings for every metric on every goal in [nodes], keyed by node id.
+Map<String, GoalMetricsReading> metricReadingsForNodes(
   List<Node> nodes, {
   required DateTime now,
   List<Transaction> transactions = const [],
 }) {
-  return {
-    for (final node in nodes)
-      if (node.auto != null)
-        node.id: evaluateAutoGoal(
+  final out = <String, GoalMetricsReading>{};
+  for (final node in nodes) {
+    if (!node.hasMetrics) continue;
+    out[node.id] = GoalMetricsReading([
+      for (final metric in node.metrics)
+        evaluateAutoGoal(
           node,
           now: now,
           nodes: nodes,
           transactions: transactions,
+          facetOverride: metric,
         ),
-  };
+    ]);
+  }
+  return out;
 }
 
 double _progress(AutoFacet facet, double actual, double target) {
-  if (target <= 0) return 0;
-  if (facet.metric == AutoMetric.percentDone) {
+  if (facet.metric == AutoMetric.allDone ||
+      facet.metric == AutoMetric.percentDone) {
     return (actual / 100).clamp(0.0, 1.0);
   }
+  if (target <= 0) return 0;
   if (facet.comparison == AutoComparison.atMost) {
     if (actual <= 0) return 1.0;
     return (target / actual).clamp(0.0, 1.0);
@@ -298,9 +357,43 @@ List<Node> _taskPool(Node goal, AutoFacet facet, List<Node> nodes) {
       if (node.id != goal.id &&
           !node.isTemplate &&
           !node.isUnbounded &&
-          (ids == null || ids.contains(node.id)) &&
+          _inScope(goal, node, ids) &&
           (!facet.homeworkOnly || node.isHomework) &&
           _classMatches(node, keys))
+        node,
+  ];
+}
+
+/// True when [node] is inside a goal's scope. A class node's scope also
+/// includes imported work from its bound feeds even before that work was
+/// parented, so class metrics work on existing history without a
+/// destructive migration.
+bool _inScope(Node goal, Node node, Set<String>? subtreeIds) {
+  if (subtreeIds == null) return true;
+  if (subtreeIds.contains(node.id)) return true;
+  if (goal.isClassNode) {
+    if (node.classNodeId == goal.id) return true;
+    return goal.classFacet!.matchesNodeSource(
+      classSourceOfNode(
+        feedId: node.feedId,
+        classId: node.classId,
+        classLabel: node.classLabel,
+      ),
+    );
+  }
+  return false;
+}
+
+/// Leaf work items: the things allDone can count. Class nodes and metric
+/// goals are containers/measurements, not work; a class with only metric
+/// goals should use a metric for completion instead of allDone.
+List<Node> _leafWork(List<Node> pool, List<Node> nodes) {
+  final parented = <String>{
+    for (final node in nodes) ...node.parentIds,
+  };
+  return [
+    for (final node in pool)
+      if (!parented.contains(node.id) && !node.isClassNode && !node.hasMetrics)
         node,
   ];
 }

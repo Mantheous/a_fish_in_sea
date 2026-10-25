@@ -45,7 +45,9 @@ enum NodeRole {
 NodeRole roleOf(Node node) {
   if (node.instanceOfId != null) return NodeRole.instance;
   if (node.recurrence != null) return NodeRole.template;
-  if (node.auto != null) return NodeRole.derived;
+  if (node.isClassNode || node.auto != null || node.extraMetrics.isNotEmpty) {
+    return NodeRole.derived;
+  }
   if (node.rule != null && node.rule!.kind != NodeRuleKind.none) {
     return NodeRole.derived;
   }
@@ -188,9 +190,13 @@ String? validateUnbounded(Node draft) {
     return 'An unbounded goal cannot have a memorization target. '
         'Remove the Anki target first.';
   }
-  if (draft.auto != null) {
-    return 'An unbounded goal cannot be automated. '
-        'An automated goal carries a target; remove it first.';
+  if (draft.auto != null || draft.extraMetrics.isNotEmpty) {
+    return 'An unbounded goal cannot have metrics. '
+        'Remove its metrics first.';
+  }
+  if (draft.classFacet != null) {
+    return 'An unbounded goal cannot be a class. '
+        'Class work needs a scope; remove the class first.';
   }
   if (draft.recurrence != null) {
     return 'An unbounded goal cannot repeat. '

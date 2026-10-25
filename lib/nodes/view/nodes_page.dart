@@ -10,6 +10,7 @@ import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/auto_goal.dart';
+import 'package:a_fish_in_sea/nodes/service/goal_completion.dart';
 import 'package:a_fish_in_sea/nodes/service/goal_progress_snapshot.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/service/node_legacy_migration.dart';
@@ -316,6 +317,8 @@ class _NodeBody extends StatelessWidget {
         if (goals.isEmpty) return const _EmptyNodes();
         final txnAmounts = snapshot.txnAmountsById;
         final autoReadings = snapshot.autoReadings;
+        final metricReadings = snapshot.metricReadings;
+        final completion = snapshot.completion;
         final progress = snapshot.progress;
         final trimmed = query.trim();
         final visible = trimmed.isEmpty ? null : filterTreeIds(nodes, trimmed);
@@ -343,6 +346,8 @@ class _NodeBody extends StatelessWidget {
                 progress: progress,
                 txnAmounts: txnAmounts,
                 autoReadings: autoReadings,
+                metricReadings: metricReadings,
+                completion: completion,
                 depth: 0,
                 flat: true,
                 visible: visible,
@@ -370,6 +375,8 @@ class _NodeBody extends StatelessWidget {
               progress: progress,
               txnAmounts: txnAmounts,
               autoReadings: autoReadings,
+              metricReadings: metricReadings,
+              completion: completion,
               visible: visible,
               expandAll: expandAll,
               expandToken: expandToken,
@@ -454,6 +461,8 @@ class _NodeBody extends StatelessWidget {
                   progress: progress,
                   txnAmounts: txnAmounts,
                   autoReadings: autoReadings,
+                  metricReadings: metricReadings,
+                  completion: completion,
                   depth: 0,
                   flat: false,
                   visible: visible,
@@ -483,6 +492,8 @@ class _NodeTree extends StatelessWidget {
   final Map<String, double> progress;
   final Map<String, double> txnAmounts;
   final Map<String, AutoGoalReading> autoReadings;
+  final Map<String, GoalMetricsReading> metricReadings;
+  final Map<String, GoalCompletion> completion;
   final Map<String, Node>? nodeById;
   final Map<String, List<Node>>? byParent;
   final DateTime? now;
@@ -499,6 +510,8 @@ class _NodeTree extends StatelessWidget {
     required this.progress,
     required this.txnAmounts,
     this.autoReadings = const {},
+    this.metricReadings = const {},
+    this.completion = const {},
     this.nodeById,
     this.byParent,
     this.now,
@@ -539,6 +552,8 @@ class _NodeTree extends StatelessWidget {
             progress: progress,
             txnAmounts: txnAmounts,
             autoReadings: autoReadings,
+            metricReadings: metricReadings,
+            completion: completion,
             depth: 0,
             flat: true,
             visible: visible,
@@ -565,6 +580,8 @@ class _NodeTree extends StatelessWidget {
           progress: progress,
           txnAmounts: txnAmounts,
           autoReadings: autoReadings,
+          metricReadings: metricReadings,
+          completion: completion,
           depth: 0,
           flat: false,
           visited: {n.id},
@@ -601,6 +618,8 @@ class _NodeTile extends StatelessWidget {
   final Map<String, double> progress;
   final Map<String, double> txnAmounts;
   final Map<String, AutoGoalReading> autoReadings;
+  final Map<String, GoalMetricsReading> metricReadings;
+  final Map<String, GoalCompletion> completion;
   final int depth;
   final bool flat;
   final Set<String> visited;
@@ -628,6 +647,8 @@ class _NodeTile extends StatelessWidget {
     required this.progress,
     required this.txnAmounts,
     this.autoReadings = const {},
+    this.metricReadings = const {},
+    this.completion = const {},
     required this.depth,
     required this.flat,
     this.visited = const {},
@@ -668,7 +689,8 @@ class _NodeTile extends StatelessWidget {
       live,
       value,
       kids.length,
-      autoReadings[live.id],
+      metricReadings[live.id],
+      completion[live.id],
     );
     final focused = live.id == focusNodeId;
     Widget wrapFocus(Widget child) {
@@ -683,7 +705,7 @@ class _NodeTile extends StatelessWidget {
     }
     final tile = ListTile(
       contentPadding: EdgeInsets.only(left: 16 + depth * 20, right: 8),
-      leading: _leading(context, live),
+      leading: _leading(context, live, completion[live.id]),
       title: Text(
         live.title,
         style: TextStyle(
@@ -709,7 +731,7 @@ class _NodeTile extends StatelessWidget {
       _ParentTile(
         key: ValueKey('${live.id}:$expandToken:$expandAll'),
         tilePadding: EdgeInsets.only(left: 16 + depth * 20, right: 8),
-        leading: _leading(context, live),
+        leading: _leading(context, live, completion[live.id]),
         title: Text(
           live.title,
           style: TextStyle(
@@ -736,6 +758,8 @@ class _NodeTile extends StatelessWidget {
               progress: progress,
               txnAmounts: txnAmounts,
               autoReadings: autoReadings,
+              metricReadings: metricReadings,
+              completion: completion,
               depth: depth + 1,
               flat: false,
               visited: {...visited, k.id},
@@ -768,6 +792,8 @@ class _NodeTile extends StatelessWidget {
                     progress: progress,
                     txnAmounts: txnAmounts,
                     autoReadings: autoReadings,
+                    metricReadings: metricReadings,
+                    completion: completion,
                     depth: depth + 2,
                     flat: true,
                     visible: visible,
@@ -924,17 +950,51 @@ class _NodeTile extends StatelessWidget {
     return aDue.compareTo(bDue);
   }
 
-  Widget _leading(BuildContext context, Node live) {
+  Widget _leading(
+    BuildContext context,
+    Node live,
+    GoalCompletion? completion,
+  ) {
     if (live.isUnbounded) {
       return const Tooltip(
         message: 'Unbounded goal — ongoing, no checkbox',
         child: Icon(Icons.all_inclusive),
       );
     }
+    // Metric goals and containers derive completion; only checklist leaves
+    // keep an editable checkbox.
+    if (completion?.derived == true) {
+      final complete = completion!.complete;
+      return Tooltip(
+        message: live.isClassNode
+            ? (complete
+                  ? 'Class complete — all work done'
+                  : 'Class — completes when all work is done')
+            : live.hasMetrics
+            ? (complete
+                  ? 'Complete — all metrics pass'
+                  : 'Incomplete — not all metrics pass')
+            : (complete
+                  ? 'Complete — all sub-work done'
+                  : 'Completes when all sub-work is done'),
+        child: Icon(
+          complete ? Icons.check_circle : Icons.radio_button_unchecked,
+          color: complete
+              ? Theme.of(context).colorScheme.primary
+              : Theme.of(context).colorScheme.outline,
+        ),
+      );
+    }
     if (live.isAutomatedGoal) {
       return const Tooltip(
         message: 'Automated goal — measured from your data',
         child: Icon(Icons.auto_graph),
+      );
+    }
+    if (live.isClassNode) {
+      return const Tooltip(
+        message: 'Class node',
+        child: Icon(Icons.school_outlined),
       );
     }
     if (live.isTemplate) {
@@ -982,7 +1042,8 @@ class _NodeTile extends StatelessWidget {
     Node live,
     double value,
     int childCount,
-    AutoGoalReading? autoReading,
+    GoalMetricsReading? metricReading,
+    GoalCompletion? completion,
   ) {
     // Unbounded goals never show dates, targets, or a percent — just the
     // ongoing marker plus how many concrete steps hang underneath.
@@ -995,16 +1056,28 @@ class _NodeTile extends StatelessWidget {
     }
     final effectiveNow = now ?? DateTime.now();
     final parts = <String>[];
+    if (live.isClassNode) {
+      parts.add('class');
+      final sources = live.classFacet?.sources.length ?? 0;
+      if (sources > 0) {
+        parts.add('$sources feed${sources == 1 ? '' : 's'}');
+      }
+    }
     if (childCount > 0) {
       parts.add('$childCount step${childCount == 1 ? '' : 's'}');
     }
-    if (autoReading != null) {
-      parts.add(autoReading.summary);
-      parts.add(autoReading.windowLabel);
-      if (autoReading.matchedLabel.isNotEmpty) {
-        parts.add(autoReading.matchedLabel);
+    final primary = metricReading?.primary;
+    if (primary != null) {
+      parts.add(metricReading!.summary);
+      if (primary.facet.metric != AutoMetric.allDone) {
+        parts.add(primary.windowLabel);
       }
-      if (autoReading.satisfied) parts.add('on track ✓');
+      if (metricReading.readings.length == 1 &&
+          primary.facet.metric != AutoMetric.allDone &&
+          primary.matchedLabel.isNotEmpty) {
+        parts.add(primary.matchedLabel);
+      }
+      if (metricReading.satisfied) parts.add('complete ✓');
     } else if (live.isAutomatedGoal) {
       parts.add('automated goal');
     } else if (live.money != null) {
@@ -1065,7 +1138,12 @@ class _NodeTile extends StatelessWidget {
     if ((live.schedule?.isFixed ?? false) || (live.money?.isFixed ?? false)) {
       parts.add('fixed');
     }
-    if (autoReading == null) parts.add('${(value * 100).round()}%');
+    if (completion?.derived == true &&
+        completion!.complete &&
+        !(metricReading?.satisfied ?? false)) {
+      parts.add('all work done ✓');
+    }
+    if (metricReading == null) parts.add('${(value * 100).round()}%');
     if (parts.isEmpty) return 'note';
     return parts.join(' · ');
   }

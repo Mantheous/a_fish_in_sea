@@ -103,9 +103,10 @@ void main() {
       _node('child2', parents: const ['parent']),
     ]);
 
-    // A plain parent can still be finished outright, so it keeps the
-    // checkbox — but the children's average is shown underneath.
-    expect(find.byType(NodeCheckbox), findsOneWidget);
+    // A container's completion is derived from its children, so it no
+    // longer carries a manual checkbox; the rolled-up average stays.
+    expect(find.byType(NodeCheckbox), findsNothing);
+    expect(find.byIcon(Icons.radio_button_unchecked), findsOneWidget);
     expect(_barValue(tester), 0.5);
     expect(find.textContaining('2 steps'), findsOneWidget);
     expect(find.textContaining('50%'), findsOneWidget);

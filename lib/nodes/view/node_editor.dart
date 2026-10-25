@@ -15,7 +15,8 @@ import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_editor_schedule.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
-import 'package:a_fish_in_sea/nodes/view/auto_goal_fields.dart';
+import 'package:a_fish_in_sea/nodes/view/class_picker.dart';
+import 'package:a_fish_in_sea/nodes/view/metrics_fields.dart';
 import 'package:a_fish_in_sea/nodes/view/parents_field.dart';
 import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
@@ -103,7 +104,8 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   TimeScale _frequency = TimeScale.daily;
   DateTime? _recurEnd;
 
-  AutoFacet? _auto;
+  List<AutoFacet> _metrics = const [];
+  String? _classNodeId;
 
   NodeRuleKind _ruleKind = NodeRuleKind.none;
   late final TextEditingController _horizon;
@@ -159,7 +161,8 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _hasRecurrence = e?.recurrence != null || widget.enableRecurrence;
     _frequency = e?.recurrence?.frequency ?? TimeScale.daily;
     _recurEnd = e?.recurrence?.endDate;
-    _auto = e?.auto;
+    _metrics = List.of(e?.metrics ?? const []);
+    _classNodeId = e?.classNodeId;
     _ruleKind = e?.rule?.kind ?? NodeRuleKind.none;
     _horizon = TextEditingController(
       text: (e?.rule?.horizonDays ?? 3).toString(),
@@ -224,7 +227,6 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
               selected: _people,
               onChanged: (next) => setState(() => _people = next),
             ),
-            const SizedBox(height: 12),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               dense: true,
@@ -246,6 +248,41 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
               value: _isFavorite,
               onChanged: (v) => setState(() => _isFavorite = v),
             ),
+            if (e?.isClassNode != true) ...[
+              const SizedBox(height: 4),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.school_outlined),
+                title: const Text('Class'),
+                subtitle: Text(_className(context)),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_classNodeId != null)
+                      IconButton(
+                        tooltip: 'Clear class',
+                        icon: const Icon(Icons.close, size: 18),
+                        onPressed: () =>
+                            setState(() => _classNodeId = null),
+                      ),
+                    IconButton(
+                      tooltip: 'Pick class',
+                      icon: const Icon(Icons.arrow_drop_down),
+                      onPressed: _pickClass,
+                    ),
+                  ],
+                ),
+              ),
+            ] else
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'Class node — its work is the subtree plus imported '
+                  'assignments from its bound feeds.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            const SizedBox(height: 12),
             if (!_isUnbounded) ...[
               const SizedBox(height: 16),
               _sectionTitle(context, 'Schedule'),
@@ -286,24 +323,25 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                   ),
                 ),
               const SizedBox(height: 8),
-              _sectionTitle(context, 'Automated goal'),
-              AutoGoalFields(
-                value: _auto,
-                onChanged: (value) => setState(() => _auto = value),
+              _sectionTitle(context, 'Metrics'),
+              MetricsFields(
+                value: _metrics,
+                onChanged: (value) => setState(() => _metrics = value),
                 classOptions: _classOptions(context),
                 className: classNameResolver(context),
                 moneyCategoryOptions: _moneyCategoryOptions(context),
+                hasChildren: _hasChildren(context),
               ),
-              if (_auto != null)
+              if (_metrics.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
-                    'This goal is measured automatically; manual targets '
-                    'below are hidden.',
+                    'Metrics measure this goal; manual targets below are '
+                    'hidden.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
-              if (_auto == null) ...[
+              if (_metrics.isEmpty) ...[
               const SizedBox(height: 8),
               _sectionTitle(context, 'Money'),
               SwitchListTile(
@@ -581,7 +619,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                       : () => setState(() => _recurEnd = null),
                 ),
               ],
-              ], // end if (_auto == null): manual targets and repeats
+              ], // end if (_metrics.isEmpty): manual targets and repeats
               if (e?.rule != null) ...[
                 const SizedBox(height: 8),
                 _sectionTitle(context, 'Legacy rule'),
@@ -731,7 +769,33 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     );
   }
 
-  /// Homework classes already imported, used as automation chips. Reading
+  String _className(BuildContext context) {
+    final id = _classNodeId;
+    if (id == null) return 'None';
+    try {
+      return context.read<NodeCubit>().byId(id)?.title ?? 'Class not found';
+    } catch (_) {
+      return 'None';
+    }
+  }
+
+  Future<void> _pickClass() async {
+    final id = await showClassPicker(context, selectedId: _classNodeId);
+    if (!mounted || id == null) return;
+    setState(() => _classNodeId = id);
+  }
+
+  bool _hasChildren(BuildContext context) {
+    final id = widget.existing?.id;
+    if (id == null) return false;
+    try {
+      return context.read<NodeCubit>().childrenOf(id).isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Homework classes already imported, used as metric chips. Reading
   /// cubits defensively keeps the editor usable in previews/tests where a
   /// provider is intentionally absent.
   List<String> _classOptions(BuildContext context) {
@@ -786,6 +850,53 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _saveConfirmed(context);
   }
 
+  /// Class membership is a parent edge plus a stable `classNodeId`.
+  /// Imported homework keeps its feed `classId`/`classLabel` provenance;
+  /// manual work takes the class node's id/title so the Homework tab and
+  /// time-by-class reporting group it correctly.
+  ({
+    List<String> parents,
+    String? classNodeId,
+    String? classId,
+    String? classLabel,
+    bool clearClassId,
+    bool clearClassLabel,
+  }) _classSaveValues(NodeCubit cubit, Node? existing) {
+    final parents = [..._parents];
+    final selectedClassId = _classNodeId;
+    final classNode =
+        selectedClassId == null ? null : cubit.byId(selectedClassId);
+    if (existing?.isClassNode != true) {
+      parents.removeWhere((id) => cubit.byId(id)?.isClassNode == true);
+      if (classNode != null && !parents.contains(classNode.id)) {
+        parents.add(classNode.id);
+      }
+    }
+    final imported = existing != null &&
+        (existing.sourceEventId != null || existing.feedId != null);
+    if (classNode != null) {
+      return (
+        parents: parents,
+        classNodeId: classNode.id,
+        classId: imported ? existing.classId : classNode.id,
+        classLabel: imported
+            ? (existing.classLabel ?? classNode.title)
+            : classNode.title,
+        clearClassId: false,
+        clearClassLabel: false,
+      );
+    }
+    final wasManualClass = existing?.classNodeId != null && !imported;
+    return (
+      parents: parents,
+      classNodeId: null,
+      classId: null,
+      classLabel: null,
+      clearClassId: wasManualClass,
+      clearClassLabel: wasManualClass,
+    );
+  }
+
   /// Second half of [_save], after the unbounded-facets confirm dialog.
   /// Split out so the async confirm gate stays readable.
   Future<void> _saveConfirmed(BuildContext context) async {
@@ -805,7 +916,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       if (_hasEffort) dropping.add('time target');
       if (_hasAnki) dropping.add('memorization target');
       if (_hasRecurrence) dropping.add('repeats');
-      if (_auto != null) dropping.add('automated goal');
+      if (_metrics.isNotEmpty) dropping.add('metrics');
       if (_ruleKind != NodeRuleKind.none) dropping.add('rule');
       if (dropping.isNotEmpty) {
         final drop = await _confirmDropFacets(context, dropping);
@@ -894,10 +1005,14 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       );
     }
 
-    var auto = _auto;
+    var auto = _metrics.isEmpty ? null : _metrics.first;
+    var extraMetrics = _metrics.length <= 1
+        ? const <AutoFacet>[]
+        : _metrics.sublist(1);
+    final classValues = _classSaveValues(cubit, existing);
 
     // Unbounded goals carry no dates, targets, repeats, rules, or
-    // automation — the hidden sections' stale state is dropped so the save
+    // metrics — the hidden sections' stale state is dropped so the save
     // validates.
     final isUnbounded = _isUnbounded;
     if (isUnbounded) {
@@ -907,6 +1022,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       anki = null;
       recurrence = null;
       auto = null;
+      extraMetrics = const [];
       rule = null;
     }
 
@@ -917,7 +1033,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         id: 'node:${DateTime.now().microsecondsSinceEpoch}',
         title: title,
         notes: notes,
-        parentIds: _parents,
+        parentIds: classValues.parents,
         createdAt: DateTime.now(),
         isUnbounded: isUnbounded,
         isFavorite: _isFavorite,
@@ -927,6 +1043,10 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         anki: anki,
         recurrence: recurrence,
         auto: auto,
+        extraMetrics: extraMetrics,
+        classNodeId: classValues.classNodeId,
+        classId: classValues.classId,
+        classLabel: classValues.classLabel,
         rule: rule,
         assignees: _people,
       );
@@ -949,7 +1069,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         title: title,
         notes: notes,
         clearNotes: notes == null,
-        parentIds: _parents,
+        parentIds: classValues.parents,
         isUnbounded: isUnbounded,
         isFavorite: _isFavorite,
         schedule: schedule,
@@ -964,6 +1084,13 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         clearRecurrence: recurrence == null,
         auto: auto,
         clearAuto: auto == null,
+        extraMetrics: extraMetrics,
+        classNodeId: classValues.classNodeId,
+        clearClassNodeId: classValues.classNodeId == null,
+        classId: classValues.classId,
+        clearClassId: classValues.clearClassId,
+        classLabel: classValues.classLabel,
+        clearClassLabel: classValues.clearClassLabel,
         rule: rule,
         clearRule: rule == null,
         assignees: _people,

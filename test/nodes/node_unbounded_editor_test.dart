@@ -56,8 +56,11 @@ void main() {
           .first,
       'Serve others',
     );
-    await tester.tap(find.widgetWithText(
-        SwitchListTile, 'Abstract / unbounded goal'));
+    final unboundedSwitch = find.widgetWithText(
+        SwitchListTile, 'Abstract / unbounded goal');
+    await tester.ensureVisible(unboundedSwitch);
+    await tester.pumpAndSettle();
+    await tester.tap(unboundedSwitch);
     await tester.pumpAndSettle();
     // Concrete sections hide while unbounded is on.
     final dialog = find.byType(AlertDialog);
@@ -99,10 +102,16 @@ void main() {
 
     await tester.tap(find.text('Dated'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(
-        SwitchListTile, 'Abstract / unbounded goal'));
+    final unboundedSwitch = find.widgetWithText(
+        SwitchListTile, 'Abstract / unbounded goal');
+    await tester.ensureVisible(unboundedSwitch);
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.tap(unboundedSwitch);
+    await tester.pumpAndSettle();
+    final save = find.widgetWithText(FilledButton, 'Save');
+    await tester.ensureVisible(save);
+    await tester.pumpAndSettle();
+    await tester.tap(save);
     await tester.pumpAndSettle();
 
     // Confirm gate lists what will go.
@@ -138,10 +147,16 @@ void main() {
 
     await tester.tap(find.text('Dated'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(
-        SwitchListTile, 'Abstract / unbounded goal'));
+    final unboundedSwitch = find.widgetWithText(
+        SwitchListTile, 'Abstract / unbounded goal');
+    await tester.ensureVisible(unboundedSwitch);
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.tap(unboundedSwitch);
+    await tester.pumpAndSettle();
+    final save = find.widgetWithText(FilledButton, 'Save');
+    await tester.ensureVisible(save);
+    await tester.pumpAndSettle();
+    await tester.tap(save);
     await tester.pumpAndSettle();
     expect(find.text('Remove dates and targets?'), findsOneWidget);
     await tester.tap(find.widgetWithText(TextButton, 'Keep editing'));
