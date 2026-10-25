@@ -109,7 +109,6 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   bool _isFavorite = false;
 
   DateTime? _due;
-  bool _dateFixed = false;
 
   bool _hasMoney = false;
   late final TextEditingController _amount;
@@ -156,7 +155,6 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _isUnbounded = e?.isUnbounded ?? false;
     _isFavorite = e?.isFavorite ?? false;
     _due = e?.schedule?.due;
-    _dateFixed = e?.schedule?.isFixed ?? false;
     _hasMoney = e?.money != null || widget.enableMoney;
     _amount = TextEditingController(
       text: e?.money != null ? e!.money!.targetAmount.toStringAsFixed(2) : '',
@@ -354,7 +352,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
           _DateRow(
             label: _due == null
                 ? 'No due date'
-                : 'Due ${MaterialLocalizations.of(context).formatFullDate(_due!)}${_dateFixed ? ' · fixed' : ''}',
+                : 'Due ${MaterialLocalizations.of(context).formatFullDate(_due!)}',
             onPick: () async {
               final picked = await showDatePicker(
                 context: context,
@@ -367,14 +365,6 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
             onClear: _due == null
                 ? null
                 : () => setState(() => _due = null),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: const Text('Fixed date'),
-            subtitle: const Text('Commitment; estimates stay flexible'),
-            value: _dateFixed,
-            onChanged: (v) => setState(() => _dateFixed = v),
           ),
           // Times are calendar events picked visually on the calendar:
           // save, then use Schedule → Time to place this there. A
@@ -1075,7 +1065,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     var schedule = scheduleAfterEditorSave(
       previous: existing?.schedule,
       due: _due,
-      isFixed: _dateFixed,
+      isFixed: existing?.schedule?.isFixed ?? false,
     );
 
     MoneyFacet? money;
