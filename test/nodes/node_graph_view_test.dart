@@ -5,6 +5,7 @@ import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/goals_view_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/view/node_graph_action_bar.dart';
 import 'package:a_fish_in_sea/nodes/view/nodes_page.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:flutter/material.dart';
@@ -74,7 +75,7 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('graph tab lays out goals and opens the editor on tap', (
+  testWidgets('graph tab lays out goals, tap selects, tap again edits', (
     tester,
   ) async {
     final nodes = NodeCubit();
@@ -88,8 +89,81 @@ void main() {
     expect(tester.takeException(), isNull);
 
     await tester.tap(find.byKey(const ValueKey('graph-node-root')));
+    await tester.pump();
+    expect(
+      find.byKey(nodeGraphActionBarKey),
+      findsOneWidget,
+      reason: 'the tapped card is selected and its actions appear',
+    );
+    expect(find.byKey(const ValueKey('graph-action-record')), findsOneWidget);
+    expect(find.text('Edit node'), findsNothing);
+    expect(tester.takeException(), isNull);
+
+    // A second tap on the selected card opens the editor, as before.
+    await tester.tap(find.byKey(const ValueKey('graph-node-root')));
     await tester.pumpAndSettle();
     expect(find.text('Edit node'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('selected goal records time from the action bar', (
+    tester,
+  ) async {
+    final nodes = NodeCubit();
+    nodes.emitSilent(sample());
+    await tester.pumpWidget(harness(nodes));
+    await tester.pump();
+    await openGraph(tester);
+
+    await tester.tap(find.byKey(const ValueKey('graph-node-root')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('graph-action-record')));
+    await tester.pump();
+
+    expect(nodes.byId('root')?.isTracking, isTrue);
+    expect(
+      find.byKey(const ValueKey('graph-action-stop')),
+      findsOneWidget,
+      reason: 'the record button becomes stop while the timer runs',
+    );
+
+    await tester.tap(find.byKey(const ValueKey('graph-action-stop')));
+    await tester.pumpAndSettle();
+    expect(nodes.byId('root')?.isTracking, isFalse);
+    expect(find.text('Work session saved'), findsOneWidget);
+  });
+
+  testWidgets('closing the action bar clears the selection', (tester) async {
+    final nodes = NodeCubit();
+    nodes.emitSilent(sample());
+    await tester.pumpWidget(harness(nodes));
+    await tester.pump();
+    await openGraph(tester);
+
+    await tester.tap(find.byKey(const ValueKey('graph-node-root')));
+    await tester.pump();
+    expect(find.byKey(nodeGraphActionBarKey), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('graph-action-close')));
+    await tester.pump();
+    expect(find.byKey(nodeGraphActionBarKey), findsNothing);
+  });
+
+  testWidgets('action bar fits a phone width without overflowing', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 740);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final nodes = NodeCubit();
+    nodes.emitSilent(sample());
+    await tester.pumpWidget(harness(nodes));
+    await tester.pump();
+    await openGraph(tester);
+
+    await tester.tap(find.byKey(const ValueKey('graph-node-root')));
+    await tester.pump();
+    expect(find.byKey(nodeGraphActionBarKey), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

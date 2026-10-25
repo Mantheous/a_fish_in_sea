@@ -29,6 +29,15 @@ Finder dialogTextField(String label) => find.descendant(
       matching: find.widgetWithText(TextField, label),
     );
 
+/// Goals lands on the graph: the first tap selects the card and the action
+/// bar's edit button opens the editor.
+Future<void> openGoalEditor(WidgetTester tester, String title) async {
+  await tester.tap(find.text(title));
+  await tester.pump();
+  await tester.tap(find.byKey(const ValueKey('graph-action-edit')));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   setUp(() {
     final storage = MockStorage();
@@ -103,8 +112,7 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    await tester.tap(find.text('Dated'));
-    await tester.pumpAndSettle();
+    await openGoalEditor(tester, 'Dated');
     final unboundedSwitch = find.widgetWithText(
         SwitchListTile, 'Abstract / unbounded goal');
     await tester.ensureVisible(unboundedSwitch);
@@ -148,8 +156,7 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    await tester.tap(find.text('Dated'));
-    await tester.pumpAndSettle();
+    await openGoalEditor(tester, 'Dated');
     final unboundedSwitch = find.widgetWithText(
         SwitchListTile, 'Abstract / unbounded goal');
     await tester.ensureVisible(unboundedSwitch);
@@ -191,8 +198,7 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    await tester.tap(find.text('Blocked'));
-    await tester.pumpAndSettle();
+    await openGoalEditor(tester, 'Blocked');
     // Day-only editor: due date inline, calendar times via Schedule.
     final dialog = find.byType(AlertDialog);
     expect(
