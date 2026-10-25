@@ -4,9 +4,12 @@ import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:a_fish_in_sea/demo/demo_mode.dart';
 import 'package:a_fish_in_sea/demo/demo_tour_card.dart';
+import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/imports/view/import_inbox_card.dart';
+import 'package:a_fish_in_sea/navigation/view/favorite_goal_line.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/goal_progress_snapshot.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/service/node_tracking.dart';
 import 'package:a_fish_in_sea/nodes/view/node_checkbox.dart';
@@ -66,6 +69,15 @@ class _HomePageState extends State<HomePage> {
       nodeCubit.dueThisWeekAt(today),
     );
     final favoriteNodes = feedCubit.visibleNodes(nodeCubit.favorites);
+    // One aggregation pass per build for all favorite rows; null when the
+    // section is empty so an empty Home never walks the store.
+    final favoriteProgress = favoriteNodes.isEmpty
+        ? null
+        : buildGoalProgressSnapshot(
+            nodes: nodeCubit.state,
+            transactions: context.watch<TransactionsCubit>().state,
+            now: today,
+          );
     return Scaffold(
       appBar: AppBar(title: const Text('Home')),
       drawer: const AppDrawer(),
@@ -84,13 +96,17 @@ class _HomePageState extends State<HomePage> {
             title: 'Favorite goals',
             onMore: () =>
                 context.read<NavigationCubit>().setPage(PlannerPage.nodes),
-            child: favoriteNodes.isEmpty
+            child: favoriteProgress == null
                 ? const _EmptyLine(
                     'No favorite goals — star a goal to pin it here')
                 : Column(
                     children: [
                       for (final node in favoriteNodes.take(5))
-                        _NodeLine(node: node, now: today),
+                        FavoriteGoalLine(
+                          node: node,
+                          now: today,
+                          snapshot: favoriteProgress,
+                        ),
                     ],
                   ),
           ),
