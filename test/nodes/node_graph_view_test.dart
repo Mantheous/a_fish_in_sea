@@ -153,4 +153,106 @@ void main() {
     expect(find.text('Grandchild goal'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('graph is the default view for goals', (tester) async {
+    final nodes = NodeCubit();
+    nodes.emitSilent(sample());
+    await tester.pumpWidget(harness(nodes));
+    await tester.pump();
+
+    final graphChip = find.ancestor(
+      of: find.text('Graph'),
+      matching: find.byType(ChoiceChip),
+    );
+    expect(graphChip, findsOneWidget);
+    expect(tester.widget<ChoiceChip>(graphChip).selected, isTrue);
+    expect(find.byKey(const ValueKey('graph-node-root')), findsOneWidget);
+  });
+
+  testWidgets(
+    'filter keeps matched goals and collapses filtered-out ancestors',
+    (tester) async {
+      final today = DateTime.now();
+      final nodes = NodeCubit();
+      nodes.emitSilent([
+        goal('root', title: 'Root goal'),
+        goal('mid', title: 'Middle goal', parents: ['root']),
+        Node(
+          id: 'leaf',
+          title: 'Due today leaf',
+          parentIds: const ['mid'],
+          createdAt: DateTime(2026, 1, 1),
+          schedule: ScheduleFacet(due: today),
+        ),
+        Node(
+          id: 'sibling',
+          title: 'Later sibling',
+          parentIds: const ['root'],
+          createdAt: DateTime(2026, 1, 1),
+          schedule: ScheduleFacet(
+            due: today.add(const Duration(days: 20)),
+          ),
+        ),
+      ]);
+      await tester.pumpWidget(harness(nodes));
+      await tester.pump();
+
+      await tester.tap(find.byKey(const ValueKey('goal-filter-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('goal-filter-date-today')),
+      );
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('goal-filter-apply')));
+      await tester.pumpAndSettle();
+
+      // The match is a full card; its filtered-out ancestors stay on the
+      // path as compact markers so the relationship is readable.
+      expect(find.byKey(const ValueKey('graph-node-leaf')), findsOneWidget);
+      expect(find.byKey(const ValueKey('graph-context-root')), findsOneWidget);
+      expect(find.byKey(const ValueKey('graph-context-mid')), findsOneWidget);
+      expect(find.byKey(const ValueKey('graph-node-sibling')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('goal-filter-chip-date')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('1 of 4 goals'), findsOneWidget);
+
+      // Clearing the condition restores every goal at full size.
+      await tester.tap(find.byKey(const ValueKey('goal-filter-clear-all')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('graph-node-root')), findsOneWidget);
+      expect(find.byKey(const ValueKey('graph-node-sibling')), findsOneWidget);
+      expect(find.byKey(const ValueKey('graph-context-root')), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('topic filter scopes the graph to one branch', (tester) async {
+    final nodes = NodeCubit();
+    nodes.emitSilent([
+      goal('school', title: 'School'),
+      goal('math', title: 'Math', parents: ['school']),
+      goal('home', title: 'Home'),
+      goal('chores', title: 'Chores', parents: ['home']),
+    ]);
+    await tester.pumpWidget(harness(nodes));
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('goal-filter-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('goal-filter-topic-school')),
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('goal-filter-apply')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('graph-node-school')), findsOneWidget);
+    expect(find.byKey(const ValueKey('graph-node-math')), findsOneWidget);
+    expect(find.byKey(const ValueKey('graph-node-home')), findsNothing);
+    expect(find.byKey(const ValueKey('graph-node-chores')), findsNothing);
+    expect(find.textContaining('2 of 4 goals'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

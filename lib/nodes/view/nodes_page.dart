@@ -10,12 +10,13 @@ import 'package:a_fish_in_sea/navigation/view/app_drawer.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/auto_goal.dart';
+import 'package:a_fish_in_sea/nodes/service/goal_graph_filter.dart';
 import 'package:a_fish_in_sea/nodes/service/goal_progress_snapshot.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/service/node_legacy_migration.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
-import 'package:a_fish_in_sea/nodes/service/node_tree_ops.dart';
 import 'package:a_fish_in_sea/finances/service/node_transaction_cleanup.dart';
+import 'package:a_fish_in_sea/nodes/view/goal_filter_sheet.dart';
 import 'package:a_fish_in_sea/nodes/view/goal_picker.dart';
 import 'package:a_fish_in_sea/nodes/view/node_checkbox.dart';
 import 'package:a_fish_in_sea/nodes/view/node_editor.dart';
@@ -25,11 +26,11 @@ import 'package:a_fish_in_sea/nodes/view/task_rollup_tile.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 
 enum _NodeView {
-  leaves,
+  graph,
   all,
+  leaves,
   automated,
   favorites,
-  graph,
   due,
   scheduled,
   money,
@@ -37,28 +38,6 @@ enum _NodeView {
 }
 
 final _nodesDateFormat = DateFormat('EEE, MMM d');
-
-/// A plain scheduled leaf: work, not a goal.
-///
-/// Generated occurrences always roll up (a daily habit otherwise shows a
-/// year of rows), and so does an unspecialized leaf carrying a due date or
-/// calendar block. Automated, financial, time-target, Anki, repeating,
-/// and legacy-derived nodes stay visible as goals. The rollup
-/// only collapses rendering — every task keeps its checkbox and editor.
-bool _isPlainTask(Node n) {
-  if (n.isUnbounded) return false;
-  if (n.instanceOfId != null) return true;
-  if (n.auto != null ||
-      n.money != null ||
-      n.effort != null ||
-      n.anki != null ||
-      n.recurrence != null ||
-      n.calendarLink != null ||
-      (n.rule != null && n.rule!.kind != NodeRuleKind.none)) {
-    return false;
-  }
-  return n.hasDue || n.hasCalendarBlock;
-}
 
 class NodesPage extends StatefulWidget {
   const NodesPage({super.key});
@@ -68,13 +47,21 @@ class NodesPage extends StatefulWidget {
 }
 
 class _NodesPageState extends State<NodesPage> {
-  // The goal tree is the landing view: a collapsed tree reads as goals,
-  // while the old flat Leaves list buried them under every open task.
-  _NodeView _view = _NodeView.all;
+  // The graph is the landing view. It is the only view that keeps the
+  // relationships between goals visible, and filtering collapses
+  // non-matching ancestors into path markers instead of deleting them.
+  _NodeView _view = _NodeView.graph;
   final TextEditingController _search = TextEditingController();
   String _query = '';
   bool _expandAll = false;
   int _expandToken = 0;
+
+  /// Filter selection from the filter menu. Transient UI state only:
+  /// never persisted, and cleared by a "Show in goals" reveal.
+  GoalGraphFilter _filter = const GoalGraphFilter();
+
+  /// Bumped when the filter changes so the graph re-fits its viewport.
+  int _fitToken = 0;
 
   /// Pending "Show in goals" reveal from [NavigationCubit]: the target is
   /// shown in the All tree with its ancestor chain expanded and itself
@@ -149,6 +136,8 @@ class _NodesPageState extends State<NodesPage> {
       _expandToken++;
       _query = '';
       _search.clear();
+      _filter = const GoalGraphFilter();
+      _fitToken++;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -164,6 +153,13 @@ class _NodesPageState extends State<NodesPage> {
 
   @override
   Widget build(BuildContext context) {
+    String? topicTitle;
+    final topicId = _filter.topicRootId;
+    if (topicId != null) {
+      try {
+        topicTitle = context.read<NodeCubit>().byId(topicId)?.title;
+      } catch (_) {}
+    }
     return Scaffold(
       appBar: AppBar(
         title: const Text('Goals'),
@@ -171,16 +167,7 @@ class _NodesPageState extends State<NodesPage> {
       ),
       drawer: const AppDrawer(),
       floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          final created = await showNodeEditor(context);
-          // A brand-new unbounded goal is invisible in the default Leaves
-          // view, which would read as "nothing happened". Land on the
-          // tree instead so the goal is on screen right after saving.
-          if (!mounted) return;
-          if (created != null && created.isUnbounded) {
-            setState(() => _view = _NodeView.all);
-          }
-        },
+        onPressed: () => showNodeEditor(context),
         child: const Icon(Icons.add),
       ),
       body: Column(
@@ -201,7 +188,21 @@ class _NodesPageState extends State<NodesPage> {
                     onChanged: (v) => setState(() => _query = v),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 4),
+                Badge(
+                  isLabelVisible: _filter.isActive,
+                  label: Text('${_filter.activeCount}'),
+                  child: IconButton(
+                    key: const ValueKey('goal-filter-button'),
+                    tooltip: 'Filter goals',
+                    icon: Icon(
+                      _filter.isActive
+                          ? Icons.filter_alt
+                          : Icons.filter_alt_outlined,
+                    ),
+                    onPressed: _openFilters,
+                  ),
+                ),
                 Tooltip(
                   message: _expandAll ? 'Collapse all' : 'Expand all',
                   child: IconButton(
@@ -218,10 +219,18 @@ class _NodesPageState extends State<NodesPage> {
             ),
           ),
           _ViewRow(view: _view, onView: (v) => setState(() => _view = v)),
+          GoalFilterSummaryBar(
+            filter: _filter,
+            topicTitle: topicTitle,
+            onChanged: _applyFilter,
+          ),
           Expanded(
             child: _NodeBody(
               view: _view,
               query: _query,
+              filter: _filter,
+              fitToken: _fitToken,
+              onClearFilters: () => _applyFilter(const GoalGraphFilter()),
               expandAll: _expandAll,
               expandToken: _expandToken,
               focusNodeId: _focusNodeId,
@@ -232,6 +241,26 @@ class _NodesPageState extends State<NodesPage> {
         ],
       ),
     );
+  }
+
+  void _applyFilter(GoalGraphFilter next) {
+    setState(() {
+      _filter = next;
+      _fitToken++;
+    });
+  }
+
+  Future<void> _openFilters() async {
+    final goals = goalNodes(context.read<NodeCubit>().state);
+    final selected = await showGoalFilterSheet(
+      context,
+      filter: _filter,
+      nodes: goals,
+      now: DateTime.now(),
+      query: _query,
+    );
+    if (!mounted || selected == null) return;
+    _applyFilter(selected);
   }
 }
 
@@ -278,8 +307,13 @@ class _ViewRow extends StatelessWidget {
 class _NodeBody extends StatelessWidget {
   final _NodeView view;
   final String query;
+  final GoalGraphFilter filter;
+  final int fitToken;
   final bool expandAll;
   final int expandToken;
+
+  /// Clears the filter from the graph's empty state.
+  final VoidCallback? onClearFilters;
 
   /// "Show in goals" reveal: target highlighted in the All tree with
   /// [expandedIds] (its ancestor chain) force-expanded and [focusKey]
@@ -290,6 +324,9 @@ class _NodeBody extends StatelessWidget {
 
   const _NodeBody({
     required this.view,
+    required this.filter,
+    this.fitToken = 0,
+    this.onClearFilters,
     this.query = '',
     this.expandAll = false,
     this.expandToken = 0,
@@ -317,8 +354,18 @@ class _NodeBody extends StatelessWidget {
         final txnAmounts = snapshot.txnAmountsById;
         final autoReadings = snapshot.autoReadings;
         final progress = snapshot.progress;
-        final trimmed = query.trim();
-        final visible = trimmed.isEmpty ? null : filterTreeIds(nodes, trimmed);
+        final projection = filterGoalGraph(
+          nodes: goals,
+          now: now,
+          filter: filter,
+          query: query,
+        );
+        // A filter is graph-shaped: lists keep only the matches (the
+        // compact path markers belong to the graph). Plain search keeps
+        // its old matches + ancestors + descendants shape.
+        final visible = projection.filterActive
+            ? projection.matchedIds
+            : (projection.active ? projection.visibleIds : null);
         List<Node> matching(List<Node> items) => visible == null
             ? items
             : items.where((n) => visible.contains(n.id)).toList();
@@ -407,13 +454,30 @@ class _NodeBody extends StatelessWidget {
             }
             return flatList(items);
           case _NodeView.graph:
+            String? topicTitle;
+            final topicId = filter.topicRootId;
+            if (topicId != null) {
+              for (final node in goals) {
+                if (node.id == topicId) {
+                  topicTitle = node.title;
+                  break;
+                }
+              }
+            }
             return NodeGraphView(
               nodes: goals,
               progress: progress,
-              visibleIds: visible,
-              query: trimmed,
+              visibleIds: projection.active ? projection.visibleIds : null,
+              contextIds: projection.contextIds,
+              matchedIds: projection.active ? projection.matchedIds : const {},
+              filterActive: projection.filterActive,
+              filterSummary: projection.filterActive
+                  ? goalFilterSummary(filter, topicTitle: topicTitle)
+                  : null,
+              fitToken: fitToken,
               expandAll: expandAll,
               expandToken: expandToken,
+              onClearFilters: onClearFilters,
             );
           case _NodeView.due:
             final queue = matching(priorityQueue(goals, now));
@@ -655,7 +719,7 @@ class _NodeTile extends StatelessWidget {
     final goalKids = <Node>[];
     final taskKids = <Node>[];
     for (final kid in kids) {
-      if (_isPlainTask(kid) && !_hasChildren(kid)) {
+      if (kid.isPlainTask && !_hasChildren(kid)) {
         taskKids.add(kid);
       } else {
         goalKids.add(kid);

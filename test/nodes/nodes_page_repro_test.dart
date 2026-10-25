@@ -90,6 +90,10 @@ void main() {
     await tester.pump();
     await tester.pump();
 
+    // The overflow menu lives on the list-style goal rows.
+    await tester.tap(find.text('Goal tree'));
+    await tester.pump();
+
     await tester.tap(find.byIcon(Icons.more_vert));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add subgoal'));

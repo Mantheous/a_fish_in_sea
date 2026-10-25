@@ -74,9 +74,12 @@ void main() {
     final saved = nodes.state.single;
     expect(saved.title, 'Serve others');
     expect(saved.isUnbounded, isTrue);
-    // The page lands on the tree by itself: unbounded goals are not in
-    // the default Leaves view, so staying there would read as failure.
-    expect(find.text('unbounded'), findsOneWidget);
+    // The graph is the landing view; the unbounded goal is a card there
+    // (and still no progress bar or checkbox).
+    expect(
+      find.byKey(ValueKey('graph-node-${saved.id}')),
+      findsOneWidget,
+    );
     expect(find.byIcon(Icons.all_inclusive), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsNothing);
     expect(find.byType(Checkbox), findsNothing);

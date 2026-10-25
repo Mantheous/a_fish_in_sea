@@ -551,6 +551,27 @@ class Node extends Equatable {
       !(isInstance && calendarLink != null) &&
       (sourceEventId != null || classId != null || feedId != null);
 
+  /// A plain scheduled leaf: work, not a goal.
+  ///
+  /// Generated occurrences always roll up (a daily habit otherwise shows a
+  /// year of rows), and so does an unspecialized leaf carrying a due date or
+  /// calendar block. Automated, financial, time-target, Anki, repeating,
+  /// and legacy-derived nodes stay visible as goals.
+  bool get isPlainTask {
+    if (isUnbounded) return false;
+    if (instanceOfId != null) return true;
+    if (auto != null ||
+        money != null ||
+        effort != null ||
+        anki != null ||
+        recurrence != null ||
+        calendarLink != null ||
+        (rule != null && rule!.kind != NodeRuleKind.none)) {
+      return false;
+    }
+    return hasDue || hasCalendarBlock;
+  }
+
   bool get hasDue => schedule?.due != null;
   bool get hasCalendarBlock => schedule?.hasCalendarBlock ?? false;
   bool get hasMoney => money != null;

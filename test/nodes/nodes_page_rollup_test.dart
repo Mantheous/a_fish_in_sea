@@ -63,13 +63,16 @@ void main() {
     await tester.pump();
 
     expect(tester.takeException(), isNull);
-    // The tree is the landing view (the old default was the flat Leaves
-    // list that drowned goals in open tasks).
-    final treeChip = find.ancestor(
-      of: find.text('Goal tree'),
+    // The graph is the landing view; the list-shaped tree is still one
+    // chip away for rollup-heavy reading.
+    final graphChip = find.ancestor(
+      of: find.text('Graph'),
       matching: find.byType(ChoiceChip),
     );
-    expect(tester.widget<ChoiceChip>(treeChip).selected, isTrue);
+    expect(tester.widget<ChoiceChip>(graphChip).selected, isTrue);
+
+    await tester.tap(find.text('Goal tree'));
+    await tester.pump();
 
     // Goals are visible; a goal's task children are behind one rollup
     // row. Unparented leaves are top-level items and stay visible.
