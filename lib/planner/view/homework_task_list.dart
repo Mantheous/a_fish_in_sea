@@ -81,11 +81,12 @@ class _HomeworkTaskListState extends State<HomeworkTaskList>
     final firstDayOfWeek = _firstDayOfWeekOf(context);
     // One calendar pass per build: the counts drive the schedule tint and,
     // through their key set, the Planned/Unplanned filter — so a tinted
-    // clock always reads as planned.
+    // clock always reads as planned — and the same pass hands each tile the
+    // slot its "Planned …" line names.
     final allNodes = nodeCubit.state;
     final calendarState = context.watch<CalendarCubit>().state;
-    final upcomingCounts =
-        futureCalendarEntryCounts(allNodes, calendarState, now);
+    final plans = upcomingNodePlans(allNodes, calendarState, now);
+    final upcomingCounts = plans.counts;
     final plannedIds = upcomingCounts.keys.toSet();
     final tints =
         taskTintMap(allNodes, viewOptions, now,
@@ -393,6 +394,7 @@ class _HomeworkTaskListState extends State<HomeworkTaskList>
                         linkedEventIds: linkedEventIds,
                         linkedTaskIds: linkedTaskIds,
                         upcomingEventCounts: upcomingCounts,
+                        plannedSlots: plans.nextSlots,
                         selected: widget.selected.contains(node.id),
                         selecting: widget.selecting,
                         onToggleSelection: () =>

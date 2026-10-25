@@ -47,10 +47,11 @@ class TodoTaskList extends StatelessWidget {
         final firstDayOfWeek = _firstDayOfWeekOf(context);
         // One calendar pass per build: the counts drive the schedule tint
         // and, through their key set, the Planned/Unplanned filter — so a
-        // tinted clock always reads as planned.
+        // tinted clock always reads as planned — and the same pass hands
+        // each tile the slot its "Planned …" line names.
         final calendarState = context.watch<CalendarCubit>().state;
-        final upcomingCounts =
-            futureCalendarEntryCounts(nodes, calendarState, now);
+        final plans = upcomingNodePlans(nodes, calendarState, now);
+        final upcomingCounts = plans.counts;
         final plannedIds = upcomingCounts.keys.toSet();
         final tints = taskTintMap(nodeCubit.state, viewOptions, now,
             plannedNodeIds: plannedIds,
@@ -98,6 +99,7 @@ class TodoTaskList extends StatelessWidget {
               linkedEventIds: linkedEventIds,
               linkedTaskIds: linkedTaskIds,
               upcomingEventCounts: upcomingCounts,
+              plannedSlots: plans.nextSlots,
               selected: selected.contains(node.id),
               selecting: selecting,
               onToggleSelection: () => onToggleSelection(node.id),
