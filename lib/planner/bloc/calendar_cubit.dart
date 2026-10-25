@@ -1,5 +1,6 @@
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
+import '../../common/time/time_session.dart';
 import '../../common/undo/revertable_hydrated_cubit.dart';
 import '../model/planner_event.dart';
 
@@ -30,9 +31,8 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
 
   void addEvent(PlannerEvent event) => emitChange([...state, event]);
 
-  void updateEvent(PlannerEvent event) => emitChange(
-        state.map((e) => e.id == event.id ? event : e).toList(),
-      );
+  void updateEvent(PlannerEvent event) =>
+      emitChange(state.map((e) => e.id == event.id ? event : e).toList());
 
   /// Replaces each listed event by id as ONE undoable emit: one undo
   /// record, one rebuild, one persist. Series-wide writes must use this
@@ -83,22 +83,34 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
       final active = byId(activeId);
       if (active != null && active.timerStartedAt != null) {
         final start = active.timerStartedAt!;
-        final end = at.isAfter(start) ? at : start.add(const Duration(seconds: 1));
+        final end = at.isAfter(start)
+            ? at
+            : start.add(const Duration(seconds: 1));
         next = next
-            .map((e) => e.id == activeId
-                ? e.copyWith(
-                    actualStart: start,
-                    actualEnd: end,
-                    clearTimerStartedAt: true,
-                  )
-                : e)
+            .map(
+              (e) => e.id == activeId
+                  ? _withSessions(
+                      e,
+                      withSession(
+                        e.recordedSessions,
+                        TimeSession(
+                          id: TimeSession.idFor(start, end),
+                          start: start,
+                          end: end,
+                        ),
+                      ),
+                    ).copyWith(clearTimerStartedAt: true)
+                  : e,
+            )
             .toList();
       }
     }
     next = next
-        .map((e) => e.id == eventId
-            ? e.copyWith(timerStartedAt: at, failed: false)
-            : e)
+        .map(
+          (e) => e.id == eventId
+              ? e.copyWith(timerStartedAt: at, failed: false)
+              : e,
+        )
         .toList();
     if (next != state) emitChange(next);
   }
@@ -110,11 +122,85 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
     final start = event.timerStartedAt!;
     final end = at.isAfter(start) ? at : start.add(const Duration(seconds: 1));
     updateEvent(
-      event.copyWith(
-        actualStart: start,
-        actualEnd: end,
-        clearTimerStartedAt: true,
+      _withSessions(
+        event,
+        withSession(
+          event.recordedSessions,
+          TimeSession(
+            id: TimeSession.idFor(start, end),
+            start: start,
+            end: end,
+          ),
+        ),
+      ).copyWith(clearTimerStartedAt: true),
+    );
+  }
+
+  /// Replaces the whole recorded list (mirroring a backing task) and keeps
+  /// the legacy aggregate span in step.
+  void setSessions(String eventId, List<TimeSession> sessions) {
+    final event = byId(eventId);
+    if (event == null) return;
+    updateEvent(_withSessions(event, sessions));
+  }
+
+  /// Appends one recorded run without touching earlier ones.
+  void addSession(String eventId, DateTime start, DateTime end) {
+    final event = byId(eventId);
+    if (event == null) return;
+    final safeEnd = end.isAfter(start)
+        ? end
+        : start.add(const Duration(seconds: 1));
+    updateEvent(
+      _withSessions(
+        event,
+        withSession(
+          event.recordedSessions,
+          TimeSession(
+            id: TimeSession.idFor(start, safeEnd),
+            start: start,
+            end: safeEnd,
+          ),
+        ),
       ),
+    );
+  }
+
+  /// Moves one run's edges, keeping its identity so linked copies and
+  /// calendar selections survive the edit.
+  void updateSession(
+    String eventId,
+    String sessionId,
+    DateTime start,
+    DateTime end,
+  ) {
+    final event = byId(eventId);
+    if (event == null) return;
+    final session = sessionById(event.recordedSessions, sessionId);
+    if (session == null) return;
+    final safeEnd = end.isAfter(start)
+        ? end
+        : start.add(const Duration(minutes: 1));
+    updateEvent(
+      _withSessions(
+        event,
+        withSession(
+          event.recordedSessions,
+          session.copyWith(start: start, end: safeEnd),
+        ),
+      ),
+    );
+  }
+
+  /// Drops one recorded run, leaving the others untouched.
+  void removeSession(String eventId, String sessionId) {
+    final event = byId(eventId);
+    if (event == null ||
+        sessionById(event.recordedSessions, sessionId) == null) {
+      return;
+    }
+    updateEvent(
+      _withSessions(event, withoutSession(event.recordedSessions, sessionId)),
     );
   }
 
@@ -132,8 +218,7 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
     final event = byId(eventId);
     if (event == null || !event.isTracking) return;
     final at = now ?? DateTime.now();
-    updateEvent(event.copyWith(
-        timerStartedAt: start.isAfter(at) ? at : start));
+    updateEvent(event.copyWith(timerStartedAt: start.isAfter(at) ? at : start));
   }
 
   /// Sets the reported interval directly (manual entry + post-stop
@@ -143,18 +228,25 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
   void setReported(String eventId, DateTime start, DateTime end) {
     final event = byId(eventId);
     if (event == null) return;
-    updateEvent(event.copyWith(
-      actualStart: start,
-      actualEnd:
-          end.isAfter(start) ? end : start.add(const Duration(minutes: 1)),
-      clearTimerStartedAt: true,
-    ));
+    final safeEnd = end.isAfter(start)
+        ? end
+        : start.add(const Duration(minutes: 1));
+    updateEvent(
+      _withSessions(event, [
+        TimeSession(
+          id: TimeSession.idFor(start, safeEnd),
+          start: start,
+          end: safeEnd,
+        ),
+      ]).copyWith(clearTimerStartedAt: true),
+    );
   }
 
   void clearReported(String eventId) {
     final event = byId(eventId);
     if (event == null) return;
-    if (event.actualStart == null &&
+    if (event.sessions.isEmpty &&
+        event.actualStart == null &&
         event.actualEnd == null &&
         !event.isTracking &&
         !event.failed) {
@@ -162,11 +254,25 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
     }
     updateEvent(
       event.copyWith(
+        sessions: const [],
         clearActualStart: true,
         clearActualEnd: true,
         clearTimerStartedAt: true,
         failed: false,
       ),
+    );
+  }
+
+  /// Stores [sessions] and recomputes the legacy aggregate span so old
+  /// readers (and older app versions) see the first start and last end.
+  PlannerEvent _withSessions(PlannerEvent event, List<TimeSession> sessions) {
+    final span = sessionSpan(sessions);
+    return event.copyWith(
+      sessions: sessions,
+      actualStart: span?.start,
+      clearActualStart: span == null,
+      actualEnd: span?.end,
+      clearActualEnd: span == null,
     );
   }
 
@@ -176,14 +282,21 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
     if (failed && event.isTracking) {
       final at = now ?? DateTime.now();
       final start = event.timerStartedAt!;
-      final end = at.isAfter(start) ? at : start.add(const Duration(seconds: 1));
+      final end = at.isAfter(start)
+          ? at
+          : start.add(const Duration(seconds: 1));
       updateEvent(
-        event.copyWith(
-          actualStart: start,
-          actualEnd: end,
-          clearTimerStartedAt: true,
-          failed: true,
-        ),
+        _withSessions(
+          event,
+          withSession(
+            event.recordedSessions,
+            TimeSession(
+              id: TimeSession.idFor(start, end),
+              start: start,
+              end: end,
+            ),
+          ),
+        ).copyWith(clearTimerStartedAt: true, failed: true),
       );
       return;
     }
@@ -290,8 +403,8 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
         final e = event.allDay
             ? event.endOfDay
             : (event.end.isAfter(event.start)
-                ? event.end
-                : event.start.add(const Duration(hours: 1)));
+                  ? event.end
+                  : event.start.add(const Duration(hours: 1)));
         if (s.isBefore(dayEnd) && e.isAfter(dayStart)) result.add(event);
         continue;
       }
@@ -340,6 +453,7 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
   }
 
   @override
-  Map<String, dynamic> toJson(List<PlannerEvent> state) =>
-      {'events': state.map((e) => e.toJson()).toList()};
+  Map<String, dynamic> toJson(List<PlannerEvent> state) => {
+    'events': state.map((e) => e.toJson()).toList(),
+  };
 }

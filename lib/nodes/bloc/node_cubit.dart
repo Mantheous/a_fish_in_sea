@@ -8,6 +8,7 @@ import 'package:a_fish_in_sea/planner/model/assignment_rule.dart';
 import 'package:a_fish_in_sea/planner/model/assignment_template.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
+import 'package:a_fish_in_sea/common/time/time_session.dart';
 import 'package:a_fish_in_sea/planner/model/task.dart';
 
 import '../model/node.dart';
@@ -265,7 +266,11 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         : event.start;
     return linked.copyWith(
       title: linked.calendarLink != null ? linked.title : event.subject,
-      notes: linked.calendarLink != null ? linked.notes : hasNotes ? event.notes!.trim() : null,
+      notes: linked.calendarLink != null
+          ? linked.notes
+          : hasNotes
+          ? event.notes!.trim()
+          : null,
       clearNotes: linked.calendarLink == null && !hasNotes,
       schedule: scheduleForEvent(event, due: due),
       assignees: event.assignees,
@@ -1019,11 +1024,17 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
         next = next
             .map(
               (n) => n.id == activeId
-                  ? n.copyWith(
-                      actualStart: s,
-                      actualEnd: e,
-                      clearTimerStartedAt: true,
-                    )
+                  ? _withSessions(
+                      n,
+                      withSession(
+                        n.recordedSessions,
+                        TimeSession(
+                          id: TimeSession.idFor(s, e),
+                          start: s,
+                          end: e,
+                        ),
+                      ),
+                    ).copyWith(clearTimerStartedAt: true)
                   : n,
             )
             .toList();
@@ -1042,7 +1053,80 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final s = node.timerStartedAt!;
     final e = at.isAfter(s) ? at : s.add(const Duration(seconds: 1));
     updateNode(
-      node.copyWith(actualStart: s, actualEnd: e, clearTimerStartedAt: true),
+      _withSessions(
+        node,
+        withSession(
+          node.recordedSessions,
+          TimeSession(id: TimeSession.idFor(s, e), start: s, end: e),
+        ),
+      ).copyWith(clearTimerStartedAt: true),
+    );
+  }
+
+  /// Replaces the whole recorded list (mirroring a linked event) and keeps
+  /// the legacy aggregate span in step.
+  void setSessions(String id, List<TimeSession> sessions) {
+    final node = byId(id);
+    if (node == null) return;
+    updateNode(_withSessions(node, sessions));
+  }
+
+  /// Appends one recorded run without touching earlier ones.
+  void addSession(String id, DateTime start, DateTime end) {
+    final node = byId(id);
+    if (node == null) return;
+    final safeEnd = end.isAfter(start)
+        ? end
+        : start.add(const Duration(seconds: 1));
+    updateNode(
+      _withSessions(
+        node,
+        withSession(
+          node.recordedSessions,
+          TimeSession(
+            id: TimeSession.idFor(start, safeEnd),
+            start: start,
+            end: safeEnd,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Moves one run's edges, keeping its identity so mirrored copies and
+  /// calendar selections survive the edit.
+  void updateSession(
+    String id,
+    String sessionId,
+    DateTime start,
+    DateTime end,
+  ) {
+    final node = byId(id);
+    if (node == null) return;
+    final session = sessionById(node.recordedSessions, sessionId);
+    if (session == null) return;
+    final safeEnd = end.isAfter(start)
+        ? end
+        : start.add(const Duration(minutes: 1));
+    updateNode(
+      _withSessions(
+        node,
+        withSession(
+          node.recordedSessions,
+          session.copyWith(start: start, end: safeEnd),
+        ),
+      ),
+    );
+  }
+
+  /// Drops one recorded run, leaving the others untouched.
+  void removeSession(String id, String sessionId) {
+    final node = byId(id);
+    if (node == null || sessionById(node.recordedSessions, sessionId) == null) {
+      return;
+    }
+    updateNode(
+      _withSessions(node, withoutSession(node.recordedSessions, sessionId)),
     );
   }
 
@@ -1070,31 +1154,49 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   void setReported(String id, DateTime start, DateTime end) {
     final node = byId(id);
     if (node == null) return;
+    final safeEnd = end.isAfter(start)
+        ? end
+        : start.add(const Duration(minutes: 1));
     updateNode(
-      node.copyWith(
-        actualStart: start,
-        actualEnd: end.isAfter(start)
-            ? end
-            : start.add(const Duration(minutes: 1)),
-        clearTimerStartedAt: true,
-      ),
+      _withSessions(node, [
+        TimeSession(
+          id: TimeSession.idFor(start, safeEnd),
+          start: start,
+          end: safeEnd,
+        ),
+      ]).copyWith(clearTimerStartedAt: true),
     );
   }
 
   void clearReported(String id) {
     final node = byId(id);
     if (node == null) return;
-    if (node.actualStart == null &&
+    if (node.sessions.isEmpty &&
+        node.actualStart == null &&
         node.actualEnd == null &&
         !node.isTracking) {
       return;
     }
     updateNode(
       node.copyWith(
+        sessions: const [],
         clearActualStart: true,
         clearActualEnd: true,
         clearTimerStartedAt: true,
       ),
+    );
+  }
+
+  /// Stores [sessions] and recomputes the legacy aggregate span so old
+  /// readers (and older app versions) see the first start and last end.
+  Node _withSessions(Node node, List<TimeSession> sessions) {
+    final span = sessionSpan(sessions);
+    return node.copyWith(
+      sessions: sessions,
+      actualStart: span?.start,
+      clearActualStart: span == null,
+      actualEnd: span?.end,
+      clearActualEnd: span == null,
     );
   }
 
@@ -1158,28 +1260,31 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final to = byId(toId);
     if (from == null || to == null) return;
     final hasRunning = from.timerStartedAt != null;
-    final hasReported = from.actualStart != null || from.actualEnd != null;
+    final movedSessions = from.recordedSessions;
+    final hasReported = movedSessions.isNotEmpty;
     if (!hasRunning && !hasReported) return;
     final next = <Node>[];
     for (final n in state) {
       if (n.id == toId) {
+        var merged = n;
+        for (final session in movedSessions) {
+          merged = _withSessions(
+            merged,
+            withSession(merged.recordedSessions, session),
+          );
+        }
         next.add(
-          n.copyWith(
+          merged.copyWith(
             timerStartedAt: hasRunning ? from.timerStartedAt : n.timerStartedAt,
-            actualStart: hasReported
-                ? (from.actualStart ?? n.actualStart)
-                : n.actualStart,
-            actualEnd: hasReported
-                ? (from.actualEnd ?? n.actualEnd)
-                : n.actualEnd,
           ),
         );
       } else if (n.id == fromId) {
         next.add(
           n.copyWith(
+            sessions: const [],
             clearTimerStartedAt: hasRunning,
-            clearActualStart: hasReported && from.actualStart != null,
-            clearActualEnd: hasReported && from.actualEnd != null,
+            clearActualStart: true,
+            clearActualEnd: true,
           ),
         );
       } else {
@@ -1399,9 +1504,12 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final template = byId(templateId);
     final recurrence = template?.recurrence;
     if (template == null || recurrence == null) return 0;
-    final anchor =
-        template.schedule?.due ?? template.schedule?.start ?? from;
-    var cursor = NodeRecurrenceSchedule.firstOnOrAfter(anchor, recurrence, from);
+    final anchor = template.schedule?.due ?? template.schedule?.start ?? from;
+    var cursor = NodeRecurrenceSchedule.firstOnOrAfter(
+      anchor,
+      recurrence,
+      from,
+    );
     final owned = existingIds != null;
     final known = existingIds ?? state.map((n) => n.id).toSet();
     final fresh = <Node>[];
@@ -1786,7 +1894,11 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
           : event.start;
       return linked.copyWith(
         title: linked.calendarLink != null ? linked.title : event.subject,
-        notes: linked.calendarLink != null ? linked.notes : hasNotes ? event.notes!.trim() : null,
+        notes: linked.calendarLink != null
+            ? linked.notes
+            : hasNotes
+            ? event.notes!.trim()
+            : null,
         clearNotes: linked.calendarLink == null && !hasNotes,
         schedule: scheduleForEvent(event, due: due),
         assignees: event.assignees,
@@ -1973,8 +2085,13 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     Set<String> taskOptOutIds = const {},
     List<AssignmentRule> assignmentRules = const [],
   }) {
-    final next = importFeedNodes(state, events, feed,
-        taskOptOutIds: taskOptOutIds, assignmentRules: assignmentRules);
+    final next = importFeedNodes(
+      state,
+      events,
+      feed,
+      taskOptOutIds: taskOptOutIds,
+      assignmentRules: assignmentRules,
+    );
     if (!identical(next, state)) emitSilent(next);
   }
 

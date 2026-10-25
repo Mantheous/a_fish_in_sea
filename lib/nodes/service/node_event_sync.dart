@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/common/time/time_session.dart';
 import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
@@ -95,16 +96,67 @@ class NodeEventSync {
       nodes.setReported(nodeId, start, end);
       final saved = nodes.byId(nodeId);
       if (saved == null) return;
-      final updates = [
-        for (final event in _linkedEvents(calendar, saved))
-          event.copyWith(
-            actualStart: saved.actualStart,
-            actualEnd: saved.actualEnd,
-            clearTimerStartedAt: true,
-          ),
-      ];
-      if (updates.isNotEmpty) calendar.updateEvents(updates);
+      _mirrorSessions(calendar, saved);
     });
+  }
+
+  /// Moves one recorded run on the task and mirrors the task's whole list
+  /// onto every linked event.
+  static void setNodeSession(
+    NodeCubit nodes,
+    CalendarCubit calendar,
+    String nodeId,
+    String sessionId,
+    DateTime start,
+    DateTime end,
+  ) {
+    if (nodes.byId(nodeId) == null) return;
+    RevertableHydratedCubit.atomic([nodes, calendar], () {
+      nodes.updateSession(nodeId, sessionId, start, end);
+      final saved = nodes.byId(nodeId);
+      if (saved == null) return;
+      _mirrorSessions(calendar, saved);
+    });
+  }
+
+  /// Deletes one recorded run on the task and from every linked event,
+  /// leaving any other runs intact.
+  static void removeNodeSession(
+    NodeCubit nodes,
+    CalendarCubit calendar,
+    String nodeId,
+    String sessionId,
+  ) {
+    if (nodes.byId(nodeId) == null) return;
+    RevertableHydratedCubit.atomic([nodes, calendar], () {
+      nodes.removeSession(nodeId, sessionId);
+      final saved = nodes.byId(nodeId);
+      if (saved == null) return;
+      _mirrorSessions(calendar, saved);
+    });
+  }
+
+  static void _mirrorSessions(CalendarCubit calendar, Node saved) {
+    final updates = [
+      for (final event in _linkedEvents(calendar, saved))
+        _eventWithSessions(event, saved.recordedSessions),
+    ];
+    if (updates.isNotEmpty) calendar.updateEvents(updates);
+  }
+
+  static PlannerEvent _eventWithSessions(
+    PlannerEvent event,
+    List<TimeSession> sessions,
+  ) {
+    final span = sessionSpan(sessions);
+    return event.copyWith(
+      sessions: sessions,
+      actualStart: span?.start,
+      clearActualStart: span == null,
+      actualEnd: span?.end,
+      clearActualEnd: span == null,
+      clearTimerStartedAt: true,
+    );
   }
 
   /// Clears the task's report and the same cached interval on every linked
@@ -126,6 +178,7 @@ class NodeEventSync {
               event.actualEnd != null ||
               event.isTracking)
             event.copyWith(
+              sessions: const [],
               clearActualStart: true,
               clearActualEnd: true,
               clearTimerStartedAt: true,
@@ -135,10 +188,7 @@ class NodeEventSync {
     });
   }
 
-  static List<PlannerEvent> _linkedEvents(
-    CalendarCubit calendar,
-    Node node,
-  ) {
+  static List<PlannerEvent> _linkedEvents(CalendarCubit calendar, Node node) {
     final ids = <String>{};
     if (node.calendarEventId != null) ids.add(node.calendarEventId!);
     if (node.sourceEventId != null) ids.add(node.sourceEventId!);

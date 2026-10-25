@@ -22,8 +22,11 @@ String reportChipTimeLabel(ReportBlock block) {
 }
 
 /// Called when a drag settles on a new interval for a reported block.
-typedef ReportIntervalChanged =
-    void Function(ReportBlock block, DateTime start, DateTime end);
+typedef ReportIntervalChanged = void Function(
+  ReportBlock block,
+  DateTime start,
+  DateTime end,
+);
 
 /// The report column of one day in the Plan + Report view.
 ///
@@ -47,6 +50,7 @@ class ReportLaneView extends StatefulWidget {
     this.selectedId,
     this.snapMinutes = 5,
     this.onIntervalChanged,
+    this.onDeleted,
     this.isRtl = false,
   });
 
@@ -71,6 +75,9 @@ class ReportLaneView extends StatefulWidget {
 
   /// Commits a dragged interval. Live recordings never call this.
   final ReportIntervalChanged? onIntervalChanged;
+
+  /// Deletes a selected recording. Live recordings never call this.
+  final ValueChanged<ReportBlock>? onDeleted;
 
   final bool isRtl;
 
@@ -230,6 +237,9 @@ class _ReportLaneViewState extends State<ReportLaneView> {
                   onResizeUpdate: _updateHandleDrag,
                   onResizeEnd: _endDrag,
                   onResizeCancel: _cancelDrag,
+                  onDelete: block.kind == ReportBlockKind.live
+                      ? null
+                      : () => widget.onDeleted?.call(block),
                 ),
               ),
             );
@@ -255,6 +265,7 @@ class _ReportChip extends StatelessWidget {
     this.onResizeUpdate,
     this.onResizeEnd,
     this.onResizeCancel,
+    this.onDelete,
   });
 
   final ReportBlock block;
@@ -267,6 +278,7 @@ class _ReportChip extends StatelessWidget {
   final GestureDragUpdateCallback? onResizeUpdate;
   final VoidCallback? onResizeEnd;
   final VoidCallback? onResizeCancel;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -279,11 +291,13 @@ class _ReportChip extends StatelessWidget {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onTap,
+        onLongPress: selected ? onDelete : null,
         child: Tooltip(
           message:
               '$title\n'
               '$timeLabel'
-              '${selected && adjustable ? '\nDrag the white circles to adjust the time' : ''}',
+              '${selected && adjustable ? '\nDrag the white circles to adjust the time' : ''}'
+              '${selected && onDelete != null ? '\nTap × or long-press to delete this recording' : ''}',
           waitDuration: const Duration(milliseconds: 500),
           child: Container(
             key: ValueKey('report-chip:${block.displayId}'),
@@ -439,10 +453,46 @@ class _ReportChip extends StatelessWidget {
                           ),
                         ),
                       ),
+                    if (selected &&
+                        onDelete != null &&
+                        (height.isInfinite || height >= 12) &&
+                        (width.isInfinite || width >= 28))
+                      Positioned(top: 1, right: 1, child: _deleteBadge()),
                   ],
                 );
               },
             ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Small × on a selected chip. The chip sits on a dense time grid, so the
+  /// badge is kept to 16px and overlaid on the top-right corner.
+  Widget _deleteBadge() {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onDelete,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Semantics(
+          button: true,
+          label: 'Delete recorded time',
+          child: Container(
+            key: ValueKey('report-delete:${block.displayId}'),
+            width: 16,
+            height: 16,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              border: Border.all(color: color, width: 1.5),
+              boxShadow: const [
+                BoxShadow(color: Colors.black38, blurRadius: 2),
+              ],
+            ),
+            child: Icon(Icons.close, size: 11, color: color),
           ),
         ),
       ),

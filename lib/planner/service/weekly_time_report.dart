@@ -1,5 +1,6 @@
 import 'dart:ui' show Color;
 
+import '../../common/time/time_session.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_progress.dart';
 import '../../reporting/model/reported_entry.dart';
@@ -114,13 +115,10 @@ WeeklyTimeReport buildWeeklyTimeReport({
 
   final out = <WeeklyTimeEntry>[];
   final consumedNodeIds = <String>{};
-  // One task's session can be mirrored onto several events (calendar sync
-  // copies the node's actuals). Count an identical session once, while
-  // keeping genuinely distinct sessions on the same task separate.
+  // One task's session is mirrored onto its events (calendar sync copies
+  // the node's whole session list). Session ids dedupe the copies while
+  // genuinely distinct runs on the same task stay separate.
   final emittedSessions = <String>{};
-  String sessionKey(String backingId, DateTime start, DateTime end) =>
-      '$backingId|${start.microsecondsSinceEpoch}|'
-      '${end.microsecondsSinceEpoch}';
   final coveredEventIds = <String>{};
   final eventIds = {for (final e in events) e.id};
 
@@ -148,14 +146,16 @@ WeeklyTimeReport buildWeeklyTimeReport({
     final clippedStart = start.isBefore(weekStart) ? weekStart : start;
     final clippedEnd = end.isAfter(weekEnd) ? weekEnd : end;
     if (!clippedEnd.isAfter(clippedStart)) return;
-    out.add(WeeklyTimeEntry(
-      title: title,
-      goalId: goal.id,
-      goalTitle: goal.title,
-      start: clippedStart,
-      end: clippedEnd,
-      live: live,
-    ));
+    out.add(
+      WeeklyTimeEntry(
+        title: title,
+        goalId: goal.id,
+        goalTitle: goal.title,
+        start: clippedStart,
+        end: clippedEnd,
+        live: live,
+      ),
+    );
   }
 
   for (final event in events) {
@@ -173,8 +173,10 @@ WeeklyTimeReport buildWeeklyTimeReport({
             ? at
             : liveStart.add(const Duration(minutes: 1));
         if (backing != null) consumedNodeIds.add(backing.id);
-        if (backing != null &&
-            !emittedSessions.add(sessionKey(backing.id, liveStart, end))) {
+        if (!emittedSessions.add(
+          'live|${backing?.id ?? event.id}|'
+          '${liveStart.microsecondsSinceEpoch}',
+        )) {
           continue;
         }
         coveredEventIds.add(event.id);
@@ -188,32 +190,22 @@ WeeklyTimeReport buildWeeklyTimeReport({
         continue;
       }
 
-      // An event and its backing node can hold distinct recordings: a
-      // restart leaves the old interval on the event while the node has
-      // the new one. Count each distinct interval that overlaps the week;
-      // mirrors of the same session dedupe by key. Only mark the backing
-      // represented when one of its intervals was actually counted, so an
+      // An event and its backing node mirror the same session list. Count
+      // each distinct run that overlaps the week once; only mark the
+      // backing represented when a run was actually in range, so an
       // out-of-week event recording cannot hide this week's node session.
       var represented = false;
-      void consider(({DateTime start, DateTime end})? interval) {
-        if (interval == null) return;
-        if (!overlaps(interval.start, interval.end)) return;
+      for (final session in _pairedSessions(event, backing)) {
+        if (!overlaps(session.start, session.end)) continue;
         represented = true;
-        if (backing != null &&
-            !emittedSessions.add(
-                sessionKey(backing.id, interval.start, interval.end))) {
-          return;
-        }
+        if (!emittedSessions.add(session.id)) continue;
         addIfOverlaps(
           title: event.subject,
           goal: goal,
-          start: interval.start,
-          end: interval.end,
+          start: session.start,
+          end: session.end,
         );
       }
-
-      consider(_eventInterval(event));
-      consider(_nodeInterval(backing));
       if (represented) {
         if (backing != null) consumedNodeIds.add(backing.id);
         coveredEventIds.add(event.id);
@@ -269,13 +261,13 @@ WeeklyTimeReport buildWeeklyTimeReport({
       );
       continue;
     }
-    final reported = node.reportedDuration;
-    if (reported != null) {
+    for (final session in node.recordedSessions) {
+      if (!emittedSessions.add(session.id)) continue;
       addIfOverlaps(
         title: node.title,
         goal: (id: goal.id, title: goal.title),
-        start: node.actualStart!,
-        end: node.actualEnd!,
+        start: session.start,
+        end: session.end,
       );
     }
   }
@@ -318,47 +310,45 @@ WeeklyTimeReport buildWeeklyTimeReport({
   var weekTotal = Duration.zero;
   for (final entry in out) {
     weekTotal += entry.duration;
-    totals[entry.goalId] = (totals[entry.goalId] ?? Duration.zero) +
-        entry.duration;
+    totals[entry.goalId] =
+        (totals[entry.goalId] ?? Duration.zero) + entry.duration;
     titles[entry.goalId] = entry.goalTitle;
   }
-  final byGoal = <WeeklyGoalTotal>[
-    for (final id in totals.keys)
-      WeeklyGoalTotal(goalId: id, title: titles[id]!, total: totals[id]!),
-  ]..sort((a, b) {
-      final cmp = b.total.compareTo(a.total);
-      if (cmp != 0) return cmp;
-      return a.title.compareTo(b.title);
-    });
+  final byGoal =
+      <WeeklyGoalTotal>[
+        for (final id in totals.keys)
+          WeeklyGoalTotal(goalId: id, title: titles[id]!, total: totals[id]!),
+      ]..sort((a, b) {
+        final cmp = b.total.compareTo(a.total);
+        if (cmp != 0) return cmp;
+        return a.title.compareTo(b.title);
+      });
 
-  return WeeklyTimeReport(
-    weekTotal: weekTotal,
-    byGoal: byGoal,
-    entries: out,
-  );
+  return WeeklyTimeReport(weekTotal: weekTotal, byGoal: byGoal, entries: out);
 }
 
 const String noGoalTitle = '(no goal)';
 
 DateTime? _firstTrackingStart(Node? backing) => backing?.timerStartedAt;
 
-({DateTime start, DateTime end})? _eventInterval(PlannerEvent event) {
-  if (event.actualStart == null || event.actualEnd == null) return null;
-  final start = event.actualStart!;
-  var end = event.actualEnd!;
-  if (!end.isAfter(start)) end = start.add(const Duration(minutes: 1));
-  return (start: start, end: end);
-}
-
-({DateTime start, DateTime end})? _nodeInterval(Node? backing) {
-  final start = backing?.actualStart;
-  final end = backing?.actualEnd;
-  if (start == null || end == null) return null;
-  var safeEnd = end;
-  if (!safeEnd.isAfter(start)) {
-    safeEnd = start.add(const Duration(minutes: 1));
+/// Sessions of an event and its backing task, deduped by id. When either
+/// side has an explicit session list, the legacy aggregate spans are
+/// ignored so a multi-run task does not also count its old span.
+List<TimeSession> _pairedSessions(PlannerEvent event, Node? backing) {
+  final explicit = <String, TimeSession>{
+    for (final session in event.sessions) session.id: session,
+    if (backing != null)
+      for (final session in backing.sessions) session.id: session,
+  };
+  if (explicit.isNotEmpty) {
+    return explicit.values.toList()..sort((a, b) => a.start.compareTo(b.start));
   }
-  return (start: start, end: safeEnd);
+  final legacy = <String, TimeSession>{
+    for (final session in event.recordedSessions) session.id: session,
+    if (backing != null)
+      for (final session in backing.recordedSessions) session.id: session,
+  };
+  return legacy.values.toList()..sort((a, b) => a.start.compareTo(b.start));
 }
 
 /// The root ancestor of [node] following [parentIds] upward (cycle-safe).
@@ -366,10 +356,7 @@ DateTime? _firstTrackingStart(Node? backing) => backing?.timerStartedAt;
 /// tree, otherwise to "(no goal)". Shared children (DAG, several parents)
 /// credit the first parent by id so the bucket is deterministic and each
 /// interval counts exactly once toward the week total.
-({String? id, String title}) _rootGoal(
-  Node node,
-  Map<String, Node> byId,
-) {
+({String? id, String title}) _rootGoal(Node node, Map<String, Node> byId) {
   var current = node;
   final seen = <String>{node.id};
   while (current.parentIds.isNotEmpty) {

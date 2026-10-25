@@ -361,6 +361,7 @@ class _CalendarPageState extends State<CalendarPage> {
           selectedId: _selectedReportId,
           snapMinutes: snapMinutes,
           onIntervalChanged: _adjustReportedInterval,
+          onDeleted: _deleteReportedBlock,
           colorFor: (block) =>
               _projection.reportColorById[block.displayId] ??
               const Color(defaultPersonalEventColor),
@@ -833,9 +834,9 @@ class _CalendarPageState extends State<CalendarPage> {
                           agendaItemHeight: 44,
                         ),
                         timeSlotViewSettings: slotSettings,
-                        todayHighlightColor: Theme.of(
-                          context,
-                        ).colorScheme.primary,
+                        todayHighlightColor: Theme.of(context)
+                            .colorScheme
+                            .primary,
                         headerDateFormat: compactHeader ? 'MMM y' : null,
                         headerHeight: headerHeight,
                         viewHeaderHeight: _view == CalendarView.week
@@ -1604,9 +1605,8 @@ class _CalendarPageState extends State<CalendarPage> {
       } else {
         unawaited(EventReminderService.scheduleReminder(previous));
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error)));
     }
   }
 
@@ -1897,12 +1897,10 @@ class _CalendarPageState extends State<CalendarPage> {
       );
     } catch (_) {}
     var eventId = entry?.eventId;
-    if (eventId == null) {
-      if (displayId.startsWith(reportTimerDisplayIdPrefix)) {
-        eventId = displayId.substring(reportTimerDisplayIdPrefix.length);
-      } else if (displayId.startsWith(reportLiveDisplayIdPrefix)) {
-        eventId = displayId.substring(reportLiveDisplayIdPrefix.length);
-      }
+    if (eventId == null &&
+        (displayId.startsWith(reportTimerDisplayIdPrefix) ||
+            displayId.startsWith(reportLiveDisplayIdPrefix))) {
+      eventId = reportOwnerIdForDisplayId(displayId);
     }
     if (eventId != null) {
       final event = calendar.byId(eventId);
@@ -1958,6 +1956,41 @@ class _CalendarPageState extends State<CalendarPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Couldn’t adjust that report — please try again.'),
+        ),
+      );
+    }
+  }
+
+  /// Drops one recorded run (or manual entry) from the Plan + Report
+  /// column. The chip is the only place a single run can be deleted, so the
+  /// task's other recordings stay intact.
+  void _deleteReportedBlock(ReportBlock block) {
+    var deleted = false;
+    try {
+      deleted = deleteReportedBlock(
+        reporting: context.read<ReportingCubit>(),
+        calendar: context.read<CalendarCubit>(),
+        nodes: context.read<NodeCubit>(),
+        block: block,
+      );
+      if (deleted) {
+        final undo = context.read<UndoCubit>();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Deleted ${block.title.isEmpty ? 'report' : block.title} · '
+              '${_calendarTimeFormat.format(block.start)} – '
+              '${_calendarTimeFormat.format(block.end)}',
+            ),
+            action: SnackBarAction(label: 'Undo', onPressed: undo.undo),
+          ),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Couldn’t delete that report — please try again.'),
         ),
       );
     }
@@ -2493,9 +2526,8 @@ class _CalendarPageState extends State<CalendarPage> {
           context.read<CalendarCubit>().byId(appointment.id) ?? appointment;
       if (!_isMovable(event)) {
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text(_blockedMessage(event))));
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(_blockedMessage(event))));
         }
         return;
       }
@@ -2663,9 +2695,8 @@ class _RecordingBannerState extends State<_RecordingBanner> {
                       widget.event.subject,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: scheme.onErrorContainer,
-                      ),
+                      style: Theme.of(context).textTheme.bodySmall
+                          ?.copyWith(color: scheme.onErrorContainer),
                     ),
                   ],
                 ),

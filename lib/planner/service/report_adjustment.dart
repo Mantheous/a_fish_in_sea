@@ -48,36 +48,119 @@ bool applyReportedInterval({
   }
 
   final eventId = block.eventId;
+  final sessionId = block.sessionId;
   if (eventId != null) {
     final backing = NodeEventLink.backingNodeFor(nodes, calendar, eventId);
     if (backing != null) {
-      NodeEventSync.setNodeReported(
-        nodes,
-        calendar,
-        backing.id,
-        start,
-        safeEnd,
-      );
+      if (sessionId != null) {
+        NodeEventSync.setNodeSession(
+          nodes,
+          calendar,
+          backing.id,
+          sessionId,
+          start,
+          safeEnd,
+        );
+      } else {
+        NodeEventSync.setNodeReported(
+          nodes,
+          calendar,
+          backing.id,
+          start,
+          safeEnd,
+        );
+      }
       return true;
     }
     final event = calendar.byId(eventId);
     if (event == null) return false;
-    calendar.updateEvent(
-      event.copyWith(
-        actualStart: start,
-        actualEnd: safeEnd,
-        clearTimerStartedAt: true,
-      ),
-    );
+    if (sessionId != null) {
+      calendar.updateSession(eventId, sessionId, start, safeEnd);
+    } else {
+      calendar.updateEvent(
+        event.copyWith(
+          actualStart: start,
+          actualEnd: safeEnd,
+          clearTimerStartedAt: true,
+        ),
+      );
+    }
     return true;
   }
 
   // Nodes recorded off the calendar carry the node id in their display id.
   if (block.displayId.startsWith(reportTimerDisplayIdPrefix)) {
-    final nodeId = block.displayId.substring(reportTimerDisplayIdPrefix.length);
+    final nodeId = reportOwnerIdForDisplayId(block.displayId);
     final node = nodes.byId(nodeId);
     if (node == null) return false;
-    NodeEventSync.setNodeReported(nodes, calendar, node.id, start, safeEnd);
+    if (sessionId != null) {
+      NodeEventSync.setNodeSession(
+        nodes,
+        calendar,
+        node.id,
+        sessionId,
+        start,
+        safeEnd,
+      );
+    } else {
+      NodeEventSync.setNodeReported(nodes, calendar, node.id, start, safeEnd);
+    }
+    return true;
+  }
+  return false;
+}
+
+/// Deletes the recording behind [block]. Manual entries leave their day
+/// bucket; recorded runs are removed from the task and its mirrored events
+/// without touching the task's other runs.
+///
+/// Returns true when a record was changed.
+bool deleteReportedBlock({
+  required ReportingCubit reporting,
+  required CalendarCubit calendar,
+  required NodeCubit nodes,
+  required ReportBlock block,
+}) {
+  if (block.kind == ReportBlockKind.live) return false;
+
+  final entry = findReportEntryByDisplayId(reporting.state, block.displayId);
+  if (entry != null) {
+    final day = DateTime(entry.start.year, entry.start.month, entry.start.day);
+    reporting.deleteEntry(day, entry.id);
+    return true;
+  }
+
+  final sessionId = block.sessionId;
+  final eventId = block.eventId;
+  if (eventId != null) {
+    final backing = NodeEventLink.backingNodeFor(nodes, calendar, eventId);
+    if (backing != null) {
+      if (sessionId != null) {
+        NodeEventSync.removeNodeSession(nodes, calendar, backing.id, sessionId);
+      } else {
+        NodeEventSync.clearNodeReported(nodes, calendar, backing.id);
+      }
+      return true;
+    }
+    final event = calendar.byId(eventId);
+    if (event == null) return false;
+    if (sessionId != null) {
+      calendar.removeSession(eventId, sessionId);
+    } else {
+      calendar.clearReported(eventId);
+    }
+    return true;
+  }
+
+  if (block.displayId.startsWith(reportTimerDisplayIdPrefix)) {
+    final nodeId = reportOwnerIdForDisplayId(block.displayId);
+    final node = nodes.byId(nodeId);
+    if (node == null) return false;
+    if (sessionId != null) {
+      NodeEventSync.removeNodeSession(nodes, calendar, node.id, sessionId);
+    } else {
+      NodeEventSync.clearNodeReported(nodes, calendar, node.id);
+    }
     return true;
   }
   return false;

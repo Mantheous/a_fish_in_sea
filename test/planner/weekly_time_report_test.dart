@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/common/time/time_session.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/service/weekly_time_report.dart';
@@ -14,17 +15,18 @@ Node node(
   DateTime? actualStart,
   DateTime? actualEnd,
   DateTime? timerStartedAt,
-}) =>
-    Node(
-      id: id,
-      title: 'Node $id',
-      parentIds: parents,
-      createdAt: DateTime(2026, 9, 1),
-      calendarEventId: calendarEventId,
-      actualStart: actualStart,
-      actualEnd: actualEnd,
-      timerStartedAt: timerStartedAt,
-    );
+  List<TimeSession> sessions = const [],
+}) => Node(
+  id: id,
+  title: 'Node $id',
+  parentIds: parents,
+  createdAt: DateTime(2026, 9, 1),
+  calendarEventId: calendarEventId,
+  sessions: sessions,
+  actualStart: actualStart,
+  actualEnd: actualEnd,
+  timerStartedAt: timerStartedAt,
+);
 
 PlannerEvent event(
   String id, {
@@ -35,41 +37,39 @@ PlannerEvent event(
   String? taskId,
   String? feedId,
   bool allDay = false,
-}) =>
-    PlannerEvent(
-      id: id,
-      subject: 'Event $id',
-      start: start ?? DateTime(2026, 9, 8, 9),
-      end: (start ?? DateTime(2026, 9, 8, 9))
-          .add(const Duration(hours: 1)),
-      allDay: allDay,
-      feedId: feedId,
-      taskId: taskId,
-      actualStart: actualStart,
-      actualEnd: actualEnd,
-      timerStartedAt: timerStartedAt,
-    );
+  List<TimeSession> sessions = const [],
+}) => PlannerEvent(
+  id: id,
+  subject: 'Event $id',
+  start: start ?? DateTime(2026, 9, 8, 9),
+  end: (start ?? DateTime(2026, 9, 8, 9)).add(const Duration(hours: 1)),
+  allDay: allDay,
+  feedId: feedId,
+  taskId: taskId,
+  sessions: sessions,
+  actualStart: actualStart,
+  actualEnd: actualEnd,
+  timerStartedAt: timerStartedAt,
+);
 
 ReportedEntry manual({
   required String id,
   String? eventId,
   required DateTime start,
   required DateTime end,
-}) =>
-    ReportedEntry(
-      id: id,
-      eventId: eventId,
-      title: 'Manual $id',
-      start: start,
-      end: end,
-      status: ReportStatus.attended,
-      auto: false,
-    );
+}) => ReportedEntry(
+  id: id,
+  eventId: eventId,
+  title: 'Manual $id',
+  start: start,
+  end: end,
+  status: ReportStatus.attended,
+  auto: false,
+);
 
 void main() {
   group('buildWeeklyTimeReport', () {
-    test('timer started from a calendar event credits its linked goal',
-        () {
+    test('timer started from a calendar event credits its linked goal', () {
       // Goal tree: task node parented under the goal, event linked via
       // taskId — the shape assignEventToGoal produces.
       final nodes = [
@@ -97,8 +97,7 @@ void main() {
       expect(report.entries, hasLength(1));
     });
 
-    test('google/feed event timer counts, unassigned lands in (no goal)',
-        () {
+    test('google/feed event timer counts, unassigned lands in (no goal)', () {
       final events = [
         event(
           'g1',
@@ -117,8 +116,7 @@ void main() {
       expect(report.byGoal.single.title, '(no goal)');
     });
 
-    test('standalone node timer rolls up through the chain to the root',
-        () {
+    test('standalone node timer rolls up through the chain to the root', () {
       final nodes = [
         node('root'),
         node('mid', parents: ['root']),
@@ -143,9 +141,7 @@ void main() {
       final now = DateTime(2026, 9, 8, 10);
       final report = buildWeeklyTimeReport(
         nodes: const [],
-        events: [
-          event('e1', timerStartedAt: DateTime(2026, 9, 8, 9, 30)),
-        ],
+        events: [event('e1', timerStartedAt: DateTime(2026, 9, 8, 9, 30))],
         reportsByDay: const {},
         weekStart: _weekStart,
         now: now,
@@ -201,6 +197,76 @@ void main() {
       );
       expect(report.entries, hasLength(1));
       expect(report.weekTotal, const Duration(minutes: 30));
+    });
+
+    test('mirrored multi-session task counts each run once', () {
+      final first = TimeSession(
+        id: 'ts:1',
+        start: DateTime(2026, 9, 8, 9, 10),
+        end: DateTime(2026, 9, 8, 9, 40),
+      );
+      final second = TimeSession(
+        id: 'ts:2',
+        start: DateTime(2026, 9, 8, 14),
+        end: DateTime(2026, 9, 8, 14, 15),
+      );
+      final nodes = [
+        node(
+          'task',
+          parents: ['goal'],
+          calendarEventId: 'e1',
+          sessions: [first, second],
+          actualStart: first.start,
+          actualEnd: second.end,
+        ),
+        node('goal'),
+      ];
+      final events = [
+        event(
+          'e1',
+          taskId: 'task',
+          sessions: [first, second],
+          actualStart: first.start,
+          actualEnd: second.end,
+        ),
+      ];
+      final report = buildWeeklyTimeReport(
+        nodes: nodes,
+        events: events,
+        reportsByDay: const {},
+        weekStart: _weekStart,
+      );
+      expect(report.entries, hasLength(2));
+      expect(report.weekTotal, const Duration(minutes: 45));
+      expect(report.byGoal.single.total, const Duration(minutes: 45));
+    });
+
+    test('calendar-less node counts every run separately', () {
+      final first = TimeSession(
+        id: 'ts:1',
+        start: DateTime(2026, 9, 9, 8),
+        end: DateTime(2026, 9, 9, 8, 30),
+      );
+      final second = TimeSession(
+        id: 'ts:2',
+        start: DateTime(2026, 9, 9, 18),
+        end: DateTime(2026, 9, 9, 18, 20),
+      );
+      final report = buildWeeklyTimeReport(
+        nodes: [
+          node(
+            'task',
+            sessions: [first, second],
+            actualStart: first.start,
+            actualEnd: second.end,
+          ),
+        ],
+        events: const [],
+        reportsByDay: const {},
+        weekStart: _weekStart,
+      );
+      expect(report.entries, hasLength(2));
+      expect(report.weekTotal, const Duration(minutes: 50));
     });
 
     test('accepted entry is ignored when the event has a timer log', () {

@@ -1,3 +1,4 @@
+import '../../common/time/time_session.dart';
 import '../../nodes/model/node.dart';
 import '../../reporting/model/reported_entry.dart';
 import '../model/event_reschedule.dart';
@@ -9,6 +10,31 @@ const String reportDisplayIdPrefix = 'report:';
 const String reportLiveDisplayIdPrefix = '${reportDisplayIdPrefix}live:';
 const String reportTimerDisplayIdPrefix = '${reportDisplayIdPrefix}timer:';
 
+/// Separates the owner id from the recorded session id inside a timer
+/// report display id. `#` never appears in ids the app generates.
+const String reportSessionSeparator = '#';
+
+/// Display id for a timer block owned by an event or a calendar-less node.
+/// [sessionId] keeps sibling recordings of one task distinct.
+String reportTimerDisplayIdFor(String ownerId, {String? sessionId}) =>
+    sessionId == null || sessionId.isEmpty
+    ? '$reportTimerDisplayIdPrefix$ownerId'
+    : '$reportTimerDisplayIdPrefix$ownerId$reportSessionSeparator$sessionId';
+
+/// Strips the display-id prefix and per-session suffix, returning the id
+/// of the event/node that owns the block.
+String reportOwnerIdForDisplayId(String displayId) {
+  final raw = displayId.startsWith(reportTimerDisplayIdPrefix)
+      ? displayId.substring(reportTimerDisplayIdPrefix.length)
+      : displayId.startsWith(reportLiveDisplayIdPrefix)
+      ? displayId.substring(reportLiveDisplayIdPrefix.length)
+      : displayId.startsWith(reportDisplayIdPrefix)
+      ? displayId.substring(reportDisplayIdPrefix.length)
+      : displayId;
+  final cut = raw.indexOf(reportSessionSeparator);
+  return cut < 0 ? raw : raw.substring(0, cut);
+}
+
 class ReportBlock {
   final String displayId;
   final String title;
@@ -19,6 +45,10 @@ class ReportBlock {
   final String? entryId;
   final ReportStatus? status;
 
+  /// The recorded run this block shows, when it is one of several. Null
+  /// for accepted entries, live blocks, and legacy single intervals.
+  final String? sessionId;
+
   const ReportBlock({
     required this.displayId,
     required this.title,
@@ -28,6 +58,7 @@ class ReportBlock {
     this.eventId,
     this.entryId,
     this.status,
+    this.sessionId,
   });
 
   ReportBlock copyWith({String? title, DateTime? start, DateTime? end}) =>
@@ -40,6 +71,7 @@ class ReportBlock {
         eventId: eventId,
         entryId: entryId,
         status: status,
+        sessionId: sessionId,
       );
 }
 
@@ -197,23 +229,26 @@ List<ReportBlock> buildReportBlocks({
           eventId: event.id,
         ),
       );
-      continue;
     }
 
-    final reported = _reportedInterval(event, linked);
-    if (reported != null) {
-      blocks.add(
-        ReportBlock(
-          displayId: '$reportTimerDisplayIdPrefix${event.id}',
-          title: event.subject,
-          start: reported.start,
-          end: reported.end,
-          kind: ReportBlockKind.timer,
-          eventId: event.id,
-        ),
-      );
+    final sessions = _recordedSessions(event, linked);
+    if (sessions.isNotEmpty) {
+      for (final session in sessions) {
+        blocks.add(
+          ReportBlock(
+            displayId: reportTimerDisplayIdFor(event.id, sessionId: session.id),
+            title: event.subject,
+            start: session.start,
+            end: session.end,
+            kind: ReportBlockKind.timer,
+            eventId: event.id,
+            sessionId: session.id,
+          ),
+        );
+      }
       continue;
     }
+    if (liveStart != null) continue;
 
     final matches = acceptedByEvent[event.id];
     if (matches != null) {
@@ -267,23 +302,17 @@ List<ReportBlock> buildReportBlocks({
           eventId: null,
         ),
       );
-      continue;
     }
-    final actualStart = node.actualStart;
-    final actualEnd = node.actualEnd;
-    if (actualStart != null && actualEnd != null) {
-      var end = actualEnd;
-      if (!end.isAfter(actualStart)) {
-        end = actualStart.add(const Duration(minutes: 1));
-      }
+    for (final session in node.recordedSessions) {
       blocks.add(
         ReportBlock(
-          displayId: '$reportTimerDisplayIdPrefix${node.id}',
+          displayId: reportTimerDisplayIdFor(node.id, sessionId: session.id),
           title: node.title,
-          start: actualStart,
-          end: end,
+          start: session.start,
+          end: session.end,
           kind: ReportBlockKind.timer,
           eventId: null,
+          sessionId: session.id,
         ),
       );
     }
@@ -317,30 +346,38 @@ DateTime? _firstTrackingStart(List<Node> linked) {
   return null;
 }
 
-_DateRange? _reportedInterval(PlannerEvent event, List<Node> linked) {
-  if (event.actualStart != null && event.actualEnd != null) {
-    final start = event.actualStart!;
-    var end = event.actualEnd!;
-    if (!end.isAfter(start)) end = start.add(const Duration(minutes: 1));
-    return _DateRange(start, end);
+/// Every distinct recorded run on an event and the tasks linked to it.
+///
+/// Task-event pairs mirror the same sessions, so ids dedupe the copies.
+/// When any side carries an explicit session list, legacy aggregate
+/// intervals are ignored: those spans would otherwise show up as an extra
+/// block after the first multi-session stop.
+List<TimeSession> _recordedSessions(PlannerEvent event, List<Node> linked) {
+  final explicit = <String, TimeSession>{};
+  for (final session in event.sessions) {
+    explicit[session.id] = session;
   }
   for (final node in linked) {
-    if (node.actualStart != null && node.actualEnd != null) {
-      final start = node.actualStart!;
-      var end = node.actualEnd!;
-      if (!end.isAfter(start)) end = start.add(const Duration(minutes: 1));
-      return _DateRange(start, end);
+    for (final session in node.sessions) {
+      explicit[session.id] = session;
     }
   }
-  return null;
+  if (explicit.isNotEmpty) return _sortedSessions(explicit.values);
+
+  final legacy = <String, TimeSession>{};
+  for (final session in event.recordedSessions) {
+    legacy[session.id] = session;
+  }
+  for (final node in linked) {
+    for (final session in node.recordedSessions) {
+      legacy[session.id] = session;
+    }
+  }
+  return _sortedSessions(legacy.values);
 }
 
-class _DateRange {
-  final DateTime start;
-  final DateTime end;
-
-  const _DateRange(this.start, this.end);
-}
+List<TimeSession> _sortedSessions(Iterable<TimeSession> sessions) =>
+    sessions.toList()..sort((a, b) => a.start.compareTo(b.start));
 
 PlannerEvent reportBlockToDisplayEvent(
   ReportBlock block, {

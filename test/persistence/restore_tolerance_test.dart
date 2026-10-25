@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/common/time/time_session.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
@@ -36,8 +37,12 @@ class MockStorage extends Mock implements Storage {}
 final _day = DateTime(2026, 9, 6, 9);
 
 Map<String, dynamic> _withCorrupt(String key, Map<String, dynamic> good) => {
-      key: [good, {'id': 42}, 'not-a-map'],
-    };
+  key: [
+    good,
+    {'id': 42},
+    'not-a-map',
+  ],
+};
 
 void main() {
   late Storage storage;
@@ -52,15 +57,15 @@ void main() {
   });
 
   FeedCubit makeFeedCubit() => FeedCubit(
-        calendarCubit: CalendarCubit(),
-        nodeCubit: NodeCubit(),
-        icalService: IcalService(),
-        googleService: GoogleCalendarService(
-          baseUrl: () => '',
-          userId: () => 'test',
-        ),
-        proxyBase: () => '',
-      );
+    calendarCubit: CalendarCubit(),
+    nodeCubit: NodeCubit(),
+    icalService: IcalService(),
+    googleService: GoogleCalendarService(
+      baseUrl: () => '',
+      userId: () => 'test',
+    ),
+    proxyBase: () => '',
+  );
 
   group('restore tolerates corrupt entries', () {
     test('AssignmentEstimatesCubit keeps valid learned rows', () {
@@ -89,7 +94,12 @@ void main() {
       final cubit = AssignmentEstimatesCubit();
       expect(cubit.fromJson({}), isNull);
       expect(cubit.fromJson({'efforts': []}), isEmpty);
-      expect(cubit.fromJson({'efforts': ['nope', 42, {}]}), isEmpty);
+      expect(
+        cubit.fromJson({
+          'efforts': ['nope', 42, {}],
+        }),
+        isEmpty,
+      );
     });
 
     test('AssignmentRule payloads without estimateMinutes still load', () {
@@ -124,29 +134,31 @@ void main() {
 
     test('CalendarCubit loads pre-tracking events and bad tracking dates', () {
       final cubit = CalendarCubit();
-      final legacy = PlannerEvent(
-        id: 'old',
-        subject: 'Lecture',
-        start: _day,
-        end: _day.add(const Duration(hours: 1)),
-      ).toJson()
-        ..remove('actualStart')
-        ..remove('actualEnd')
-        ..remove('timerStartedAt')
-        ..remove('failed');
+      final legacy =
+          PlannerEvent(
+              id: 'old',
+              subject: 'Lecture',
+              start: _day,
+              end: _day.add(const Duration(hours: 1)),
+            ).toJson()
+            ..remove('actualStart')
+            ..remove('actualEnd')
+            ..remove('timerStartedAt')
+            ..remove('failed');
       final restoredLegacy = cubit.fromJson({
         'events': [legacy],
       });
       expect(restoredLegacy?.single.failed, isFalse);
       expect(restoredLegacy?.single.isTracking, isFalse);
-      final corrupt = PlannerEvent(
-        id: 'bad',
-        subject: 'Lecture',
-        start: _day,
-        end: _day.add(const Duration(hours: 1)),
-      ).toJson()
-        ..['actualStart'] = 'not-a-date'
-        ..['timerStartedAt'] = 'not-a-date';
+      final corrupt =
+          PlannerEvent(
+              id: 'bad',
+              subject: 'Lecture',
+              start: _day,
+              end: _day.add(const Duration(hours: 1)),
+            ).toJson()
+            ..['actualStart'] = 'not-a-date'
+            ..['timerStartedAt'] = 'not-a-date';
       final restoredCorrupt = cubit.fromJson({
         'events': [corrupt],
       });
@@ -162,8 +174,7 @@ void main() {
         subject: 'Lecture',
         start: _day,
         end: _day.add(const Duration(hours: 1)),
-      ).toJson()
-        ..remove('reminderMinutesBefore');
+      ).toJson()..remove('reminderMinutesBefore');
       final restoredLegacy = cubit.fromJson({
         'events': [legacy],
       });
@@ -173,8 +184,7 @@ void main() {
         subject: 'Lecture',
         start: _day,
         end: _day.add(const Duration(hours: 1)),
-      ).toJson()
-        ..['reminderMinutesBefore'] = 'soon';
+      ).toJson()..['reminderMinutesBefore'] = 'soon';
       final restoredCorrupt = cubit.fromJson({
         'events': [corrupt],
       });
@@ -214,8 +224,7 @@ void main() {
       for (final item in expenses) {
         if (item is! Map) continue;
         try {
-          parsedExpenses.add(
-              Expense.fromJson(Map<String, dynamic>.from(item)));
+          parsedExpenses.add(Expense.fromJson(Map<String, dynamic>.from(item)));
         } catch (_) {}
       }
       expect(parsedExpenses.map((e) => e.id), ['x1']);
@@ -248,8 +257,7 @@ void main() {
         name: 'Coffee',
         pendingTransactionId: 'pending_tx0',
       ).toJson();
-      final restored =
-          cubit.fromJson(_withCorrupt('transactions', good));
+      final restored = cubit.fromJson(_withCorrupt('transactions', good));
       expect(restored?.map((t) => t.id), ['tx1']);
       expect(restored?.single.pendingTransactionId, 'pending_tx0');
     });
@@ -329,7 +337,10 @@ void main() {
       ).toJson();
       final restored = cubit.fromJson({
         'days': {
-          '2026-09-06': [good, {'id': 42}],
+          '2026-09-06': [
+            good,
+            {'id': 42},
+          ],
           'broken-day': 'not-a-list',
         },
       });
@@ -353,8 +364,7 @@ void main() {
       expect(cubit.byId(id)?.hasDue, isTrue);
     });
 
-    test('NodeCubit keeps valid nodes, tolerates corrupt + pre-facet data',
-        () {
+    test('NodeCubit keeps valid nodes, tolerates corrupt + pre-facet data', () {
       final cubit = NodeCubit();
       final good = Node(
         id: 'n1',
@@ -391,7 +401,11 @@ void main() {
         'nodes': [
           good,
           {...good, 'id': 'n10', 'anki': 'garbage'},
-          {...good, 'id': 'n11', 'anki': {'targetReviews': 'lots'}},
+          {
+            ...good,
+            'id': 'n11',
+            'anki': {'targetReviews': 'lots'},
+          },
         ],
       });
       expect(restored?.map((n) => n.id), ['n9', 'n10', 'n11']);
@@ -406,8 +420,7 @@ void main() {
         id: 'n2',
         title: 'Serve others',
         createdAt: _day,
-      ).toJson()
-        ..remove('isUnbounded');
+      ).toJson()..remove('isUnbounded');
       final restored = cubit.fromJson({
         'nodes': [preFlag],
       });
@@ -423,11 +436,7 @@ void main() {
 
     test('NodeCubit loads pre-favorite nodes as not favorite', () {
       final cubit = NodeCubit();
-      final preFavorite = Node(
-        id: 'n5',
-        title: 'Run',
-        createdAt: _day,
-      ).toJson()
+      final preFavorite = Node(id: 'n5', title: 'Run', createdAt: _day).toJson()
         ..remove('isFavorite');
       final restored = cubit.fromJson({
         'nodes': [preFavorite],
@@ -455,18 +464,19 @@ void main() {
 
     test('NodeCubit loads pre-fitness nodes as plain non-workouts', () {
       final cubit = NodeCubit();
-      final preFitness = Node(
-        id: 'n4',
-        title: 'Sleep 8h',
-        createdAt: _day,
-        fitness: const FitnessFacet(
-          metric: FitnessMetric.sleepMinutes,
-          targetValue: 480,
-        ),
-        isWorkout: true,
-      ).toJson()
-        ..remove('fitness')
-        ..remove('isWorkout');
+      final preFitness =
+          Node(
+              id: 'n4',
+              title: 'Sleep 8h',
+              createdAt: _day,
+              fitness: const FitnessFacet(
+                metric: FitnessMetric.sleepMinutes,
+                targetValue: 480,
+              ),
+              isWorkout: true,
+            ).toJson()
+            ..remove('fitness')
+            ..remove('isWorkout');
       final restored = cubit.fromJson({
         'nodes': [preFitness],
       });
@@ -477,8 +487,10 @@ void main() {
       final restoredCorrupt = cubit.fromJson({
         'nodes': [corrupt],
       });
-      expect(restoredCorrupt?.single.fitness?.metric,
-          FitnessMetric.activityMinutes);
+      expect(
+        restoredCorrupt?.single.fitness?.metric,
+        FitnessMetric.activityMinutes,
+      );
     });
 
     test('applyJson with garbage does not throw', () {
@@ -526,8 +538,9 @@ void main() {
       expect(Feed.fromJson(feed.toJson()), feed);
       final visibility = CalendarVisibilityCubit();
       visibility.setLeafVisible('gcal:a', false);
-      final visibilityRestored =
-          visibility.fromJson(visibility.toJson(visibility.state));
+      final visibilityRestored = visibility.fromJson(
+        visibility.toJson(visibility.state),
+      );
       expect(visibilityRestored?.hiddenIds, {'gcal:a'});
     });
 
@@ -620,7 +633,9 @@ void main() {
       expect((nodeJson['timerStartedAt'] as String).endsWith('Z'), isTrue);
       final legacyNode = Map<String, dynamic>.from(nodeJson)
         ..['timerStartedAt'] = _day.toIso8601String()
-        ..['actualEnd'] = _day.add(const Duration(minutes: 30)).toIso8601String();
+        ..['actualEnd'] = _day
+            .add(const Duration(minutes: 30))
+            .toIso8601String();
       expect(Node.fromJson(legacyNode).timerStartedAt, _day);
 
       final taskJson = Task(
@@ -649,6 +664,87 @@ void main() {
       expect(PlannerEvent.fromJson(legacyEvent).timerStartedAt, _day);
     });
 
+    test('recorded sessions round-trip and leave old payloads intact', () {
+      final first = TimeSession(
+        id: 'ts:first',
+        start: _day,
+        end: _day.add(const Duration(minutes: 20)),
+      );
+      final second = TimeSession(
+        id: 'ts:second',
+        start: _day.add(const Duration(hours: 2)),
+        end: _day.add(const Duration(hours: 2, minutes: 15)),
+      );
+      final node = Node(
+        id: 'n1',
+        title: 'Call mom',
+        createdAt: _day,
+        sessions: [first, second],
+        actualStart: first.start,
+        actualEnd: second.end,
+      );
+      final restored = Node.fromJson(node.toJson());
+      expect(restored, node);
+      expect(restored.recordedSessions, [first, second]);
+      expect(restored.reportedDuration, const Duration(minutes: 35));
+
+      // A payload written before sessions existed: no key, legacy interval
+      // becomes the one recorded run.
+      final legacyJson = node.toJson()..remove('sessions');
+      final legacy = Node.fromJson(legacyJson);
+      expect(legacy.sessions, isEmpty);
+      expect(legacy.recordedSessions, hasLength(1));
+      expect(legacy.recordedSessions.single.start, first.start);
+      // With no session list the old aggregate span is all we know, so a
+      // synthetic two-run payload reads back as one span.
+      expect(legacy.reportedDuration, const Duration(hours: 2, minutes: 15));
+
+      // Corrupt entries are skipped per item instead of rejecting the node.
+      final corrupt = node.toJson()
+        ..['sessions'] = [
+          first.toJson(),
+          {'id': 42},
+          {'start': 'not-a-date', 'end': 'nope'},
+          second.toJson(),
+        ];
+      final tolerant = Node.fromJson(corrupt);
+      expect(tolerant.recordedSessions, [first, second]);
+    });
+
+    test('event recorded sessions round-trip and tolerate garbage', () {
+      final first = TimeSession(
+        id: 'ts:event-1',
+        start: _day,
+        end: _day.add(const Duration(minutes: 10)),
+      );
+      final second = TimeSession(
+        id: 'ts:event-2',
+        start: _day.add(const Duration(hours: 1)),
+        end: _day.add(const Duration(hours: 1, minutes: 5)),
+      );
+      final event = PlannerEvent(
+        id: 'e1',
+        subject: 'Study',
+        start: _day,
+        end: _day.add(const Duration(hours: 2)),
+        sessions: [first, second],
+        actualStart: first.start,
+        actualEnd: second.end,
+      );
+      expect(PlannerEvent.fromJson(event.toJson()), event);
+      expect(
+        PlannerEvent.fromJson(event.toJson()).reportedDuration,
+        const Duration(minutes: 15),
+      );
+      final legacy = PlannerEvent.fromJson(event.toJson()..remove('sessions'));
+      expect(legacy.recordedSessions, hasLength(1));
+      expect(legacy.reportedDuration, const Duration(hours: 1, minutes: 5));
+      final corrupt = PlannerEvent.fromJson(
+        event.toJson()..['sessions'] = ['nope', 7, second.toJson()],
+      );
+      expect(corrupt.recordedSessions.single.id, second.id);
+    });
+
     test('unknown enum values fall back instead of throwing', () {
       final rule = RecurringRule(
         id: 'r1',
@@ -658,10 +754,7 @@ void main() {
         startDate: _day,
       );
       final ruleJson = rule.toJson()..['frequency'] = 'renamed-value';
-      expect(
-        RecurringRule.fromJson(ruleJson).frequency,
-        TimeScale.monthly,
-      );
+      expect(RecurringRule.fromJson(ruleJson).frequency, TimeScale.monthly);
       final entry = ReportedEntry(
         id: 're1',
         title: 'Class',
@@ -670,10 +763,7 @@ void main() {
         status: ReportStatus.attended,
       );
       final entryJson = entry.toJson()..['status'] = 'renamed-value';
-      expect(
-        ReportedEntry.fromJson(entryJson).status,
-        ReportStatus.partial,
-      );
+      expect(ReportedEntry.fromJson(entryJson).status, ReportStatus.partial);
     });
 
     test('undo after a simulated pull round-trips both items (issue #55)', () {

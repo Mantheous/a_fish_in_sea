@@ -163,10 +163,12 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     _hasFitness = e?.fitness != null;
     _fitnessMetric = e?.fitness?.metric ?? FitnessMetric.activityMinutes;
     _fitnessTarget = TextEditingController(
-        text: e?.fitness != null
-            ? e!.fitness!.targetValue.toStringAsFixed(
-                e.fitness!.metric == FitnessMetric.activityCount ? 0 : 1)
-            : '');
+      text: e?.fitness != null
+          ? e!.fitness!.targetValue.toStringAsFixed(
+              e.fitness!.metric == FitnessMetric.activityCount ? 0 : 1,
+            )
+          : '',
+    );
     _hasRecurrence = e?.recurrence != null || widget.enableRecurrence;
     _frequency = e?.recurrence?.frequency ?? TimeScale.daily;
     _recurEnd = e?.recurrence?.endDate;
@@ -531,7 +533,8 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                 dense: true,
                 title: const Text('Workout'),
                 subtitle: const Text(
-                    'Auto-report duration from the fitness app'),
+                  'Auto-report duration from the fitness app',
+                ),
                 value: _isWorkout,
                 onChanged: (v) => setState(() => _isWorkout = v),
               ),
@@ -540,34 +543,38 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                 dense: true,
                 title: const Text('Has fitness target'),
                 subtitle: const Text(
-                    'Sleep hours or activity time/count via Garmin'),
+                  'Sleep hours or activity time/count via Garmin',
+                ),
                 value: _hasFitness,
                 onChanged: (v) => setState(() => _hasFitness = v),
               ),
               if (_hasFitness) ...[
                 DropdownButtonFormField<FitnessMetric>(
                   initialValue: _fitnessMetric,
-                  decoration:
-                      const InputDecoration(labelText: 'Measures'),
+                  decoration: const InputDecoration(labelText: 'Measures'),
                   items: const [
                     DropdownMenuItem(
-                        value: FitnessMetric.sleepMinutes,
-                        child: Text('Sleep minutes')),
+                      value: FitnessMetric.sleepMinutes,
+                      child: Text('Sleep minutes'),
+                    ),
                     DropdownMenuItem(
-                        value: FitnessMetric.activityMinutes,
-                        child: Text('Activity minutes')),
+                      value: FitnessMetric.activityMinutes,
+                      child: Text('Activity minutes'),
+                    ),
                     DropdownMenuItem(
-                        value: FitnessMetric.activityCount,
-                        child: Text('Activity count')),
+                      value: FitnessMetric.activityCount,
+                      child: Text('Activity count'),
+                    ),
                   ],
-                  onChanged: (v) => setState(
-                      () => _fitnessMetric = v ?? _fitnessMetric),
+                  onChanged: (v) =>
+                      setState(() => _fitnessMetric = v ?? _fitnessMetric),
                 ),
                 const SizedBox(height: 8),
                 TextField(
                   controller: _fitnessTarget,
                   keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true),
+                    decimal: true,
+                  ),
                   decoration: InputDecoration(
                     labelText: _fitnessMetric == FitnessMetric.activityCount
                         ? 'Target count'
@@ -697,14 +704,15 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                       live.isTracking && live.timerStartedAt != null
                       ? 'Recording since ${DateFormat('h:mm a').format(live.timerStartedAt!)}'
                       : null;
+                  final sessions = live.recordedSessions;
                   final reportedLine =
-                      live.hasReported &&
-                          live.reportedDuration != null &&
-                          live.actualStart != null &&
-                          live.actualEnd != null
-                      ? 'Reported ${live.reportedDuration!.inMinutes}m '
-                            '(${DateFormat('h:mm a').format(live.actualStart!)} – '
-                            '${DateFormat('h:mm a').format(live.actualEnd!)})'
+                      live.hasReported && live.reportedDuration != null
+                      ? sessions.length > 1
+                            ? 'Reported ${sessions.length} sessions · '
+                                  '${live.reportedDuration!.inMinutes}m'
+                            : 'Reported ${live.reportedDuration!.inMinutes}m '
+                                  '(${DateFormat('h:mm a').format(sessions.single.start)} – '
+                                  '${DateFormat('h:mm a').format(sessions.single.end)})'
                       : null;
                   return Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -727,13 +735,12 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                           ],
                         ),
                       ),
-                      TextButton(
-                        onPressed: () =>
-                            showEditNodeTimerSheet(context, nodeId: e.id),
-                        child: Text(
-                          trackingLine != null ? 'Edit start' : 'Adjust',
+                      if (trackingLine != null)
+                        TextButton(
+                          onPressed: () =>
+                              showEditNodeTimerSheet(context, nodeId: e.id),
+                          child: const Text('Edit start'),
                         ),
-                      ),
                     ],
                   );
                 },
@@ -891,14 +898,12 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       if (parsed == null || parsed <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Please enter a positive fitness target')),
+            content: Text('Please enter a positive fitness target'),
+          ),
         );
         return;
       }
-      fitness = FitnessFacet(
-        metric: _fitnessMetric,
-        targetValue: parsed,
-      );
+      fitness = FitnessFacet(metric: _fitnessMetric, targetValue: parsed);
     }
 
     NodeRecurrence? recurrence;
@@ -1170,11 +1175,9 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
             if (calendar == null) {
               nodes.deleteNode(existing.id);
             } else {
-              NodeEventLink.deleteNodesAndUnlink(
-                nodes,
-                calendar,
-                {existing.id},
-              );
+              NodeEventLink.deleteNodesAndUnlink(nodes, calendar, {
+                existing.id,
+              });
             }
             return null;
           },

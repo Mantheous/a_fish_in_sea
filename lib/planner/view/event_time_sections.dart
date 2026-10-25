@@ -9,10 +9,7 @@ import '../../nodes/service/node_event_sync.dart';
 import '../../nodes/view/node_finish_sheet.dart';
 import '../../nodes/view/timer_edit_sheet.dart';
 import '../bloc/calendar_cubit.dart';
-import '../bloc/settings_cubit.dart';
-import '../model/event_reschedule.dart';
 import '../model/planner_event.dart';
-import '../../reporting/view/time_range_dial.dart';
 
 /// Time-tracking sections for the event detail/editor sheets.
 ///
@@ -49,16 +46,18 @@ class TaskTimeSection extends StatelessWidget {
         ? plannedEnd.difference(plannedStart).inMinutes
         : 0;
     final reported = node.reportedDuration;
+    final sessions = node.recordedSessions;
     final lines = <String>[
       'Planned ${timeFormatter.format(plannedStart)} – '
           '${timeFormatter.format(plannedEnd)} (${plannedMin}m)',
       if (node.isTracking && node.timerStartedAt != null)
         'Recording since ${timeFormatter.format(node.timerStartedAt!)}',
-      if (reported != null &&
-          node.actualStart != null &&
-          node.actualEnd != null)
-        'Reported ${timeFormatter.format(node.actualStart!)} – '
-            '${timeFormatter.format(node.actualEnd!)} (${reported.inMinutes}m)',
+      if (reported != null && sessions.isNotEmpty)
+        sessions.length > 1
+            ? 'Reported ${sessions.length} sessions · ${reported.inMinutes}m'
+            : 'Reported ${timeFormatter.format(sessions.single.start)} – '
+                  '${timeFormatter.format(sessions.single.end)} '
+                  '(${reported.inMinutes}m)',
       if (failed) 'Marked as failed',
     ];
     final nodeId = node.id;
@@ -80,7 +79,8 @@ class TaskTimeSection extends StatelessWidget {
                 color: line.startsWith('Marked as failed')
                     ? theme.colorScheme.error
                     : null,
-                fontWeight: line.startsWith('Recording') ||
+                fontWeight:
+                    line.startsWith('Recording') ||
                         line.startsWith('Marked as failed')
                     ? FontWeight.w600
                     : null,
@@ -115,10 +115,8 @@ class TaskTimeSection extends StatelessWidget {
                 ),
               if (node.isTracking)
                 TextButton.icon(
-                  onPressed: () => showEditNodeTimerSheet(
-                    context,
-                    nodeId: nodeId,
-                  ),
+                  onPressed: () =>
+                      showEditNodeTimerSheet(context, nodeId: nodeId),
                   icon: const Icon(Icons.edit, size: 16),
                   label: const Text('Edit start'),
                 ),
@@ -134,14 +132,12 @@ class TaskTimeSection extends StatelessWidget {
                   } catch (_) {}
                 },
                 style: OutlinedButton.styleFrom(
-                  foregroundColor:
-                      failed ? null : theme.colorScheme.error,
+                  foregroundColor: failed ? null : theme.colorScheme.error,
                 ),
                 child: Text(failed ? 'Unfail' : 'Mark failed'),
               ),
               TextButton(
-                onPressed: () =>
-                    showFollowUpScheduler(context, nodeId: nodeId),
+                onPressed: () => showFollowUpScheduler(context, nodeId: nodeId),
                 child: const Text('Follow-up'),
               ),
               if (node.hasReported && !node.isTracking)
@@ -156,15 +152,6 @@ class TaskTimeSection extends StatelessWidget {
                     } catch (_) {}
                   },
                   child: const Text('Clear reported'),
-                ),
-              if (node.hasReported && !node.isTracking)
-                TextButton.icon(
-                  onPressed: () => showEditNodeTimerSheet(
-                    context,
-                    nodeId: nodeId,
-                  ),
-                  icon: const Icon(Icons.tune, size: 16),
-                  label: const Text('Adjust'),
                 ),
             ],
           ),
@@ -216,16 +203,18 @@ class TimeReportSection extends StatelessWidget {
     final timeFormatter = DateFormat('h:mm a');
     final plannedMin = live.plannedDuration.inMinutes;
     final reported = live.reportedDuration;
+    final sessions = live.recordedSessions;
     final lines = <String>[
       'Planned ${timeFormatter.format(live.start)} – '
           '${timeFormatter.format(live.end)} (${plannedMin}m)',
       if (live.isTracking && live.timerStartedAt != null)
         'Recording since ${timeFormatter.format(live.timerStartedAt!)}',
-      if (reported != null &&
-          live.actualStart != null &&
-          live.actualEnd != null)
-        'Reported ${timeFormatter.format(live.actualStart!)} – '
-            '${timeFormatter.format(live.actualEnd!)} (${reported.inMinutes}m)',
+      if (reported != null && sessions.isNotEmpty)
+        sessions.length > 1
+            ? 'Reported ${sessions.length} sessions · ${reported.inMinutes}m'
+            : 'Reported ${timeFormatter.format(sessions.single.start)} – '
+                  '${timeFormatter.format(sessions.single.end)} '
+                  '(${reported.inMinutes}m)',
       if (live.failed) 'Marked as failed',
     ];
     final eventId = live.id;
@@ -251,7 +240,8 @@ class TimeReportSection extends StatelessWidget {
                 color: line.startsWith('Marked as failed')
                     ? theme.colorScheme.error
                     : null,
-                fontWeight: line.startsWith('Recording') ||
+                fontWeight:
+                    line.startsWith('Recording') ||
                         line.startsWith('Marked as failed')
                     ? FontWeight.w600
                     : null,
@@ -276,10 +266,8 @@ class TimeReportSection extends StatelessWidget {
                 ),
               if (isTracking)
                 TextButton.icon(
-                  onPressed: () => showEditEventTimerSheet(
-                    context,
-                    eventId: eventId,
-                  ),
+                  onPressed: () =>
+                      showEditEventTimerSheet(context, eventId: eventId),
                   icon: const Icon(Icons.edit, size: 16),
                   label: const Text('Edit start'),
                 ),
@@ -287,171 +275,22 @@ class TimeReportSection extends StatelessWidget {
               // calendar events just record time.
               if (isTask)
                 OutlinedButton(
-                  onPressed: () => context
-                      .read<CalendarCubit>()
-                      .setFailed(eventId, !failed),
+                  onPressed: () =>
+                      context.read<CalendarCubit>().setFailed(eventId, !failed),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: failed
-                        ? null
-                        : theme.colorScheme.error,
+                    foregroundColor: failed ? null : theme.colorScheme.error,
                   ),
                   child: Text(failed ? 'Unfail' : 'Mark failed'),
                 ),
               if (hasReported && !isTracking)
                 TextButton(
-                  onPressed: () => context
-                      .read<CalendarCubit>()
-                      .clearReported(eventId),
-                  child: const Text('Clear reported'),
-                ),
-              if (hasReported && !isTracking)
-                TextButton.icon(
                   onPressed: () =>
-                      showAdjustTimerSheet(context, eventId: eventId),
-                  icon: const Icon(Icons.tune, size: 16),
-                  label: const Text('Adjust'),
+                      context.read<CalendarCubit>().clearReported(eventId),
+                  child: const Text('Clear reported'),
                 ),
             ],
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// Bottom sheet with the circular [TimeRangeDial] for correcting a
-/// timer-logged interval (`actualStart`/`actualEnd`) on a calendar event.
-/// Saves once via [CalendarCubit.updateEvent], so dragging the handles is
-/// a single undoable change.
-Future<void> showAdjustTimerSheet(
-  BuildContext context, {
-  required String eventId,
-}) {
-  return showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    builder: (sheetContext) => Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
-      ),
-      child: _AdjustTimerSheet(eventId: eventId),
-    ),
-  );
-}
-
-class _AdjustTimerSheet extends StatefulWidget {
-  final String eventId;
-
-  const _AdjustTimerSheet({required this.eventId});
-
-  @override
-  State<_AdjustTimerSheet> createState() => _AdjustTimerSheetState();
-}
-
-class _AdjustTimerSheetState extends State<_AdjustTimerSheet> {
-  late DateTime _day;
-  late int _dayOffset;
-  late TimeOfDay _start;
-  late TimeOfDay _end;
-  bool _ready = false;
-
-  @override
-  void initState() {
-    super.initState();
-    PlannerEvent? live;
-    try {
-      live = context.read<CalendarCubit>().byId(widget.eventId);
-    } catch (_) {}
-    final actualStart = live?.actualStart ?? live?.start;
-    final actualEnd = live?.actualEnd ?? live?.end;
-    if (actualStart == null || actualEnd == null) {
-      final now = DateTime.now();
-      _day = DateTime(now.year, now.month, now.day);
-      _dayOffset = 0;
-      _start = TimeOfDay.fromDateTime(now);
-      _end = TimeOfDay.fromDateTime(now.add(const Duration(hours: 1)));
-    } else {
-      _day = DateTime(
-        actualStart.year,
-        actualStart.month,
-        actualStart.day,
-      );
-      final endDay = DateTime(actualEnd.year, actualEnd.month, actualEnd.day);
-      _dayOffset = endDay.difference(_day).inDays.clamp(0, 1);
-      _start = TimeOfDay.fromDateTime(actualStart);
-      _end = TimeOfDay.fromDateTime(actualEnd);
-    }
-    _ready = true;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (!_ready) return const SizedBox.shrink();
-    var snap = 5;
-    try {
-      snap = context.read<SettingsCubit>().state.snapMinutes;
-    } catch (_) {}
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('Adjust reported time',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            Center(
-              child: TimeRangeDial(
-                start: _start,
-                end: _end,
-                snapMinutes: snap,
-                onStartChanged: (v) => setState(() => _start = v),
-                onEndChanged: (v) => setState(() => _end = v),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: () {
-                    CalendarCubit calendar;
-                    try {
-                      calendar = context.read<CalendarCubit>();
-                    } catch (_) {
-                      Navigator.of(context).pop();
-                      return;
-                    }
-                    final live = calendar.byId(widget.eventId);
-                    if (live == null || !live.hasReported) {
-                      Navigator.of(context).pop();
-                      return;
-                    }
-                    final start = DateTime(_day.year, _day.month, _day.day,
-                        _start.hour, _start.minute);
-                    var end = DateTime(_day.year, _day.month, _day.day,
-                            _end.hour, _end.minute)
-                        .add(Duration(days: _dayOffset));
-                    if (!end.isAfter(start)) {
-                      end = start.add(minEventDuration);
-                    }
-                    calendar.updateEvent(
-                      live.copyWith(actualStart: start, actualEnd: end),
-                    );
-                    Navigator.of(context).pop();
-                  },
-                  child: const Text('Save'),
-                ),
-              ],
-            ),
-          ],
-        ),
       ),
     );
   }

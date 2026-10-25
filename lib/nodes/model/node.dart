@@ -7,6 +7,7 @@ export 'node_calendar_link.dart';
 export 'node_recurrence.dart';
 
 import 'package:a_fish_in_sea/common/time/planned_actual.dart';
+import 'package:a_fish_in_sea/common/time/time_session.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/fitness/fitness_models.dart';
 import 'package:a_fish_in_sea/planner/model/task_assignee.dart';
@@ -79,30 +80,29 @@ class ScheduleFacet extends Equatable {
     bool clearEnd = false,
     bool? allDay,
     bool? isFixed,
-  }) =>
-      ScheduleFacet(
-        due: clearDue ? null : (due ?? this.due),
-        start: clearStart ? null : (start ?? this.start),
-        end: clearEnd ? null : (end ?? this.end),
-        allDay: allDay ?? this.allDay,
-        isFixed: isFixed ?? this.isFixed,
-      );
+  }) => ScheduleFacet(
+    due: clearDue ? null : (due ?? this.due),
+    start: clearStart ? null : (start ?? this.start),
+    end: clearEnd ? null : (end ?? this.end),
+    allDay: allDay ?? this.allDay,
+    isFixed: isFixed ?? this.isFixed,
+  );
 
   factory ScheduleFacet.fromJson(Map<String, dynamic> json) => ScheduleFacet(
-        due: _tryDate(json['due']),
-        start: _tryDate(json['start']),
-        end: _tryDate(json['end']),
-        allDay: json['allDay'] as bool? ?? false,
-        isFixed: json['isFixed'] as bool? ?? false,
-      );
+    due: _tryDate(json['due']),
+    start: _tryDate(json['start']),
+    end: _tryDate(json['end']),
+    allDay: json['allDay'] as bool? ?? false,
+    isFixed: json['isFixed'] as bool? ?? false,
+  );
 
   Map<String, dynamic> toJson() => {
-        'due': due?.toIso8601String(),
-        'start': start?.toIso8601String(),
-        'end': end?.toIso8601String(),
-        'allDay': allDay,
-        'isFixed': isFixed,
-      };
+    'due': due?.toIso8601String(),
+    'start': start?.toIso8601String(),
+    'end': end?.toIso8601String(),
+    'allDay': allDay,
+    'isFixed': isFixed,
+  };
 
   @override
   List<Object?> get props => [due, start, end, allDay, isFixed];
@@ -170,78 +170,75 @@ class MoneyFacet extends Equatable {
     double? rolloverAmount,
     bool? isFixed,
     List<String>? linkedTransactionIds,
-  }) =>
-      MoneyFacet(
-        targetAmount: targetAmount ?? this.targetAmount,
-        actualAmount:
-            clearActual ? null : (actualAmount ?? this.actualAmount),
-        direction: direction ?? this.direction,
-        status: status ?? this.status,
-        period: clearPeriod ? null : (period ?? this.period),
-        customPeriodDays: clearCustomPeriod
-            ? null
-            : (customPeriodDays ?? this.customPeriodDays),
-        isRecurring: isRecurring ?? this.isRecurring,
-        autoRollover: autoRollover ?? this.autoRollover,
-        rolloverAmount: rolloverAmount ?? this.rolloverAmount,
-        isFixed: isFixed ?? this.isFixed,
-        linkedTransactionIds:
-            linkedTransactionIds ?? this.linkedTransactionIds,
-      );
+  }) => MoneyFacet(
+    targetAmount: targetAmount ?? this.targetAmount,
+    actualAmount: clearActual ? null : (actualAmount ?? this.actualAmount),
+    direction: direction ?? this.direction,
+    status: status ?? this.status,
+    period: clearPeriod ? null : (period ?? this.period),
+    customPeriodDays: clearCustomPeriod
+        ? null
+        : (customPeriodDays ?? this.customPeriodDays),
+    isRecurring: isRecurring ?? this.isRecurring,
+    autoRollover: autoRollover ?? this.autoRollover,
+    rolloverAmount: rolloverAmount ?? this.rolloverAmount,
+    isFixed: isFixed ?? this.isFixed,
+    linkedTransactionIds: linkedTransactionIds ?? this.linkedTransactionIds,
+  );
 
   factory MoneyFacet.fromJson(Map<String, dynamic> json) => MoneyFacet(
-        targetAmount: (json['targetAmount'] as num?)?.toDouble() ?? 0.0,
-        actualAmount: (json['actualAmount'] as num?)?.toDouble(),
-        direction: MoneyDirection.values.firstWhere(
-          (e) => e.name == json['direction'],
-          orElse: () => MoneyDirection.spend,
-        ),
-        status: MoneyStatus.values.firstWhere(
-          (e) => e.name == json['status'],
-          orElse: () => MoneyStatus.projected,
-        ),
-        period: json['period'] == null
-            ? null
-            : TimeScale.values.firstWhere(
-                (e) => e.name == json['period'],
-                orElse: () => TimeScale.monthly,
-              ),
-        customPeriodDays: (json['customPeriodDays'] as num?)?.toInt(),
-        isRecurring: json['isRecurring'] as bool? ?? false,
-        autoRollover: json['autoRollover'] as bool? ?? false,
-        rolloverAmount: (json['rolloverAmount'] as num?)?.toDouble() ?? 0.0,
-        isFixed: json['isFixed'] as bool? ?? false,
-        linkedTransactionIds: _stringList(json['linkedTransactionIds']),
-      );
+    targetAmount: (json['targetAmount'] as num?)?.toDouble() ?? 0.0,
+    actualAmount: (json['actualAmount'] as num?)?.toDouble(),
+    direction: MoneyDirection.values.firstWhere(
+      (e) => e.name == json['direction'],
+      orElse: () => MoneyDirection.spend,
+    ),
+    status: MoneyStatus.values.firstWhere(
+      (e) => e.name == json['status'],
+      orElse: () => MoneyStatus.projected,
+    ),
+    period: json['period'] == null
+        ? null
+        : TimeScale.values.firstWhere(
+            (e) => e.name == json['period'],
+            orElse: () => TimeScale.monthly,
+          ),
+    customPeriodDays: (json['customPeriodDays'] as num?)?.toInt(),
+    isRecurring: json['isRecurring'] as bool? ?? false,
+    autoRollover: json['autoRollover'] as bool? ?? false,
+    rolloverAmount: (json['rolloverAmount'] as num?)?.toDouble() ?? 0.0,
+    isFixed: json['isFixed'] as bool? ?? false,
+    linkedTransactionIds: _stringList(json['linkedTransactionIds']),
+  );
 
   Map<String, dynamic> toJson() => {
-        'targetAmount': targetAmount,
-        'actualAmount': actualAmount,
-        'direction': direction.name,
-        'status': status.name,
-        'period': period?.name,
-        'customPeriodDays': customPeriodDays,
-        'isRecurring': isRecurring,
-        'autoRollover': autoRollover,
-        'rolloverAmount': rolloverAmount,
-        'isFixed': isFixed,
-        'linkedTransactionIds': linkedTransactionIds,
-      };
+    'targetAmount': targetAmount,
+    'actualAmount': actualAmount,
+    'direction': direction.name,
+    'status': status.name,
+    'period': period?.name,
+    'customPeriodDays': customPeriodDays,
+    'isRecurring': isRecurring,
+    'autoRollover': autoRollover,
+    'rolloverAmount': rolloverAmount,
+    'isFixed': isFixed,
+    'linkedTransactionIds': linkedTransactionIds,
+  };
 
   @override
   List<Object?> get props => [
-        targetAmount,
-        actualAmount,
-        direction,
-        status,
-        period,
-        customPeriodDays,
-        isRecurring,
-        autoRollover,
-        rolloverAmount,
-        isFixed,
-        linkedTransactionIds,
-      ];
+    targetAmount,
+    actualAmount,
+    direction,
+    status,
+    period,
+    customPeriodDays,
+    isRecurring,
+    autoRollover,
+    rolloverAmount,
+    isFixed,
+    linkedTransactionIds,
+  ];
 }
 
 /// Time-target facet. Replaces `GoalType.time` + `targetMinutes`.
@@ -252,17 +249,19 @@ class EffortFacet extends Equatable {
   const EffortFacet({required this.targetMinutes, this.isFixed = false});
 
   EffortFacet copyWith({int? targetMinutes, bool? isFixed}) => EffortFacet(
-        targetMinutes: targetMinutes ?? this.targetMinutes,
-        isFixed: isFixed ?? this.isFixed,
-      );
+    targetMinutes: targetMinutes ?? this.targetMinutes,
+    isFixed: isFixed ?? this.isFixed,
+  );
 
   factory EffortFacet.fromJson(Map<String, dynamic> json) => EffortFacet(
-        targetMinutes: (json['targetMinutes'] as num?)?.toInt() ?? 0,
-        isFixed: json['isFixed'] as bool? ?? false,
-      );
+    targetMinutes: (json['targetMinutes'] as num?)?.toInt() ?? 0,
+    isFixed: json['isFixed'] as bool? ?? false,
+  );
 
-  Map<String, dynamic> toJson() =>
-      {'targetMinutes': targetMinutes, 'isFixed': isFixed};
+  Map<String, dynamic> toJson() => {
+    'targetMinutes': targetMinutes,
+    'isFixed': isFixed,
+  };
 
   @override
   List<Object?> get props => [targetMinutes, isFixed];
@@ -309,29 +308,30 @@ class AnkiFacet extends Equatable {
     DateTime? lastSyncedAt,
     bool clearLastSyncedAt = false,
     bool? isFixed,
-  }) =>
-      AnkiFacet(
-        deckName: clearDeck ? null : (deckName ?? this.deckName),
-        targetReviews: targetReviews ?? this.targetReviews,
-        period: clearPeriod ? null : (period ?? this.period),
-        customPeriodDays: clearCustomPeriod
-            ? null
-            : (customPeriodDays ?? this.customPeriodDays),
-        reviewsActual: clearReviewsActual
-            ? null
-            : (reviewsActual ?? this.reviewsActual),
-        lastSyncedAt: clearLastSyncedAt
-            ? null
-            : (lastSyncedAt ?? this.lastSyncedAt),
-        isFixed: isFixed ?? this.isFixed,
-      );
+  }) => AnkiFacet(
+    deckName: clearDeck ? null : (deckName ?? this.deckName),
+    targetReviews: targetReviews ?? this.targetReviews,
+    period: clearPeriod ? null : (period ?? this.period),
+    customPeriodDays: clearCustomPeriod
+        ? null
+        : (customPeriodDays ?? this.customPeriodDays),
+    reviewsActual: clearReviewsActual
+        ? null
+        : (reviewsActual ?? this.reviewsActual),
+    lastSyncedAt: clearLastSyncedAt
+        ? null
+        : (lastSyncedAt ?? this.lastSyncedAt),
+    isFixed: isFixed ?? this.isFixed,
+  );
 
   factory AnkiFacet.fromJson(Map<String, dynamic> json) {
     final rawDeck = json['deckName'] as String?;
     return AnkiFacet(
       deckName: rawDeck == null || rawDeck.trim().isEmpty ? null : rawDeck,
-      targetReviews:
-          ((json['targetReviews'] as num?)?.toInt() ?? 0).clamp(0, 1000000000),
+      targetReviews: ((json['targetReviews'] as num?)?.toInt() ?? 0).clamp(
+        0,
+        1000000000,
+      ),
       period: json['period'] == null
           ? null
           : TimeScale.values.firstWhere(
@@ -341,33 +341,35 @@ class AnkiFacet extends Equatable {
       customPeriodDays: (json['customPeriodDays'] as num?)?.toInt(),
       reviewsActual: json['reviewsActual'] == null
           ? null
-          : ((json['reviewsActual'] as num?)?.toInt() ?? 0)
-              .clamp(0, 1000000000),
+          : ((json['reviewsActual'] as num?)?.toInt() ?? 0).clamp(
+              0,
+              1000000000,
+            ),
       lastSyncedAt: _tryDate(json['lastSyncedAt']),
       isFixed: json['isFixed'] as bool? ?? false,
     );
   }
 
   Map<String, dynamic> toJson() => {
-        'deckName': deckName,
-        'targetReviews': targetReviews,
-        'period': period?.name,
-        'customPeriodDays': customPeriodDays,
-        'reviewsActual': reviewsActual,
-        'lastSyncedAt': lastSyncedAt?.toIso8601String(),
-        'isFixed': isFixed,
-      };
+    'deckName': deckName,
+    'targetReviews': targetReviews,
+    'period': period?.name,
+    'customPeriodDays': customPeriodDays,
+    'reviewsActual': reviewsActual,
+    'lastSyncedAt': lastSyncedAt?.toIso8601String(),
+    'isFixed': isFixed,
+  };
 
   @override
   List<Object?> get props => [
-        deckName,
-        targetReviews,
-        period,
-        customPeriodDays,
-        reviewsActual,
-        lastSyncedAt,
-        isFixed,
-      ];
+    deckName,
+    targetReviews,
+    period,
+    customPeriodDays,
+    reviewsActual,
+    lastSyncedAt,
+    isFixed,
+  ];
 }
 
 /// Derived-goal definition. Evaluated by query at read time — no stored
@@ -391,27 +393,26 @@ class RuleFacet extends Equatable {
     NodeRuleKind? kind,
     int? horizonDays,
     double? minBalance,
-  }) =>
-      RuleFacet(
-        kind: kind ?? this.kind,
-        horizonDays: horizonDays ?? this.horizonDays,
-        minBalance: minBalance ?? this.minBalance,
-      );
+  }) => RuleFacet(
+    kind: kind ?? this.kind,
+    horizonDays: horizonDays ?? this.horizonDays,
+    minBalance: minBalance ?? this.minBalance,
+  );
 
   factory RuleFacet.fromJson(Map<String, dynamic> json) => RuleFacet(
-        kind: NodeRuleKind.values.firstWhere(
-          (e) => e.name == json['kind'],
-          orElse: () => NodeRuleKind.none,
-        ),
-        horizonDays: (json['horizonDays'] as num?)?.toInt() ?? 3,
-        minBalance: (json['minBalance'] as num?)?.toDouble() ?? 0.0,
-      );
+    kind: NodeRuleKind.values.firstWhere(
+      (e) => e.name == json['kind'],
+      orElse: () => NodeRuleKind.none,
+    ),
+    horizonDays: (json['horizonDays'] as num?)?.toInt() ?? 3,
+    minBalance: (json['minBalance'] as num?)?.toDouble() ?? 0.0,
+  );
 
   Map<String, dynamic> toJson() => {
-        'kind': kind.name,
-        'horizonDays': horizonDays,
-        'minBalance': minBalance,
-      };
+    'kind': kind.name,
+    'horizonDays': horizonDays,
+    'minBalance': minBalance,
+  };
 
   @override
   List<Object?> get props => [kind, horizonDays, minBalance];
@@ -497,6 +498,13 @@ class Node extends Equatable {
   final String? classLabel;
 
   // Time reporting, mirroring Task actuals.
+  //
+  // [sessions] keeps every completed run of the timer. The legacy
+  // [actualStart]/[actualEnd] pair remains the aggregate span (earliest
+  // start, latest end) so readers written before sessions existed keep
+  // working. Payloads from before this field simply have no `sessions`
+  // key and are lifted on read by [recordedSessions].
+  final List<TimeSession> sessions;
   final DateTime? actualStart;
   final DateTime? actualEnd;
   final DateTime? timerStartedAt;
@@ -536,6 +544,7 @@ class Node extends Equatable {
     this.feedId,
     this.classId,
     this.classLabel,
+    this.sessions = const [],
     this.actualStart,
     this.actualEnd,
     this.timerStartedAt,
@@ -549,7 +558,16 @@ class Node extends Equatable {
   bool get isDone => status == NodeStatus.done;
   bool get isOpen => status == NodeStatus.open;
   bool get isTracking => timerStartedAt != null;
-  bool get hasReported => actualStart != null && actualEnd != null;
+
+  /// Every recorded run, oldest first. Falls back to the legacy
+  /// single interval when a payload predates [sessions].
+  List<TimeSession> get recordedSessions {
+    if (sessions.isNotEmpty) return sessions;
+    final legacy = TimeSession.legacySession(actualStart, actualEnd);
+    return legacy == null ? const [] : [legacy];
+  }
+
+  bool get hasReported => recordedSessions.isNotEmpty;
 
   /// Imported homework marker: provenance-based, never tag-based.
   bool get isHomework =>
@@ -562,12 +580,9 @@ class Node extends Equatable {
   bool get hasEffort => effort != null;
   bool get hasAnki => anki != null;
 
-  Duration? get reportedDuration {
-    final s = actualStart;
-    final e = actualEnd;
-    if (s == null || e == null || !e.isAfter(s)) return null;
-    return e.difference(s);
-  }
+  /// Total time across every recorded session — not the aggregate span,
+  /// which would count the gaps between sessions as work.
+  Duration? get reportedDuration => totalSessionDuration(recordedSessions);
 
   /// The plan next to the occurrence, in one object.
   ///
@@ -579,11 +594,11 @@ class Node extends Equatable {
   /// non-nullable on [PlannerEvent]); this is the one that can be
   /// compared directly.
   PlannedActual get plannedActual => PlannedActual(
-        plannedStart: schedule?.start,
-        plannedEnd: schedule?.end,
-        actualStart: actualStart,
-        actualEnd: actualEnd,
-      );
+    plannedStart: schedule?.start,
+    plannedEnd: schedule?.end,
+    actualStart: actualStart,
+    actualEnd: actualEnd,
+  );
 
   bool isOverdueAt(DateTime now) {
     final due = schedule?.due;
@@ -632,6 +647,7 @@ class Node extends Equatable {
     bool clearClassId = false,
     String? classLabel,
     bool clearClassLabel = false,
+    List<TimeSession>? sessions,
     DateTime? actualStart,
     bool clearActualStart = false,
     DateTime? actualEnd,
@@ -642,50 +658,47 @@ class Node extends Equatable {
     bool? isWorkout,
     FitnessFacet? fitness,
     bool clearFitness = false,
-  }) =>
-      Node(
-        id: id,
-        title: title ?? this.title,
-        notes: clearNotes ? null : (notes ?? this.notes),
-        parentIds: parentIds ?? this.parentIds,
-        status: status ?? this.status,
-        completedAt:
-            clearCompletedAt ? null : (completedAt ?? this.completedAt),
-        createdAt: createdAt ?? this.createdAt,
-        isUnbounded: isUnbounded ?? this.isUnbounded,
-        isTracked: isTracked ?? this.isTracked,
-        isFavorite: isFavorite ?? this.isFavorite,
-        schedule: clearSchedule ? null : (schedule ?? this.schedule),
-        money: clearMoney ? null : (money ?? this.money),
-        effort: clearEffort ? null : (effort ?? this.effort),
-        anki: clearAnki ? null : (anki ?? this.anki),
-        recurrence: clearRecurrence ? null : (recurrence ?? this.recurrence),
-        calendarLink: clearCalendarLink
-            ? null : (calendarLink ?? this.calendarLink),
-        rule: clearRule ? null : (rule ?? this.rule),
-        instanceOfId:
-            clearInstanceOf ? null : (instanceOfId ?? this.instanceOfId),
-        overriddenFields: overriddenFields ?? this.overriddenFields,
-        sourceEventId: clearSourceEvent
-            ? null
-            : (sourceEventId ?? this.sourceEventId),
-        calendarEventId: clearCalendarEvent
-            ? null
-            : (calendarEventId ?? this.calendarEventId),
-        feedId: clearFeed ? null : (feedId ?? this.feedId),
-        classId: clearClassId ? null : (classId ?? this.classId),
-        classLabel:
-            clearClassLabel ? null : (classLabel ?? this.classLabel),
-        actualStart:
-            clearActualStart ? null : (actualStart ?? this.actualStart),
-        actualEnd: clearActualEnd ? null : (actualEnd ?? this.actualEnd),
-        timerStartedAt: clearTimerStartedAt
-            ? null
-            : (timerStartedAt ?? this.timerStartedAt),
-        assignees: assignees ?? this.assignees,
-        isWorkout: isWorkout ?? this.isWorkout,
-        fitness: clearFitness ? null : (fitness ?? this.fitness),
-      );
+  }) => Node(
+    id: id,
+    title: title ?? this.title,
+    notes: clearNotes ? null : (notes ?? this.notes),
+    parentIds: parentIds ?? this.parentIds,
+    status: status ?? this.status,
+    completedAt: clearCompletedAt ? null : (completedAt ?? this.completedAt),
+    createdAt: createdAt ?? this.createdAt,
+    isUnbounded: isUnbounded ?? this.isUnbounded,
+    isTracked: isTracked ?? this.isTracked,
+    isFavorite: isFavorite ?? this.isFavorite,
+    schedule: clearSchedule ? null : (schedule ?? this.schedule),
+    money: clearMoney ? null : (money ?? this.money),
+    effort: clearEffort ? null : (effort ?? this.effort),
+    anki: clearAnki ? null : (anki ?? this.anki),
+    recurrence: clearRecurrence ? null : (recurrence ?? this.recurrence),
+    calendarLink: clearCalendarLink
+        ? null
+        : (calendarLink ?? this.calendarLink),
+    rule: clearRule ? null : (rule ?? this.rule),
+    instanceOfId: clearInstanceOf ? null : (instanceOfId ?? this.instanceOfId),
+    overriddenFields: overriddenFields ?? this.overriddenFields,
+    sourceEventId: clearSourceEvent
+        ? null
+        : (sourceEventId ?? this.sourceEventId),
+    calendarEventId: clearCalendarEvent
+        ? null
+        : (calendarEventId ?? this.calendarEventId),
+    feedId: clearFeed ? null : (feedId ?? this.feedId),
+    classId: clearClassId ? null : (classId ?? this.classId),
+    classLabel: clearClassLabel ? null : (classLabel ?? this.classLabel),
+    sessions: sessions ?? this.sessions,
+    actualStart: clearActualStart ? null : (actualStart ?? this.actualStart),
+    actualEnd: clearActualEnd ? null : (actualEnd ?? this.actualEnd),
+    timerStartedAt: clearTimerStartedAt
+        ? null
+        : (timerStartedAt ?? this.timerStartedAt),
+    assignees: assignees ?? this.assignees,
+    isWorkout: isWorkout ?? this.isWorkout,
+    fitness: clearFitness ? null : (fitness ?? this.fitness),
+  );
 
   /// Mark one field as owned by this node (stops inheriting it from the
   /// template). Permanent API, not a migration branch.
@@ -732,28 +745,45 @@ class Node extends Equatable {
       schedule: json['schedule'] is Map
           ? _facetOrNull(
               () => ScheduleFacet.fromJson(
-                  Map<String, dynamic>.from(json['schedule'] as Map)))
+                Map<String, dynamic>.from(json['schedule'] as Map),
+              ),
+            )
           : null,
       money: json['money'] is Map
-          ? _facetOrNull(() => MoneyFacet.fromJson(
-              Map<String, dynamic>.from(json['money'] as Map)))
+          ? _facetOrNull(
+              () => MoneyFacet.fromJson(
+                Map<String, dynamic>.from(json['money'] as Map),
+              ),
+            )
           : null,
       effort: json['effort'] is Map
-          ? _facetOrNull(() => EffortFacet.fromJson(
-              Map<String, dynamic>.from(json['effort'] as Map)))
+          ? _facetOrNull(
+              () => EffortFacet.fromJson(
+                Map<String, dynamic>.from(json['effort'] as Map),
+              ),
+            )
           : null,
       anki: json['anki'] is Map
-          ? _facetOrNull(() => AnkiFacet.fromJson(
-              Map<String, dynamic>.from(json['anki'] as Map)))
+          ? _facetOrNull(
+              () => AnkiFacet.fromJson(
+                Map<String, dynamic>.from(json['anki'] as Map),
+              ),
+            )
           : null,
       calendarLink: NodeCalendarLink.tryParse(json['calendarLink']),
       recurrence: json['recurrence'] is Map
-          ? _facetOrNull(() => NodeRecurrence.fromJson(
-              Map<String, dynamic>.from(json['recurrence'] as Map)))
+          ? _facetOrNull(
+              () => NodeRecurrence.fromJson(
+                Map<String, dynamic>.from(json['recurrence'] as Map),
+              ),
+            )
           : null,
       rule: json['rule'] is Map
-          ? _facetOrNull(() => RuleFacet.fromJson(
-              Map<String, dynamic>.from(json['rule'] as Map)))
+          ? _facetOrNull(
+              () => RuleFacet.fromJson(
+                Map<String, dynamic>.from(json['rule'] as Map),
+              ),
+            )
           : null,
       instanceOfId: json['instanceOfId'] as String?,
       overriddenFields: _stringSet(json['overriddenFields']),
@@ -762,6 +792,7 @@ class Node extends Equatable {
       feedId: json['feedId'] as String?,
       classId: json['classId'] as String?,
       classLabel: json['classLabel'] as String?,
+      sessions: TimeSession.listFromJson(json['sessions']),
       actualStart: _tryTimerDate(json['actualStart']),
       actualEnd: _tryTimerDate(json['actualEnd']),
       timerStartedAt: _tryTimerDate(json['timerStartedAt']),
@@ -769,80 +800,85 @@ class Node extends Equatable {
       // Missing (pre-workout payloads) reads as a plain non-workout node.
       isWorkout: json['isWorkout'] == true,
       fitness: json['fitness'] is Map
-          ? _facetOrNull(() => FitnessFacet.fromJson(
-              Map<String, dynamic>.from(json['fitness'] as Map)))
+          ? _facetOrNull(
+              () => FitnessFacet.fromJson(
+                Map<String, dynamic>.from(json['fitness'] as Map),
+              ),
+            )
           : null,
     );
   }
 
   Map<String, dynamic> toJson() => {
-        'version': storageVersion,
-        'id': id,
-        'title': title,
-        'notes': notes,
-        'parentIds': parentIds,
-        'status': status.name,
-        'completedAt': completedAt?.toIso8601String(),
-        'createdAt': createdAt.toIso8601String(),
-        'isUnbounded': isUnbounded,
-        'isTracked': isTracked,
-        'tracked': isTracked,
-        'isFavorite': isFavorite,
-        'schedule': schedule?.toJson(),
-        'money': money?.toJson(),
-        'effort': effort?.toJson(),
-        'anki': anki?.toJson(),
-        'recurrence': recurrence?.toJson(),
-        'calendarLink': calendarLink?.toJson(),
-        'rule': rule?.toJson(),
-        'instanceOfId': instanceOfId,
-        'overriddenFields': overriddenFields.toList(),
-        'sourceEventId': sourceEventId,
-        'calendarEventId': calendarEventId,
-        'feedId': feedId,
-        'classId': classId,
-        'classLabel': classLabel,
-        'actualStart': actualStart?.toUtc().toIso8601String(),
-        'actualEnd': actualEnd?.toUtc().toIso8601String(),
-        'timerStartedAt': timerStartedAt?.toUtc().toIso8601String(),
-        'assignees': assignees.map((a) => a.toJson()).toList(),
-        'isWorkout': isWorkout,
-        'fitness': fitness?.toJson(),
-      };
+    'version': storageVersion,
+    'id': id,
+    'title': title,
+    'notes': notes,
+    'parentIds': parentIds,
+    'status': status.name,
+    'completedAt': completedAt?.toIso8601String(),
+    'createdAt': createdAt.toIso8601String(),
+    'isUnbounded': isUnbounded,
+    'isTracked': isTracked,
+    'tracked': isTracked,
+    'isFavorite': isFavorite,
+    'schedule': schedule?.toJson(),
+    'money': money?.toJson(),
+    'effort': effort?.toJson(),
+    'anki': anki?.toJson(),
+    'recurrence': recurrence?.toJson(),
+    'calendarLink': calendarLink?.toJson(),
+    'rule': rule?.toJson(),
+    'instanceOfId': instanceOfId,
+    'overriddenFields': overriddenFields.toList(),
+    'sourceEventId': sourceEventId,
+    'calendarEventId': calendarEventId,
+    'feedId': feedId,
+    'classId': classId,
+    'classLabel': classLabel,
+    'sessions': sessions.map((s) => s.toJson()).toList(),
+    'actualStart': actualStart?.toUtc().toIso8601String(),
+    'actualEnd': actualEnd?.toUtc().toIso8601String(),
+    'timerStartedAt': timerStartedAt?.toUtc().toIso8601String(),
+    'assignees': assignees.map((a) => a.toJson()).toList(),
+    'isWorkout': isWorkout,
+    'fitness': fitness?.toJson(),
+  };
 
   @override
   List<Object?> get props => [
-        id,
-        title,
-        notes,
-        parentIds,
-        status,
-        completedAt,
-        createdAt,
-        isUnbounded,
-        isTracked,
-        isFavorite,
-        schedule,
-        money,
-        effort,
-        anki,
-        recurrence,
-        calendarLink,
-        rule,
-        instanceOfId,
-        overriddenFields,
-        sourceEventId,
-        calendarEventId,
-        feedId,
-        classId,
-        classLabel,
-        actualStart,
-        actualEnd,
-        timerStartedAt,
-        assignees,
-        isWorkout,
-        fitness,
-      ];
+    id,
+    title,
+    notes,
+    parentIds,
+    status,
+    completedAt,
+    createdAt,
+    isUnbounded,
+    isTracked,
+    isFavorite,
+    schedule,
+    money,
+    effort,
+    anki,
+    recurrence,
+    calendarLink,
+    rule,
+    instanceOfId,
+    overriddenFields,
+    sourceEventId,
+    calendarEventId,
+    feedId,
+    classId,
+    classLabel,
+    sessions,
+    actualStart,
+    actualEnd,
+    timerStartedAt,
+    assignees,
+    isWorkout,
+    fitness,
+  ];
 }
 
 DateTime? _tryDate(Object? raw) {
