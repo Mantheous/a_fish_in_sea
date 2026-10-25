@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import '../../common/time/local_date.dart';
 import 'ical_recurrence.dart';
 
 enum RepeatKind { none, daily, weekdays, weekly, biweekly, monthly, yearly }
@@ -43,7 +44,7 @@ class RepeatConfig extends Equatable {
       // can run before the picker returns — a null date must fall back
       // to a sane default, never crash.
       RepeatEndKind.until =>
-        '$base;UNTIL=${_formatUntil(until ?? start.add(const Duration(days: 30)))}',
+        '$base;UNTIL=${_formatUntil(until ?? shiftLocalDay(start, 30))}',
     };
   }
 

@@ -4,6 +4,7 @@ import 'package:a_fish_in_sea/finances/model/recurring_rule.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/goals/model/goal.dart';
@@ -721,6 +722,19 @@ void main() {
       final restored = Node.fromJson(legacy);
       expect(restored.timerStartedAt, t0);
       expect(restored.actualStart, t0);
+    });
+    test('wall-clock fields normalize a stored UTC instant to local', () {
+      final dueUtc = DateTime.utc(2026, 10, 25, 4);
+      final restored = Node.fromJson({
+        'id': 'a',
+        'title': 'a',
+        'schedule': {'due': dueUtc.toIso8601String()},
+      });
+      final due = restored.schedule!.due!;
+      expect(due.isUtc, isFalse);
+      expect(due, dueUtc.toLocal());
+      // The date the user sees is the local one, not the UTC calendar day.
+      expect(localDay(due), localDay(dueUtc));
     });
   });
 

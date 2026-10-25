@@ -1,4 +1,5 @@
 import '../model/node.dart';
+import '../../common/time/local_date.dart';
 import '../../planner/model/planner_event.dart';
 import '../../planner/model/feed.dart';
 import '../../planner/model/assignment_rule.dart';
@@ -52,9 +53,7 @@ List<Node> importFeedNodes(
       healedBase.add(n);
       continue;
     }
-    final isWindow =
-        event.allDay &&
-        event.end.difference(event.start) > const Duration(days: 1);
+    final isWindow = event.allDay && localDayDistance(event.start, event.end) > 1;
     if (!isWindow) {
       healedBase.add(n);
       continue;
@@ -64,6 +63,8 @@ List<Node> importFeedNodes(
       feedId: feed.id,
       title: n.title,
     );
+    // Legacy match: the old buggy writer used elapsed-time days, so keep
+    // that exact formula when deciding whether a stored due came from it.
     final oldBaseDue = shift == 0
         ? event.end
         : event.end.add(Duration(days: shift));
@@ -72,10 +73,8 @@ List<Node> importFeedNodes(
       continue;
     }
     final newBaseDue = shift == 0
-        ? event.end.subtract(const Duration(days: 1))
-        : event.end
-              .subtract(const Duration(days: 1))
-              .add(Duration(days: shift));
+        ? shiftByCalendarDays(event.end, -1)
+        : shiftByCalendarDays(shiftByCalendarDays(event.end, -1), shift);
     healed++;
     healedBase.add(
       n.copyWith(
@@ -105,10 +104,9 @@ List<Node> importFeedNodes(
     final isWindow =
         feed.kind == FeedKind.learningSuite &&
         event.allDay &&
-        event.end.difference(event.start) > const Duration(days: 1);
-    final baseDue = isWindow
-        ? event.end.subtract(const Duration(days: 1))
-        : event.start;
+        localDayDistance(event.start, event.end) > 1;
+    final baseDue =
+        isWindow ? shiftByCalendarDays(event.end, -1) : event.start;
     // Assignment rules shift the planned deadline (e.g. video quizzes
     // due 2 days early); the feed window stays in start/end as truth.
     final shift = assignmentOffsetFor(
@@ -126,7 +124,9 @@ List<Node> importFeedNodes(
         completedAt: event.completedAt,
         schedule: scheduleForEvent(
           event,
-          due: shift == 0 ? baseDue : baseDue.add(Duration(days: shift)),
+          due: shift == 0
+              ? baseDue
+              : shiftByCalendarDays(baseDue, shift),
         ),
         sourceEventId: event.id,
         feedId: feed.id,

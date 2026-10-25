@@ -95,7 +95,7 @@ class AssignmentRule extends Equatable {
     DateTime createdAt = DateTime.fromMillisecondsSinceEpoch(0);
     final rawCreated = json['createdAt'];
     if (rawCreated is String) {
-      createdAt = DateTime.tryParse(rawCreated) ?? createdAt;
+      createdAt = DateTime.tryParse(rawCreated)?.toLocal() ?? createdAt;
     }
     return AssignmentRule(
       id: id,

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
+import '../../common/time/local_date.dart';
 import '../../nodes/model/node.dart';
 import '../bloc/assignment_estimates_cubit.dart';
 import '../bloc/assignment_rules_cubit.dart';
@@ -47,11 +48,7 @@ String estimateLine(AssignmentEstimate estimate) {
   return 'Est ~$minutes, ${describeTimeOfDay(start)}';
 }
 
-bool isDueToday(DateTime due, DateTime now) {
-  final today = DateTime(now.year, now.month, now.day);
-  final day = DateTime(due.year, due.month, due.day);
-  return day == today;
-}
+bool isDueToday(DateTime due, DateTime now) => isSameLocalDay(due, now);
 
 /// Readable orange for "due today" cues in either brightness.
 Color dueTodayColor(ThemeData theme) => theme.brightness == Brightness.dark

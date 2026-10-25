@@ -128,7 +128,8 @@ class ImportBatch {
       id: (json['id'] as num?)?.toInt() ?? 0,
       source: json['source'] as String? ?? 'import',
       status: json['status'] as String? ?? 'pending',
-      createdAt: DateTime.tryParse(json['created_at'] as String? ?? ''),
+      createdAt:
+          DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal(),
       items: rawItems is List
           ? rawItems
               .whereType<Map>()

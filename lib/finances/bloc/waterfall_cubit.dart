@@ -3,6 +3,7 @@ import 'package:equatable/equatable.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:a_fish_in_sea/common/persistence/stable_storage_keys.dart';
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/finances/model/granularity.dart';
 import 'package:a_fish_in_sea/finances/model/ledger_entry.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
@@ -388,27 +389,28 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
   /// Same as the old [_computeTimeUntilLabel] but takes the already-truncated
   /// [todayDate] so per-row calls don't reallocate it O(rows) times.
   String _computeTimeUntilLabelForDay(DateTime date, DateTime todayDate) {
-    final targetDate = DateTime(date.year, date.month, date.day);
+    final targetDate = localDay(date);
+    final today = localDay(todayDate);
 
-    if (targetDate.isBefore(todayDate)) {
+    if (targetDate.isBefore(today)) {
       return 'Past';
     }
 
-    final difference = targetDate.difference(todayDate).inDays;
+    final difference = localDayDistance(today, targetDate);
 
     if (difference == 0) return 'Today';
     if (difference == 1) return '1 day';
 
     // Calculate months difference
-    int months = (targetDate.year - todayDate.year) * 12 +
-        (targetDate.month - todayDate.month);
-    if (targetDate.day < todayDate.day) months--;
+    int months = (targetDate.year - today.year) * 12 +
+        (targetDate.month - today.month);
+    if (targetDate.day < today.day) months--;
 
     // Calculate years difference
-    int years = targetDate.year - todayDate.year;
-    if (targetDate.month < todayDate.month ||
-        (targetDate.month == todayDate.month &&
-            targetDate.day < todayDate.day)) {
+    int years = targetDate.year - today.year;
+    if (targetDate.month < today.month ||
+        (targetDate.month == today.month &&
+            targetDate.day < today.day)) {
       years--;
     }
 
@@ -440,10 +442,10 @@ class WaterfallCubit extends HydratedCubit<WaterfallState> {
       final horizonRaw = json['projectionHorizon'];
       return WaterfallState(
         startingBalance: _asDouble(json['startingBalance'], 0.0),
-        projectionHorizon:
-            horizonRaw is String && DateTime.tryParse(horizonRaw) != null
-                ? DateTime.parse(horizonRaw)
-                : DateTime.now().add(const Duration(days: 365)),
+        projectionHorizon: horizonRaw is String &&
+                DateTime.tryParse(horizonRaw) != null
+            ? DateTime.parse(horizonRaw).toLocal()
+            : DateTime.now().add(const Duration(days: 365)),
         viewScale: json['viewScale'] != null
             ? TimeScale.values.firstWhere(
                 (e) => e.name == json['viewScale'],

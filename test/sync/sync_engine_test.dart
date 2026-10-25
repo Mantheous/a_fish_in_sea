@@ -446,7 +446,7 @@ void main() {
     expect(desktop.settings.state.dayEndHour, 22);
     expect(desktop.nodes.byId('weekly-plan-task')?.isDone, isTrue);
     expect(
-      desktop.nodes.byId('weekly-plan-task')?.completedAt,
+      desktop.nodes.byId('weekly-plan-task')?.completedAt?.toUtc(),
       DateTime.utc(2026, 10, 18, 14),
     );
   });

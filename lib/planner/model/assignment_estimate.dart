@@ -185,7 +185,7 @@ class AssignmentTypeEffort extends Equatable {
     DateTime updatedAt = DateTime.fromMillisecondsSinceEpoch(0);
     final rawUpdated = json['updatedAt'];
     if (rawUpdated is String) {
-      updatedAt = DateTime.tryParse(rawUpdated) ?? updatedAt;
+      updatedAt = DateTime.tryParse(rawUpdated)?.toLocal() ?? updatedAt;
     }
     final minutes = _clampedIntList(json['minutes'], max: _minutesPerDay * 2);
     final startMinutes =

@@ -1,3 +1,4 @@
+import '../../common/time/local_date.dart';
 import '../model/node.dart';
 
 /// Progress of a leaf node given its actuals. Clamped to [0, 1].
@@ -775,13 +776,13 @@ HomeworkAheadResult evaluateHomeworkAhead({
   required DateTime now,
   int horizonDays = 3,
 }) {
-  final today = DateTime(now.year, now.month, now.day);
-  final endExclusive = today.add(Duration(days: horizonDays + 1));
+  final today = localDay(now);
+  final endExclusive = shiftLocalDay(today, horizonDays + 1);
   final dueSoon = all.where((n) {
     if (!n.isHomework || n.isTemplate) return false;
     final due = n.schedule?.due;
     if (due == null) return false;
-    final day = DateTime(due.year, due.month, due.day);
+    final day = localDay(due);
     return !day.isBefore(today) && day.isBefore(endExclusive);
   }).toList()
     ..sort((a, b) => a.schedule!.due!.compareTo(b.schedule!.due!));

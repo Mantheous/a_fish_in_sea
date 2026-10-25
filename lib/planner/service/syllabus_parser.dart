@@ -1,3 +1,4 @@
+import '../../common/time/local_date.dart';
 import 'syllabus_draft.dart';
 
 /// Offline heuristic fallback for syllabus → tasks.
@@ -139,7 +140,7 @@ DateTime? _extractDate(String line, DateTime reference) {
 /// land in the future.
 DateTime _withInferredYear(int month, int day, DateTime reference) {
   var date = DateTime(reference.year, month, day);
-  if (date.isBefore(reference.subtract(const Duration(days: 90)))) {
+  if (date.isBefore(shiftLocalDay(reference, -90))) {
     date = DateTime(reference.year + 1, month, day);
   }
   return date;

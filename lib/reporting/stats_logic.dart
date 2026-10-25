@@ -26,6 +26,7 @@
 /// Pure functions only: no Flutter, no cubits, fully unit-testable.
 library;
 
+import '../../common/time/local_date.dart';
 import '../../nodes/model/node.dart';
 import '../../planner/model/assignment_estimate.dart';
 import '../../planner/model/assignment_rule.dart';
@@ -67,13 +68,15 @@ class StatsRange {
   bool contains(DateTime when) =>
       !when.isBefore(start) && when.isBefore(end);
 
-  int get days => end.difference(start).inDays;
+  /// Number of calendar days the range spans. Uses calendar-day distance,
+  /// not elapsed hours: a DST week is 167/169 hours but still 7 days.
+  int get days => localDayDistance(start, end);
 }
 
 /// Monday 00:00 of the week containing [when].
 DateTime weekStartOf(DateTime when) {
-  final day = DateTime(when.year, when.month, when.day);
-  return day.subtract(Duration(days: day.weekday - 1));
+  final day = localDay(when);
+  return shiftLocalDay(day, -(day.weekday - 1));
 }
 
 StatsRange statsRangeFor(
@@ -86,14 +89,14 @@ StatsRange statsRangeFor(
       final start = weekStartOf(at);
       return StatsRange(
         start: start,
-        end: start.add(const Duration(days: 7)),
+        end: shiftLocalDay(start, 7),
         preset: preset,
       );
     case StatsRangePreset.lastWeek:
-      final start = weekStartOf(at).subtract(const Duration(days: 7));
+      final start = shiftLocalDay(weekStartOf(at), -7);
       return StatsRange(
         start: start,
-        end: start.add(const Duration(days: 7)),
+        end: shiftLocalDay(start, 7),
         preset: preset,
       );
     case StatsRangePreset.thisMonth:
@@ -101,10 +104,10 @@ StatsRange statsRangeFor(
       final end = DateTime(at.year, at.month + 1);
       return StatsRange(start: start, end: end, preset: preset);
     case StatsRangePreset.last30:
-      final today = DateTime(at.year, at.month, at.day);
+      final today = localDay(at);
       return StatsRange(
-        start: today.subtract(const Duration(days: 29)),
-        end: today.add(const Duration(days: 1)),
+        start: shiftLocalDay(today, -29),
+        end: shiftLocalDay(today, 1),
         preset: preset,
       );
   }
@@ -405,7 +408,7 @@ class _Span {
   int get minutes => end.isAfter(start) ? end.difference(start).inMinutes : 0;
 }
 
-DateTime _startOfDay(DateTime day) => DateTime(day.year, day.month, day.day);
+DateTime _startOfDay(DateTime day) => localDay(day);
 
 int _overlap(DateTime aStart, DateTime aEnd, DateTime bStart, DateTime bEnd) {
   final start = aStart.isAfter(bStart) ? aStart : bStart;
@@ -415,10 +418,24 @@ int _overlap(DateTime aStart, DateTime aEnd, DateTime bStart, DateTime bEnd) {
 
 /// Clamp a span to the waking window of [day].
 ({DateTime start, DateTime end})? _clipToWaking(DateTime day, DateTime s, DateTime e) {
-  final windowStart =
-      _startOfDay(day).add(const Duration(minutes: statsWakingStartMinute));
-  final windowEnd =
-      _startOfDay(day).add(const Duration(minutes: statsWakingEndMinute));
+  final base = _startOfDay(day);
+  // Wall-clock hour/minute construction keeps the 07:00–24:00 window
+  // fixed on DST days; adding raw minutes to midnight would shift it by
+  // an hour twice a year.
+  final windowStart = DateTime(
+    base.year,
+    base.month,
+    base.day,
+    statsWakingStartMinute ~/ 60,
+    statsWakingStartMinute % 60,
+  );
+  final windowEnd = DateTime(
+    base.year,
+    base.month,
+    base.day,
+    statsWakingEndMinute ~/ 60,
+    statsWakingEndMinute % 60,
+  );
   final start = s.isAfter(windowStart) ? s : windowStart;
   final end = e.isBefore(windowEnd) ? e : windowEnd;
   if (!end.isAfter(start)) return null;
@@ -431,7 +448,10 @@ List<_Span> _splitByDay(_Span span) {
   final out = <_Span>[];
   var cursor = span.start;
   while (cursor.isBefore(span.end)) {
-    final dayEnd = _startOfDay(cursor).add(const Duration(days: 1));
+    // Calendar-day end: a 25-hour fall-back day used to recompute the same
+    // dayEnd after 24 hours and loop forever; a 23-hour spring day closed
+    // an hour early. shiftLocalDay always lands on the next midnight.
+    final dayEnd = shiftLocalDay(_startOfDay(cursor), 1);
     final pieceEnd = span.end.isBefore(dayEnd) ? span.end : dayEnd;
     out.add(_Span(
       start: cursor,

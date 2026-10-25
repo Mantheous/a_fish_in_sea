@@ -5,6 +5,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../../common/time/local_date.dart';
 import '../../common/undo/undo_bar.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/service/node_event_link.dart';
@@ -293,7 +294,7 @@ class DayPicker extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.chevron_left),
             onPressed: () =>
-                onChanged(day.subtract(const Duration(days: 1))),
+                onChanged(shiftLocalDay(day, -1)),
           ),
           Expanded(
             child: InkWell(
@@ -319,7 +320,7 @@ class DayPicker extends StatelessWidget {
             icon: const Icon(Icons.chevron_right),
             onPressed: isToday
                 ? null
-                : () => onChanged(day.add(const Duration(days: 1))),
+                : () => onChanged(shiftLocalDay(day, 1)),
           ),
         ],
       ),

@@ -1,6 +1,7 @@
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 
+import '../../common/time/local_date.dart';
 import '../model/node.dart';
 import 'auto_goal_format.dart';
 
@@ -17,7 +18,9 @@ class AutoGoalWindow {
 
   bool contains(DateTime at) => !at.isBefore(start) && at.isBefore(end);
 
-  int get days => end.difference(start).inDays;
+  /// Calendar days in the window. A DST week is 167/169 hours but still 7
+  /// days for daily-rate goals.
+  int get days => localDayDistance(start, end);
 
   /// Minutes of `[from, to)` inside this window, clipped at both ends.
   /// Returns 0 for inverted or empty spans.
@@ -31,7 +34,7 @@ class AutoGoalWindow {
 }
 
 /// Start of the local day containing [at].
-DateTime autoDay(DateTime at) => DateTime(at.year, at.month, at.day);
+DateTime autoDay(DateTime at) => localDay(at);
 
 /// The window containing [at] for [facet]. [anchor] is the goal's creation
 /// day, used by biweekly and custom periods so they do not jump when the
@@ -44,12 +47,12 @@ AutoGoalWindow autoGoalWindow(
   final day = autoDay(at);
   switch (facet.period) {
     case TimeScale.daily:
-      return AutoGoalWindow(start: day, end: day.add(const Duration(days: 1)));
+      return AutoGoalWindow(start: day, end: shiftLocalDay(day, 1));
     case TimeScale.weekly:
-      final start = day.subtract(Duration(days: day.weekday - 1));
+      final start = shiftLocalDay(day, -(day.weekday - 1));
       return AutoGoalWindow(
         start: start,
-        end: start.add(const Duration(days: 7)),
+        end: shiftLocalDay(start, 7),
       );
     case TimeScale.biweekly:
       return _anchoredWindow(day, anchor ?? day, 14);
@@ -77,12 +80,12 @@ AutoGoalWindow autoGoalWindow(
 
 AutoGoalWindow _anchoredWindow(DateTime day, DateTime anchor, int days) {
   final anchorDay = autoDay(anchor);
-  final diff = day.difference(anchorDay).inDays;
+  final diff = localDayDistance(anchorDay, day);
   final index = (diff / days).floor();
-  final start = anchorDay.add(Duration(days: index * days));
+  final start = shiftLocalDay(anchorDay, index * days);
   return AutoGoalWindow(
     start: start,
-    end: start.add(Duration(days: days)),
+    end: shiftLocalDay(start, days),
   );
 }
 
@@ -446,7 +449,7 @@ List<Node> _tasksDueInCheckWindow(
   final horizon = facet.horizonDays;
   final start = horizon != null && horizon > 0 ? autoDay(now) : window.start;
   final end = horizon != null && horizon > 0
-      ? autoDay(now).add(Duration(days: horizon + 1))
+      ? shiftLocalDay(autoDay(now), horizon + 1)
       : window.end;
   return [
     for (final node in pool)

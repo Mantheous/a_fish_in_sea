@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/finances/model/budget.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 
@@ -124,16 +125,16 @@ class Goal extends Equatable {
       tagIds: _tagIdsFromJson(json['tagIds']),
       startDate: startRaw == null
           ? DateTime.fromMillisecondsSinceEpoch(0)
-          : (DateTime.tryParse(startRaw) ??
+          : (DateTime.tryParse(startRaw)?.toLocal() ??
               DateTime.fromMillisecondsSinceEpoch(0)),
       deadline: deadlineRaw == null
           ? DateTime.fromMillisecondsSinceEpoch(0)
-          : (DateTime.tryParse(deadlineRaw) ??
+          : (DateTime.tryParse(deadlineRaw)?.toLocal() ??
               DateTime.fromMillisecondsSinceEpoch(0)),
       done: json['done'] as bool? ?? false,
       completedAt: json['completedAt'] == null
           ? null
-          : DateTime.tryParse(json['completedAt'] as String),
+          : DateTime.tryParse(json['completedAt'] as String)?.toLocal(),
       failed: json['failed'] as bool? ?? false,
       showInTasks: json['showInTasks'] as bool? ?? false,
       targetMinutes: (json['targetMinutes'] as num?)?.toInt(),
@@ -157,9 +158,8 @@ class Goal extends Equatable {
         type: GoalType.financial,
         tagIds: const [],
         startDate: budget.startDate,
-        deadline: budget.endDate ?? budget.startDate.add(
-          const Duration(days: 30),
-        ),
+        deadline: budget.endDate ??
+            shiftByCalendarDays(budget.startDate, 30),
         targetAmount: budget.goalAmount,
         period: budget.period,
         customPeriodDays: budget.customPeriodDays,
@@ -244,9 +244,10 @@ bool spanFitsParent({
 enum DeadlineBucket { all, shortTerm, longTerm, overdue }
 
 DeadlineBucket bucketFor(DateTime deadline, DateTime now) {
-  final today = DateTime(now.year, now.month, now.day);
-  if (deadline.isBefore(today)) return DeadlineBucket.overdue;
-  final daysOut = deadline.difference(today).inDays;
+  final today = localDay(now);
+  final deadlineDay = localDay(deadline);
+  if (deadlineDay.isBefore(today)) return DeadlineBucket.overdue;
+  final daysOut = localDayDistance(today, deadlineDay);
   if (daysOut <= 30) return DeadlineBucket.shortTerm;
   return DeadlineBucket.longTerm;
 }

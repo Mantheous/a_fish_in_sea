@@ -1,5 +1,6 @@
 import 'package:bloc/bloc.dart';
 
+import '../../common/time/local_date.dart';
 import '../../nodes/model/node.dart';
 import '../model/assignment_estimate.dart';
 import '../model/planner_event.dart';
@@ -112,9 +113,7 @@ PlannerEvent draftSeedFromNode(
   startMinute = snapMinuteOfDay(startMinute, snap);
   var start = _atMinuteOfDay(anchor, startMinute);
 
-  final isToday = start.year == ref.year &&
-      start.month == ref.month &&
-      start.day == ref.day;
+  final isToday = isSameLocalDay(start, ref);
   if (isToday && start.isBefore(ref)) {
     // Never seed an event in the past: keep the current slot so the block
     // is still visible in today's column. A block starting exactly now is
@@ -178,7 +177,7 @@ PlannerEvent draftSeedForFollowUp(
   final existing = node.schedule;
   if (existing != null && isSeedableBlock(existing)) {
     final duration = existing.end!.difference(existing.start!);
-    final start = existing.start!.add(const Duration(days: 1));
+    final start = shiftByCalendarDays(existing.start!, 1);
     if (!start.isBefore(ref)) {
       return PlannerEvent(
         id: calendarDraftEventId,
@@ -228,13 +227,22 @@ PlannerEvent _futureFollowUp(PlannerEvent seed, DateTime ref) {
     seed.start.hour,
     seed.start.minute,
   );
-  if (start.isBefore(ref)) start = start.add(const Duration(days: 1));
+  if (start.isBefore(ref)) start = shiftByCalendarDays(start, 1);
   return seed.copyWith(start: start, end: start.add(duration));
 }
 
-DateTime _atMinuteOfDay(DateTime day, int minute) =>
-    DateTime(day.year, day.month, day.day)
-        .add(Duration(minutes: minute.clamp(0, 24 * 60)));
+DateTime _atMinuteOfDay(DateTime day, int minute) {
+  final clamped = minute.clamp(0, 24 * 60);
+  // Constructor arithmetic keeps a 24:00 minute value at the next local
+  // midnight instead of adding 24 elapsed hours (wrong on DST days).
+  return DateTime(
+    day.year,
+    day.month,
+    day.day,
+    clamped ~/ 60,
+    clamped % 60,
+  );
+}
 
 class CalendarDraftCubit extends Cubit<PlannerEvent?> {
   CalendarDraftCubit() : super(null);

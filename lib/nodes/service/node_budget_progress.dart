@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
@@ -77,19 +78,19 @@ double _subtreeActual(
   DateTime? now,
 ) {
   final at = now ?? DateTime.now();
-  final today = DateTime(at.year, at.month, at.day);
+  final today = localDay(at);
   switch (period) {
     case TimeScale.daily:
-      return (today, today.add(const Duration(days: 1)));
+      return (today, shiftLocalDay(today, 1));
     case TimeScale.weekly:
-      final start = today.subtract(Duration(days: today.weekday - 1));
-      return (start, start.add(const Duration(days: 7)));
+      final start = shiftLocalDay(today, -(today.weekday - 1));
+      return (start, shiftLocalDay(start, 7));
     case TimeScale.biweekly:
-      final monday = today.subtract(Duration(days: today.weekday - 1));
+      final monday = shiftLocalDay(today, -(today.weekday - 1));
       final anchor = DateTime(1970, 1, 5);
-      final weeks = monday.difference(anchor).inDays ~/ 7;
-      final start = anchor.add(Duration(days: (weeks ~/ 2) * 14));
-      return (start, start.add(const Duration(days: 14)));
+      final weeks = localDayDistance(anchor, monday) ~/ 7;
+      final start = shiftLocalDay(anchor, (weeks ~/ 2) * 14);
+      return (start, shiftLocalDay(start, 14));
     case TimeScale.monthly:
       return (DateTime(at.year, at.month), DateTime(at.year, at.month + 1));
     case TimeScale.quarterly:
@@ -100,7 +101,7 @@ double _subtreeActual(
     case TimeScale.custom:
       final days = customDays;
       if (days == null || days < 1) return null;
-      final start = today.subtract(Duration(days: days - 1));
-      return (start, today.add(const Duration(days: 1)));
+      final start = shiftLocalDay(today, -(days - 1));
+      return (start, shiftLocalDay(today, 1));
   }
 }

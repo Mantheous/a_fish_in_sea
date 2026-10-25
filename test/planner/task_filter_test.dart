@@ -45,6 +45,13 @@ Node _node(
   );
 }
 
+Node _dueNode(String id, DateTime due) => Node(
+      id: id,
+      title: id,
+      createdAt: DateTime(2026, 10, 1),
+      schedule: ScheduleFacet(due: due),
+    );
+
 void main() {
   setUp(() {
     final storage = MockStorage();
@@ -100,6 +107,57 @@ void main() {
       expect(seven.matches(_node('d6', due: DateTime(2026, 10, 18, 9)), monday),
           isTrue);
       expect(seven.matches(_node('d7', due: DateTime(2026, 10, 19, 9)), monday),
+          isFalse);
+    });
+
+    test('DST transition days keep calendar windows intact', () {
+      final tomorrow =
+          TaskFilter(id: 't', name: 't', date: TaskFilterDate.tomorrow);
+      final seven = TaskFilter(id: 's', name: 's', date: TaskFilterDate.next7Days);
+      final week = TaskFilter(id: 'w', name: 'w', date: TaskFilterDate.thisWeek);
+
+      // US fall-back: Sunday Nov 1 2026 has 25 hours. `today + 24h` is
+      // still Nov 1 23:00, so the old code matched nothing as "tomorrow".
+      final fallBack = DateTime(2026, 11, 1, 12);
+      expect(
+          tomorrow.matches(_dueNode('mon', DateTime(2026, 11, 2, 0, 30)), fallBack),
+          isTrue);
+      expect(
+          tomorrow.matches(_dueNode('sun', DateTime(2026, 11, 1, 23, 59)), fallBack),
+          isFalse);
+      // Seven days from Nov 1 is Nov 8. A fixed 7*24h end was Nov 7
+      // 23:00, so a late-Nov-7 due fell outside the window.
+      expect(
+          seven.matches(_dueNode('last', DateTime(2026, 11, 7, 23, 59)), fallBack),
+          isTrue);
+      expect(
+          seven.matches(_dueNode('after', DateTime(2026, 11, 8, 0, 1)), fallBack),
+          isFalse);
+      // Sunday rolls "this week" to next Sunday, inclusive.
+      expect(
+          week.matches(_dueNode('sat', DateTime(2026, 11, 7, 23, 59)), fallBack),
+          isTrue);
+      expect(
+          week.matches(_dueNode('next', DateTime(2026, 11, 8, 23, 59)), fallBack),
+          isTrue);
+      expect(
+          week.matches(_dueNode('after', DateTime(2026, 11, 9, 0, 1)), fallBack),
+          isFalse);
+
+      // US spring-forward: Sunday Mar 8 2026 has 23 hours. The old
+      // 7*24h end was Mar 15 01:00, letting the next day leak in.
+      final spring = DateTime(2026, 3, 8, 12);
+      expect(
+          tomorrow.matches(_dueNode('mon', DateTime(2026, 3, 9, 0, 30)), spring),
+          isTrue);
+      expect(
+          tomorrow.matches(_dueNode('sun', DateTime(2026, 3, 8, 23, 59)), spring),
+          isFalse);
+      expect(
+          seven.matches(_dueNode('last', DateTime(2026, 3, 14, 23, 59)), spring),
+          isTrue);
+      expect(
+          seven.matches(_dueNode('after', DateTime(2026, 3, 15, 0, 30)), spring),
           isFalse);
     });
 
@@ -548,6 +606,34 @@ void main() {
           matching(const TaskFilter(
               id: 'w', name: 'w', date: TaskFilterDate.thisWeek)),
           cubit.dueThisWeekAt(sunday).map((n) => n.id).toSet());
+    });
+    test('DST transition days keep due windows on their calendar days', () {
+      // Fall-back Sunday Nov 1 2026: the day is 25 hours long.
+      final fallBack = DateTime(2026, 11, 1, 12);
+      final fall = cubitWith([
+        _dueNode('late-today', DateTime(2026, 11, 1, 23, 59)),
+        _dueNode('early-tomorrow', DateTime(2026, 11, 2, 0, 30)),
+        _dueNode('next-week', DateTime(2026, 11, 9, 9)),
+      ]);
+      addTearDown(fall.close);
+      expect(fall.dueTodayAt(fallBack).map((n) => n.id), ['late-today']);
+      expect(fall.overdueAndTodayAt(fallBack).map((n) => n.id), ['late-today']);
+      expect(fall.dueThisWeekAt(fallBack).map((n) => n.id),
+          containsAll(['late-today', 'early-tomorrow']));
+      expect(fall.dueThisWeekAt(fallBack).map((n) => n.id),
+          isNot(contains('next-week')));
+
+      // Spring-forward Sunday Mar 8 2026: the day is 23 hours long. The
+      // old +24h window ran to Mar 9 01:00 and swallowed early tomorrow.
+      final spring = DateTime(2026, 3, 8, 12);
+      final springCubit = cubitWith([
+        _dueNode('late-today', DateTime(2026, 3, 8, 23, 59)),
+        _dueNode('early-tomorrow', DateTime(2026, 3, 9, 0, 30)),
+      ]);
+      addTearDown(springCubit.close);
+      expect(springCubit.dueTodayAt(spring).map((n) => n.id), ['late-today']);
+      expect(
+          springCubit.overdueAndTodayAt(spring).map((n) => n.id), ['late-today']);
     });
   });
 

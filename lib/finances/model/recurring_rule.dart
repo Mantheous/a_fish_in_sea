@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/model/expense.dart';
 
@@ -110,7 +111,7 @@ class RecurringRule extends Equatable {
         final targetDay = dayOfWeek ?? date.weekday;
         var diff = targetDay - date.weekday;
         if (diff < 0) diff += 7;
-        return date.add(Duration(days: diff));
+        return shiftByCalendarDays(date, diff);
       default:
         return date;
     }
@@ -120,11 +121,11 @@ class RecurringRule extends Equatable {
   DateTime _nextOccurrence(DateTime current) {
     switch (frequency) {
       case TimeScale.daily:
-        return current.add(const Duration(days: 1));
+        return shiftByCalendarDays(current, 1);
       case TimeScale.weekly:
-        return current.add(const Duration(days: 7));
+        return shiftByCalendarDays(current, 7);
       case TimeScale.biweekly:
-        return current.add(const Duration(days: 14));
+        return shiftByCalendarDays(current, 14);
       case TimeScale.monthly:
         final day = dayOfMonth ?? current.day;
         return DateTime(current.year, current.month + 1, day.clamp(1, 28));
@@ -134,7 +135,7 @@ class RecurringRule extends Equatable {
         return DateTime(current.year + 1, current.month, current.day);
       case TimeScale.custom:
         final days = customPeriodDays ?? 30;
-        return current.add(Duration(days: days));
+        return shiftByCalendarDays(current, days);
     }
   }
 
@@ -148,9 +149,9 @@ class RecurringRule extends Equatable {
         orElse: () => TimeScale.monthly,
       ),
       customPeriodDays: json['customPeriodDays'] as int?,
-      startDate: DateTime.parse(json['startDate'] as String),
+      startDate: DateTime.parse(json['startDate'] as String).toLocal(),
       endDate: json['endDate'] != null
-          ? DateTime.parse(json['endDate'] as String)
+          ? DateTime.parse(json['endDate'] as String).toLocal()
           : null,
       category: json['category'] as String?,
       dayOfMonth: json['dayOfMonth'] as int?,

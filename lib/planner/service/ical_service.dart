@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:timezone/timezone.dart' as tz;
 
+import '../../common/time/local_date.dart';
 import '../model/feed.dart';
 import '../model/ical_recurrence.dart';
 import '../model/planner_event.dart';
@@ -124,7 +125,7 @@ class IcalService {
       } else if (duration != null) {
         resolvedEnd = resolvedStart.add(_durationFromIso(duration));
       } else if (allDay) {
-        resolvedEnd = resolvedStart.add(const Duration(days: 1));
+        resolvedEnd = shiftLocalDay(resolvedStart, 1);
       } else {
         resolvedEnd = resolvedStart;
       }

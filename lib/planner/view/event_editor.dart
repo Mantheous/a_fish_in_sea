@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
+import '../../common/time/local_date.dart';
 import '../../common/undo/undo_cubit.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
@@ -503,7 +504,7 @@ class EventEditorFormState extends State<EventEditorForm> {
             snap,
           );
     var end = _allDay
-        ? start.add(const Duration(days: 1))
+        ? shiftLocalDay(start, 1)
         : snapToInterval(
             DateTime(_date.year, _date.month, _date.day, _endTime.hour,
                 _endTime.minute),
@@ -977,7 +978,7 @@ class EventEditorFormState extends State<EventEditorForm> {
                   onPressed: () async {
                     final picked = await showDatePicker(
                       context: context,
-                      initialDate: _until ?? _date.add(const Duration(days: 30)),
+                      initialDate: _until ?? shiftLocalDay(_date, 30),
                       firstDate: _date,
                       lastDate: DateTime(2100),
                     );
@@ -1038,7 +1039,7 @@ class EventEditorFormState extends State<EventEditorForm> {
             snap,
           );
     var end = _allDay
-        ? start.add(const Duration(days: 1))
+        ? shiftLocalDay(start, 1)
         : snapToInterval(
             DateTime(_date.year, _date.month, _date.day, _endTime.hour,
                 _endTime.minute),
@@ -1681,7 +1682,7 @@ class EventEditorFormState extends State<EventEditorForm> {
   }
 
   DateTime _masterEnd(PlannerEvent master, DateTime seriesStart) {
-    if (_allDay) return seriesStart.add(const Duration(days: 1));
+    if (_allDay) return shiftLocalDay(seriesStart, 1);
     final candidate = DateTime(
       master.start.year,
       master.start.month,
@@ -2343,8 +2344,8 @@ class _DayConflictsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final dayStart = DateTime(day.year, day.month, day.day);
-    final dayEnd = dayStart.add(const Duration(days: 1));
+    final dayStart = localDay(day);
+    final dayEnd = shiftLocalDay(dayStart, 1);
     final selStart = DateTime(
         day.year, day.month, day.day, startTime.hour, startTime.minute);
     var selEnd = DateTime(

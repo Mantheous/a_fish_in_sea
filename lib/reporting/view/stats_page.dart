@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
+import '../../common/time/local_date.dart';
 import '../../common/undo/undo_bar.dart';
 import '../../navigation/view/app_drawer.dart';
 import '../../nodes/bloc/node_cubit.dart';
@@ -123,8 +124,7 @@ class _StatsBodyState extends State<_StatsBody> {
     // what was on the calendar.
     final sliceCache = <String, List<PlannedSlice>>{};
     final rangeDays = [
-      for (var i = 0; i < range.days; i++)
-        range.start.add(Duration(days: i)),
+      for (var i = 0; i < range.days; i++) shiftLocalDay(range.start, i),
     ];
     for (final day in rangeDays) {
       sliceCache.putIfAbsent(
@@ -313,7 +313,7 @@ final _rangeDateFormat = DateFormat('EEE, MMM d');
 final _longDateFormat = DateFormat('MMM d');
 
 String _rangeLabel(StatsRange range) {
-  final lastDay = range.end.subtract(const Duration(days: 1));
+  final lastDay = shiftLocalDay(range.end, -1);
   if (range.days <= 7) {
     return '${_rangeDateFormat.format(range.start)} – ${_rangeDateFormat.format(lastDay)}';
   }
