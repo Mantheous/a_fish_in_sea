@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:equatable/equatable.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 
+import '../../common/persistence/stable_storage_keys.dart';
 import '../model/tracked_point.dart';
 import '../reporting_logic.dart';
 
@@ -41,6 +42,9 @@ class TrackingCubit extends HydratedCubit<TrackingState> {
   static const int retentionDays = 30;
 
   TrackingCubit() : super(const TrackingState());
+
+  @override
+  String get storagePrefix => StableStorageKeys.tracking;
 
   // Day-bucketed view of [state.points]: one O(p) pass, then O(1) per day.
   // Stats builds 7 days per frame; without this it pays 7 full scans.

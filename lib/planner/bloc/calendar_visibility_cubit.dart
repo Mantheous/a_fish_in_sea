@@ -4,6 +4,7 @@ import 'package:hydrated_bloc/hydrated_bloc.dart';
 import '../model/calendar_source.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
+import '../../common/persistence/stable_storage_keys.dart';
 
 /// Tri-state for a group checkbox.
 enum CalendarGroupVisibility { all, none, some }
@@ -37,6 +38,9 @@ class CalendarVisibilityState extends Equatable {
 /// to visible; unknown ids are kept so prefs survive feed deletes/re-adds.
 class CalendarVisibilityCubit extends HydratedCubit<CalendarVisibilityState> {
   CalendarVisibilityCubit() : super(const CalendarVisibilityState());
+
+  @override
+  String get storagePrefix => StableStorageKeys.calendarVisibility;
 
   bool isLeafVisible(String leafId, String groupId) =>
       !state.hiddenIds.contains(leafId) &&

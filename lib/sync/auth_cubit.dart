@@ -1,6 +1,7 @@
 import 'package:equatable/equatable.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 
+import '../common/persistence/stable_storage_keys.dart';
 import 'sync_client.dart';
 
 enum AuthStatus { signedOut, working, signedIn }
@@ -72,6 +73,9 @@ class AuthCubit extends HydratedCubit<AuthState> {
   AuthCubit({required SyncClient Function() client})
       : _client = client,
         super(const AuthState());
+
+  @override
+  String get storagePrefix => StableStorageKeys.auth;
 
   Future<bool> register(String email, String password) =>
       _tokenCall(() => _client().register(email.trim(), password),

@@ -1,8 +1,12 @@
+import '../../common/persistence/stable_storage_keys.dart';
 import '../../common/undo/revertable_hydrated_cubit.dart';
 import '../model/place.dart';
 
 class PlacesCubit extends RevertableHydratedCubit<List<Place>> {
   PlacesCubit() : super(const []);
+
+  @override
+  String get storagePrefix => StableStorageKeys.places;
 
   void addPlace(Place place) => emitChange([...state, place]);
 

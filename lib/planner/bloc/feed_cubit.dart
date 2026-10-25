@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../common/persistence/stable_storage_keys.dart';
 import '../../common/undo/change_record.dart';
 import '../../common/undo/revertable_hydrated_cubit.dart';
 import '../../common/undo/undo_cubit.dart';
@@ -86,6 +87,9 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
         _proxyBase = proxyBase,
         _canvasService = canvasService,
         super(const []);
+
+  @override
+  String get storagePrefix => StableStorageKeys.feed;
 
   @override
   Future<void> close() {

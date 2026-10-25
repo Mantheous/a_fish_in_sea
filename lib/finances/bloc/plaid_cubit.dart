@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:equatable/equatable.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
+import 'package:a_fish_in_sea/common/persistence/stable_storage_keys.dart';
 import 'package:a_fish_in_sea/demo/demo_data.dart';
 import 'package:a_fish_in_sea/demo/demo_mode.dart';
 import 'package:a_fish_in_sea/finances/service/plaid_link_handler.dart';
@@ -71,6 +72,9 @@ class PlaidCubit extends HydratedCubit<PlaidState> {
         super(PlaidState(userId: userId ?? PlaidUserId.generate())) {
     _service = _serviceOverride ?? PlaidService(userId: state.userId);
   }
+
+  @override
+  String get storagePrefix => StableStorageKeys.plaid;
 
   final PlaidService? _serviceOverride;
   late PlaidService _service;

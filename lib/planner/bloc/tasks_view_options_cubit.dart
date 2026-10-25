@@ -3,6 +3,7 @@ import 'package:hydrated_bloc/hydrated_bloc.dart';
 
 import '../model/task_filter.dart';
 import '../model/task_rule.dart';
+import '../../common/persistence/stable_storage_keys.dart';
 
 class TasksViewOptionsState extends Equatable {
   /// Saved views. The first three are the legacy All/Today/Overdue
@@ -128,6 +129,9 @@ class TasksViewOptionsState extends Equatable {
 /// corrupt payload never wipes the other prefs.
 class TasksViewOptionsCubit extends HydratedCubit<TasksViewOptionsState> {
   TasksViewOptionsCubit() : super(const TasksViewOptionsState());
+
+  @override
+  String get storagePrefix => StableStorageKeys.tasksViewOptions;
 
   void setActiveFilter(String id) {
     if (id == state.activeFilterId) return;

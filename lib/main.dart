@@ -1,3 +1,5 @@
+import 'package:a_fish_in_sea/common/persistence/legacy_minified_keys.dart';
+import 'package:a_fish_in_sea/common/persistence/migration.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
@@ -34,19 +36,45 @@ import 'package:a_fish_in_sea/sync/view/auth/auth_gate.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:hive/hive.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:timezone/data/latest_all.dart' as tzdata;
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   tzdata.initializeTimeZones();
-  HydratedBloc.storage = await HydratedStorage.build(
-    storageDirectory: kIsWeb
-        ? HydratedStorage.webStorageDirectory
-        : await getApplicationDocumentsDirectory(),
-  );
+  await _initPersistentStorage();
   runApp(const MyApp());
+}
+
+/// Opens the hydrated box once. On web we own the Hive box so the one-time
+/// recovery of pre-minified-key payloads can share it with [HydratedStorage]
+/// (a second handle would keep its own in-memory cache and miss the writes).
+Future<void> _initPersistentStorage() async {
+  if (kIsWeb) {
+    final box = await Hive.openBox<dynamic>('hydrated_box');
+    // Payloads written by release builds before the stable keys landed sit
+    // under `minified:<compiler name>`; a deploy renames those classes and
+    // orphaned the Tasks views/rules, calendar visibility, and session.
+    if (Migration.removeAfter('2026-10-27')) {
+      try {
+        final recovered = await migrateLegacyHydratedKeys(box);
+        if (recovered.isNotEmpty) {
+          debugPrint('[persistence] recovered legacy prefs: $recovered');
+        }
+      } catch (error) {
+        // Recovery is best-effort: a damaged box must never block boot.
+        debugPrint('[persistence] legacy prefs recovery skipped: $error');
+      }
+    }
+    // ignore: invalid_use_of_visible_for_testing_member
+    HydratedBloc.storage = HydratedStorage(box);
+    return;
+  }
+  HydratedBloc.storage = await HydratedStorage.build(
+    storageDirectory: await getApplicationDocumentsDirectory(),
+  );
 }
 
 class MyApp extends StatelessWidget {
