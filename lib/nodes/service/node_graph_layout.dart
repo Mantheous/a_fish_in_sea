@@ -10,6 +10,11 @@ class NodeGraphStyle {
   final double nodeWidth;
   final double nodeHeight;
 
+  /// Compact card size. Filtered-out ancestors use these so the relation
+  /// stays visible without reading as a matching goal.
+  final double compactWidth;
+  final double compactHeight;
+
   /// Gap between sibling subtrees.
   final double horizontalGap;
 
@@ -25,6 +30,8 @@ class NodeGraphStyle {
   const NodeGraphStyle({
     this.nodeWidth = 176,
     this.nodeHeight = 62,
+    this.compactWidth = 112,
+    this.compactHeight = 30,
     this.horizontalGap = 26,
     this.verticalGap = 78,
     this.rootGap = 72,
@@ -56,6 +63,9 @@ class GraphNodePlacement {
   /// True when this node hides its children.
   final bool collapsed;
 
+  /// True for a filtered-out ancestor kept as a compact path marker.
+  final bool compact;
+
   const GraphNodePlacement({
     required this.node,
     required this.rect,
@@ -64,6 +74,7 @@ class GraphNodePlacement {
     required this.childCount,
     required this.hiddenDescendants,
     required this.collapsed,
+    this.compact = false,
   });
 
   bool get hasChildren => childCount > 0;
@@ -82,12 +93,17 @@ class GraphEdge {
   /// edge), false for extra DAG parents of a shared node.
   final bool primary;
 
+  /// True when either endpoint is a compact filtered-out context node.
+  /// The painter draws these lighter so the matched goals stand out.
+  final bool faint;
+
   const GraphEdge({
     required this.parentId,
     required this.childId,
     required this.start,
     required this.end,
     required this.primary,
+    this.faint = false,
   });
 }
 
@@ -119,15 +135,21 @@ class NodeGraphLayout {
 ///
 /// Collapse: ids in [collapsedIds] hide their whole subtree; those nodes
 /// still render with a badge ([GraphNodePlacement.hiddenDescendants]) so the
-/// hidden part is discoverable. When [visibleIds] is non-null (search), the
-/// graph shows that filtered set and collapse is ignored, so a search never
-/// hides its matches.
+/// hidden part is discoverable. When [visibleIds] is non-null (search or a
+/// filter), the graph shows that restricted set and collapse is ignored, so
+/// a restriction never hides its matches.
+///
+/// Filter context: ids in [compactIds] render as compact path markers
+/// instead of full cards. Callers pass the filtered-out ancestors of the
+/// matches here, so a deep match still shows *what it hangs from* without
+/// pretending every ancestor matched.
 ///
 /// Pure and deterministic: no clock, no ids minted. Cycle-safe.
 NodeGraphLayout layoutNodeGraph({
   required List<Node> nodes,
   Set<String> collapsedIds = const <String>{},
   Set<String>? visibleIds,
+  Set<String> compactIds = const <String>{},
   NodeGraphStyle style = const NodeGraphStyle(),
 }) {
   if (nodes.isEmpty) return NodeGraphLayout.empty;
@@ -141,6 +163,10 @@ NodeGraphLayout layoutNodeGraph({
   final order = {
     for (var i = 0; i < allowedNodes.length; i++) allowedNodes[i].id: i,
   };
+
+  double widthOf(String id) =>
+      compactIds.contains(id) ? style.compactWidth : style.nodeWidth;
+  bool isCompact(String id) => compactIds.contains(id);
 
   // Children within the allowed set, sorted the way lists sort goals
   // (due date, then creation) so the same data always lays out the same.
@@ -217,14 +243,15 @@ NodeGraphLayout layoutNodeGraph({
     final cached = widths[id];
     if (cached != null) return cached;
     final kids = placementChildren[id] ?? const <String>[];
-    var width = style.nodeWidth;
+    final ownWidth = widthOf(id);
+    var width = ownWidth;
     if (kids.isNotEmpty) {
       var span = 0.0;
       for (var i = 0; i < kids.length; i++) {
         if (i > 0) span += style.horizontalGap;
         span += subtreeWidth(kids[i]);
       }
-      width = math.max(style.nodeWidth, span);
+      width = math.max(ownWidth, span);
     }
     widths[id] = width;
     return width;
@@ -245,10 +272,11 @@ NodeGraphLayout layoutNodeGraph({
 
   void position(String id, double left, int depth) {
     final width = subtreeWidth(id);
+    final ownWidth = widthOf(id);
     final kids = placementChildren[id] ?? const <String>[];
     double x;
     if (kids.isEmpty) {
-      x = left + (width - style.nodeWidth) / 2;
+      x = left + (width - ownWidth) / 2;
     } else {
       final span = childrenSpan(kids);
       var cursor = left + (width - span) / 2;
@@ -260,13 +288,18 @@ NodeGraphLayout layoutNodeGraph({
       // own subtree box.
       final center =
           (rects[kids.first]!.center.dx + rects[kids.last]!.center.dx) / 2;
-      x = (center - style.nodeWidth / 2).clamp(
+      x = (center - ownWidth / 2).clamp(
         left,
-        left + width - style.nodeWidth,
+        left + width - ownWidth,
       );
     }
-    final top = style.padding + depth * (style.nodeHeight + style.verticalGap);
-    final rect = Rect.fromLTWH(x, top, style.nodeWidth, style.nodeHeight);
+    final rowTop =
+        style.padding + depth * (style.nodeHeight + style.verticalGap);
+    final height = isCompact(id) ? style.compactHeight : style.nodeHeight;
+    // Compact markers sit on the same row, vertically centered so the
+    // connector still flows parent -> marker -> child.
+    final top = rowTop + (style.nodeHeight - height) / 2;
+    final rect = Rect.fromLTWH(x, top, ownWidth, height);
     rects[id] = rect;
     depths[id] = depth;
     if (rect.bottom > maxBottom) maxBottom = rect.bottom;
@@ -297,6 +330,7 @@ NodeGraphLayout layoutNodeGraph({
         childCount: directKids.length,
         hiddenDescendants: collapsed ? _descendantCount(id, children) : 0,
         collapsed: collapsed,
+        compact: isCompact(id),
       ),
     );
   }
@@ -313,10 +347,14 @@ NodeGraphLayout layoutNodeGraph({
           );
     final n = kidIds.length;
     // Fan the parent-side endpoints across the card's bottom edge so many
-    // children do not leave from the exact same pixel.
+    // children do not leave from the exact same pixel. Compact markers are
+    // narrow, so the step is clamped to zero rather than going negative.
     final step = n <= 1
         ? 0.0
-        : math.min(18.0, (parentRect.width - 40) / (n - 1));
+        : math.max(
+            0.0,
+            math.min(18.0, (parentRect.width - 40) / (n - 1)),
+          );
     final claimed = placementChildren[p.node.id] ?? const <String>[];
     for (var i = 0; i < n; i++) {
       final kid = kidIds[i];
@@ -331,6 +369,7 @@ NodeGraphLayout layoutNodeGraph({
           start: Offset(startX, parentRect.bottom),
           end: Offset(kidRect.center.dx, kidRect.top),
           primary: claimed.contains(kid.id),
+          faint: p.compact || isCompact(kid.id),
         ),
       );
     }

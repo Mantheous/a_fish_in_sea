@@ -60,6 +60,9 @@ void main() {
     );
     await tester.pump();
 
+    await tester.tap(find.text('Goal tree'));
+    await tester.pump();
+
     expect(tester.takeException(), isNull);
     expect(find.text('Scripture study'), findsOneWidget);
     expect(find.byIcon(Icons.check_circle), findsOneWidget);
