@@ -104,14 +104,26 @@ class NodeTile extends StatelessWidget {
     final Color chipColor;
     final String chipLabel;
     Feed? resolvedFeed;
-    if (showClass && live.classLabel != null) {
+    // The class node is the current identity; classLabel is only the
+    // denormalized snapshot (and may keep legacy feed provenance).
+    var classLabel = live.classLabel;
+    if (live.classNodeId != null) {
+      Node? cls = nodeById?[live.classNodeId];
+      if (cls == null) {
+        try {
+          cls = context.read<NodeCubit>().byId(live.classNodeId!);
+        } catch (_) {}
+      }
+      if (cls != null) classLabel = cls.title;
+    }
+    if (showClass && classLabel != null) {
       final colorPrefs = colorPrefsOf(context);
       chipColor = resolveClassColor(
-        live.classLabel!,
+        classLabel,
         colorPrefs,
         useOverrides: colorPrefs.applyToTaskLists,
       );
-      chipLabel = live.classLabel!;
+      chipLabel = classLabel;
     } else {
       Feed? feed;
       if (showClass && live.classId != null) {

@@ -27,23 +27,26 @@ class TaskDateRange extends Equatable {
 
   /// False when both ends resolve and start sits past end — nothing
   /// dated matches.
-  bool isValidAt(DateTime now) {
-    final s = start.resolve(now);
-    final e = end.resolve(now);
+  bool isValidAt(DateTime now, {int firstDayOfWeek = 1}) {
+    final s = start.resolve(now, firstDayOfWeek: firstDayOfWeek);
+    final e = end.resolve(now, firstDayOfWeek: firstDayOfWeek);
     if (s == null || e == null) return true;
     return !s.isAfter(e);
   }
 
-  DateTime? startDate(DateTime now) => start.resolve(now);
+  DateTime? startDate(DateTime now, {int firstDayOfWeek = 1}) =>
+      start.resolve(now, firstDayOfWeek: firstDayOfWeek);
 
-  DateTime? endDate(DateTime now) => end.resolve(now);
+  DateTime? endDate(DateTime now, {int firstDayOfWeek = 1}) =>
+      end.resolve(now, firstDayOfWeek: firstDayOfWeek);
 
-  bool matches(DateTime? due, DateTime now, {bool showUndated = false}) {
+  bool matches(DateTime? due, DateTime now,
+      {bool showUndated = false, int firstDayOfWeek = 1}) {
     if (due == null) return showUndated;
     final day = _day(due);
-    final s = start.resolve(now);
+    final s = start.resolve(now, firstDayOfWeek: firstDayOfWeek);
     if (s != null && day.isBefore(s)) return false;
-    final e = end.resolve(now);
+    final e = end.resolve(now, firstDayOfWeek: firstDayOfWeek);
     if (e != null && day.isAfter(e)) return false;
     return true;
   }
@@ -104,9 +107,10 @@ String describeTaskDateRange(TaskDateRange range) {
 
 /// Resolved summary for the current day, e.g. "Oct 12 – Oct 20" or
 /// "On or before Oct 13".
-String resolvedTaskDateRange(TaskDateRange range, DateTime now) {
-  final s = range.startDate(now);
-  final e = range.endDate(now);
+String resolvedTaskDateRange(TaskDateRange range, DateTime now,
+    {int firstDayOfWeek = 1}) {
+  final s = range.startDate(now, firstDayOfWeek: firstDayOfWeek);
+  final e = range.endDate(now, firstDayOfWeek: firstDayOfWeek);
   if (s == null && e == null) return 'Any date';
   if (s == null) return 'On or before ${_shortFormat.format(e!)}';
   if (e == null) return '${_shortFormat.format(s)} or later';

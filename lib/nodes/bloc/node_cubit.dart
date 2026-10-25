@@ -16,6 +16,7 @@ import '../model/node.dart';
 import '../model/node_relations.dart';
 import '../service/class_membership.dart';
 import '../service/event_schedule.dart';
+import '../service/homework_structure.dart';
 import '../service/node_feed_import.dart';
 import '../service/node_event_detach.dart';
 import '../service/node_batch_graph.dart';
@@ -2094,6 +2095,31 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   void removeNodesForEvent(String eventId) {
     final next = detachEventNodes(state, {eventId});
     if (!identical(next, state)) emitSilent(next);
+  }
+
+  // ── Homework / class structure ───────────────────────────────────────
+
+  /// Ensures the automatic Homework container and one class child per
+  /// discovered class, then attaches work by parent edge/source key.
+  ///
+  /// Additive and silent: it creates nodes and edges but never deletes or
+  /// re-parents. Returns the Homework node id (null only when there is no
+  /// homework/class data and [force] is false).
+  String? ensureHomeworkStructure({
+    bool force = false,
+    Map<String, String> feedNames = const {},
+  }) {
+    final plan = planHomeworkStructure(
+      state,
+      now: DateTime.now(),
+      feedNames: feedNames,
+      force: force,
+    );
+    if (plan.upserts.isNotEmpty) {
+      writeNodes(upserts: plan.upserts, silent: true);
+    }
+    final id = plan.homeworkId;
+    return id == null ? null : byId(id)?.id ?? id;
   }
 
   // ── Feed import ─────────────────────────────────────────────────────

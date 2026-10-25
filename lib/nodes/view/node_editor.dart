@@ -262,8 +262,16 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
                       IconButton(
                         tooltip: 'Clear class',
                         icon: const Icon(Icons.close, size: 18),
-                        onPressed: () =>
-                            setState(() => _classNodeId = null),
+                        onPressed: () => setState(() {
+                          _classNodeId = null;
+                          _parents = [
+                            for (final id in _parents)
+                              if (context.read<NodeCubit>().byId(id)
+                                      ?.isClassNode !=
+                                  true)
+                                id,
+                          ];
+                        }),
                       ),
                     IconButton(
                       tooltip: 'Pick class',
@@ -772,13 +780,24 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   }
 
   String _className(BuildContext context) {
-    final id = _classNodeId;
-    if (id == null) return 'None';
     try {
-      return context.read<NodeCubit>().byId(id)?.title ?? 'Class not found';
+      final cubit = context.read<NodeCubit>();
+      final id = _classNodeId ?? _classParentId(cubit);
+      if (id == null) return 'None';
+      return cubit.byId(id)?.title ?? 'Class not found';
     } catch (_) {
       return 'None';
     }
+  }
+
+  /// A class added through the Parents field is still class membership.
+  /// The Class row reads it so "just add the class as a parent" works
+  /// without a second selection.
+  String? _classParentId(NodeCubit cubit) {
+    for (final id in _parents) {
+      if (cubit.byId(id)?.isClassNode == true) return id;
+    }
+    return null;
   }
 
   Future<void> _pickClass() async {
@@ -866,9 +885,16 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
   }) _classSaveValues(NodeCubit cubit, Node? existing) {
     final parents = [..._parents];
     final selectedClassId = _classNodeId;
-    final classNode =
+    var classNode =
         selectedClassId == null ? null : cubit.byId(selectedClassId);
-    if (existing?.isClassNode != true) {
+    classNode ??= () {
+      for (final id in _parents) {
+        final candidate = cubit.byId(id);
+        if (candidate?.isClassNode == true) return candidate;
+      }
+      return null;
+    }();
+    if (existing?.isClassNode != true && existing?.isInstance != true) {
       parents.removeWhere((id) => cubit.byId(id)?.isClassNode == true);
       if (classNode != null && !parents.contains(classNode.id)) {
         parents.add(classNode.id);
@@ -877,10 +903,17 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     final imported = existing != null &&
         (existing.sourceEventId != null || existing.feedId != null);
     if (classNode != null) {
+      final oldClassId = existing?.classId;
+      final oldClassIdIsNode =
+          oldClassId != null && cubit.byId(oldClassId)?.isClassNode == true;
       return (
         parents: parents,
         classNodeId: classNode.id,
-        classId: imported ? existing.classId : classNode.id,
+        classId: imported
+            ? existing.classId
+            : (oldClassId != null && !oldClassIdIsNode
+                  ? oldClassId
+                  : classNode.id),
         classLabel: imported
             ? (existing.classLabel ?? classNode.title)
             : classNode.title,
