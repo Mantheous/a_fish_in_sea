@@ -12,8 +12,9 @@ import 'node_editor.dart';
 /// An alternative to the list views, not a replacement: tap a card to edit
 /// (same editor as everywhere else) and tap the −/+ badge under a card to
 /// collapse or expand that subtree. Pan and zoom to move around large
-/// trees. Repeating templates start collapsed so their generated instances
-/// don't flood the graph.
+/// trees. Repeating templates and goals with a very wide fan-out start
+/// collapsed so their generated instances or subgoal walls don't flood the
+/// graph.
 class NodeGraphView extends StatefulWidget {
   const NodeGraphView({
     super.key,
@@ -71,8 +72,12 @@ class NodeGraphView extends StatefulWidget {
 }
 
 class _NodeGraphViewState extends State<NodeGraphView> {
+  /// A goal with more direct subgoals than this starts collapsed, so one
+  /// wide parent cannot fill the first screen with its children.
+  static const int _autoCollapseSubgoals = 5;
+
   final Set<String> _collapsed = <String>{};
-  bool _seededTemplates = false;
+  bool _seededDefaults = false;
 
   @override
   void didUpdateWidget(covariant NodeGraphView oldWidget) {
@@ -97,15 +102,36 @@ class _NodeGraphViewState extends State<NodeGraphView> {
     return out;
   }
 
+  /// Parent ids whose direct subgoal count exceeds [_autoCollapseSubgoals].
+  /// Only goals present in [nodes] count, so the seed matches what the graph
+  /// can actually draw.
+  static Set<String> _wideParents(List<Node> nodes) {
+    final ids = {for (final n in nodes) n.id};
+    final counts = <String, int>{};
+    for (final n in nodes) {
+      for (final p in n.parentIds) {
+        if (ids.contains(p)) counts[p] = (counts[p] ?? 0) + 1;
+      }
+    }
+    return {
+      for (final entry in counts.entries)
+        if (entry.value > _autoCollapseSubgoals) entry.key,
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (!_seededTemplates && widget.nodes.isNotEmpty) {
+    if (!_seededDefaults && widget.nodes.isNotEmpty) {
       // One-time seed: habits/budgets generate an instance per period, so
-      // drawing every instance by default would bury the actual tree.
-      _seededTemplates = true;
+      // drawing every instance by default would bury the actual tree. Goals
+      // with more than [_autoCollapseSubgoals] direct subgoals start folded
+      // for the same reason: the first screen shows the shape of the tree,
+      // not one goal's whole fan-out. Expanding one by hand sticks.
+      _seededDefaults = true;
       _collapsed.addAll(
         widget.nodes.where((n) => n.isTemplate).map((n) => n.id),
       );
+      _collapsed.addAll(_wideParents(widget.nodes));
     }
     final restricted = widget.visibleIds != null;
     final layout = layoutNodeGraph(
