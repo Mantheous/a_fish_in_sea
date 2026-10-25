@@ -346,6 +346,7 @@ class _MetricEditorState extends State<_MetricEditor> {
       children: [
         if (!allDone) ...[
           DropdownButtonFormField<AutoSource>(
+            isExpanded: true,
             key: ValueKey('metric-source-${facet.metric.name}'),
             initialValue: facet.source,
             decoration: const InputDecoration(
@@ -370,6 +371,7 @@ class _MetricEditorState extends State<_MetricEditor> {
           ),
           const SizedBox(height: 8),
           DropdownButtonFormField<AutoMetric>(
+            isExpanded: true,
             key: ValueKey(
               'metric-kind-${facet.source.name}-${facet.metric.name}',
             ),
@@ -413,6 +415,7 @@ class _MetricEditorState extends State<_MetricEditor> {
               const SizedBox(width: 8),
               Expanded(
                 child: DropdownButtonFormField<AutoComparison>(
+                  isExpanded: true,
                   initialValue: facet.comparison,
                   decoration: const InputDecoration(
                     labelText: 'Target',
@@ -436,6 +439,7 @@ class _MetricEditorState extends State<_MetricEditor> {
           ),
           const SizedBox(height: 8),
           DropdownButtonFormField<TimeScale>(
+            isExpanded: true,
             initialValue: facet.period,
             decoration: const InputDecoration(
               labelText: 'Resets',
@@ -468,6 +472,7 @@ class _MetricEditorState extends State<_MetricEditor> {
         ],
         const SizedBox(height: 8),
         DropdownButtonFormField<AutoScope>(
+          isExpanded: true,
           initialValue: facet.scope,
           decoration: const InputDecoration(labelText: 'Scope', isDense: true),
           items: [

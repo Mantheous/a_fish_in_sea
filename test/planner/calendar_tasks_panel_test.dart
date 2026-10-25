@@ -3,6 +3,7 @@ import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/navigation/bloc/navigation_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/view/node_editor_side_sheet.dart';
 import 'package:a_fish_in_sea/nodes/view/node_tile.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_draft_cubit.dart';
@@ -244,13 +245,12 @@ void main() {
     await tester.tap(find.text('Edit'));
     await tester.pumpAndSettle();
 
-    expect(find.byType(AlertDialog), findsOneWidget);
+    // The calendar pane is wide, so the editor docks as a side sheet.
+    final editor = find.byKey(nodeEditorSideSheetKey);
+    expect(editor, findsOneWidget);
     // The editor opened on the tapped task.
     expect(
-      find.descendant(
-        of: find.byType(AlertDialog),
-        matching: find.text('Problem set 5'),
-      ),
+      find.descendant(of: editor, matching: find.text('Problem set 5')),
       findsOneWidget,
     );
   });
