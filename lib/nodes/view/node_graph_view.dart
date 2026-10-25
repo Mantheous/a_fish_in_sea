@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import '../model/node.dart';
 import '../service/node_graph_layout.dart';
-import '../service/node_tree_ops.dart';
 import 'node_editor.dart';
 
 /// Graphical top-down view of the goal DAG, following the board in
@@ -21,9 +20,14 @@ class NodeGraphView extends StatefulWidget {
     required this.nodes,
     required this.progress,
     this.visibleIds,
-    this.query = '',
+    this.contextIds = const <String>{},
+    this.matchedIds = const <String>{},
+    this.filterActive = false,
+    this.filterSummary,
+    this.fitToken = 0,
     this.expandAll = false,
     this.expandToken = 0,
+    this.onClearFilters,
   });
 
   /// Goal-tree nodes (see [goalNodes]).
@@ -32,15 +36,35 @@ class NodeGraphView extends StatefulWidget {
   /// Progress per node id, from `progressForest`.
   final Map<String, double> progress;
 
-  /// Search filter from `filterTreeIds`; null = not searching. When set,
-  /// the graph ignores collapse so matches are always reachable.
+  /// Restriction from search/filter; null = show everything. When set, the
+  /// graph ignores manual collapse so matches are always reachable.
   final Set<String>? visibleIds;
-  final String query;
+
+  /// Filtered-out ancestors of the matches. These render as compact path
+  /// markers instead of full cards, preserving "this connects to this".
+  final Set<String> contextIds;
+
+  /// Goals that passed the active filter/search; these get the match
+  /// outline and a full card.
+  final Set<String> matchedIds;
+
+  /// True when [contextIds] came from the filter menu (not plain search).
+  final bool filterActive;
+
+  /// Human summary of the active filter, shown in the stats pill.
+  final String? filterSummary;
+
+  /// Bumped when the filter changes so the viewport re-fits the new graph
+  /// instead of keeping the previous pan/zoom.
+  final int fitToken;
 
   /// Mirrors the page-level expand/collapse-all button. [expandToken] bumps
   /// on every tap; [expandAll] is the new state.
   final bool expandAll;
   final int expandToken;
+
+  /// Clears the active filter from the graph's empty state.
+  final VoidCallback? onClearFilters;
 
   @override
   State<NodeGraphView> createState() => _NodeGraphViewState();
@@ -83,51 +107,98 @@ class _NodeGraphViewState extends State<NodeGraphView> {
         widget.nodes.where((n) => n.isTemplate).map((n) => n.id),
       );
     }
-    final searching = widget.visibleIds != null;
+    final restricted = widget.visibleIds != null;
     final layout = layoutNodeGraph(
       nodes: widget.nodes,
-      collapsedIds: searching ? const <String>{} : _collapsed,
+      collapsedIds: restricted ? const <String>{} : _collapsed,
       visibleIds: widget.visibleIds,
+      compactIds: widget.contextIds,
     );
     if (layout.isEmpty) {
-      return Center(
-        child: Text(searching ? 'No goals match the search.' : 'No goals yet.'),
+      return _EmptyGraph(
+        filtering: widget.filterActive,
+        restricting: restricted,
+        onClearFilters: widget.onClearFilters,
       );
     }
-    final matches = searching
-        ? {
-            for (final n in widget.nodes)
-              if (matchesQuery(n, widget.query)) n.id,
-          }
-        : const <String>{};
     final canvas = _GraphCanvas(
       layout: layout,
       progress: widget.progress,
-      matches: matches,
-      showToggles: !searching,
+      matches: widget.matchedIds,
+      showToggles: !restricted,
       onEdit: (node) => showNodeEditor(context, existing: node),
       onToggle: (id) => setState(() {
         if (!_collapsed.remove(id)) _collapsed.add(id);
       }),
     );
+    final shown = restricted
+        ? widget.matchedIds.length
+        : layout.placements.length;
     return Stack(
       children: [
         Positioned.fill(
-          child: _GraphViewport(layoutSize: layout.size, child: canvas),
+          child: _GraphViewport(
+            layoutSize: layout.size,
+            fitToken: widget.fitToken,
+            child: canvas,
+          ),
         ),
         Positioned(
           left: 12,
           top: 10,
           child: _GraphPill(
-            text: '${layout.placements.length} of ${widget.nodes.length} goals',
+            text: widget.filterActive
+                ? '$shown of ${widget.nodes.length} goals · '
+                      '${widget.filterSummary ?? 'filtered'}'
+                : '$shown of ${widget.nodes.length} goals',
           ),
         ),
-        const Positioned(
+        Positioned(
           left: 12,
           bottom: 10,
-          child: _GraphPill(text: 'Tap to edit · − / + collapses'),
+          child: _GraphPill(
+            text: widget.filterActive
+                ? 'Filtered-out goals collapse · links stay visible'
+                : 'Tap to edit · − / + collapses',
+          ),
         ),
       ],
+    );
+  }
+}
+
+class _EmptyGraph extends StatelessWidget {
+  const _EmptyGraph({
+    required this.filtering,
+    required this.restricting,
+    this.onClearFilters,
+  });
+
+  final bool filtering;
+  final bool restricting;
+  final VoidCallback? onClearFilters;
+
+  @override
+  Widget build(BuildContext context) {
+    final message = filtering
+        ? 'No goals match these filters.'
+        : restricting
+        ? 'No goals match the search.'
+        : 'No goals yet.';
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(message),
+          if (filtering && onClearFilters != null) ...[
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: onClearFilters,
+              child: const Text('Clear filters'),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -135,10 +206,15 @@ class _NodeGraphViewState extends State<NodeGraphView> {
 /// Pan/zoom surface with floating zoom controls. Fits the whole layout to
 /// the viewport once; afterwards the transform is the user's.
 class _GraphViewport extends StatefulWidget {
-  const _GraphViewport({required this.layoutSize, required this.child});
+  const _GraphViewport({
+    required this.layoutSize,
+    required this.child,
+    this.fitToken = 0,
+  });
 
   final Size layoutSize;
   final Widget child;
+  final int fitToken;
 
   @override
   State<_GraphViewport> createState() => _GraphViewportState();
@@ -154,9 +230,29 @@ class _GraphViewportState extends State<_GraphViewport> {
   bool _fitScheduled = false;
 
   @override
+  void didUpdateWidget(covariant _GraphViewport oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.fitToken != oldWidget.fitToken) {
+      _didFit = false;
+      _scheduleFit();
+    }
+  }
+
+  @override
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  void _scheduleFit() {
+    if (_fitScheduled) return;
+    _fitScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _fitScheduled = false;
+      if (!mounted) return;
+      _didFit = true;
+      _fit();
+    });
   }
 
   Matrix4 _matrix(double scale, double tx, double ty) {
@@ -203,13 +299,7 @@ class _GraphViewportState extends State<_GraphViewport> {
       builder: (context, constraints) {
         _viewport = Size(constraints.maxWidth, constraints.maxHeight);
         if (!_didFit && !_fitScheduled) {
-          _fitScheduled = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _fitScheduled = false;
-            if (!mounted) return;
-            _didFit = true;
-            _fit();
-          });
+          _scheduleFit();
         }
         return Stack(
           children: [
@@ -330,7 +420,10 @@ class _GraphCanvas extends StatelessWidget {
               width: placement.rect.width,
               height: placement.rect.height,
               child: _GraphNodeCard(
-                key: ValueKey('graph-node-${placement.node.id}'),
+                key: ValueKey(
+                  'graph-${placement.compact ? 'context' : 'node'}-'
+                  '${placement.node.id}',
+                ),
                 placement: placement,
                 progress: progress[placement.node.id] ?? 0,
                 isMatch: matches.contains(placement.node.id),
@@ -368,6 +461,7 @@ class _GraphNodeCard extends StatelessWidget {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final node = placement.node;
+    if (placement.compact) return _compactCard(context, node);
     final isRoot = node.parentIds.isEmpty;
     final fill = _fill(theme, node);
     final border = isMatch
@@ -427,6 +521,57 @@ class _GraphNodeCard extends StatelessWidget {
                   ],
                 ),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// A filtered-out ancestor, collapsed to a small path marker. It keeps
+  /// the connector visible and stays tappable, but reads as context rather
+  /// than as a matching goal.
+  Widget _compactCard(BuildContext context, Node node) {
+    final scheme = Theme.of(context).colorScheme;
+    final title = node.title.isEmpty ? '(untitled)' : node.title;
+    return Tooltip(
+      message: '$title\nfiltered out · shown to keep the link',
+      waitDuration: const Duration(milliseconds: 500),
+      child: Opacity(
+        opacity: 0.82,
+        child: Material(
+          color: scheme.surfaceContainerHighest,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(999),
+            side: BorderSide(color: scheme.outlineVariant),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onEdit,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.filter_alt_off_outlined,
+                    size: 10,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 9,
+                        height: 1.1,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -563,6 +708,10 @@ class _GraphEdgePainter extends CustomPainter {
       ..color = color.withValues(alpha: 0.32)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.2;
+    final faint = Paint()
+      ..color = color.withValues(alpha: 0.2)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.1;
     for (final edge in edges) {
       final dy = edge.end.dy - edge.start.dy;
       final path = Path()
@@ -575,7 +724,10 @@ class _GraphEdgePainter extends CustomPainter {
           edge.end.dx,
           edge.end.dy,
         );
-      canvas.drawPath(path, edge.primary ? primary : shared);
+      canvas.drawPath(
+        path,
+        edge.faint ? faint : (edge.primary ? primary : shared),
+      );
     }
   }
 

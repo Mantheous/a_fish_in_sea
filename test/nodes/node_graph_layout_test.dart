@@ -141,6 +141,36 @@ void main() {
       );
     });
 
+    test('compact context nodes are narrow and keep their edges', () {
+      final nodes = [
+        goal('root', due: DateTime(2026, 1, 1)),
+        goal('mid', parents: ['root'], due: DateTime(2026, 1, 2)),
+        goal('leaf', parents: ['mid'], due: DateTime(2026, 1, 3)),
+      ];
+      final layout = layoutNodeGraph(
+        nodes: nodes,
+        visibleIds: {'root', 'mid', 'leaf'},
+        compactIds: {'root', 'mid'},
+      );
+      final byId = {for (final p in layout.placements) p.node.id: p};
+      expect(byId['root']!.compact, isTrue);
+      expect(byId['mid']!.compact, isTrue);
+      expect(byId['leaf']!.compact, isFalse);
+      expect(byId['root']!.rect.width, lessThan(byId['leaf']!.rect.width));
+      expect(byId['root']!.rect.height, lessThan(byId['leaf']!.rect.height));
+      // Compact markers sit on the same row, centered between the rows.
+      expect(
+        byId['root']!.rect.center.dy,
+        lessThan(byId['mid']!.rect.center.dy),
+      );
+      // Path edges are still drawn, just faint.
+      final path = layout.edges
+          .where((e) => e.childId == 'mid' || e.childId == 'leaf')
+          .toList();
+      expect(path.length, 2);
+      expect(path.every((e) => e.faint), isTrue);
+    });
+
     test('cycle without roots still lays out every node once', () {
       final nodes = [
         goal('a', parents: ['b']),
