@@ -647,6 +647,40 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     return addNode(child);
   }
 
+  /// Adds [node] and appends [node] as a parent of every id in
+  /// [childIds], all in ONE undoable change. Used by "add parent goal":
+  /// the new goal is created with the tapped goal already beneath it.
+  ///
+  /// Existing parents of the children are kept (this is a DAG — adding a
+  /// parent never steals the child from the rest of the tree). Every rule
+  /// is checked against the prospective state before anything is
+  /// emitted, so a rejected child leaves the store untouched.
+  String? addNodeWithChildren(Node node, {List<String> childIds = const []}) {
+    if (byId(node.id) != null) return 'A node with that id exists.';
+    final unboundedError = validateUnbounded(node);
+    if (unboundedError != null) return unboundedError;
+    final error = validateParents(node, node.parentIds);
+    if (error != null) return error;
+    final next = [...state, node];
+    final indexById = {for (var i = 0; i < next.length; i++) next[i].id: i};
+    for (final childId in childIds) {
+      final index = indexById[childId];
+      if (index == null) return 'Node not found.';
+      final child = next[index];
+      final parents = [...child.parentIds, node.id];
+      final attached = child.copyWith(parentIds: parents);
+      final relationError = validateNodeRelations(
+        draft: attached,
+        all: next,
+        parentIds: parents,
+      );
+      if (relationError != null) return relationError;
+      next[index] = attached;
+    }
+    emitChange(next);
+    return null;
+  }
+
   /// Deep-copies [sourceId] and its whole descendant closure. External
   /// parents of copied nodes are preserved, so shared DAG children stay
   /// shared. Copies are titled `<title> (copy)` at the root only.

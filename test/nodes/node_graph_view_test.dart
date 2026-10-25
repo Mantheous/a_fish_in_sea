@@ -464,4 +464,85 @@ void main() {
     expect(find.byKey(const ValueKey('graph-node-school')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('card + button creates a subgoal under that goal', (tester) async {
+    final nodes = NodeCubit();
+    nodes.emitSilent(sample());
+    await tester.pumpWidget(harness(nodes));
+    await tester.pump();
+    await openGraph(tester);
+
+    await tester.tap(find.byKey(const ValueKey('graph-add-subgoal-root')));
+    await tester.pumpAndSettle();
+    expect(find.text('New node'), findsOneWidget);
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Title').first,
+      'Fresh subgoal',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Add'));
+    await tester.pumpAndSettle();
+
+    final created = nodes.state.singleWhere((n) => n.title == 'Fresh subgoal');
+    expect(created.parentIds, ['root']);
+    // The new card must be visible immediately, not hidden under a
+    // collapsed parent.
+    expect(find.text('Fresh subgoal'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('card ↑ button creates a parent goal above that goal', (
+    tester,
+  ) async {
+    final nodes = NodeCubit();
+    nodes.emitSilent(sample());
+    await tester.pumpWidget(harness(nodes));
+    await tester.pump();
+    await openGraph(tester);
+
+    await tester.tap(find.byKey(const ValueKey('graph-add-parent-child')));
+    await tester.pumpAndSettle();
+    expect(find.text('New node'), findsOneWidget);
+    // The editor explains the adoption this action performs.
+    expect(find.textContaining('becomes a parent of'), findsOneWidget);
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Title').first,
+      'New parent goal',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Add'));
+    await tester.pumpAndSettle();
+
+    final parent = nodes.state.singleWhere((n) => n.title == 'New parent goal');
+    expect(parent.parentIds, isEmpty);
+    // Shared DAG: the child keeps its existing parent and gains the new one.
+    expect(nodes.byId('child')?.parentIds, ['root', parent.id]);
+    expect(find.text('New parent goal'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('generated instances get no add buttons', (tester) async {
+    final nodes = NodeCubit();
+    nodes.emitSilent(sample());
+    await tester.pumpWidget(harness(nodes));
+    await tester.pump();
+    await openGraph(tester);
+
+    // Habit instances start collapsed; expand-all reveals the instance.
+    await tester.tap(find.byTooltip('Expand all'));
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('graph-node-habit-instance')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('graph-add-subgoal-habit-instance')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('graph-add-parent-habit-instance')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
 }
