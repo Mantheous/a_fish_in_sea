@@ -40,6 +40,10 @@ class SettingsState extends Equatable {
   final bool trackingEnabled;
   final int trackingIntervalMinutes;
 
+  /// First day of the week for "this week" windows (1 = Monday … 7 = Sunday).
+  /// Persisted and roamed with the rest of settings.
+  final int firstDayOfWeek;
+
   /// Homework/class/calendar event colors and where they apply. Persisted
   /// and roamed inside this cubit's JSON as one additive blob.
   final ColorPrefs colors;
@@ -58,6 +62,7 @@ class SettingsState extends Equatable {
     this.defaultEventFeedId,
     this.trackingEnabled = true,
     this.trackingIntervalMinutes = 5,
+    this.firstDayOfWeek = 1,
     this.colors = const ColorPrefs(),
     this.ankiConnectHost = SettingsCubit.defaultAnkiConnectHost,
   });
@@ -72,6 +77,7 @@ class SettingsState extends Equatable {
     bool clearDefaultEventFeedId = false,
     bool? trackingEnabled,
     int? trackingIntervalMinutes,
+    int? firstDayOfWeek,
     ColorPrefs? colors,
     String? ankiConnectHost,
   }) {
@@ -87,6 +93,7 @@ class SettingsState extends Equatable {
       trackingEnabled: trackingEnabled ?? this.trackingEnabled,
       trackingIntervalMinutes:
           trackingIntervalMinutes ?? this.trackingIntervalMinutes,
+      firstDayOfWeek: firstDayOfWeek ?? this.firstDayOfWeek,
       colors: colors ?? this.colors,
       ankiConnectHost: ankiConnectHost ?? this.ankiConnectHost,
     );
@@ -102,6 +109,7 @@ class SettingsState extends Equatable {
         defaultEventFeedId,
         trackingEnabled,
         trackingIntervalMinutes,
+        firstDayOfWeek,
         colors,
         ankiConnectHost,
       ];
@@ -165,6 +173,10 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
 
   void setTrackingIntervalMinutes(int minutes) {
     emit(state.copyWith(trackingIntervalMinutes: minutes.clamp(1, 15)));
+  }
+
+  void setFirstDayOfWeek(int day) {
+    emit(state.copyWith(firstDayOfWeek: day.clamp(1, 7)));
   }
 
   void setDefaultEventFeedId(String? feedId) {
@@ -268,6 +280,11 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
     return 5;
   }
 
+  static int _parseFirstDayOfWeek(Object? value) {
+    if (value is num) return value.toInt().clamp(1, 7);
+    return 1;
+  }
+
   @override
   SettingsState? fromJson(Map<String, dynamic> json) => SettingsState(
         icalProxyBase: json['icalProxyBase'] as String? ?? '',
@@ -280,6 +297,7 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
         trackingEnabled: json['trackingEnabled'] as bool? ?? true,
         trackingIntervalMinutes:
             _parseTrackingInterval(json['trackingIntervalMinutes']),
+        firstDayOfWeek: _parseFirstDayOfWeek(json['firstDayOfWeek']),
         colors: ColorPrefs.fromJson(json['colors']),
         ankiConnectHost: _parseAnkiHost(json['ankiConnectHost']),
       );
@@ -299,6 +317,7 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
         'defaultEventFeedId': state.defaultEventFeedId,
         'trackingEnabled': state.trackingEnabled,
         'trackingIntervalMinutes': state.trackingIntervalMinutes,
+        'firstDayOfWeek': state.firstDayOfWeek,
         'colors': state.colors.toJson(),
         'ankiConnectHost': state.ankiConnectHost,
       };

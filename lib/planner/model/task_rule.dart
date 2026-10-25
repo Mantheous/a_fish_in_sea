@@ -59,10 +59,12 @@ class TaskRule extends Equatable {
   /// open node, hide rules defer to the selector (done included when the
   /// selector keeps completed items). [plannedNodeIds] is forwarded to the
   /// selector's planned narrows (see [TaskFilter.matches]).
-  bool matches(Node node, DateTime now, {Set<String>? plannedNodeIds}) {
+  bool matches(Node node, DateTime now,
+      {Set<String>? plannedNodeIds, int firstDayOfWeek = 1}) {
     if (!enabled) return false;
     if (isHighlight && !node.isOpen) return false;
-    return selector.matches(node, now, plannedNodeIds: plannedNodeIds);
+    return selector.matches(node, now,
+        plannedNodeIds: plannedNodeIds, firstDayOfWeek: firstDayOfWeek);
   }
 
   TaskRule copyWith({
@@ -179,18 +181,23 @@ TaskRuleOutcome evaluateTaskRules(
   Node node,
   DateTime now, {
   Set<String>? plannedNodeIds,
+  int firstDayOfWeek = 1,
 }) {
   var hidden = false;
   TaskRule? tint;
   for (final rule in rules) {
     if (!rule.enabled) continue;
     if (rule.isHide) {
-      if (rule.selector.matches(node, now, plannedNodeIds: plannedNodeIds)) {
+      if (rule.selector.matches(node, now,
+          plannedNodeIds: plannedNodeIds,
+          firstDayOfWeek: firstDayOfWeek)) {
         hidden = true;
       }
     } else if (tint == null &&
         node.isOpen &&
-        rule.selector.matches(node, now, plannedNodeIds: plannedNodeIds)) {
+        rule.selector.matches(node, now,
+            plannedNodeIds: plannedNodeIds,
+            firstDayOfWeek: firstDayOfWeek)) {
       tint = rule;
     }
   }
@@ -204,11 +211,14 @@ bool taskHiddenByRules(
   Node node,
   DateTime now, {
   Set<String>? plannedNodeIds,
+  int firstDayOfWeek = 1,
 }) {
   for (final rule in rules) {
     if (rule.isHide &&
         rule.enabled &&
-        rule.selector.matches(node, now, plannedNodeIds: plannedNodeIds)) {
+        rule.selector.matches(node, now,
+            plannedNodeIds: plannedNodeIds,
+            firstDayOfWeek: firstDayOfWeek)) {
       return true;
     }
   }

@@ -11,6 +11,7 @@ import '../../nodes/view/node_tile.dart';
 import '../bloc/assignment_rules_cubit.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/feed_cubit.dart';
+import '../bloc/settings_cubit.dart';
 import '../model/assignment_template.dart';
 import '../model/feed.dart';
 import 'assignment_rules_sheet.dart';
@@ -77,6 +78,7 @@ class _HomeworkTaskListState extends State<HomeworkTaskList>
     final colorPrefs = colorPrefsOf(context);
     final viewOptions = viewOptionsOf(context);
     final now = DateTime.now();
+    final firstDayOfWeek = _firstDayOfWeekOf(context);
     // One calendar pass per build: the counts drive the schedule tint and,
     // through their key set, the Planned/Unplanned filter — so a tinted
     // clock always reads as planned.
@@ -86,7 +88,8 @@ class _HomeworkTaskListState extends State<HomeworkTaskList>
         futureCalendarEntryCounts(allNodes, calendarState, now);
     final plannedIds = upcomingCounts.keys.toSet();
     final tints =
-        taskTintMap(allNodes, viewOptions, now, plannedNodeIds: plannedIds);
+        taskTintMap(allNodes, viewOptions, now,
+            plannedNodeIds: plannedIds, firstDayOfWeek: firstDayOfWeek);
     var imported = applyTaskViewOptions(
       feedCubit.visibleNodes(
         nodeCubit.state.where((n) => n.isHomework).toList(),
@@ -94,6 +97,7 @@ class _HomeworkTaskListState extends State<HomeworkTaskList>
       viewOptions,
       now,
       plannedNodeIds: plannedIds,
+      firstDayOfWeek: firstDayOfWeek,
     );
     if (imported.isEmpty) {
       if (viewOptions.isFiltering) {
@@ -465,3 +469,12 @@ class _HomeworkTaskListState extends State<HomeworkTaskList>
     return aDue.compareTo(bDue);
   }
 }
+
+int _firstDayOfWeekOf(BuildContext context) {
+  try {
+    return context.read<SettingsCubit>().state.firstDayOfWeek;
+  } catch (_) {
+    return 1;
+  }
+}
+
