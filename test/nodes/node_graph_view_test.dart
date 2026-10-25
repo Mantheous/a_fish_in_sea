@@ -465,7 +465,36 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('card + button creates a subgoal under that goal', (tester) async {
+  testWidgets('tree action buttons use down/up arrows, not a plus', (
+    tester,
+  ) async {
+    final nodes = NodeCubit();
+    nodes.emitSilent(sample());
+    await tester.pumpWidget(harness(nodes));
+    await tester.pump();
+    await openGraph(tester);
+
+    final subgoal = find.byKey(const ValueKey('graph-add-subgoal-root'));
+    final parent = find.byKey(const ValueKey('graph-add-parent-root'));
+    expect(subgoal, findsOneWidget);
+    expect(parent, findsOneWidget);
+    expect(
+      find.descendant(of: subgoal, matching: find.byIcon(Icons.arrow_downward)),
+      findsOneWidget,
+      reason: 'a plus would read as the collapsed-count badge',
+    );
+    expect(
+      find.descendant(of: parent, matching: find.byIcon(Icons.arrow_upward)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: subgoal, matching: find.byIcon(Icons.add)),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('card ↓ button creates a subgoal under that goal', (tester) async {
     final nodes = NodeCubit();
     nodes.emitSilent(sample());
     await tester.pumpWidget(harness(nodes));

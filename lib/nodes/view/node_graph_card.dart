@@ -7,7 +7,7 @@ import '../service/node_graph_layout.dart';
 ///
 /// Tapping the card opens the editor, like every other goal surface. The
 /// footer carries the quick tree actions: a −/+ badge collapses or expands
-/// the subtree, and the two small buttons grow the tree in place — `+`
+/// the subtree, and the two small arrows grow the tree in place — `↓`
 /// creates a subgoal under this goal, `↑` creates a parent goal above it.
 /// Generated instances get neither action: their structure is owned by the
 /// template that produced them.
@@ -101,7 +101,7 @@ class NodeGraphCard extends StatelessWidget {
                         context,
                         key: ValueKey('graph-add-subgoal-${node.id}'),
                         tooltip: 'Add subgoal',
-                        icon: Icons.add,
+                        icon: Icons.arrow_downward,
                         onTap: onAddSubgoal,
                       ),
                       const SizedBox(width: 2),
