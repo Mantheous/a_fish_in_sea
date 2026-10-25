@@ -38,13 +38,22 @@ HomeworkStructurePlan planHomeworkStructure(
   Node? homework;
   for (final node in nodes) {
     if (node.isClassNode || node.isInstance || node.isHomework) continue;
-    if (node.title.toLowerCase().contains('homework')) {
+    // Only a real container, never an assignment called "Homework 3".
+    // Exact title plus no schedule/targets avoids adopting a task.
+    final containerShaped = node.schedule == null &&
+        node.effort == null &&
+        node.calendarLink == null &&
+        node.recurrence == null;
+    if (node.title.trim().toLowerCase() == 'homework' && containerShaped) {
       homework = node;
       break;
     }
   }
   if (homework == null) {
-    final id = 'node:homework:${now.microsecondsSinceEpoch}';
+    const baseId = 'node:homework';
+    final id = working.containsKey(baseId)
+        ? '$baseId:${now.microsecondsSinceEpoch}'
+        : baseId;
     homework = Node(
       id: id,
       title: 'Homework',
@@ -132,7 +141,8 @@ HomeworkStructurePlan planHomeworkStructure(
       bySource[source.key] = sameTitle;
       continue;
     }
-    final id = 'node:class:${now.microsecondsSinceEpoch}:${fresh++}';
+    final baseId = 'node:class:${_stableKey(source.key)}';
+    final id = working.containsKey(baseId) ? '$baseId:${fresh++}' : baseId;
     final cls = Node(
       id: id,
       title: label,
@@ -178,7 +188,19 @@ HomeworkStructurePlan planHomeworkStructure(
     // membership still travels through classNodeId.
     if (!node.isInstance && !parents.contains(cls.id)) parents.add(cls.id);
     final isImported = node.sourceEventId != null || node.feedId != null;
-    final classId = isImported ? node.classId : cls.id;
+    final oldClassId = node.classId;
+    final oldClassIdIsNode =
+        oldClassId != null && working[oldClassId]?.isClassNode == true;
+    // Preserve feed provenance on legacy/syllabus payloads that carry
+    // classId but no feedId/sourceEventId. Only replace a classId that
+    // actually points at another class node.
+    final classId = isImported
+        ? (oldClassId ?? cls.id)
+        : (node.classNodeId == null &&
+                  oldClassId != null &&
+                  !oldClassIdIsNode
+              ? oldClassId
+              : cls.id);
     final classLabel = node.classLabel ?? cls.title;
     if (node.classNodeId == cls.id &&
         node.classId == classId &&
@@ -201,6 +223,17 @@ HomeworkStructurePlan planHomeworkStructure(
     ...changed.values.where((node) => !created.containsKey(node.id)),
   ];
   return HomeworkStructurePlan(homeworkId: homeworkId, upserts: upserts);
+}
+
+/// Stable across runs/devices so two offline passes create the same class
+/// id for the same source instead of duplicate nodes after sync.
+String _stableKey(String input) {
+  var hash = 0x811c9dc5;
+  for (final code in input.codeUnits) {
+    hash ^= code;
+    hash = (hash * 0x01000193) & 0xffffffff;
+  }
+  return hash.toRadixString(16).padLeft(8, '0');
 }
 
 bool _sameList(List<String> a, List<String> b) {

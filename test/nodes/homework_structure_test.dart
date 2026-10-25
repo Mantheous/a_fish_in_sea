@@ -164,6 +164,59 @@ void main() {
     expect(adopted.parentIds, contains('cmlit'));
   });
 
+  test('preserves classId-only legacy feed provenance', () {
+    final homework = _node('homework', title: 'Homework');
+    final cls = _node(
+      'cmlit',
+      title: 'CMLIT 201',
+      parents: const ['homework'],
+      classFacet: const ClassFacet(),
+      auto: const AutoFacet(metric: AutoMetric.allDone),
+    );
+    final legacy = Node(
+      id: 'legacy',
+      title: 'Syllabus assignment',
+      parentIds: const ['cmlit'],
+      createdAt: _now,
+      classId: 'feed:old-syllabus',
+      classLabel: 'CMLIT 201',
+    );
+    final applied = _apply(
+      [homework, cls, legacy],
+      planHomeworkStructure([homework, cls, legacy], now: _now),
+    );
+    final saved = applied.firstWhere((n) => n.id == 'legacy');
+    expect(saved.classNodeId, 'cmlit');
+    expect(saved.classId, 'feed:old-syllabus');
+    expect(saved.classLabel, 'CMLIT 201');
+  });
+
+  test('does not adopt a task titled Homework 3', () {
+    final assignment = Node(
+      id: 'hw3',
+      title: 'Homework 3',
+      createdAt: _now,
+      schedule: ScheduleFacet(due: _now),
+    );
+    final imported = _node(
+      'essay',
+      feedId: 'feed:ls',
+      classId: 'feed:ls',
+      classLabel: 'CMLIT 201',
+      sourceEventId: 'e1',
+    );
+    final applied = _apply(
+      [assignment, imported],
+      planHomeworkStructure([assignment, imported], now: _now),
+    );
+    final homework = applied.firstWhere((n) => n.title == 'Homework');
+    expect(homework.id, isNot('hw3'));
+    expect(
+      applied.firstWhere((n) => n.id == 'hw3').parentIds,
+      isEmpty,
+    );
+  });
+
   test('is idempotent once the structure exists', () {
     final nodes = [
       _node(
@@ -179,6 +232,28 @@ void main() {
     final again = planHomeworkStructure(first, now: _now);
     expect(again.upserts, isEmpty);
     expect(again.homeworkId, isNotNull);
+  });
+
+  test('ids are deterministic across offline passes', () {
+    final nodes = [
+      _node(
+        'essay',
+        feedId: 'feed:ls',
+        classId: 'feed:ls',
+        classLabel: 'CMLIT 201',
+        sourceEventId: 'e1',
+      ),
+    ];
+    final first = planHomeworkStructure(nodes, now: _now);
+    final second = planHomeworkStructure(
+      nodes,
+      now: _now.add(const Duration(seconds: 1)),
+    );
+    expect(first.homeworkId, second.homeworkId);
+    expect(
+      first.upserts.where((n) => n.isClassNode).map((n) => n.id).toSet(),
+      second.upserts.where((n) => n.isClassNode).map((n) => n.id).toSet(),
+    );
   });
 
   test('force creates Homework even before any class exists', () {
