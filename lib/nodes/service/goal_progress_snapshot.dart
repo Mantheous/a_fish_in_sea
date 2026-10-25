@@ -22,6 +22,10 @@ class GoalProgressSnapshot {
   /// money lines (signed amounts, as persisted).
   final Map<String, double> txnAmountsById;
 
+  /// Money actuals per node id: recorded amount first, then linked and
+  /// assigned transactions. This is the map [progressForest] consumed.
+  final Map<String, double> moneyActualByNodeId;
+
   /// Percent complete in 0–1 per goal id.
   final Map<String, double> progress;
 
@@ -33,16 +37,14 @@ class GoalProgressSnapshot {
     required this.byId,
     required this.byParent,
     required this.txnAmountsById,
+    required this.moneyActualByNodeId,
     required this.progress,
     required this.autoReadings,
   });
 
-  bool contains(String id) => byId.containsKey(id);
-
   /// Clamped 0–1 completion. Goals outside the snapshot (homework, unknown
   /// ids) read as 0 rather than throwing.
   double progressOf(String id) => (progress[id] ?? 0).clamp(0.0, 1.0);
-
   /// Number of goal children. Homework children never count as steps.
   int childCountOf(String id) => byParent[id]?.length ?? 0;
 
@@ -55,7 +57,7 @@ class GoalProgressSnapshot {
       node,
       byId: byId,
       byParent: byParent,
-      txnAmountsById: txnAmountsById,
+      txnAmountsById: moneyActualByNodeId,
     );
   }
 
@@ -143,6 +145,7 @@ GoalProgressSnapshot buildGoalProgressSnapshot({
     byId: indexes.byId,
     byParent: indexes.byParent,
     txnAmountsById: txnAmounts,
+    moneyActualByNodeId: moneyActualByNodeId,
     progress: progress,
     autoReadings: autoReadings,
   );

@@ -303,17 +303,17 @@ class _NodeBody extends StatelessWidget {
     return BlocBuilder<NodeCubit, List<Node>>(
       builder: (context, nodes) {
         // Goal tree only: homework imports and calendar links live in
-        // Tasks/Calendar, never auto-fill this page.
-        final goals = goalNodes(nodes);
-        if (goals.isEmpty) return const _EmptyNodes();
+        // Tasks/Calendar, never auto-fill this page. Shared with Home's
+        // favorite rows: one snapshot builder keeps the same goal at the
+        // same percentage on both surfaces.
         final now = DateTime.now();
-        // Shared with Home's favorite rows: one snapshot builder keeps the
-        // same goal at the same percentage on both surfaces.
         final snapshot = buildGoalProgressSnapshot(
           nodes: nodes,
           transactions: context.watch<TransactionsCubit>().state,
           now: now,
         );
+        final goals = snapshot.goals;
+        if (goals.isEmpty) return const _EmptyNodes();
         final txnAmounts = snapshot.txnAmountsById;
         final autoReadings = snapshot.autoReadings;
         final progress = snapshot.progress;
