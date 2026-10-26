@@ -101,8 +101,9 @@ class _PlanAppointmentOverlay extends StatefulWidget {
   final double height;
 
   /// Source of the grid viewport the shifted tile is clipped to. Listening
-  /// to it keeps the clip right when the viewport is first measured or the
-  /// window/panel resizes.
+  /// to its viewport (not its scroll position) keeps the clip right when the
+  /// viewport is first measured or the window/panel resizes, without
+  /// rebuilding the tile on every scroll tick.
   final PlanGridTracker? tracker;
   final Widget child;
   final VoidCallback? onTap;
@@ -129,10 +130,11 @@ class _PlanAppointmentOverlayState extends State<_PlanAppointmentOverlay> {
       child: OverlayPortal(
         controller: _controller,
         overlayChildBuilder: (context) {
-          return AnimatedBuilder(
-            animation:
-                widget.tracker ?? const AlwaysStoppedAnimation<double>(0),
-            builder: (context, _) => _clippedTile(context),
+          return ValueListenableBuilder<Rect?>(
+            valueListenable:
+                widget.tracker?.viewportGlobalListenable ??
+                const AlwaysStoppedAnimation<Rect?>(null),
+            builder: (context, viewport, _) => _clippedTile(context),
           );
         },
         child: const SizedBox.expand(),

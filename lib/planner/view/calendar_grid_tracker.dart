@@ -32,6 +32,17 @@ class PlanGridTracker extends ChangeNotifier {
   Rect? _viewportLocal;
   bool _notifyScheduled = false;
 
+  /// Notifies only when the time grid's on-screen rect changes — a window
+  /// resize, the side panel opening, or Day ↔ Week swapping the grid.
+  ///
+  /// Scroll ticks deliberately do *not* notify these: the viewport is fixed
+  /// while the content scrolls under it, so anything that only positions
+  /// against the viewport (the plan-tile overlays and the report lane clip)
+  /// can skip the whole scroll path. Rebuilding those on every tick was a
+  /// measurable share of frame time.
+  final ValueNotifier<Rect?> viewportGlobalListenable = ValueNotifier(null);
+  final ValueNotifier<Rect?> viewportLocalListenable = ValueNotifier(null);
+
   /// The time grid's scroll position, or null before the first discovery.
   ScrollPosition? get position => _position;
 
@@ -57,6 +68,8 @@ class PlanGridTracker extends ChangeNotifier {
     _position = null;
     _viewportGlobal = null;
     _viewportLocal = null;
+    viewportGlobalListenable.value = null;
+    viewportLocalListenable.value = null;
   }
 
   /// Finds the time grid behind [root] (a context above the SfCalendar) and
@@ -97,6 +110,10 @@ class PlanGridTracker extends ChangeNotifier {
     if (!timeGrid) return;
     final scrollable = Scrollable.maybeOf(context);
     if (scrollable == null) return;
+    // SfCalendar keeps the neighbouring day/week pages laid out beside the
+    // visible one (±viewport width) and builds their appointments too. Only
+    // adopt a grid that actually sits in the calendar we draw.
+    if (!_overlapsAnchor(scrollable.context)) return;
     _capture(scrollable);
   }
 
@@ -144,8 +161,24 @@ class PlanGridTracker extends ChangeNotifier {
         position.viewportDimension > _timeGridViewportThreshold;
   }
 
+  /// True when the box behind [scrollableContext] shares screen space with
+  /// the calendar stack this tracker draws in. Off-screen carousel pages
+  /// fail this: they are laid out a full viewport to the side.
+  bool _overlapsAnchor(BuildContext scrollableContext) {
+    final anchorContext = _anchorKey?.currentContext;
+    if (anchorContext == null) return true;
+    final box = scrollableContext.findRenderObject();
+    final anchor = anchorContext.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return true;
+    if (anchor is! RenderBox || !anchor.hasSize) return true;
+    final rect = box.localToGlobal(Offset.zero) & box.size;
+    final bounds = anchor.localToGlobal(Offset.zero) & anchor.size;
+    return rect.overlaps(bounds);
+  }
+
   _FoundScrollable? _findTimeGrid(BuildContext root) {
     ScrollableState? best;
+    ScrollableState? bestVisible;
     void visit(Element element) {
       if (element.widget is Scrollable) {
         final state = (element as StatefulElement).state as ScrollableState;
@@ -155,6 +188,13 @@ class PlanGridTracker extends ChangeNotifier {
                 position.viewportDimension >
                     best!.position.viewportDimension)) {
           best = state;
+        }
+        if (_isTimeGridPosition(position) &&
+            _overlapsAnchor(element) &&
+            (bestVisible == null ||
+                position.viewportDimension >
+                    bestVisible!.position.viewportDimension)) {
+          bestVisible = state;
         }
         // A grid's own scrollables can't contain another one.
         return;
@@ -171,7 +211,7 @@ class PlanGridTracker extends ChangeNotifier {
     }
 
     visitChildOrSelf(root as Element);
-    final found = best;
+    final found = bestVisible ?? best;
     return found == null ? null : _FoundScrollable(found);
   }
 
@@ -213,22 +253,38 @@ class PlanGridTracker extends ChangeNotifier {
   /// mid-build. Defer only then; scroll ticks notify immediately so chips
   /// track the grid without a frame of lag.
   void _notify() {
+    void publish() {
+      // Viewport listeners only hear about real geometry changes: they are
+      // the resize path, not the scroll path.
+      if (viewportGlobalListenable.value != _viewportGlobal) {
+        viewportGlobalListenable.value = _viewportGlobal;
+      }
+      if (viewportLocalListenable.value != _viewportLocal) {
+        viewportLocalListenable.value = _viewportLocal;
+      }
+      notifyListeners();
+    }
+
     if (SchedulerBinding.instance.schedulerPhase ==
         SchedulerPhase.persistentCallbacks) {
       if (_notifyScheduled) return;
       _notifyScheduled = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _notifyScheduled = false;
-        notifyListeners();
+        // The page (and this tracker) can be gone before the frame ends.
+        if (!_isMounted()) return;
+        publish();
       });
       return;
     }
-    notifyListeners();
+    publish();
   }
 
   @override
   void dispose() {
     _position?.removeListener(_onScrollTick);
+    viewportGlobalListenable.dispose();
+    viewportLocalListenable.dispose();
     super.dispose();
   }
 }
