@@ -200,6 +200,15 @@ List<ReportBlock> buildReportBlocks({
 
   final visibleEventIds = {for (final e in visibleEvents) e.id};
   final handledNodeIds = <String>{};
+  // One task can own several plan events (taskId links plus direct
+  // calendarEventId/sourceEventId links). The node's timer and sessions are
+  // mirrored onto every linked event for cache alignment, so without a
+  // global guard the same recording renders once per event. Session ids are
+  // stable across mirrors (TimeSession.idFor), so they dedupe the copies
+  // while genuinely distinct runs stay separate. Live blocks dedupe by the
+  // owning node for the same reason.
+  final emittedSessionIds = <String>{};
+  final emittedLiveNodeIds = <String>{};
 
   final blocks = <ReportBlock>[];
   for (final event in visibleEvents) {
@@ -220,10 +229,28 @@ List<ReportBlock> buildReportBlocks({
     }
 
     DateTime? liveStart = event.timerStartedAt;
-    liveStart ??= _firstTrackingStart(linked);
+    String? liveNodeId;
+    if (liveStart == null) {
+      for (final node in linked) {
+        if (node.timerStartedAt != null) {
+          liveStart = node.timerStartedAt;
+          liveNodeId = node.id;
+          break;
+        }
+      }
+    }
+    var emitLive = false;
     if (liveStart != null) {
+      if (liveNodeId != null) {
+        // Node-owned timer mirrored onto every linked event: show once.
+        emitLive = emittedLiveNodeIds.add(liveNodeId);
+      } else {
+        emitLive = true;
+      }
+    }
+    if (emitLive) {
       var end = at;
-      if (!end.isAfter(liveStart)) {
+      if (!end.isAfter(liveStart!)) {
         end = liveStart.add(const Duration(minutes: 1));
       }
       if (end.difference(liveStart) < const Duration(minutes: 1)) {
@@ -246,6 +273,7 @@ List<ReportBlock> buildReportBlocks({
     if (sessions.isNotEmpty) {
       final hasMultiple = sessions.length > 1;
       for (final session in sessions) {
+        if (!emittedSessionIds.add(session.id)) continue;
         blocks.add(
           ReportBlock(
             displayId: hasMultiple
@@ -358,13 +386,6 @@ List<ReportBlock> buildReportBlocks({
 
   blocks.sort((a, b) => a.start.compareTo(b.start));
   return blocks;
-}
-
-DateTime? _firstTrackingStart(List<Node> linked) {
-  for (final node in linked) {
-    if (node.timerStartedAt != null) return node.timerStartedAt;
-  }
-  return null;
 }
 
 /// Every distinct recorded run on an event and the tasks linked to it.
