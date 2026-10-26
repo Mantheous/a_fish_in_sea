@@ -193,6 +193,7 @@ class _NodeGraphViewState extends State<NodeGraphView> {
   @override
   Widget build(BuildContext context) {
     _seedIfNeeded();
+    final compactScreen = MediaQuery.sizeOf(context).width < kGraphAutoPanWidth;
     final restricted = widget.visibleIds != null;
     final layout = layoutNodeGraph(
       nodes: widget.nodes,
@@ -330,6 +331,8 @@ class _NodeGraphViewState extends State<NodeGraphView> {
             child: GraphPill(
               text: widget.filterActive
                   ? 'Filtered-out goals collapse · links stay visible'
+                  : compactScreen
+                  ? 'Drag to pan · long-press to multi-select · pinch to zoom'
                   : 'Drag or long-press to select · Space/H pan · ⌘/Ctrl-click adds',
             ),
           ),
