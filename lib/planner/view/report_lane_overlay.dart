@@ -12,6 +12,12 @@ import 'calendar_report_lane.dart';
 /// clips to the grid's viewport, so it can never drift from the plans
 /// beside it, and empty lane space lets every gesture fall through to the
 /// calendar underneath.
+///
+/// Scrolling only *translates* the lanes inside the clip. The chips are laid
+/// out once for the whole day and then move as one cached layer; rebuilding
+/// every chip per scroll tick used to cost 10–20ms a frame on a week with a
+/// handful of reports per day, which read as the calendar freezing while
+/// scrolling.
 class ReportLaneOverlay extends StatelessWidget {
   const ReportLaneOverlay({
     super.key,
@@ -67,54 +73,98 @@ class ReportLaneOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (days.isEmpty) return const SizedBox.shrink();
-    return AnimatedBuilder(
-      animation: tracker,
-      builder: (context, _) {
+    // Only the viewport matters here: it sets the clip and the lane origin.
+    // It is stable while the grid scrolls, so this builder stays idle then.
+    return ValueListenableBuilder<Rect?>(
+      valueListenable: tracker.viewportLocalListenable,
+      builder: (context, viewport, _) {
         // The grid's rect in this overlay's own coordinate space. Null
         // until the calendar has laid its time grid out once.
-        final viewport = tracker.viewportLocal;
         if (viewport == null) return const SizedBox.shrink();
         final gridWidth = width - timeRulerWidth;
         if (gridWidth <= 0 || viewport.height <= 0) {
           return const SizedBox.shrink();
         }
         final cellWidth = gridWidth / days.length;
-        final lanes = <Widget>[];
-        for (var index = 0; index < days.length; index++) {
-          final day = days[index];
-          final column = isRtl ? days.length - 1 - index : index;
-          final cellLeft = (isRtl ? 0.0 : timeRulerWidth) + column * cellWidth;
-          final left = isRtl ? cellLeft : cellLeft + cellWidth / 2;
-          lanes.add(
+        final gridHeight =
+            ((endHour - startHour).clamp(1, 24) * 60) * pixelsPerMinute;
+        // Only the vertical band matters: the overlay spans the calendar
+        // area itself, so a sideways offset from a neighbouring calendar
+        // page can never move the lanes.
+        final band = Rect.fromLTWH(0, viewport.top, width, viewport.height);
+        final lanes = <Widget>[
+          for (var index = 0; index < days.length; index++)
             Positioned(
-              left: left,
-              top: viewport.top,
+              left: _laneLeft(index, cellWidth),
+              top: 0,
               width: cellWidth / 2,
-              height: viewport.height,
+              height: gridHeight,
+              child: ReportLaneView(
+                key: ValueKey('report-lane:${days[index]}'),
+                blocks: blocksForDay(days[index]),
+                day: days[index],
+                startHour: startHour,
+                endHour: endHour,
+                pixelsPerMinute: pixelsPerMinute,
+                colorFor: colorFor,
+                selectedId: selectedId,
+                snapMinutes: snapMinutes,
+                isRtl: isRtl,
+                onTap: onTap,
+                onIntervalChanged: onIntervalChanged,
+                onRecord: onRecord,
+                onDeleted: onDeleted,
+              ),
+            ),
+        ];
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned.fromRect(
+              rect: band,
               child: ClipRect(
-                child: ReportLaneView(
-                  key: ValueKey('report-lane:$day'),
-                  blocks: blocksForDay(day),
-                  day: day,
-                  startHour: startHour,
-                  endHour: endHour,
-                  pixelsPerMinute: pixelsPerMinute,
-                  scrollOffset: tracker.scrollOffset,
-                  colorFor: colorFor,
-                  selectedId: selectedId,
-                  snapMinutes: snapMinutes,
-                  isRtl: isRtl,
-                  onTap: onTap,
-                  onIntervalChanged: onIntervalChanged,
-                  onRecord: onRecord,
-                  onDeleted: onDeleted,
+                // Scrolling only moves this layer; the chips inside are
+                // built once per day and reused for every frame of the
+                // scroll. The moving layer is a whole day tall and hangs off
+                // the top of the clip, so chips keep working at any offset.
+                child: AnimatedBuilder(
+                  animation: tracker,
+                  child: RepaintBoundary(
+                    // A wheel over a chip used to die there: the chip takes
+                    // the pointer, and the plan grid's scrollable is not in
+                    // its hit path. Forward it to the grid like a plan tile
+                    // does, so the whole calendar area scrolls as one.
+                    child: Listener(
+                      behavior: HitTestBehavior.translucent,
+                      onPointerSignal: tracker.onPlanPointerSignal,
+                      child: Stack(clipBehavior: Clip.none, children: lanes),
+                    ),
+                  ),
+                  builder: (context, child) => Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Positioned(
+                        left: 0,
+                        top: -tracker.scrollOffset,
+                        width: width,
+                        height: gridHeight,
+                        child: child!,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
-          );
-        }
-        return Stack(clipBehavior: Clip.none, children: lanes);
+          ],
+        );
       },
     );
+  }
+
+  /// Left edge of a day's report half, in the lane stack's coordinates.
+  double _laneLeft(int index, double cellWidth) {
+    final column = isRtl ? days.length - 1 - index : index;
+    final cellLeft = (isRtl ? 0.0 : timeRulerWidth) + column * cellWidth;
+    return isRtl ? cellLeft : cellLeft + cellWidth / 2;
   }
 }

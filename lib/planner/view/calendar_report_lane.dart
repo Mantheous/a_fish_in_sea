@@ -55,7 +55,6 @@ class ReportLaneView extends StatefulWidget {
     this.onRecord,
     this.onDeleted,
     this.isRtl = false,
-    this.scrollOffset = 0,
     this.pixelsPerMinute,
   });
 
@@ -89,11 +88,6 @@ class ReportLaneView extends StatefulWidget {
   final ValueChanged<ReportBlock>? onDeleted;
 
   final bool isRtl;
-
-  /// How far the plan grid is currently scrolled, in pixels. Chips shift
-  /// up by this much, so the lane's own height is just the visible
-  /// viewport rather than a whole day.
-  final double scrollOffset;
 
   /// Vertical scale of the plan grid. Null lets the lane derive it from
   /// its height (standalone use, where the lane *is* a whole day tall).
@@ -277,6 +271,9 @@ class _ReportLaneViewState extends State<ReportLaneView> {
                 }
                 // Clamp to the grid's hour range: a block that starts before it
                 // (or ends after) keeps the visible part at the right offset.
+                // The lane is a whole day tall and the overlay translates it
+                // with the plan grid's scroll offset, so no per-chip scroll
+                // math is involved.
                 final rawStart = block.start
                     .difference(gridStart)
                     .inMinutes
@@ -285,12 +282,9 @@ class _ReportLaneViewState extends State<ReportLaneView> {
                     .difference(gridStart)
                     .inMinutes
                     .toDouble();
-                final top =
-                    rawStart.clamp(0, minutes).toDouble() * pxPerMinute -
-                    widget.scrollOffset;
+                final top = rawStart.clamp(0, minutes).toDouble() * pxPerMinute;
                 final bottom =
-                    rawEnd.clamp(0, minutes).toDouble() * pxPerMinute -
-                    widget.scrollOffset;
+                    rawEnd.clamp(0, minutes).toDouble() * pxPerMinute;
                 final visible = bottom - top;
                 final chipHeight = visible < 3 ? 3.0 : visible;
                 // A very short report paints a thin bar, but its hit area stays
@@ -298,8 +292,8 @@ class _ReportLaneViewState extends State<ReportLaneView> {
                 // stays centered on its real interval; only the grab area grows.
                 final hitHeight = math.max(chipHeight, reportChipMinHitHeight);
                 final hitTop = top - (hitHeight - chipHeight) / 2;
-                // Fully scrolled out of the viewport: no chip at all, so an
-                // off-screen report can never intercept a tap or paint over
+                // Outside the grid's hours entirely: no chip at all, so an
+                // off-range report can never intercept a tap or paint over
                 // the header.
                 if (hitTop + hitHeight <= 0 || hitTop >= height) continue;
                 chips.add(
