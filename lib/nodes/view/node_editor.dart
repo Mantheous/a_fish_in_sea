@@ -17,6 +17,7 @@ import 'package:a_fish_in_sea/nodes/service/node_editor_schedule.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/view/class_picker.dart';
 import 'package:a_fish_in_sea/nodes/view/metrics_fields.dart';
+import 'package:a_fish_in_sea/nodes/view/node_editor_date_row.dart';
 import 'package:a_fish_in_sea/nodes/view/node_editor_side_sheet.dart';
 import 'package:a_fish_in_sea/nodes/view/parents_field.dart';
 import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
@@ -257,6 +258,8 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         TextField(
           controller: _title,
           autofocus: e == null,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => _save(context),
           decoration: const InputDecoration(
             labelText: 'Title',
             border: OutlineInputBorder(),
@@ -367,7 +370,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
         if (!_isUnbounded) ...[
           const SizedBox(height: 16),
           _sectionTitle(context, 'Schedule'),
-          _DateRow(
+          NodeEditorDateRow(
             label: _due == null
                 ? 'No due date'
                 : 'Due ${MaterialLocalizations.of(context).formatFullDate(_due!)}',
@@ -670,7 +673,7 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
               onChanged: (v) =>
                   setState(() => _frequency = v ?? _frequency),
             ),
-            _DateRow(
+            NodeEditorDateRow(
               label: _recurEnd == null
                   ? 'Repeats forever'
                   : 'Ends ${MaterialLocalizations.of(context).formatFullDate(_recurEnd!)}',
@@ -1461,33 +1464,5 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
           action: SnackBarAction(label: 'Undo', onPressed: undo.undo),
         ),
       );
-  }
-}
-
-class _DateRow extends StatelessWidget {
-  final String label;
-  final VoidCallback onPick;
-  final VoidCallback? onClear;
-
-  const _DateRow({required this.label, required this.onPick, this.onClear});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(child: Text(label)),
-        IconButton(
-          tooltip: 'Pick date',
-          icon: const Icon(Icons.event),
-          onPressed: onPick,
-        ),
-        if (onClear != null)
-          IconButton(
-            tooltip: 'Clear date',
-            icon: const Icon(Icons.event_busy),
-            onPressed: onClear,
-          ),
-      ],
-    );
   }
 }
