@@ -44,6 +44,7 @@ import 'calendar_tile_metrics.dart';
 import 'event_colors.dart';
 import 'event_editor.dart';
 import 'feed_manager.dart';
+import 'plan_to_report_copy.dart';
 import 'report_lane_overlay.dart';
 import 'task_tile_helpers.dart';
 import 'tasks_panel.dart';
@@ -588,6 +589,7 @@ class _CalendarPageState extends State<CalendarPage> {
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
                 child: Text(
                   'Each day: plan on the left, report right beside it · '
+                  'tap ⧉ on a plan to copy it to the report · '
                   'tap a report for details and ▶ to record it again · '
                   'drag its circles to adjust · red = recording now',
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(
@@ -720,6 +722,8 @@ class _CalendarPageState extends State<CalendarPage> {
                             trackingNodeIds: _projection.trackingNodeIds,
                             trackingEventIds: _projection.trackingEventIds,
                             assigneeLabelById: _projection.assigneeLabelById,
+                            reportedEventIds: _projection.reportedEventIds,
+                            showCopyToReport: reportLanes,
                           );
                           final raw = details.appointments.isNotEmpty
                               ? details.appointments.first
@@ -891,6 +895,8 @@ class _CalendarPageState extends State<CalendarPage> {
     Set<String>? trackingNodeIds,
     Set<String>? trackingEventIds,
     Map<String, String>? assigneeLabelById,
+    Set<String>? reportedEventIds,
+    bool showCopyToReport = false,
   }) {
     if (details.isMoreAppointmentRegion) {
       return Container(
@@ -1232,6 +1238,36 @@ class _CalendarPageState extends State<CalendarPage> {
                         trackingNodeIds: trackingNodeIds,
                         trackingEventIds: trackingEventIds,
                       ),
+                    ),
+                  ),
+                // One-tap copy in the Plan + Report view, pinned
+                // bottom-right so it never covers the title the play badge
+                // already shares the top corner with. For when the day went
+                // as scheduled but nothing was recorded: copies the planned
+                // interval into the report lane as an accepted entry. Needs
+                // a taller tile than the play badge (48px) so it clears the
+                // title row; shorter tiles copy from the event detail's
+                // time section instead.
+                if (showCopyToReport &&
+                    !isDraft &&
+                    !event.allDay &&
+                    !isReportDisplayId(event.id) &&
+                    !isNodeBlockId(event.id) &&
+                    !compactHandles &&
+                    _view != CalendarView.month &&
+                    (realHeight.isInfinite || realHeight >= 48) &&
+                    (maxWidth == null || maxWidth >= 48) &&
+                    isCopyablePlanEvent(
+                      event,
+                      reportedEventIds: reportedEventIds ?? const {},
+                    ))
+                  Positioned(
+                    bottom: 2,
+                    right: 2,
+                    child: PlanCopyBadge(
+                      key: ValueKey('plan-copy:${event.id}'),
+                      onTapDown: _suppressNextTap,
+                      onTap: () => _copyPlanToReport(event),
                     ),
                   ),
               ],
@@ -2028,6 +2064,20 @@ class _CalendarPageState extends State<CalendarPage> {
           ? 'Recording another report…'
           : 'Recording another report · $title',
       onUndo: undo.undo,
+    );
+  }
+
+  /// Copies a plan tile's scheduled interval into the report lane as an
+  /// accepted entry. For when the day went as scheduled but nothing was
+  /// recorded: one tap, no timer, no editor. The lane chip can be dragged
+  /// to adjust afterwards. Guards (via [copyPlanEventToReport]) keep
+  /// double-taps and already-reported events from duplicating.
+  void _copyPlanToReport(PlannerEvent event) {
+    if (!mounted) return;
+    copyPlanEventToReport(
+      context,
+      event,
+      reportedEventIds: _projection.reportedEventIds,
     );
   }
 
