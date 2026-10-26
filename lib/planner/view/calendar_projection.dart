@@ -29,6 +29,11 @@ class CalendarProjection {
   Map<String, ReportBlock> reportById = const {};
   Map<String, Color> reportColorById = const {};
 
+  /// Event ids with at least one report block (live, timer, or accepted).
+  /// Plan tiles read this to decide whether the one-tap copy-to-report
+  /// badge applies — O(1) per tile instead of scanning blocks per frame.
+  Set<String> reportedEventIds = const {};
+
   /// Report blocks per visible day (keyed by midnight), for the Plan +
   /// Report overlay: each day's lane paints its own list beside the plans.
   Map<DateTime, List<ReportBlock>> reportBlocksByDay = const {};
@@ -144,10 +149,12 @@ class CalendarProjection {
     if (!showAnyReports) {
       if (_reportEvents.isNotEmpty ||
           reportById.isNotEmpty ||
+          reportedEventIds.isNotEmpty ||
           _reportModeOn ||
           _reportLiveOnly) {
         _reportEvents = const [];
         reportById = const {};
+        reportedEventIds = const {};
         reportColorById = const {};
         reportBlocksByDay = const {};
         _reportModeOn = false;
@@ -196,6 +203,10 @@ class CalendarProjection {
           reportBlockToDisplayEvent(block, template: byId[block.eventId]),
       ];
       reportById = {for (final block in blocks) block.displayId: block};
+      reportedEventIds = {
+        for (final block in blocks)
+          if (block.eventId != null) block.eventId!,
+      };
       // Chips live in the lane tile now, so their colors come straight from
       // the block's template (course/label/feed) instead of the calendar's
       // colorById, which only covers appointments in `shown`.

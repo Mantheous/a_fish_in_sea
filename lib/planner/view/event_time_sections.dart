@@ -9,11 +9,14 @@ import '../../nodes/service/node_event_link.dart';
 import '../../nodes/service/node_event_sync.dart';
 import '../../nodes/view/node_finish_sheet.dart';
 import '../../nodes/view/timer_edit_sheet.dart';
+import '../../reporting/bloc/reporting_cubit.dart';
 import '../bloc/calendar_cubit.dart';
 import '../bloc/settings_cubit.dart';
 import '../model/event_reschedule.dart';
 import '../model/planner_event.dart';
+import '../service/calendar_report.dart';
 import '../../reporting/view/time_range_dial.dart';
+import 'plan_to_report_copy.dart';
 
 /// Time-tracking sections for the event detail/editor sheets.
 ///
@@ -65,6 +68,29 @@ class TaskTimeSection extends StatelessWidget {
       if (failed) 'Marked as failed',
     ];
     final nodeId = node.id;
+    // One-tap copy for short tiles whose plan badge has no room, and for
+    // anyone who opens the detail first: same accepted entry the tile
+    // badge writes. Hidden once anything is recorded or copied.
+    var hasManual = false;
+    try {
+      hasManual =
+          findReportEntryForEvent(
+            context.watch<ReportingCubit>().state,
+            event.id,
+          ) !=
+          null;
+    } catch (_) {}
+    var liveEvent = event;
+    try {
+      liveEvent = context.watch<CalendarCubit>().byId(event.id) ?? event;
+    } catch (_) {}
+    final canCopy =
+        !event.allDay &&
+        !node.isTracking &&
+        !node.hasReported &&
+        !liveEvent.isTracking &&
+        !liveEvent.hasReported &&
+        !hasManual;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -144,6 +170,12 @@ class TaskTimeSection extends StatelessWidget {
                 onPressed: () => showFollowUpScheduler(context, nodeId: nodeId),
                 child: const Text('Follow-up'),
               ),
+              if (canCopy)
+                OutlinedButton.icon(
+                  onPressed: () => copyPlanEventToReport(context, liveEvent),
+                  icon: const Icon(Icons.content_copy, size: 16),
+                  label: const Text('Copy plan to report'),
+                ),
               if (node.hasReported && !node.isTracking)
                 TextButton(
                   onPressed: () {
@@ -226,6 +258,20 @@ class TimeReportSection extends StatelessWidget {
     final failed = live.failed;
     final hasReported = live.hasReported;
     final isTask = live.isTask;
+    // Same one-tap copy the plan tiles offer, for short tiles whose badge
+    // has no room and for anyone opening the detail first. Hidden once
+    // anything is recorded or copied.
+    var hasManual = false;
+    try {
+      hasManual =
+          findReportEntryForEvent(
+            context.watch<ReportingCubit>().state,
+            eventId,
+          ) !=
+          null;
+    } catch (_) {}
+    final canCopy =
+        !live.allDay && !isTracking && !hasReported && !hasManual;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -291,6 +337,12 @@ class TimeReportSection extends StatelessWidget {
                   onPressed: () =>
                       context.read<CalendarCubit>().clearReported(eventId),
                   child: const Text('Clear reported'),
+                ),
+              if (canCopy)
+                OutlinedButton.icon(
+                  onPressed: () => copyPlanEventToReport(context, live),
+                  icon: const Icon(Icons.content_copy, size: 16),
+                  label: const Text('Copy plan to report'),
                 ),
             ],
           ),
