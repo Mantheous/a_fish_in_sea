@@ -21,6 +21,7 @@ class NodeGraphCard extends StatelessWidget {
     required this.selected,
     required this.showToggle,
     required this.onTap,
+    required this.onLongPress,
     required this.onToggle,
     required this.onAddSubgoal,
     required this.onAddParent,
@@ -37,6 +38,9 @@ class NodeGraphCard extends StatelessWidget {
 
   /// Card tap: select on the first tap, edit on the next.
   final VoidCallback onTap;
+
+  /// Touch-friendly way into multi-select: long-press adds the card.
+  final VoidCallback onLongPress;
   final VoidCallback onToggle;
   final VoidCallback onAddSubgoal;
   final VoidCallback onAddParent;
@@ -79,6 +83,7 @@ class NodeGraphCard extends StatelessWidget {
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
+          onLongPress: onLongPress,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(9, 6, 9, 5),
             child: Column(
@@ -309,6 +314,7 @@ class NodeGraphCard extends StatelessWidget {
     if (node.status == NodeStatus.failed) parts.add('failed');
     if (node.isTracking) parts.add('recording');
     parts.add(selected ? 'selected · tap again to edit' : 'tap to select');
+    parts.add('long-press or ⌘/Ctrl-click to add to a selection');
     return parts.join('\n');
   }
 

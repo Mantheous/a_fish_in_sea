@@ -1,17 +1,21 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../planner/bloc/calendar_cubit.dart';
 import '../bloc/node_cubit.dart';
 import '../model/node.dart';
 import '../service/node_event_link.dart';
+import '../service/node_graph_fold.dart';
 import '../service/node_graph_layout.dart';
 import 'node_editor.dart';
 import 'node_finish_sheet.dart';
 import 'node_graph_action_bar.dart';
-import 'node_graph_card.dart';
+import 'node_graph_canvas.dart';
+import 'node_graph_chrome.dart';
+import 'node_graph_multi_action_bar.dart';
+import 'node_graph_selection_actions.dart';
+import 'node_graph_viewport.dart';
 
 /// Graphical top-down view of the goal DAG, following the board in
 /// `docs/goal-tree-issue-4.png`: layered cards joined by curved connectors.
@@ -22,12 +26,19 @@ import 'node_graph_card.dart';
 /// toward it, edit, add a subgoal or parent, mark it complete — while the
 /// −/+ badge under a card collapses or expands that subtree. Each card also
 /// grows the tree in place: its `↓` button creates a subgoal beneath it and
-/// its `↑` button creates a parent goal above it. Pan and zoom to move around
-/// large trees. Repeating templates and goals with a very wide fan-out start
-/// collapsed so their generated instances or subgoal walls don't flood the
-/// graph. Folding is reported through [onCollapsedChanged] and can be
-/// restored with [collapsedIds], so leaving the Goals tab and coming back
-/// shows the same graph.
+/// its `↑` button creates a parent goal above it.
+///
+/// Multi-select: drag empty canvas for a marquee, or shift/ctrl/cmd-click
+/// cards on desktop; long-press enters tap-to-toggle selection on touch.
+/// Two or more selected goals float a bulk bar that opens the multi-goal
+/// editor (titles stay individual) and can mark the group done or delete it
+/// in one undoable step. Panning is deliberate so a drag can select: hold
+/// space, toggle the hand tool, middle-mouse drag, or scroll. Pan and zoom
+/// around large trees; repeating templates and goals with a very wide
+/// fan-out start collapsed so their generated instances or subgoal walls
+/// don't flood the graph. Folding is reported through [onCollapsedChanged]
+/// and can be restored with [collapsedIds], so leaving the Goals tab and
+/// coming back shows the same graph.
 class NodeGraphView extends StatefulWidget {
   const NodeGraphView({
     super.key,
@@ -97,17 +108,22 @@ class NodeGraphView extends StatefulWidget {
 }
 
 class _NodeGraphViewState extends State<NodeGraphView> {
-  /// A goal with more direct subgoals than this starts collapsed, so one
-  /// wide parent cannot fill the first screen with its children.
-  static const int _autoCollapseSubgoals = 5;
-
   final Set<String> _collapsed = <String>{};
   bool _seeded = false;
 
-  /// The goal whose action bar is showing. Selection is transient view state
-  /// (never persisted): it clears on a background tap, the bar's ✕, a
-  /// collapse that hides the card, and a tab switch.
-  String? _selectedId;
+  /// Selected goal ids. Selection is transient view state (never persisted):
+  /// it clears on a background tap, the bar's ✕, a collapse that hides a
+  /// selected card, and a tab switch.
+  final Set<String> _selected = <String>{};
+
+  /// True after a long-press: on touch there are no modifier keys, so taps
+  /// toggle membership until the selection is closed.
+  bool _multiSelectMode = false;
+
+  /// Selection that existed when an additive marquee started. Marquee ids
+  /// replace the live selection, but this base is kept while the drag grows
+  /// and shrinks.
+  Set<String> _marqueeBase = const {};
 
   /// Most recently added goal. The viewport pans just enough to show it
   /// without changing zoom, so growing the tree is visible even when the
@@ -119,43 +135,48 @@ class _NodeGraphViewState extends State<NodeGraphView> {
   @override
   void didUpdateWidget(covariant NodeGraphView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Deleting or filtering out the selected goal leaves no card to act on;
-    // never keep an invisible selection pointing at a missing node.
-    if (_selectedId != null &&
-        !widget.nodes.any((node) => node.id == _selectedId)) {
-      _selectedId = null;
-    }
+    _pruneSelection();
     if (widget.expandToken != oldWidget.expandToken) {
-      final withKids = _parentIds(widget.nodes);
+      final withKids = parentIds(widget.nodes);
       _seeded = true;
       _collapsed
         ..clear()
         ..addAll(widget.expandAll ? const <String>[] : withKids);
-      // Collapse-all folds the selected card out of view.
-      if (!widget.expandAll) _selectedId = null;
+      // Collapse-all folds selected cards out of view.
+      if (!widget.expandAll) _clearSelectionState();
       _reportCollapsed();
     }
+  }
+
+  void _pruneSelection() {
+    final present = {for (final node in widget.nodes) node.id};
+    _selected.removeWhere((id) => !present.contains(id));
+    final visible = widget.visibleIds;
+    if (visible != null) {
+      _selected.removeWhere((id) => !visible.contains(id));
+    }
+    if (_selected.isEmpty) _multiSelectMode = false;
+  }
+
+  void _clearSelectionState() {
+    _selected.clear();
+    _multiSelectMode = false;
+    _marqueeBase = const {};
   }
 
   /// One-time seed, once goals exist. A set carried in
   /// [NodeGraphView.collapsedIds] wins: that is the fold state from an
   /// earlier visit to the page. Otherwise habits/budgets generate an
-  /// instance per period and goals with more than [_autoCollapseSubgoals]
+  /// instance per period and goals with more than [kGraphAutoCollapseSubgoals]
   /// direct subgoals flood the canvas, so both start folded — the first
   /// screen shows the shape of the tree, not one goal's whole fan-out.
   void _seedIfNeeded() {
     if (_seeded || widget.nodes.isEmpty) return;
     _seeded = true;
     final saved = widget.collapsedIds;
-    _collapsed.addAll(saved ?? _defaultCollapsed(widget.nodes));
+    _collapsed.addAll(saved ?? defaultCollapsedIds(widget.nodes));
     if (saved == null) _reportCollapsed();
   }
-
-  static Set<String> _defaultCollapsed(List<Node> nodes) => {
-    for (final n in nodes)
-      if (n.isTemplate) n.id,
-    ..._wideParents(nodes),
-  };
 
   /// Hands the current folded set to the owner. Deferred to after the frame:
   /// the seed runs during build and the expand-all path runs inside
@@ -169,34 +190,6 @@ class _NodeGraphViewState extends State<NodeGraphView> {
   }
 
   /// Parent ids that have at least one child in [nodes].
-  static Set<String> _parentIds(List<Node> nodes) {
-    final ids = {for (final n in nodes) n.id};
-    final out = <String>{};
-    for (final n in nodes) {
-      for (final p in n.parentIds) {
-        if (ids.contains(p)) out.add(p);
-      }
-    }
-    return out;
-  }
-
-  /// Parent ids whose direct subgoal count exceeds [_autoCollapseSubgoals].
-  /// Only goals present in [nodes] count, so the seed matches what the graph
-  /// can actually draw.
-  static Set<String> _wideParents(List<Node> nodes) {
-    final ids = {for (final n in nodes) n.id};
-    final counts = <String, int>{};
-    for (final n in nodes) {
-      for (final p in n.parentIds) {
-        if (ids.contains(p)) counts[p] = (counts[p] ?? 0) + 1;
-      }
-    }
-    return {
-      for (final entry in counts.entries)
-        if (entry.value > _autoCollapseSubgoals) entry.key,
-    };
-  }
-
   @override
   Widget build(BuildContext context) {
     _seedIfNeeded();
@@ -208,31 +201,36 @@ class _NodeGraphViewState extends State<NodeGraphView> {
       compactIds: widget.contextIds,
     );
     if (layout.isEmpty) {
-      return _EmptyGraph(
+      return GraphEmptyState(
         filtering: widget.filterActive,
         restricting: restricted,
         onClearFilters: widget.onClearFilters,
       );
     }
-    // The selection is only actionable while its card is on screen: a
-    // collapse or a filter that hides it also hides the bar.
-    GraphNodePlacement? selectedPlacement;
-    if (_selectedId != null) {
-      for (final placement in layout.placements) {
-        if (placement.node.id == _selectedId) {
-          selectedPlacement = placement;
-          break;
-        }
-      }
-    }
-    final selectedNode = selectedPlacement?.node;
-    final canvas = _GraphCanvas(
+    // Selection is only actionable while its card is on screen: a collapse
+    // or filter that hides it also hides the bar.
+    final placeable = {
+      for (final placement in layout.placements) placement.node.id,
+    };
+    final selected = _selected.where(placeable.contains).toSet();
+    final selectedNodes = [
+      for (final node in widget.nodes)
+        if (selected.contains(node.id)) node,
+    ];
+    final single = selectedNodes.length == 1 ? selectedNodes.single : null;
+    final multi = selectedNodes.length > 1;
+    final allDone =
+        selectedNodes.isNotEmpty && selectedNodes.every((node) => node.isDone);
+    final canToggleDone = selectedNodes.every((node) => !node.isUnbounded);
+
+    final canvas = NodeGraphCanvas(
       layout: layout,
       progress: widget.progress,
       matches: widget.matchedIds,
-      selectedId: selectedNode?.id,
+      selectedIds: selected,
       showToggles: !restricted,
-      onCardTap: _selectOrEdit,
+      onCardTap: _onCardTap,
+      onCardLongPress: _onCardLongPress,
       onBackgroundTap: _clearSelection,
       onToggle: _toggleCollapsed,
       onAddSubgoal: _addSubgoal,
@@ -253,25 +251,54 @@ class _NodeGraphViewState extends State<NodeGraphView> {
     return Stack(
       children: [
         Positioned.fill(
-          child: _GraphViewport(
+          child: NodeGraphViewport(
             layoutSize: layout.size,
+            placements: layout.placements,
             fitToken: widget.fitToken,
             revealRect: reveal?.rect,
             revealToken: _revealToken,
+            onMarqueeStart: _onMarqueeStart,
+            onMarqueeChanged: _onMarqueeChanged,
+            onMarqueeEnd: () => _marqueeBase = const {},
+            onSelectAll: () => _selectAll(layout.placements),
+            onClearSelection: _clearSelection,
             child: canvas,
           ),
         ),
         Positioned(
           left: 12,
+          right: 224,
           top: 10,
-          child: _GraphPill(
-            text: widget.filterActive
-                ? '$shown of ${widget.nodes.length} goals · '
-                      '${widget.filterSummary ?? 'filtered'}'
-                : '$shown of ${widget.nodes.length} goals',
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: GraphPill(
+              text: widget.filterActive
+                  ? '$shown of ${widget.nodes.length} goals · '
+                        '${widget.filterSummary ?? 'filtered'}'
+                  : '$shown of ${widget.nodes.length} goals',
+            ),
           ),
         ),
-        if (selectedNode != null)
+        if (multi)
+          Positioned(
+            left: 12,
+            right: 12,
+            bottom: 10,
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: NodeGraphMultiActionBar(
+                count: selectedNodes.length,
+                allDone: allDone,
+                canToggleDone: canToggleDone,
+                onEdit: () => _editSelected(selectedNodes),
+                onToggleDone: () =>
+                    _toggleSelectedDone(selectedNodes, allDone: allDone),
+                onDelete: () => _deleteSelected(selectedNodes),
+                onClose: _clearSelection,
+              ),
+            ),
+          )
+        else if (single != null)
           Positioned(
             left: 12,
             right: 12,
@@ -280,18 +307,18 @@ class _NodeGraphViewState extends State<NodeGraphView> {
               alignment: Alignment.bottomCenter,
               child: NodeGraphActionBar(
                 key: nodeGraphActionBarKey,
-                node: selectedNode,
-                onRecord: () => _toggleRecording(selectedNode),
-                onEdit: () => showNodeEditor(context, existing: selectedNode),
-                onAddSubgoal: selectedNode.instanceOfId == null
-                    ? () => _addSubgoal(selectedNode)
+                node: single,
+                onRecord: () => _toggleRecording(single),
+                onEdit: () => showNodeEditor(context, existing: single),
+                onAddSubgoal: single.instanceOfId == null
+                    ? () => _addSubgoal(single)
                     : null,
-                onAddParent: selectedNode.instanceOfId == null
-                    ? () => _addParent(selectedNode)
+                onAddParent: single.instanceOfId == null
+                    ? () => _addParent(single)
                     : null,
-                onToggleDone: selectedNode.isUnbounded
+                onToggleDone: single.isUnbounded
                     ? null
-                    : () => _toggleDone(selectedNode),
+                    : () => _toggleDone(single),
                 onClose: _clearSelection,
               ),
             ),
@@ -300,61 +327,119 @@ class _NodeGraphViewState extends State<NodeGraphView> {
           Positioned(
             left: 12,
             bottom: 10,
-            child: _GraphPill(
+            child: GraphPill(
               text: widget.filterActive
                   ? 'Filtered-out goals collapse · links stay visible'
-                  : 'Tap to select · tap again to edit · −/+ collapses',
+                  : 'Drag or long-press to select · Space/H pan · ⌘/Ctrl-click adds',
             ),
           ),
       ],
     );
   }
 
+  bool get _additivePressed =>
+      HardwareKeyboard.instance.isShiftPressed ||
+      HardwareKeyboard.instance.isControlPressed ||
+      HardwareKeyboard.instance.isMetaPressed;
+
   /// Card tap: the first tap selects the goal and opens its action bar; a
-  /// tap on the already-selected card opens the editor, the same as before.
-  void _selectOrEdit(Node node) {
-    if (_selectedId == node.id) {
+  /// tap on the only selected card opens the editor, the same as before.
+  /// With a modifier (or once touch multi-select started) the tap toggles
+  /// membership instead.
+  void _onCardTap(Node node) {
+    final additive = _additivePressed;
+    final sole = _selected.length == 1 && _selected.contains(node.id);
+    if (!additive && !_multiSelectMode && sole) {
       showNodeEditor(context, existing: node);
       return;
     }
-    setState(() => _selectedId = node.id);
+    setState(() {
+      if (additive || _multiSelectMode) {
+        if (!_selected.remove(node.id)) _selected.add(node.id);
+        if (_selected.isEmpty) _multiSelectMode = false;
+      } else {
+        _selected
+          ..clear()
+          ..add(node.id);
+        _multiSelectMode = false;
+      }
+    });
+  }
+
+  /// Long-press is the touch entry to multi-select: it selects the card and
+  /// makes subsequent taps toggle instead of replacing the selection.
+  void _onCardLongPress(Node node) {
+    setState(() {
+      _multiSelectMode = true;
+      _selected.add(node.id);
+    });
+  }
+
+  void _onMarqueeStart(bool additive) {
+    _marqueeBase = additive ? Set.of(_selected) : const {};
+    if (!additive) {
+      setState(_clearSelectionState);
+    }
+  }
+
+  void _onMarqueeChanged(Set<String> ids) {
+    setState(() {
+      _selected
+        ..clear()
+        ..addAll(_marqueeBase)
+        ..addAll(ids);
+      _multiSelectMode = false;
+    });
+  }
+
+  void _selectAll(List<GraphNodePlacement> placements) {
+    setState(() {
+      _selected
+        ..clear()
+        ..addAll([
+          for (final placement in placements)
+            if (!placement.compact) placement.node.id,
+        ]);
+      _multiSelectMode = false;
+    });
   }
 
   void _clearSelection() {
-    if (_selectedId == null) return;
-    setState(() => _selectedId = null);
+    if (_selected.isEmpty && !_multiSelectMode) return;
+    setState(_clearSelectionState);
   }
 
-  /// Folds or unfolds [id] and drops a selection that the fold hides.
+  /// Folds or unfolds [id] and drops every selection the fold hides.
   void _toggleCollapsed(String id) {
     final collapsing = !_collapsed.contains(id);
-    final selection = _selectedId;
     setState(() {
       if (!_collapsed.remove(id)) _collapsed.add(id);
-      if (collapsing &&
-          selection != null &&
-          selection != id &&
-          _hasAncestor(widget.nodes, selection, id)) {
-        _selectedId = null;
+      if (collapsing) {
+        _selected.removeWhere(
+          (selectedId) =>
+              selectedId != id && hasAncestor(widget.nodes, selectedId, id),
+        );
+        if (_selected.isEmpty) _multiSelectMode = false;
       }
     });
     _reportCollapsed();
   }
 
-  /// True when [ancestorId] is one of [nodeId]'s ancestors in [nodes].
-  /// Walks every parent (the goal tree is a DAG, so a goal can sit under
-  /// more than one parent).
-  static bool _hasAncestor(List<Node> nodes, String nodeId, String ancestorId) {
-    final byId = {for (final node in nodes) node.id: node};
-    final pending = <String>[...?byId[nodeId]?.parentIds];
-    final seen = <String>{};
-    while (pending.isNotEmpty) {
-      final id = pending.removeLast();
-      if (!seen.add(id)) continue;
-      if (id == ancestorId) return true;
-      pending.addAll(byId[id]?.parentIds ?? const <String>[]);
-    }
-    return false;
+  Future<void> _editSelected(List<Node> nodes) async {
+    final changed = await editSelectedGoals(context, nodes);
+    if (mounted && changed) _clearSelection();
+  }
+
+  /// Marks the group complete, or reopens it when every selected goal was
+  /// already done. One undoable write mirroring linked calendar events.
+  void _toggleSelectedDone(List<Node> nodes, {required bool allDone}) {
+    markSelectedGoalsDone(context, nodes, allDone: allDone);
+    if (mounted) _clearSelection();
+  }
+
+  Future<void> _deleteSelected(List<Node> nodes) async {
+    final deleted = await deleteSelectedGoals(context, nodes);
+    if (mounted && deleted) _clearSelection();
   }
 
   /// Starts the selected goal's timer, or stops it through the same finish
@@ -415,388 +500,4 @@ class _NodeGraphViewState extends State<NodeGraphView> {
       _revealToken++;
     });
   }
-}
-
-class _EmptyGraph extends StatelessWidget {
-  const _EmptyGraph({
-    required this.filtering,
-    required this.restricting,
-    this.onClearFilters,
-  });
-
-  final bool filtering;
-  final bool restricting;
-  final VoidCallback? onClearFilters;
-
-  @override
-  Widget build(BuildContext context) {
-    final message = filtering
-        ? 'No goals match these filters.'
-        : restricting
-        ? 'No goals match the search.'
-        : 'No goals yet.';
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(message),
-          if (filtering && onClearFilters != null) ...[
-            const SizedBox(height: 8),
-            TextButton(
-              onPressed: onClearFilters,
-              child: const Text('Clear filters'),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-/// Pan/zoom surface with floating zoom controls. Fits the whole layout to
-/// the viewport once; afterwards the transform is the user's.
-class _GraphViewport extends StatefulWidget {
-  const _GraphViewport({
-    required this.layoutSize,
-    required this.child,
-    this.fitToken = 0,
-    this.revealRect,
-    this.revealToken = 0,
-  });
-
-  final Size layoutSize;
-  final Widget child;
-  final int fitToken;
-
-  /// Canvas-space rect to bring into view when [revealToken] changes.
-  final Rect? revealRect;
-  final int revealToken;
-
-  @override
-  State<_GraphViewport> createState() => _GraphViewportState();
-}
-
-class _GraphViewportState extends State<_GraphViewport> {
-  static const double _minScale = 0.12;
-  static const double _maxScale = 2.5;
-
-  final TransformationController _controller = TransformationController();
-  Size _viewport = Size.zero;
-  bool _didFit = false;
-  bool _fitScheduled = false;
-  bool _revealScheduled = false;
-
-  @override
-  void didUpdateWidget(covariant _GraphViewport oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.fitToken != oldWidget.fitToken) {
-      _didFit = false;
-      _scheduleFit();
-    } else if (widget.revealToken != oldWidget.revealToken) {
-      _scheduleReveal();
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _scheduleFit() {
-    if (_fitScheduled) return;
-    _fitScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _fitScheduled = false;
-      if (!mounted) return;
-      _didFit = true;
-      _fit();
-    });
-  }
-
-  /// Pans minimally so [widget.revealRect] is inside the viewport, keeping
-  /// the user's zoom. A card already in view does not move the canvas.
-  void _scheduleReveal() {
-    if (_revealScheduled) return;
-    _revealScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _revealScheduled = false;
-      if (!mounted) return;
-      _reveal();
-    });
-  }
-
-  void _reveal() {
-    final rect = widget.revealRect;
-    if (rect == null || _viewport.isEmpty) return;
-    final m = _controller.value;
-    final scale = m.getMaxScaleOnAxis();
-    final t = m.getTranslation();
-    const padding = 24.0;
-    final left = rect.left * scale + t.x;
-    final top = rect.top * scale + t.y;
-    final right = rect.right * scale + t.x;
-    final bottom = rect.bottom * scale + t.y;
-    var dx = 0.0;
-    var dy = 0.0;
-    if (right > _viewport.width - padding) {
-      dx = _viewport.width - padding - right;
-    }
-    if (left + dx < padding) dx = padding - left;
-    if (bottom > _viewport.height - padding) {
-      dy = _viewport.height - padding - bottom;
-    }
-    if (top + dy < padding) dy = padding - top;
-    if (dx == 0 && dy == 0) return;
-    _controller.value = _matrix(scale, t.x + dx, t.y + dy);
-  }
-
-  Matrix4 _matrix(double scale, double tx, double ty) {
-    final m = Matrix4.identity();
-    m.setEntry(0, 0, scale);
-    m.setEntry(1, 1, scale);
-    m.setEntry(2, 2, scale);
-    m.setEntry(0, 3, tx);
-    m.setEntry(1, 3, ty);
-    return m;
-  }
-
-  void _fit() {
-    if (_viewport.isEmpty || widget.layoutSize.isEmpty) return;
-    final scale = math
-        .min(1.0, (_viewport.width - 48) / widget.layoutSize.width)
-        .clamp(_minScale, _maxScale);
-    final tx = (_viewport.width - widget.layoutSize.width * scale) / 2;
-    final scaledHeight = widget.layoutSize.height * scale;
-    final ty = scaledHeight < _viewport.height
-        ? math.max(16.0, (_viewport.height - scaledHeight) / 2)
-        : 16.0;
-    _controller.value = _matrix(scale, tx, ty);
-  }
-
-  void _zoomBy(double factor) {
-    if (_viewport.isEmpty) return;
-    final m = _controller.value;
-    final scale = m.getMaxScaleOnAxis();
-    final next = (scale * factor).clamp(_minScale, _maxScale);
-    if (next == scale) return;
-    final f = next / scale;
-    final center = Offset(_viewport.width / 2, _viewport.height / 2);
-    final t = m.getTranslation();
-    final tx = center.dx - f * (center.dx - t.x);
-    final ty = center.dy - f * (center.dy - t.y);
-    _controller.value = _matrix(next, tx, ty);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        _viewport = Size(constraints.maxWidth, constraints.maxHeight);
-        if (!_didFit && !_fitScheduled) {
-          _scheduleFit();
-        }
-        return Stack(
-          children: [
-            Positioned.fill(
-              child: InteractiveViewer(
-                transformationController: _controller,
-                constrained: false,
-                boundaryMargin: const EdgeInsets.all(600),
-                minScale: _minScale,
-                maxScale: _maxScale,
-                child: SizedBox(
-                  width: widget.layoutSize.width,
-                  height: widget.layoutSize.height,
-                  child: widget.child,
-                ),
-              ),
-            ),
-            Positioned(
-              right: 12,
-              top: 10,
-              child: Material(
-                elevation: 1,
-                borderRadius: BorderRadius.circular(24),
-                color: scheme.surfaceContainerHigh.withValues(alpha: 0.94),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      tooltip: 'Zoom out',
-                      visualDensity: VisualDensity.compact,
-                      iconSize: 18,
-                      onPressed: () => _zoomBy(0.8),
-                      icon: const Icon(Icons.remove),
-                    ),
-                    IconButton(
-                      tooltip: 'Zoom in',
-                      visualDensity: VisualDensity.compact,
-                      iconSize: 18,
-                      onPressed: () => _zoomBy(1.25),
-                      icon: const Icon(Icons.add),
-                    ),
-                    IconButton(
-                      tooltip: 'Fit to screen',
-                      visualDensity: VisualDensity.compact,
-                      iconSize: 18,
-                      onPressed: _fit,
-                      icon: const Icon(Icons.fit_screen_outlined),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _GraphPill extends StatelessWidget {
-  const _GraphPill({required this.text});
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return IgnorePointer(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerHigh.withValues(alpha: 0.9),
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Text(text, style: Theme.of(context).textTheme.labelSmall),
-      ),
-    );
-  }
-}
-
-/// Edges first, cards on top.
-class _GraphCanvas extends StatelessWidget {
-  const _GraphCanvas({
-    required this.layout,
-    required this.progress,
-    required this.matches,
-    required this.selectedId,
-    required this.showToggles,
-    required this.onCardTap,
-    required this.onBackgroundTap,
-    required this.onToggle,
-    required this.onAddSubgoal,
-    required this.onAddParent,
-  });
-
-  final NodeGraphLayout layout;
-  final Map<String, double> progress;
-  final Set<String> matches;
-
-  /// The goal whose card paints the selection ring, if any.
-  final String? selectedId;
-
-  final bool showToggles;
-  final ValueChanged<Node> onCardTap;
-
-  /// A tap on empty canvas clears the selection.
-  final VoidCallback onBackgroundTap;
-
-  final ValueChanged<String> onToggle;
-  final ValueChanged<Node> onAddSubgoal;
-  final ValueChanged<Node> onAddParent;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return RepaintBoundary(
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: onBackgroundTap,
-            ),
-          ),
-          Positioned.fill(
-            child: CustomPaint(
-              painter: _GraphEdgePainter(
-                edges: layout.edges,
-                color: scheme.outline,
-              ),
-            ),
-          ),
-          for (final placement in layout.placements)
-            Positioned(
-              left: placement.rect.left,
-              top: placement.rect.top,
-              width: placement.rect.width,
-              height: placement.rect.height,
-              child: NodeGraphCard(
-                key: ValueKey(
-                  'graph-${placement.compact ? 'context' : 'node'}-'
-                  '${placement.node.id}',
-                ),
-                placement: placement,
-                progress: progress[placement.node.id] ?? 0,
-                isMatch: matches.contains(placement.node.id),
-                selected: placement.node.id == selectedId,
-                showToggle: showToggles,
-                onTap: () => onCardTap(placement.node),
-                onToggle: () => onToggle(placement.node.id),
-                onAddSubgoal: () => onAddSubgoal(placement.node),
-                onAddParent: () => onAddParent(placement.node),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _GraphEdgePainter extends CustomPainter {
-  const _GraphEdgePainter({required this.edges, required this.color});
-
-  final List<GraphEdge> edges;
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final primary = Paint()
-      ..color = color.withValues(alpha: 0.55)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4;
-    final shared = Paint()
-      ..color = color.withValues(alpha: 0.32)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2;
-    final faint = Paint()
-      ..color = color.withValues(alpha: 0.2)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.1;
-    for (final edge in edges) {
-      final dy = edge.end.dy - edge.start.dy;
-      final path = Path()
-        ..moveTo(edge.start.dx, edge.start.dy)
-        ..cubicTo(
-          edge.start.dx,
-          edge.start.dy + dy * 0.5,
-          edge.end.dx,
-          edge.end.dy - dy * 0.5,
-          edge.end.dx,
-          edge.end.dy,
-        );
-      canvas.drawPath(
-        path,
-        edge.faint ? faint : (edge.primary ? primary : shared),
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _GraphEdgePainter oldDelegate) =>
-      oldDelegate.edges != edges || oldDelegate.color != color;
 }
