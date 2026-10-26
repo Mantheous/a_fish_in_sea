@@ -68,6 +68,11 @@ class NodeGraphViewport extends StatefulWidget {
 
 const double _wheelScaleFactor = 200;
 
+/// Graph viewports narrower than this start with the hand tool selected, so
+/// a phone drag pans instead of drawing a marquee. Tapping the hand tool (or
+/// pressing V) switches to selection; the choice then sticks.
+const double kGraphAutoPanWidth = 600;
+
 class _NodeGraphViewportState extends State<NodeGraphViewport> {
   final NodeGraphCamera _camera = NodeGraphCamera();
   final FocusNode _focusNode = FocusNode(debugLabel: 'goal-graph');
@@ -79,6 +84,10 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
   int _zoomPercent = 100;
 
   bool _handTool = false;
+
+  /// True once the user picks a tool by hand. Until then a compact viewport
+  /// keeps the hand tool selected automatically.
+  bool _panToolChosen = false;
   bool _spaceHeld = false;
 
   final Map<int, Offset> _pointers = {};
@@ -102,6 +111,10 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
   double _trackpadScale = 1;
 
   bool get _panMode => _handTool || _spaceHeld;
+
+  /// Explicit hand tool (or space) absorbs card taps. Auto-pan on a compact
+  /// viewport does not: taps still select cards, only drags pan.
+  bool get _hardPanMode => _spaceHeld || (_panToolChosen && _handTool);
 
   bool get _additivePressed =>
       HardwareKeyboard.instance.isShiftPressed ||
@@ -176,11 +189,17 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
       return KeyEventResult.handled;
     }
     if (event.logicalKey == LogicalKeyboardKey.keyH) {
-      setState(() => _handTool = true);
+      setState(() {
+        _panToolChosen = true;
+        _handTool = true;
+      });
       return KeyEventResult.handled;
     }
     if (event.logicalKey == LogicalKeyboardKey.keyV) {
-      setState(() => _handTool = false);
+      setState(() {
+        _panToolChosen = true;
+        _handTool = false;
+      });
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -419,6 +438,9 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
       builder: (context, constraints) {
         _camera.viewport = Size(constraints.maxWidth, constraints.maxHeight);
         if (!_didFit && !_fitScheduled) _scheduleFit();
+        if (!_panToolChosen) {
+          _handTool = MediaQuery.sizeOf(context).width < kGraphAutoPanWidth;
+        }
         final scheme = Theme.of(context).colorScheme;
         return Focus(
           focusNode: _focusNode,
@@ -449,7 +471,7 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
                             child: AnimatedBuilder(
                               animation: _camera.controller,
                               child: AbsorbPointer(
-                                absorbing: _panMode,
+                                absorbing: _hardPanMode,
                                 child: SizedBox(
                                   width: widget.layoutSize.width,
                                   height: widget.layoutSize.height,
@@ -491,7 +513,10 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
                 child: NodeGraphNavControls(
                   zoomPercent: _zoomPercent,
                   handTool: _handTool,
-                  onToggleHand: () => setState(() => _handTool = !_handTool),
+                  onToggleHand: () => setState(() {
+                    _panToolChosen = true;
+                    _handTool = !_panMode;
+                  }),
                   onZoomOut: () {
                     _userMovedCamera = true;
                     _camera.zoomBy(0.8);
