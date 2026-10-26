@@ -126,6 +126,115 @@ void main() {
       expect(blocks.map((b) => b.displayId).toSet(), hasLength(2));
     });
 
+    test('runs land on the event they happened during', () {
+      final monday = TimeSession(
+        id: 'ts:mon',
+        start: DateTime(2026, 9, 7, 9, 5),
+        end: DateTime(2026, 9, 7, 9, 20),
+      );
+      final wednesday = TimeSession(
+        id: 'ts:wed',
+        start: DateTime(2026, 9, 9, 14, 5),
+        end: DateTime(2026, 9, 9, 14, 25),
+      );
+      final first = event('e1', DateTime(2026, 9, 7, 9)).copyWith(
+        taskId: 'n1',
+        isTask: true,
+        sessions: [monday, wednesday],
+        actualStart: monday.start,
+        actualEnd: wednesday.end,
+      );
+      final second = event('e2', DateTime(2026, 9, 9, 14)).copyWith(
+        taskId: 'n1',
+        isTask: true,
+        sessions: [monday, wednesday],
+        actualStart: monday.start,
+        actualEnd: wednesday.end,
+      );
+      final node = Node(
+        id: 'n1',
+        title: 'Task',
+        createdAt: DateTime(2026, 9, 1),
+        sessions: [monday, wednesday],
+        actualStart: monday.start,
+        actualEnd: wednesday.end,
+      );
+      final blocks = buildReportBlocks(
+        visibleEvents: [first, second],
+        nodes: [node],
+        reportsByDay: const {},
+      );
+      expect(blocks, hasLength(2));
+      final bySession = {
+        for (final block in blocks) block.sessionId: block.eventId,
+      };
+      expect(bySession['ts:mon'], 'e1');
+      expect(bySession['ts:wed'], 'e2');
+    });
+
+    test('live recording shows on the event it is running during', () {
+      final first = event('e1', DateTime(2026, 9, 7, 9)).copyWith(
+        taskId: 'n1',
+        isTask: true,
+      );
+      final second = event('e2', DateTime(2026, 9, 9, 14)).copyWith(
+        taskId: 'n1',
+        isTask: true,
+      );
+      final node = Node(
+        id: 'n1',
+        title: 'Task',
+        createdAt: DateTime(2026, 9, 1),
+        timerStartedAt: DateTime(2026, 9, 9, 14, 5),
+      );
+      final blocks = buildReportBlocks(
+        visibleEvents: [first, second],
+        nodes: [node],
+        reportsByDay: const {},
+        now: DateTime(2026, 9, 9, 14, 30),
+      );
+      expect(blocks, hasLength(1));
+      expect(blocks.single.kind, ReportBlockKind.live);
+      expect(blocks.single.eventId, 'e2');
+    });
+
+    test('a task recording marks every sibling event as reported', () {
+      final session = TimeSession(
+        id: 'ts:1',
+        start: DateTime(2026, 9, 7, 9, 5),
+        end: DateTime(2026, 9, 7, 9, 20),
+      );
+      final first = event('e1', DateTime(2026, 9, 7, 9)).copyWith(
+        taskId: 'n1',
+        isTask: true,
+        sessions: [session],
+        actualStart: session.start,
+        actualEnd: session.end,
+      );
+      final second = event('e2', DateTime(2026, 9, 9, 14)).copyWith(
+        taskId: 'n1',
+        isTask: true,
+        sessions: [session],
+        actualStart: session.start,
+        actualEnd: session.end,
+      );
+      final node = Node(
+        id: 'n1',
+        title: 'Task',
+        createdAt: DateTime(2026, 9, 1),
+        sessions: [session],
+        actualStart: session.start,
+        actualEnd: session.end,
+      );
+      final blocks = buildReportBlocks(
+        visibleEvents: [first, second],
+        nodes: [node],
+        reportsByDay: const {},
+      );
+      final reported = reportedEventIdsFor(blocks, [first, second], [node]);
+      expect(reported, containsAll(<String>['e1', 'e2']));
+    });
+
     test('one task with several events shows each session once', () {
       final session = TimeSession(
         id: 'ts:1',

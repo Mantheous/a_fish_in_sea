@@ -203,10 +203,7 @@ class CalendarProjection {
           reportBlockToDisplayEvent(block, template: byId[block.eventId]),
       ];
       reportById = {for (final block in blocks) block.displayId: block};
-      reportedEventIds = {
-        for (final block in blocks)
-          if (block.eventId != null) block.eventId!,
-      };
+      reportedEventIds = reportedEventIdsFor(blocks, _visible, nodes);
       // Chips live in the lane tile now, so their colors come straight from
       // the block's template (course/label/feed) instead of the calendar's
       // colorById, which only covers appointments in `shown`.
