@@ -440,7 +440,20 @@ class _BulkEditorState extends State<_BulkEditor> {
       );
       if (!mounted || confirmed != true) return;
     }
-    final live = [for (final node in widget.nodes) cubit.byId(node.id) ?? node];
+    // Never resurrect a goal deleted while the panel was open: writeNodes
+    // treats an unknown id as an insert, so only live nodes are candidates.
+    final live = [
+      for (final node in widget.nodes)
+        if (cubit.byId(node.id) case final current?) current,
+    ];
+    if (live.isEmpty) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Those goals no longer exist')),
+        );
+      return;
+    }
     final byId = {for (final node in cubit.state) node.id: node};
     final upserts = applyBulkEdits(live, edits, byId: byId);
     if (upserts.isEmpty) {
