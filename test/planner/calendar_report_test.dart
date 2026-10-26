@@ -126,6 +126,73 @@ void main() {
       expect(blocks.map((b) => b.displayId).toSet(), hasLength(2));
     });
 
+    test('one task with several events shows each session once', () {
+      final session = TimeSession(
+        id: 'ts:1',
+        start: DateTime(2026, 9, 4, 9, 5),
+        end: DateTime(2026, 9, 4, 9, 20),
+      );
+      final first = event('e1', DateTime(2026, 9, 4, 9)).copyWith(
+        taskId: 'n1',
+        isTask: true,
+        sessions: [session],
+        actualStart: session.start,
+        actualEnd: session.end,
+      );
+      final second = event('e2', DateTime(2026, 9, 4, 14)).copyWith(
+        taskId: 'n1',
+        isTask: true,
+        sessions: [session],
+        actualStart: session.start,
+        actualEnd: session.end,
+      );
+      final node = Node(
+        id: 'n1',
+        title: 'Task e1',
+        createdAt: DateTime(2026, 9, 4),
+        sessions: [session],
+        actualStart: session.start,
+        actualEnd: session.end,
+      );
+      final blocks = buildReportBlocks(
+        visibleEvents: [first, second],
+        nodes: [node],
+        reportsByDay: const {},
+      );
+      expect(
+        blocks.where((b) => b.kind == ReportBlockKind.timer),
+        hasLength(1),
+      );
+      expect(blocks.single.sessionId, 'ts:1');
+    });
+
+    test('one task with several events shows a single live block', () {
+      final first = event('e1', DateTime(2026, 9, 4, 9)).copyWith(
+        taskId: 'n1',
+        isTask: true,
+      );
+      final second = event('e2', DateTime(2026, 9, 4, 14)).copyWith(
+        taskId: 'n1',
+        isTask: true,
+      );
+      final node = Node(
+        id: 'n1',
+        title: 'Task e1',
+        createdAt: DateTime(2026, 9, 4),
+        timerStartedAt: DateTime(2026, 9, 4, 9, 10),
+      );
+      final blocks = buildReportBlocks(
+        visibleEvents: [first, second],
+        nodes: [node],
+        reportsByDay: const {},
+        now: DateTime(2026, 9, 4, 9, 40),
+      );
+      expect(
+        blocks.where((b) => b.kind == ReportBlockKind.live),
+        hasLength(1),
+      );
+    });
+
     test('mirrored task and event sessions are shown once', () {
       final first = TimeSession(
         id: 'ts:1',
