@@ -73,6 +73,7 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
   final FocusNode _focusNode = FocusNode(debugLabel: 'goal-graph');
 
   bool _didFit = false;
+  bool _userMovedCamera = false;
   bool _fitScheduled = false;
   bool _revealScheduled = false;
   int _zoomPercent = 100;
@@ -118,10 +119,18 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
   void didUpdateWidget(covariant NodeGraphViewport oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.fitToken != oldWidget.fitToken) {
+      // An explicit refit (filter change) resets the view for the new graph.
       _didFit = false;
+      _userMovedCamera = false;
       _scheduleFit();
     } else if (widget.revealToken != oldWidget.revealToken) {
+      _userMovedCamera = true;
       _scheduleReveal();
+    } else if (widget.layoutSize != oldWidget.layoutSize && !_userMovedCamera) {
+      // Nodes can arrive after the first fit (demo hydration, the homework
+      // structure post-frame, generated instances). Keep the initial view
+      // fitted until the user actually pans or zooms.
+      _scheduleFit();
     }
   }
 
@@ -205,6 +214,7 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
     _focusNode.requestFocus();
     _pointers[event.pointer] = event.localPosition;
     if (_pointers.length >= 2) {
+      _userMovedCamera = true;
       _endGesture();
       _gesture = _Gesture.pinch;
       _pinchStart = _camera.controller.value.clone();
@@ -235,8 +245,9 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
   }
 
   bool _panRequested(PointerDownEvent event) {
-    if (_panMode) return true;
-    return (event.buttons & kMiddleMouseButton) != 0;
+    final pan = _panMode || (event.buttons & kMiddleMouseButton) != 0;
+    if (pan) _userMovedCamera = true;
+    return pan;
   }
 
   void _handlePointerMove(PointerMoveEvent event) {
@@ -354,6 +365,7 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
   }
 
   void _handlePointerSignal(PointerSignalEvent event) {
+    _userMovedCamera = true;
     if (event is PointerScrollEvent) {
       final zoom =
           HardwareKeyboard.instance.isControlPressed ||
@@ -380,6 +392,7 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
   }
 
   void _handleTrackpadStart(PointerPanZoomStartEvent event) {
+    _userMovedCamera = true;
     _trackpadStart = _camera.controller.value.clone();
     _trackpadFocal = event.localPosition;
     _trackpadScale = _camera.scale;
@@ -479,10 +492,22 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
                   zoomPercent: _zoomPercent,
                   handTool: _handTool,
                   onToggleHand: () => setState(() => _handTool = !_handTool),
-                  onZoomOut: () => _camera.zoomBy(0.8),
-                  onZoomIn: () => _camera.zoomBy(1.25),
-                  onZoomTo: _camera.zoomTo,
-                  onFit: () => _camera.fit(widget.layoutSize),
+                  onZoomOut: () {
+                    _userMovedCamera = true;
+                    _camera.zoomBy(0.8);
+                  },
+                  onZoomIn: () {
+                    _userMovedCamera = true;
+                    _camera.zoomBy(1.25);
+                  },
+                  onZoomTo: (target) {
+                    _userMovedCamera = true;
+                    _camera.zoomTo(target);
+                  },
+                  onFit: () {
+                    _userMovedCamera = true;
+                    _camera.fit(widget.layoutSize);
+                  },
                 ),
               ),
             ],
