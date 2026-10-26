@@ -14,7 +14,15 @@ import '../bloc/calendar_cubit.dart';
 /// Marks [ids] done in one undoable step, mirroring completion onto their
 /// linked calendar events. Shows the undo snackbar; returns the number of
 /// nodes changed (0 when the selection was empty, stale, or already done).
-int markTaskNodesDone(BuildContext context, Set<String> ids) {
+///
+/// [noun] is the user-facing member name for the snackbar; the goal graph
+/// reuses this for its bulk bar with "goal" instead of "task".
+int markTaskNodesDone(
+  BuildContext context,
+  Set<String> ids, {
+  bool done = true,
+  String noun = 'task',
+}) {
   NodeCubit nodes;
   try {
     nodes = context.read<NodeCubit>();
@@ -30,31 +38,38 @@ int markTaskNodesDone(BuildContext context, Set<String> ids) {
   final undoCubit = context.read<UndoCubit>();
   final messenger = ScaffoldMessenger.maybeOf(context);
   final changed = calendar == null
-      ? nodes.setDoneMany(live, done: true)
-      : NodeEventLink.setNodesDone(nodes, calendar, live, done: true);
+      ? nodes.setDoneMany(live, done: done)
+      : NodeEventLink.setNodesDone(nodes, calendar, live, done: done);
+  final plural = '$changed ${noun}s';
   messenger
     ?..hideCurrentSnackBar()
     ..showSnackBar(
       SnackBar(
         content: Text(
-          changed == 1 ? '1 task marked done' : '$changed tasks marked done',
+          changed == 1
+              ? '1 $noun ${done ? 'marked done' : 'reopened'}'
+              : '$plural ${done ? 'marked done' : 'reopened'}',
         ),
         duration: const Duration(seconds: 4),
         // Action snackbars persist forever by default; this one must go.
         persist: false,
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: undoCubit.undo,
-        ),
+        action: SnackBarAction(label: 'Undo', onPressed: undoCubit.undo),
       ),
     );
   return changed;
 }
 
 /// Deletes [ids] in one undoable step, keeping their calendar events but
-/// clearing the task links. Shows the undo snackbar; returns the number
-/// of nodes removed (0 when the selection was empty or stale).
-int deleteTaskNodes(BuildContext context, Set<String> ids) {
+/// clearing the task links. Shows the undo snackbar; returns the number of
+/// nodes removed (0 when the selection was empty or stale).
+///
+/// [noun] is the user-facing member name for the snackbar; the goal graph
+/// passes "goal".
+int deleteTaskNodes(
+  BuildContext context,
+  Set<String> ids, {
+  String noun = 'task',
+}) {
   NodeCubit nodes;
   try {
     nodes = context.read<NodeCubit>();
@@ -89,15 +104,12 @@ int deleteTaskNodes(BuildContext context, Set<String> ids) {
     ..showSnackBar(
       SnackBar(
         content: Text(
-          removed == 1 ? '1 task deleted' : '$removed tasks deleted',
+          removed == 1 ? '1 $noun deleted' : '$removed ${noun}s deleted',
         ),
         duration: const Duration(seconds: 4),
         // Action snackbars persist forever by default; this one must go.
         persist: false,
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: undoCubit.undo,
-        ),
+        action: SnackBarAction(label: 'Undo', onPressed: undoCubit.undo),
       ),
     );
   return removed;
