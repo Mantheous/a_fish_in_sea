@@ -201,12 +201,55 @@ List<ReportBlock> buildReportBlocks({
   final visibleEventIds = {for (final e in visibleEvents) e.id};
   final handledNodeIds = <String>{};
   // One task can own several plan events (taskId links plus direct
-  // calendarEventId/sourceEventId links). The node's timer and sessions are
-  // mirrored onto every linked event for cache alignment, so without a
-  // global guard the same recording renders once per event. Session ids are
-  // stable across mirrors (TimeSession.idFor), so they dedupe the copies
-  // while genuinely distinct runs stay separate. Live blocks dedupe by the
-  // owning node for the same reason.
+  // calendarEventId/sourceEventId links). Its timer and sessions are
+  // mirrored onto every linked event for cache alignment, so each run must
+  // be attributed to the event it actually happened during — Toggl-style,
+  // every entry sits on its own row — and rendered exactly once. Session
+  // ids are stable across mirrors (TimeSession.idFor), so they dedupe the
+  // copies while genuinely distinct runs stay separate.
+  final eventById = {for (final e in visibleEvents) e.id: e};
+  final eventsByNode = <String, List<PlannerEvent>>{};
+  void linkEvent(String? nodeId, PlannerEvent event) {
+    if (nodeId == null || event.allDay) return;
+    final list = eventsByNode[nodeId] ??= <PlannerEvent>[];
+    if (!list.any((e) => e.id == event.id)) list.add(event);
+  }
+
+  for (final event in visibleEvents) {
+    linkEvent(event.taskId, event);
+  }
+  for (final node in nodes) {
+    for (final eventId in [node.calendarEventId, node.sourceEventId]) {
+      final event = eventId == null ? null : eventById[eventId];
+      if (event != null) linkEvent(node.id, event);
+    }
+  }
+  final sessionOwner = <String, String>{};
+  final liveOwner = <String, String>{};
+  for (final node in nodes) {
+    final candidates = eventsByNode[node.id];
+    if (candidates == null || candidates.isEmpty) continue;
+    for (final session in node.sessions) {
+      final owner = _ownerEventId(candidates, session.start, session.end);
+      if (owner != null) sessionOwner.putIfAbsent(session.id, () => owner);
+    }
+    final started = node.timerStartedAt;
+    if (started != null) {
+      final owner = _ownerEventId(candidates, started, at);
+      if (owner != null) liveOwner[node.id] = owner;
+    }
+  }
+  // Runs cached on an event (older data, or a run that never reached its
+  // node) still land on the event they belong to.
+  for (final event in visibleEvents) {
+    if (event.allDay) continue;
+    final candidates = eventsByNode[event.taskId] ?? const <PlannerEvent>[];
+    for (final session in event.sessions) {
+      if (sessionOwner.containsKey(session.id)) continue;
+      sessionOwner[session.id] =
+          _ownerEventId(candidates, session.start, session.end) ?? event.id;
+    }
+  }
   final emittedSessionIds = <String>{};
   final emittedLiveNodeIds = <String>{};
 
@@ -241,11 +284,13 @@ List<ReportBlock> buildReportBlocks({
     }
     var emitLive = false;
     if (liveStart != null) {
-      if (liveNodeId != null) {
-        // Node-owned timer mirrored onto every linked event: show once.
-        emitLive = emittedLiveNodeIds.add(liveNodeId);
-      } else {
+      final owner = liveNodeId == null ? null : liveOwner[liveNodeId];
+      if (liveNodeId == null) {
         emitLive = true;
+      } else if (owner == event.id) {
+        // The timer shows on the event whose slot it is running in, so a
+        // recording started from any of a task's events appears there.
+        emitLive = emittedLiveNodeIds.add(liveNodeId);
       }
     }
     if (emitLive) {
@@ -271,8 +316,15 @@ List<ReportBlock> buildReportBlocks({
 
     final sessions = _recordedSessions(event, linked);
     if (sessions.isNotEmpty) {
+      // Only the attributed event owns each run; the mirrored copies on the
+      // task's other events are skipped. Distinct runs keep their own ids
+      // and can each land on a different event.
+      final owned = [
+        for (final session in sessions)
+          if ((sessionOwner[session.id] ?? event.id) == event.id) session,
+      ];
       final hasMultiple = sessions.length > 1;
-      for (final session in sessions) {
+      for (final session in owned) {
         if (!emittedSessionIds.add(session.id)) continue;
         blocks.add(
           ReportBlock(
@@ -289,6 +341,11 @@ List<ReportBlock> buildReportBlocks({
           ),
         );
       }
+      if (owned.isNotEmpty) continue;
+      // Every run belongs to a sibling event (the task's other plan block):
+      // this block's lane stays empty, Toggl-style — the entry sits on the
+      // row it happened during. Accepted entries stay hidden too, since the
+      // task already has real recorded time.
       continue;
     }
     if (liveStart != null) continue;
@@ -420,6 +477,94 @@ List<TimeSession> _recordedSessions(PlannerEvent event, List<Node> linked) {
 
 List<TimeSession> _sortedSessions(Iterable<TimeSession> sessions) =>
     sessions.toList()..sort((a, b) => a.start.compareTo(b.start));
+
+/// Which of a task's plan events a recording belongs to.
+///
+/// Toggl-style attribution: an entry sits on the row it happened during, so
+/// a task planned twice (say Monday 9am and Wednesday 2pm) shows Monday's
+/// run on Monday and Wednesday's on Wednesday instead of stacking both on
+/// one of them. Picks the event with the largest overlap, then the nearest
+/// one; ties break on earliest start, then id, so the choice is stable
+/// across rebuilds.
+String? _ownerEventId(
+  List<PlannerEvent> candidates,
+  DateTime start,
+  DateTime end,
+) {
+  if (candidates.isEmpty) return null;
+  PlannerEvent? best;
+  var bestOverlap = -1;
+  var bestGap = -1;
+  for (final event in candidates) {
+    final overlap = _overlapSeconds(event, start, end);
+    final gap = _gapSeconds(event, start, end);
+    final better = best == null ||
+        overlap > bestOverlap ||
+        (overlap == bestOverlap && gap < bestGap) ||
+        (overlap == bestOverlap &&
+            gap == bestGap &&
+            (event.start.isBefore(best.start) ||
+                (event.start == best.start &&
+                    event.id.compareTo(best.id) < 0)));
+    if (better) {
+      best = event;
+      bestOverlap = overlap;
+      bestGap = gap;
+    }
+  }
+  return best?.id;
+}
+
+int _overlapSeconds(PlannerEvent event, DateTime start, DateTime end) {
+  final from = start.isAfter(event.start) ? start : event.start;
+  final to = end.isBefore(event.end) ? end : event.end;
+  return to.isAfter(from) ? to.difference(from).inSeconds : 0;
+}
+
+int _gapSeconds(PlannerEvent event, DateTime start, DateTime end) {
+  if (!end.isBefore(event.start) && !start.isAfter(event.end)) return 0;
+  if (end.isBefore(event.start)) return event.start.difference(end).inSeconds;
+  return start.difference(event.end).inSeconds.abs();
+}
+
+/// Event ids that already carry a report, including the sibling events of
+/// the same task.
+///
+/// A task's recorded time belongs to all of its plan events, so copying a
+/// sibling event's plan into the report lane would record the same work a
+/// second time. The copy badge and [buildPlanCopyEntry] read this set, so
+/// multi-event tasks stay protected the way single-event tasks already are.
+Set<String> reportedEventIdsFor(
+  List<ReportBlock> blocks,
+  List<PlannerEvent> visibleEvents,
+  List<Node> nodes,
+) {
+  final ids = <String>{
+    for (final block in blocks)
+      if (block.eventId != null) block.eventId!,
+  };
+  if (ids.isEmpty) return ids;
+  final nodeForEvent = <String, String>{};
+  for (final node in nodes) {
+    for (final eventId in [node.calendarEventId, node.sourceEventId]) {
+      if (eventId != null) nodeForEvent[eventId] = node.id;
+    }
+  }
+  final reportedNodeIds = <String>{};
+  for (final event in visibleEvents) {
+    if (!ids.contains(event.id)) continue;
+    final taskId = event.taskId;
+    if (taskId != null) reportedNodeIds.add(taskId);
+    final nodeId = nodeForEvent[event.id];
+    if (nodeId != null) reportedNodeIds.add(nodeId);
+  }
+  if (reportedNodeIds.isEmpty) return ids;
+  for (final event in visibleEvents) {
+    final taskId = event.taskId;
+    if (taskId != null && reportedNodeIds.contains(taskId)) ids.add(event.id);
+  }
+  return ids;
+}
 
 PlannerEvent reportBlockToDisplayEvent(
   ReportBlock block, {

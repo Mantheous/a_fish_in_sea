@@ -3,9 +3,12 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
 import '../../common/undo/undo_cubit.dart';
+import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/service/node_calendar.dart';
+import '../../nodes/service/node_event_link.dart';
 import '../../reporting/bloc/reporting_cubit.dart';
 import '../../reporting/model/reported_entry.dart';
+import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
 import '../model/planner_event.dart';
 import '../service/calendar_report.dart';
@@ -80,6 +83,19 @@ bool copyPlanEventToReport(
   if (isNodeBlockId(event.id)) return false;
   if (event.isTracking || event.hasReported) return false;
   if (reportedEventIds?.contains(event.id) ?? false) return false;
+  // A task's recorded time covers every one of its plan events. Copying
+  // one event's plan while the task already has a recording would count
+  // the same work twice, so refuse to copy a sibling's time.
+  try {
+    final backing = NodeEventLink.backingNodeFor(
+      context.read<NodeCubit>(),
+      context.read<CalendarCubit>(),
+      event.id,
+    );
+    if (backing != null && (backing.hasReported || backing.isTracking)) {
+      return false;
+    }
+  } catch (_) {}
   ReportingCubit reporting;
   try {
     reporting = context.read<ReportingCubit>();
