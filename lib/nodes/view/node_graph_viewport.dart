@@ -98,6 +98,7 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
   Offset _panStartTranslation = Offset.zero;
 
   Offset? _marqueeStart;
+  Offset? _marqueeStartScene;
   Offset? _marqueeCurrent;
   Set<String> _marqueeIds = const {};
 
@@ -257,6 +258,7 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
     _gesture = _Gesture.marquee;
     _activePointer = event.pointer;
     _marqueeStart = event.localPosition;
+    _marqueeStartScene = _camera.toScene(event.localPosition);
     _marqueeCurrent = event.localPosition;
     _marqueeIds = const {};
     setState(() {});
@@ -288,7 +290,13 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
       case _Gesture.marquee:
         if (event.pointer != _activePointer || _marqueeStart == null) return;
         _marqueeCurrent = event.localPosition;
-        final rect = Rect.fromPoints(_marqueeStart!, _marqueeCurrent!);
+        // The marquee is drawn in screen space but cards live in layout
+        // space. Convert both corners through the camera before comparing,
+        // otherwise a fit/zoomed graph selects whatever happens to sit at
+        // those raw coordinates in the unscaled layout.
+        final start = _marqueeStartScene;
+        if (start == null) return;
+        final rect = Rect.fromPoints(start, _camera.toScene(_marqueeCurrent!));
         final ids = _idsIn(rect);
         if (!setEquals(ids, _marqueeIds)) {
           _marqueeIds = ids;
@@ -330,6 +338,7 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
     if (active) {
       setState(() {
         _marqueeStart = null;
+        _marqueeStartScene = null;
         _marqueeCurrent = null;
         _marqueeIds = const {};
       });
