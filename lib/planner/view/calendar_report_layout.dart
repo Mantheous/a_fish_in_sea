@@ -19,10 +19,6 @@ Widget planAppointmentInTrack({
   VoidCallback? onTap,
   ValueChanged<PointerSignalEvent>? onPointerSignal,
   GestureDragUpdateCallback? onVerticalDragUpdate,
-  GestureLongPressStartCallback? onLongPressStart,
-  GestureLongPressMoveUpdateCallback? onLongPressMoveUpdate,
-  GestureLongPressEndCallback? onLongPressEnd,
-  VoidCallback? onLongPressCancel,
 }) {
   if (visibleDays.isEmpty || !calendarWidth.isFinite || bounds.width <= 0) {
     return child;
@@ -69,10 +65,6 @@ Widget planAppointmentInTrack({
     onTap: onTap,
     onPointerSignal: onPointerSignal,
     onVerticalDragUpdate: onVerticalDragUpdate,
-    onLongPressStart: onLongPressStart,
-    onLongPressMoveUpdate: onLongPressMoveUpdate,
-    onLongPressEnd: onLongPressEnd,
-    onLongPressCancel: onLongPressCancel,
     child: child,
   );
 }
@@ -89,10 +81,6 @@ class _PlanAppointmentOverlay extends StatefulWidget {
     required this.onTap,
     required this.onPointerSignal,
     required this.onVerticalDragUpdate,
-    required this.onLongPressStart,
-    required this.onLongPressMoveUpdate,
-    required this.onLongPressEnd,
-    required this.onLongPressCancel,
   });
 
   final LayerLink link;
@@ -109,10 +97,6 @@ class _PlanAppointmentOverlay extends StatefulWidget {
   final VoidCallback? onTap;
   final ValueChanged<PointerSignalEvent>? onPointerSignal;
   final GestureDragUpdateCallback? onVerticalDragUpdate;
-  final GestureLongPressStartCallback? onLongPressStart;
-  final GestureLongPressMoveUpdateCallback? onLongPressMoveUpdate;
-  final GestureLongPressEndCallback? onLongPressEnd;
-  final VoidCallback? onLongPressCancel;
 
   @override
   State<_PlanAppointmentOverlay> createState() =>
@@ -176,10 +160,6 @@ class _PlanAppointmentOverlayState extends State<_PlanAppointmentOverlay> {
                       behavior: HitTestBehavior.opaque,
                       onTap: widget.onTap,
                       onVerticalDragUpdate: widget.onVerticalDragUpdate,
-                      onLongPressStart: widget.onLongPressStart,
-                      onLongPressMoveUpdate: widget.onLongPressMoveUpdate,
-                      onLongPressEnd: widget.onLongPressEnd,
-                      onLongPressCancel: widget.onLongPressCancel,
                       child: widget.child,
                     ),
                   ),
