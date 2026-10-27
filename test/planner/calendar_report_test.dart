@@ -473,6 +473,42 @@ void main() {
       expect(blocks.single.entryId, 'rep:extra:x:1');
     });
 
+    test('an all-day event does not hide its task timer', () {
+      final start = DateTime(2026, 9, 4, 9);
+      final session = TimeSession(
+        id: TimeSession.idFor(start, start.add(const Duration(minutes: 30))),
+        start: start,
+        end: start.add(const Duration(minutes: 30)),
+      );
+      final blocks = buildReportBlocks(
+        visibleEvents: [
+          PlannerEvent(
+            id: 'e1',
+            subject: 'Due',
+            start: DateTime(2026, 9, 4),
+            end: DateTime(2026, 9, 5),
+            allDay: true,
+            taskId: 'n1',
+          ),
+        ],
+        nodes: [
+          Node(
+            id: 'n1',
+            title: 'Essay',
+            createdAt: DateTime(2026, 9, 1),
+            calendarEventId: 'e1',
+            sessions: [session],
+            actualStart: session.start,
+            actualEnd: session.end,
+          ),
+        ],
+        reportsByDay: const {},
+      );
+      expect(blocks, hasLength(1));
+      expect(blocks.single.kind, ReportBlockKind.timer);
+      expect(blocks.single.sessionId, session.id);
+    });
+
     test('all-day events are skipped', () {
       final blocks = buildReportBlocks(
         visibleEvents: [

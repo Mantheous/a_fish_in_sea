@@ -291,18 +291,62 @@ class NodeEventLink {
 
   /// Deletes an event together with its backing nodes.
   /// One user gesture = one undo step (the silent node removal is folded
-  /// into the same record, so undo restores both. A task-seeded standalone
-  /// node survives, but its personal event link is cleared in that record.
+  /// into the same record, so undo restores both). A task-seeded standalone
+  /// node survives, but its personal event link and the deleted block are
+  /// cleared in that record. The old implementation removed every node
+  /// matching the event first — including the seeded task and its recorded
+  /// sessions — then cleared a link on the node it had just deleted.
   static void deleteEventAndNodes(
     CalendarCubit calendar,
     NodeCubit nodes,
     PlannerEvent event,
   ) {
     RevertableHydratedCubit.atomic([calendar, nodes], () {
-      nodes.removeNodesForEvent(event.id);
-      if (event.taskId != null) nodes.clearCalendarEvent(event.taskId!);
-      nodes.clearCalendarEventForEvent(event.id);
+      releaseEventNodes(nodes, event);
       calendar.deleteEvent(event.id);
+    });
+  }
+
+  /// Node-side half of an event delete, for callers that already removed the
+  /// calendar row (remote deletes). Preserves a task that only scheduled the
+  /// event, clears its block link, and removes disposable shadow nodes.
+  static void releaseEventNodes(NodeCubit nodes, PlannerEvent event) {
+    final taskId = event.taskId;
+    final seeded = taskId == null ? null : nodes.byId(taskId);
+    // `node:<eventId>` is the disposable shadow created for an event marked
+    // as actionable; feed shadows use the event id itself. Anything else
+    // reached through `taskId` is the task that scheduled this block.
+    final keepSeeded =
+        seeded != null &&
+        seeded.id != event.id &&
+        seeded.id != 'node:${event.id}';
+    final removeIds = <String>{
+      for (final node in nodes.state)
+        if (!(keepSeeded && node.id == seeded.id))
+          if (node.calendarEventId == event.id ||
+              node.sourceEventId == event.id)
+            node.id,
+    };
+    if (removeIds.isNotEmpty) nodes.deleteNodes(removeIds);
+    if (keepSeeded && seeded.calendarEventId == event.id) {
+      // The block is gone; keep the task's due date but stop showing a
+      // phantom planned interval on the task side.
+      nodes.clearScheduleBlock(seeded.id);
+    }
+    nodes.clearCalendarEventForEvent(event.id);
+  }
+
+  /// Releases several deleted events as one undoable node change. Used by a
+  /// remote series delete, where the calendar rows are already gone before
+  /// cleanup runs — collecting the rows first is the caller's job.
+  static void releaseNodesForDeletedEvents(
+    NodeCubit nodes,
+    Iterable<PlannerEvent> events,
+  ) {
+    RevertableHydratedCubit.atomic([nodes], () {
+      for (final event in events) {
+        releaseEventNodes(nodes, event);
+      }
     });
   }
 

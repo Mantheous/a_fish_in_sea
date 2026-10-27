@@ -375,6 +375,99 @@ void main() {
           reason: 'recording extra time must not reopen the task');
     });
 
+    test('starting a failed node reopens it, like a calendar event', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      nodes.addNode(
+        taskNode('n1')
+            .copyWith(status: NodeStatus.failed, clearCompletedAt: true),
+      );
+      NodeEventLink.startNodeTracking(
+        nodes,
+        calendar,
+        'n1',
+        now: DateTime(2026, 10, 13, 7),
+      );
+      expect(nodes.byId('n1')?.isTracking, isTrue);
+      expect(nodes.byId('n1')?.status, NodeStatus.open);
+    });
+
+    test('editing a running task start mirrors a linked event timer', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      calendar.addEvent(
+        evt('e1', taskId: 'n1').copyWith(
+          timerStartedAt: DateTime(2026, 10, 13, 7),
+        ),
+      );
+      nodes.addNode(
+        taskNode('n1', calendarEventId: 'e1').copyWith(
+          timerStartedAt: DateTime(2026, 10, 13, 7),
+        ),
+      );
+      final corrected = DateTime(2026, 10, 13, 6, 55);
+      NodeEventSync.setNodeTimerStart(nodes, calendar, 'n1', corrected);
+      expect(nodes.byId('n1')?.timerStartedAt, corrected);
+      expect(calendar.byId('e1')?.timerStartedAt, corrected);
+    });
+
+    test('deleting a block keeps the task that scheduled it', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      final session = TimeSession(
+        id: TimeSession.idFor(
+          DateTime(2026, 10, 13, 7),
+          DateTime(2026, 10, 13, 7, 25),
+        ),
+        start: DateTime(2026, 10, 13, 7),
+        end: DateTime(2026, 10, 13, 7, 25),
+      );
+      calendar.addEvent(evt('e1', taskId: 'n1'));
+      nodes.addNode(
+        Node(
+          id: 'n1',
+          title: 'Scripture study',
+          createdAt: DateTime(2026, 10, 1),
+          calendarEventId: 'e1',
+          schedule: ScheduleFacet(
+            due: DateTime(2026, 10, 13, 23),
+            start: DateTime(2026, 10, 13, 7),
+            end: DateTime(2026, 10, 13, 7, 30),
+          ),
+          sessions: [session],
+          actualStart: session.start,
+          actualEnd: session.end,
+        ),
+      );
+
+      NodeEventLink.deleteEventAndNodes(
+        calendar,
+        nodes,
+        calendar.byId('e1')!,
+      );
+
+      final kept = nodes.byId('n1');
+      expect(kept, isNotNull);
+      expect(kept!.calendarEventId, isNull);
+      expect(kept.recordedSessions, hasLength(1));
+      expect(kept.schedule?.due, DateTime(2026, 10, 13, 23));
+      expect(kept.schedule?.hasCalendarBlock, isFalse);
+      expect(calendar.byId('e1'), isNull);
+    });
+
+    test('deleting an event still removes its disposable shadow', () {
+      final nodes = NodeCubit();
+      final calendar = CalendarCubit();
+      calendar.addEvent(evt('e1'));
+      nodes.addNode(taskNode('node:e1', calendarEventId: 'e1'));
+      NodeEventLink.deleteEventAndNodes(
+        calendar,
+        nodes,
+        calendar.byId('e1')!,
+      );
+      expect(nodes.byId('node:e1'), isNull);
+    });
+
     test('plain events still record on the event', () {
       final nodes = NodeCubit();
       final calendar = CalendarCubit();

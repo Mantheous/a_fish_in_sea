@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/common/time/time_session.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
@@ -16,6 +17,7 @@ Node _node(
   ScheduleFacet? schedule,
   DateTime? actualStart,
   DateTime? actualEnd,
+  List<TimeSession> sessions = const [],
   DateTime? completedAt,
   NodeStatus status = NodeStatus.open,
   String? classLabel,
@@ -30,6 +32,7 @@ Node _node(
   schedule: schedule,
   actualStart: actualStart,
   actualEnd: actualEnd,
+  sessions: sessions,
   completedAt: completedAt,
   status: status,
   classLabel: classLabel,
@@ -184,6 +187,45 @@ void main() {
       expect(reading.satisfied, isTrue);
       expect(reading.matched, 3);
       expect(reading.summary, '7h / 7h');
+    });
+
+    test('counts recorded runs, not the gap between them', () {
+      final goal = _node(
+        'study',
+        auto: const AutoFacet(
+          source: AutoSource.tasks,
+          metric: AutoMetric.minutes,
+          target: 60,
+        ),
+      );
+      final first = TimeSession(
+        id: 's1',
+        start: _monday.add(const Duration(hours: 9)),
+        end: _monday.add(const Duration(hours: 9, minutes: 30)),
+      );
+      final second = TimeSession(
+        id: 's2',
+        start: _monday.add(const Duration(hours: 14)),
+        end: _monday.add(const Duration(hours: 14, minutes: 30)),
+      );
+      final task = _node(
+        'task',
+        parents: const ['study'],
+        sessions: [first, second],
+        actualStart: first.start,
+        actualEnd: second.end,
+      );
+      final reading = evaluateAutoGoal(
+        goal,
+        now: _monday.add(const Duration(hours: 18)),
+        nodes: [goal, task],
+      );
+      expect(
+        reading.actual,
+        60,
+        reason: 'the 4.5-hour gap between sessions is not work',
+      );
+      expect(reading.progress, 1.0);
     });
 
     test('uses elapsed calendar blocks when nothing was recorded', () {

@@ -1002,7 +1002,7 @@ class _NodeTile extends StatelessWidget {
           icon: Icon(Icons.stop, color: theme.colorScheme.primary),
           onPressed: () => stopNodeAndFinish(context, live.id),
         )
-      else if (!live.isUnbounded && live.isOpen)
+      else if (!live.isUnbounded && !live.isDone)
         IconButton(
           tooltip: 'Start recording',
           icon: const Icon(Icons.play_arrow),

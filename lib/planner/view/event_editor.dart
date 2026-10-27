@@ -391,6 +391,21 @@ class EventEditorFormState extends State<EventEditorForm> {
     final seededFromTask = widget.existing == null && _sourceTaskId != null;
     _isTask = existing?.isTask ?? seededFromTask;
     _done = existing?.done ?? false;
+    // A linked task owns completion. Reading only the event made the status
+    // tile (which prefers the task) and this checkbox disagree, and saving
+    // then re-opened a task that was actually done.
+    if (existing != null) {
+      try {
+        for (final node in context.read<NodeCubit>().state) {
+          if (node.calendarEventId == existing.id ||
+              node.sourceEventId == existing.id ||
+              node.id == existing.taskId) {
+            _done = node.isDone;
+            break;
+          }
+        }
+      } catch (_) {}
+    }
     _reminderMinutesBefore = existing?.reminderMinutesBefore;
     if (existing != null) {
       _date = DateTime(
@@ -2041,44 +2056,21 @@ class EventEditorFormState extends State<EventEditorForm> {
     final calendarCubit = context.read<CalendarCubit>();
     final existing = widget.existing;
     if (existing == null) return;
-    void clearTaskLink({bool wholeSeries = false}) {
-      try {
-        final nodeCubit = context.read<NodeCubit>();
-        if (!wholeSeries) {
-          if (existing.taskId != null) {
-            nodeCubit.clearCalendarEvent(existing.taskId!);
-          }
-          nodeCubit.clearCalendarEventForEvent(existing.id);
-          nodeCubit.removeNodesForEvent(existing.id);
-          return;
-        }
-        final key = FeedCubit.seriesRemoteId(existing) ??
-            FeedCubit.seriesKeyFor(existing);
-        final ids = <String>{existing.id};
-        if (key != null) {
-          for (final event in calendarCubit.state) {
-            if (FeedCubit.seriesKeyFor(event) == key) ids.add(event.id);
-          }
-        }
-        for (final id in ids) {
-          nodeCubit.clearCalendarEventForEvent(id);
-          nodeCubit.removeNodesForEvent(id);
-        }
-        if (existing.taskId != null) {
-          nodeCubit.clearCalendarEvent(existing.taskId!);
-        }
-      } catch (_) {}
-    }
+    NodeCubit? nodes;
+    try {
+      nodes = context.read<NodeCubit>();
+    } catch (_) {}
 
     if (!feedCubit.isRemoteEditable(existing)) {
-      NodeCubit? nodes;
-      try {
-        nodes = context.read<NodeCubit>();
-      } catch (_) {}
-      if (nodes == null) {
+      final nodeCubit = nodes;
+      if (nodeCubit == null) {
         calendarCubit.deleteEvent(existing.id);
       } else {
-        NodeEventLink.deleteEventAndNodes(calendarCubit, nodes, existing);
+        NodeEventLink.deleteEventAndNodes(
+          calendarCubit,
+          nodeCubit,
+          existing,
+        );
       }
       await EventReminderService.cancelReminder(existing.id);
       // Close the editor before showing the undo prompt: the bar draws
@@ -2135,6 +2127,21 @@ class EventEditorFormState extends State<EventEditorForm> {
       series = choice == _DeleteChoice.series;
     }
     if (!context.mounted) return;
+    // The remote delete drops the series rows before returning, so collect
+    // every occurrence now. Reading the calendar afterwards only found the
+    // edited occurrence and left its sibling task nodes dangling.
+    final seriesKey = series
+        ? (FeedCubit.seriesRemoteId(existing) ??
+              FeedCubit.seriesKeyFor(existing))
+        : null;
+    final eventsToRelease = <PlannerEvent>[
+      existing,
+      if (seriesKey != null)
+        for (final event in calendarCubit.state)
+          if (event.id != existing.id &&
+              FeedCubit.seriesKeyFor(event) == seriesKey)
+            event,
+    ];
     setState(() => _saving = true);
     final error =
         await feedCubit.pushEventDelete(existing, series: series);
@@ -2146,7 +2153,10 @@ class EventEditorFormState extends State<EventEditorForm> {
       );
       return;
     }
-    clearTaskLink(wholeSeries: series);
+    final nodeCubit = nodes;
+    if (nodeCubit != null) {
+      NodeEventLink.releaseNodesForDeletedEvents(nodeCubit, eventsToRelease);
+    }
     await EventReminderService.cancelReminder(existing.id);
     widget.onFinished?.call();
   }

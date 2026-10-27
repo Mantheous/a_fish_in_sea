@@ -167,34 +167,40 @@ WeeklyTimeReport buildWeeklyTimeReport({
     // file an accepted manual report against one, so only skip the
     // timer/actuals passes for them.
     if (!event.allDay) {
+      // A live run and the stopped runs before it are different intervals:
+      // show all of them. Returning early after the live block used to hide
+      // every earlier run until the timer stopped (issue: timesheet total
+      // jumped when pressing Stop).
       final liveStart = event.timerStartedAt ?? _firstTrackingStart(backing);
-      if (liveStart != null) {
-        final end = at.isAfter(liveStart)
-            ? at
-            : liveStart.add(const Duration(minutes: 1));
-        if (backing != null) consumedNodeIds.add(backing.id);
-        if (!emittedSessions.add(
-          'live|${backing?.id ?? event.id}|'
-          '${liveStart.microsecondsSinceEpoch}',
-        )) {
-          continue;
+      final liveEnd = liveStart == null
+          ? null
+          : (at.isAfter(liveStart)
+                ? at
+                : liveStart.add(const Duration(minutes: 1)));
+      var represented =
+          liveStart != null && liveEnd != null && overlaps(liveStart, liveEnd);
+      if (represented) {
+        final liveKey =
+            'live|${backing?.id ?? event.id}|'
+            '${liveStart.microsecondsSinceEpoch}';
+        // The task's other plan events carry the same live timer; emit it
+        // once, but still mark this event represented so an accepted
+        // manual entry cannot double-count the running work.
+        if (emittedSessions.add(liveKey)) {
+          addIfOverlaps(
+            title: event.subject,
+            goal: goal,
+            start: liveStart,
+            end: liveEnd,
+            live: true,
+          );
         }
-        coveredEventIds.add(event.id);
-        addIfOverlaps(
-          title: event.subject,
-          goal: goal,
-          start: liveStart,
-          end: end,
-          live: true,
-        );
-        continue;
       }
 
       // An event and its backing node mirror the same session list. Count
       // each distinct run that overlaps the week once; only mark the
       // backing represented when a run was actually in range, so an
       // out-of-week event recording cannot hide this week's node session.
-      var represented = false;
       for (final session in _pairedSessions(event, backing)) {
         if (!overlaps(session.start, session.end)) continue;
         represented = true;

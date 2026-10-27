@@ -1096,12 +1096,16 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
             .toList();
       }
     }
-    next = next
-        .map(
-          (n) =>
-              n.id == id ? n.copyWith(timerStartedAt: at, taskFlag: true) : n,
-        )
-        .toList();
+    next = next.map((n) {
+      if (n.id != id) return n;
+      // Starting work reopens a failed goal, matching the calendar event
+      // timer path. Otherwise a failed row could record time while still
+      // rendering (and scoring) as failed.
+      final started = n.copyWith(timerStartedAt: at, taskFlag: true);
+      return n.status == NodeStatus.failed
+          ? started.copyWith(status: NodeStatus.open, clearCompletedAt: true)
+          : started;
+    }).toList();
     if (next != state) emitChange(next);
   }
 

@@ -918,10 +918,20 @@ class _CalendarPageState extends State<CalendarPage> {
     _gridTracker.rememberPosition(context, timeGrid: !event.allDay);
     final report = reportById[event.id];
     final isDraft = event.id == calendarDraftEventId;
+    // The checkbox resolves the backing task, so the strike-through and
+    // dimming must use that same completion; event.done alone left a
+    // checked tile with an unstruck title when the two stores diverged.
+    final backing = _backingNodeFor(
+      context,
+      event,
+      nodeByEventId: nodeByEventId,
+      nodeById: nodeById,
+    );
+    final done = backing?.isDone ?? event.done;
     final baseColor =
         colorById?[event.id] ?? _eventColor(event, feedColors, colorPrefs);
     var color = isDraft ? baseColor.withValues(alpha: 0.55) : baseColor;
-    if (event.isTask && event.done) {
+    if ((event.isTask || backing != null) && done) {
       color = color.withValues(alpha: 0.55);
     }
     if (report != null && report.kind != ReportBlockKind.live) {
@@ -1099,7 +1109,7 @@ class _CalendarPageState extends State<CalendarPage> {
                           fontStyle: isDraft
                               ? FontStyle.italic
                               : FontStyle.normal,
-                          decoration: event.isTask && event.done
+                          decoration: (event.isTask || backing != null) && done
                               ? TextDecoration.lineThrough
                               : null,
                         ),

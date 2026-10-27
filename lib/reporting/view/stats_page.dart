@@ -148,9 +148,11 @@ class _StatsBodyState extends State<_StatsBody> {
       range: range,
       plannedSlices: plannedInRange,
       nodes: nodes,
+      events: calendar.state,
       rules: rules,
       efforts: efforts,
       reportedEntries: reportedInRange,
+      now: widget.now?.call(),
     );
     final goalReport = buildGoalRangeReport(range: range, nodes: nodes);
 

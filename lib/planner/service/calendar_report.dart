@@ -198,7 +198,15 @@ List<ReportBlock> buildReportBlocks({
   }
   final nodesById = {for (final node in nodes) node.id: node};
 
-  final visibleEventIds = {for (final e in visibleEvents) e.id};
+  // All-day rows never enter the timed pass, so they must not count as
+  // "handled" here either. A task can carry recorded sessions (started
+  // while the block was timed, or on the task itself) and still be linked
+  // to an all-day event; skipping the node pass dropped that time from the
+  // lane and from anything built on these blocks.
+  final visibleEventIds = {
+    for (final e in visibleEvents)
+      if (!e.allDay) e.id,
+  };
   final handledNodeIds = <String>{};
   // One task can own several plan events (taskId links plus direct
   // calendarEventId/sourceEventId links). Its timer and sessions are
@@ -498,7 +506,8 @@ String? _ownerEventId(
   for (final event in candidates) {
     final overlap = _overlapSeconds(event, start, end);
     final gap = _gapSeconds(event, start, end);
-    final better = best == null ||
+    final better =
+        best == null ||
         overlap > bestOverlap ||
         (overlap == bestOverlap && gap < bestGap) ||
         (overlap == bestOverlap &&

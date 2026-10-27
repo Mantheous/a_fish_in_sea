@@ -25,6 +25,33 @@ void main() {
     expect(saved?.allDay, isTrue);
   });
 
+  test('renaming a block-only task keeps its calendar block', () {
+    final previous = ScheduleFacet(
+      start: DateTime(2026, 10, 18, 9),
+      end: DateTime(2026, 10, 18, 10),
+    );
+
+    final saved = scheduleAfterEditorSave(
+      previous: previous,
+      due: null,
+      isFixed: false,
+    );
+
+    expect(saved, isNotNull);
+    expect(saved?.start, previous.start);
+    expect(saved?.end, previous.end);
+    expect(saved?.hasCalendarBlock, isTrue);
+  });
+
+  test('clearing due and fixed still drops a schedule with no block', () {
+    final saved = scheduleAfterEditorSave(
+      previous: const ScheduleFacet(),
+      due: null,
+      isFixed: false,
+    );
+    expect(saved, isNull);
+  });
+
   test('event-derived schedules retain all-day windows', () {
     final event = PlannerEvent(
       id: 'e1',
