@@ -29,18 +29,30 @@ Future<void> showEditNodeTimerSheet(
   bool running = false;
   DateTime initialStart = DateTime.now();
   DateTime initialEnd = DateTime.now().add(const Duration(hours: 1));
+  var sessionCount = 0;
+  String? editSessionId;
   try {
     final node = context.read<NodeCubit>().byId(nodeId);
     if (node == null) return;
     title = node.title;
     running = node.isTracking;
+    sessionCount = node.recordedSessions.length;
+    // A stopped multi-run task cannot be rewritten as one aggregate
+    // interval. Edit the most recent run instead, matching the report
+    // lane's per-session chips, so Save never silently does nothing.
+    final latest = !running && sessionCount > 1
+        ? node.recordedSessions.last
+        : null;
+    editSessionId = latest?.id;
     initialStart = running && node.timerStartedAt != null
         ? node.timerStartedAt!
-        : (node.actualStart ??
+        : (latest?.start ??
+            node.actualStart ??
             node.schedule?.start ??
             node.schedule?.due ??
             DateTime.now());
-    initialEnd = node.actualEnd ??
+    initialEnd = latest?.end ??
+        node.actualEnd ??
         node.schedule?.end ??
         initialStart.add(const Duration(hours: 1));
   } catch (_) {
@@ -51,6 +63,7 @@ Future<void> showEditNodeTimerSheet(
     context,
     recordTitle: title,
     running: running,
+    sessionCount: sessionCount,
     hasReported: () {
       try {
         return context.read<NodeCubit>().byId(nodeId)?.hasReported ?? false;
@@ -62,18 +75,35 @@ Future<void> showEditNodeTimerSheet(
     initialEnd: initialEnd,
     onSaveStart: (start) {
       try {
-        context.read<NodeCubit>().setTimerStart(nodeId, start);
-      } catch (_) {}
-    },
-    onSaveRange: (start, end) {
-      try {
-        NodeEventSync.setNodeReported(
+        NodeEventSync.setNodeTimerStart(
           context.read<NodeCubit>(),
           context.read<CalendarCubit>(),
           nodeId,
           start,
-          end,
         );
+      } catch (_) {}
+    },
+    onSaveRange: (start, end) {
+      try {
+        final sessionId = editSessionId;
+        if (sessionId != null) {
+          NodeEventSync.setNodeSession(
+            context.read<NodeCubit>(),
+            context.read<CalendarCubit>(),
+            nodeId,
+            sessionId,
+            start,
+            end,
+          );
+        } else {
+          NodeEventSync.setNodeReported(
+            context.read<NodeCubit>(),
+            context.read<CalendarCubit>(),
+            nodeId,
+            start,
+            end,
+          );
+        }
       } catch (_) {}
     },
     onReassignGoal: (goalId) {
@@ -94,6 +124,8 @@ Future<void> showEditEventTimerSheet(
   String title = 'Timer';
   bool running = false;
   bool hasReported = false;
+  var sessionCount = 0;
+  String? editSessionId;
   DateTime initialStart = DateTime.now();
   DateTime initialEnd = DateTime.now().add(const Duration(hours: 1));
   try {
@@ -102,10 +134,15 @@ Future<void> showEditEventTimerSheet(
     title = event.subject;
     running = event.isTracking;
     hasReported = event.hasReported;
+    sessionCount = event.recordedSessions.length;
+    final latest = !running && sessionCount > 1
+        ? event.recordedSessions.last
+        : null;
+    editSessionId = latest?.id;
     initialStart = running && event.timerStartedAt != null
         ? event.timerStartedAt!
-        : (event.actualStart ?? event.start);
-    initialEnd = event.actualEnd ?? event.end;
+        : (latest?.start ?? event.actualStart ?? event.start);
+    initialEnd = latest?.end ?? event.actualEnd ?? event.end;
     if (!initialEnd.isAfter(initialStart)) {
       initialEnd = initialStart.add(const Duration(hours: 1));
     }
@@ -117,6 +154,7 @@ Future<void> showEditEventTimerSheet(
     context,
     recordTitle: title,
     running: running,
+    sessionCount: sessionCount,
     hasReported: hasReported,
     initialStart: initialStart,
     initialEnd: initialEnd,
@@ -127,7 +165,13 @@ Future<void> showEditEventTimerSheet(
     },
     onSaveRange: (start, end) {
       try {
-        context.read<CalendarCubit>().setReported(eventId, start, end);
+        final sessionId = editSessionId;
+        final calendar = context.read<CalendarCubit>();
+        if (sessionId != null) {
+          calendar.updateSession(eventId, sessionId, start, end);
+        } else {
+          calendar.setReported(eventId, start, end);
+        }
       } catch (_) {}
     },
   );
@@ -139,6 +183,7 @@ Future<void> showTimerEditSheet(
   BuildContext context, {
   required String recordTitle,
   required bool running,
+  int sessionCount = 0,
   required bool hasReported,
   required DateTime initialStart,
   required DateTime initialEnd,
@@ -156,6 +201,7 @@ Future<void> showTimerEditSheet(
       child: _TimerEditSheet(
         recordTitle: recordTitle,
         running: running,
+        sessionCount: sessionCount,
         hasReported: hasReported,
         initialStart: initialStart,
         initialEnd: initialEnd,
@@ -170,6 +216,7 @@ Future<void> showTimerEditSheet(
 class _TimerEditSheet extends StatefulWidget {
   final String recordTitle;
   final bool running;
+  final int sessionCount;
   final bool hasReported;
   final DateTime initialStart;
   final DateTime initialEnd;
@@ -180,6 +227,7 @@ class _TimerEditSheet extends StatefulWidget {
   const _TimerEditSheet({
     required this.recordTitle,
     required this.running,
+    this.sessionCount = 0,
     required this.hasReported,
     required this.initialStart,
     required this.initialEnd,
@@ -282,12 +330,19 @@ class _TimerEditSheetState extends State<_TimerEditSheet> {
               running
                   ? 'Recording ${formatStopwatch(elapsed)} — the timer keeps '
                       'running; only the start moves.'
-                  : widget.hasReported
-                      ? 'Recorded $rangeLabel'
-                      : 'No recorded time yet — this adds one ($rangeLabel).',
+                  : widget.sessionCount > 1
+                      ? 'Editing the most recent of ${widget.sessionCount} '
+                          'runs ($rangeLabel) — earlier runs stay unchanged.'
+                      : widget.hasReported
+                          ? 'Recorded $rangeLabel'
+                          : 'No recorded time yet — this adds one '
+                              '($rangeLabel).',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: running ? theme.colorScheme.primary : null,
-                fontWeight: running ? FontWeight.w600 : null,
+                fontWeight:
+                    running || widget.sessionCount > 1
+                    ? FontWeight.w600
+                    : null,
               ),
             ),
             const SizedBox(height: 12),

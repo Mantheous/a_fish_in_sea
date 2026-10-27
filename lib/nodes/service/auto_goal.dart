@@ -422,11 +422,19 @@ String? autoClassKey(Node node) {
 /// and pure due dates contribute zero, so planned work is never reported
 /// as done.
 double _taskMinutesInWindow(Node node, AutoGoalWindow window, DateTime now) {
-  // A reported span is authoritative, even when it falls outside this
+  // Recorded runs are authoritative, even when they fall outside this
   // window: falling back to the planned block would attribute the same
-  // work to the wrong period.
-  if (node.actualStart != null && node.actualEnd != null) {
-    return window.overlapMinutes(node.actualStart, node.actualEnd);
+  // work to the wrong period. Sum each run instead of the aggregate
+  // actualStart..actualEnd span — the span includes the gap between two
+  // sessions, so a 30m morning run plus a 30m afternoon run used to count
+  // as hours of "work" in an automated minutes goal.
+  final sessions = node.recordedSessions;
+  if (sessions.isNotEmpty) {
+    var minutes = 0.0;
+    for (final session in sessions) {
+      minutes += window.overlapMinutes(session.start, session.end);
+    }
+    return minutes;
   }
   final start = node.schedule?.start;
   final end = node.schedule?.end;

@@ -81,6 +81,33 @@ class NodeEventSync {
     });
   }
 
+  /// Moves a running task timer's start and mirrors it onto linked events
+  /// that are independently recording. Task-event pairs normally record on
+  /// the node, so most linked events carry no timer; those are left alone
+  /// rather than accidentally started.
+  static void setNodeTimerStart(
+    NodeCubit nodes,
+    CalendarCubit calendar,
+    String nodeId,
+    DateTime start, {
+    DateTime? now,
+  }) {
+    final node = nodes.byId(nodeId);
+    if (node == null || !node.isTracking) return;
+    RevertableHydratedCubit.atomic([nodes, calendar], () {
+      nodes.setTimerStart(nodeId, start, now: now);
+      final saved = nodes.byId(nodeId);
+      final applied = saved?.timerStartedAt;
+      if (saved == null || applied == null) return;
+      final updates = [
+        for (final event in _linkedEvents(calendar, saved))
+          if (event.isTracking && event.timerStartedAt != applied)
+            event.copyWith(timerStartedAt: applied),
+      ];
+      if (updates.isNotEmpty) calendar.updateEvents(updates);
+    });
+  }
+
   /// Mirrors a manual timer correction from a task to every linked event,
   /// keeping the event-side report cache aligned with the task record.
   static void setNodeReported(

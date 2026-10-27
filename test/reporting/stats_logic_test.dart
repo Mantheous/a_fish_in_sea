@@ -1,6 +1,8 @@
+import 'package:a_fish_in_sea/common/time/time_session.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/planner/model/assignment_estimate.dart';
 import 'package:a_fish_in_sea/planner/model/assignment_rule.dart';
+import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/reporting/model/reported_entry.dart';
 import 'package:a_fish_in_sea/reporting/reporting_logic.dart';
@@ -136,6 +138,86 @@ void main() {
       expect(report.plannedMinutes, 0);
       expect(report.rows, hasLength(1));
       expect(report.rows.single.classLabel, 'MATH 290');
+    });
+
+    test('counts time recorded on a plain calendar event', () {
+      final start = dayOn(1, 9);
+      final end = start.add(const Duration(minutes: 90));
+      final report = buildAssignmentTimeReport(
+        range: _thisWeek,
+        plannedSlices: const [],
+        nodes: const [],
+        events: [
+          PlannerEvent(
+            id: 'evt:library',
+            subject: 'Study at the library',
+            classLabel: 'BIO 100',
+            start: start,
+            end: start.add(const Duration(hours: 1)),
+            sessions: [
+              TimeSession(id: TimeSession.idFor(start, end), start: start, end: end),
+            ],
+          ),
+        ],
+      );
+      expect(report.trackedMinutes, 90);
+      final bio = report.byClass.firstWhere((g) => g.label == 'BIO 100');
+      expect(bio.trackedMinutes, 90);
+    });
+
+    test('counts a running timer up to now', () {
+      final start = dayOn(1, 9);
+      final report = buildAssignmentTimeReport(
+        range: _thisWeek,
+        plannedSlices: const [],
+        nodes: [
+          Node(
+            id: 'n:live',
+            title: 'Focus',
+            createdAt: _monday,
+            timerStartedAt: start,
+          ),
+        ],
+        now: start.add(const Duration(minutes: 25)),
+      );
+      expect(report.trackedMinutes, 25);
+    });
+
+    test('mirrored task and event sessions count once', () {
+      final start = dayOn(1, 9);
+      final session = TimeSession(
+        id: TimeSession.idFor(start, start.add(const Duration(minutes: 30))),
+        start: start,
+        end: start.add(const Duration(minutes: 30)),
+      );
+      final report = buildAssignmentTimeReport(
+        range: _thisWeek,
+        plannedSlices: const [],
+        nodes: [
+          Node(
+            id: 'n1',
+            title: 'Quiz',
+            createdAt: _monday,
+            calendarEventId: 'evt:1',
+            sessions: [session],
+            actualStart: session.start,
+            actualEnd: session.end,
+          ),
+        ],
+        events: [
+          PlannerEvent(
+            id: 'evt:1',
+            subject: 'Quiz',
+            start: start,
+            end: start.add(const Duration(hours: 1)),
+            taskId: 'n1',
+            sessions: [session],
+            actualStart: session.start,
+            actualEnd: session.end,
+          ),
+        ],
+      );
+      expect(report.trackedMinutes, 30);
     });
 
     test('counts a planned block with no timer as planned', () {
@@ -436,6 +518,43 @@ void main() {
       );
       expect(report.trackedMinutes, 45);
       expect(report.trackedNotPlannedMinutes, 45);
+    });
+
+    test('a manual report on a task with no timer still counts', () {
+      final start = dayOn(1, 9);
+      final report = buildAssignmentTimeReport(
+        range: _thisWeek,
+        plannedSlices: const [],
+        nodes: [
+          Node(
+            id: 'n1',
+            title: 'Quiz',
+            createdAt: _monday,
+            calendarEventId: 'evt:1',
+          ),
+        ],
+        events: [
+          PlannerEvent(
+            id: 'evt:1',
+            subject: 'Quiz',
+            start: start,
+            end: start.add(const Duration(hours: 1)),
+            taskId: 'n1',
+          ),
+        ],
+        reportedEntries: [
+          ReportedEntry(
+            id: 'rep:evt:1',
+            eventId: 'evt:1',
+            title: 'Quiz',
+            start: start,
+            end: start.add(const Duration(minutes: 45)),
+            status: ReportStatus.attended,
+            auto: false,
+          ),
+        ],
+      );
+      expect(report.trackedMinutes, 45);
     });
 
     test('missed and auto entries do not count as tracked time', () {

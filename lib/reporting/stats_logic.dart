@@ -31,6 +31,8 @@ import '../../nodes/model/node.dart';
 import '../../planner/model/assignment_estimate.dart';
 import '../../planner/model/assignment_rule.dart';
 import '../../planner/model/assignment_template.dart';
+import '../../planner/model/planner_event.dart';
+import '../../planner/service/calendar_report.dart';
 import 'model/reported_entry.dart';
 import 'reporting_logic.dart';
 
@@ -503,39 +505,118 @@ int _overlapWith(List<_Span> spans, List<_Span> others) {
   return total;
 }
 
-/// Appends [node]'s report as a span on its day.
-void _addNodeSpans(List<Node> nodes, List<_Span> out, StatsRange range) {
-  final byId = {for (final node in nodes) node.id: node};
-  for (final node in nodes) {
-    // One span per run: the aggregate actual span would count the gaps
-    // between sessions as study time.
-    for (final session in node.recordedSessions) {
-      if (!session.isValid) continue;
-      if (!range.contains(session.start)) continue;
-      final minutes = session.duration.inMinutes;
-      if (minutes <= 0) continue;
-      // A class-node membership unifies manual and imported work under one
-      // class key; provenance ids remain the fallback for unbound work.
-      final classNode =
-          node.classNodeId == null ? null : byId[node.classNodeId];
-      final scope = node.classNodeId ?? node.feedId ?? node.classId;
-      out.add(
-        _Span(
-          start: session.start,
-          end: session.end,
-          groupKey: scope ?? 'unassigned',
-          label: classNode?.title ?? node.classLabel ?? 'No class',
-          classLabel: classNode?.title ?? node.classLabel,
-          title: node.title,
-          templateKey: node.isHomework
-              ? assignmentTemplateKey(node.title)
-              : null,
-          nodeId: node.id,
-          tracked: true,
-        ),
-      );
-    }
+/// Node backing [event] (personal back-link, feed shadow, or `taskId`).
+Node? _backingNodeFor(
+  PlannerEvent event,
+  Map<String, Node> nodeById,
+  Map<String, Node> nodeByEvent,
+) {
+  final direct = nodeByEvent[event.id];
+  if (direct != null) return direct;
+  final taskId = event.taskId;
+  return taskId == null ? null : nodeById[taskId];
+}
+
+/// Appends every recorded timer run as a span, whichever store owns it.
+///
+/// Delegates the projection to [buildReportBlocks] so Stats, the calendar
+/// report lane, and the weekly timesheet agree about which runs exist and
+/// how mirrored task/event sessions dedupe. Previously Stats read only
+/// nodes, so time recorded on a plain calendar event vanished here while
+/// the lane and timesheet still showed it. Live timers now count too.
+void _addRecordedSpans(
+  List<ReportBlock> blocks,
+  Map<String, Node> nodeById,
+  Map<String, Node> nodeByEvent,
+  Map<String, PlannerEvent> eventById,
+  List<_Span> out,
+  StatsRange range,
+) {
+  for (final block in blocks) {
+    if (block.kind == ReportBlockKind.accepted) continue;
+    if (!range.contains(block.start)) continue;
+    final minutes = block.end.difference(block.start).inMinutes;
+    if (minutes <= 0) continue;
+    final eventId = block.eventId;
+    final event = eventId == null ? null : eventById[eventId];
+    final owner = eventId == null
+        ? nodeById[reportOwnerIdForDisplayId(block.displayId)]
+        : (event == null
+              ? null
+              : _backingNodeFor(event, nodeById, nodeByEvent));
+    // A class-node membership unifies manual and imported work under one
+    // class key; provenance ids remain the fallback for unbound work.
+    final classNode =
+        owner?.classNodeId == null ? null : nodeById[owner!.classNodeId];
+    final scope =
+        owner?.classNodeId ??
+        owner?.feedId ??
+        owner?.classId ??
+        event?.classLabel;
+    out.add(
+      _Span(
+        start: block.start,
+        end: block.end,
+        groupKey: scope ?? 'unassigned',
+        label:
+            classNode?.title ??
+            owner?.classLabel ??
+            event?.classLabel ??
+            'No class',
+        classLabel:
+            classNode?.title ?? owner?.classLabel ?? event?.classLabel,
+        title: owner?.title ?? event?.subject ?? block.title,
+        templateKey: owner?.isHomework == true
+            ? assignmentTemplateKey(owner!.title)
+            : null,
+        nodeId: owner?.id ?? 'event:${eventId ?? block.displayId}',
+        tracked: true,
+      ),
+    );
   }
+}
+
+/// Manual report entry as a tracked span, attributed to its event's class
+/// when one is loaded. Returns null for missed/unconfirmed entries.
+_Span? _entrySpan(
+  ReportedEntry entry,
+  Map<String, Node> nodeById,
+  Map<String, Node> nodeByEvent,
+  Map<String, PlannerEvent> eventById,
+  StatsRange range,
+) {
+  // Missed events are the absence of work, and unconfirmed auto entries
+  // are guesses: neither counts as recorded time.
+  if (entry.auto || entry.status == ReportStatus.missed) return null;
+  if (!range.contains(entry.start)) return null;
+  final eventId = entry.eventId;
+  final event = eventId == null ? null : eventById[eventId];
+  final owner = event == null
+      ? null
+      : _backingNodeFor(event, nodeById, nodeByEvent);
+  final classNode =
+      owner?.classNodeId == null ? null : nodeById[owner!.classNodeId];
+  final scope =
+      owner?.classNodeId ??
+      owner?.feedId ??
+      owner?.classId ??
+      event?.classLabel;
+  return _Span(
+    start: entry.start,
+    end: entry.end.isAfter(entry.start)
+        ? entry.end
+        : entry.start.add(const Duration(minutes: 1)),
+    groupKey: scope ?? 'unassigned',
+    label:
+        classNode?.title ??
+        owner?.classLabel ??
+        event?.classLabel ??
+        'No class',
+    classLabel: classNode?.title ?? owner?.classLabel ?? event?.classLabel,
+    title: entry.title,
+    nodeId: 'entry:${entry.eventId ?? entry.start.microsecondsSinceEpoch}',
+    tracked: true,
+  );
 }
 
 /// Builds the assignment/class time report for one range.
@@ -550,11 +631,20 @@ AssignmentTimeReport buildAssignmentTimeReport({
   required StatsRange range,
   required List<PlannedSlice> plannedSlices,
   required List<Node> nodes,
+  List<PlannerEvent> events = const [],
   List<AssignmentRule> rules = const [],
   List<AssignmentTypeEffort> efforts = const [],
   List<ReportedEntry> reportedEntries = const [],
+  DateTime? now,
 }) {
   final nodeById = {for (final n in nodes) n.id: n};
+  final eventById = {for (final e in events) e.id: e};
+  final nodeByEvent = <String, Node>{};
+  for (final node in nodes) {
+    for (final eventId in [node.calendarEventId, node.sourceEventId]) {
+      if (eventId != null) nodeByEvent.putIfAbsent(eventId, () => node);
+    }
+  }
 
   final plannedSpans = <_Span>[];
   for (final slice in plannedSlices) {
@@ -595,35 +685,49 @@ AssignmentTimeReport buildAssignmentTimeReport({
   }
 
   final trackedSpans = <_Span>[];
-  _addNodeSpans(nodes, trackedSpans, range);
-  // Manual reports for events that no node backs (a plain calendar event
-  // the user filled in by hand) still count as time.
+  // One projection for every timer run: task sessions, plain-event
+  // sessions, mirrored copies, and the currently running timer. The lane
+  // and the weekly timesheet read the same blocks.
+  final recordBlocks = buildReportBlocks(
+    visibleEvents: events,
+    nodes: nodes,
+    reportsByDay: const {},
+    now: now,
+  );
+  _addRecordedSpans(
+    recordBlocks,
+    nodeById,
+    nodeByEvent,
+    eventById,
+    trackedSpans,
+    range,
+  );
+  // A timer supersedes a manual report for the same event; the copy button
+  // and lane already hide the entry in that case.
+  final timedEventIds = <String>{
+    for (final block in recordBlocks)
+      if (block.kind != ReportBlockKind.accepted && block.eventId != null)
+        block.eventId!,
+  };
+  // Manual reports still count when nothing recorded time yet: a task with
+  // no timer, or a plain calendar event the user filled in by hand. Only a
+  // backing node that already has a recording suppresses the manual copy.
   final backedEventIds = <String>{
-    for (final n in nodes) ...[
-      if (n.calendarEventId != null) n.calendarEventId!,
-      if (n.sourceEventId != null) n.sourceEventId!,
-    ],
+    for (final n in nodes)
+      if (n.hasReported || n.isTracking) ...[
+        if (n.calendarEventId != null) n.calendarEventId!,
+        if (n.sourceEventId != null) n.sourceEventId!,
+      ],
   };
   for (final entry in reportedEntries) {
-    // Missed events are the absence of work, and unconfirmed auto entries
-    // are guesses: neither counts as recorded time.
-    if (entry.auto || entry.status == ReportStatus.missed) continue;
     final eventId = entry.eventId;
-    if (eventId != null && backedEventIds.contains(eventId)) continue;
-    if (!range.contains(entry.start)) continue;
-    trackedSpans.add(
-      _Span(
-        start: entry.start,
-        end: entry.end.isAfter(entry.start)
-            ? entry.end
-            : entry.start.add(const Duration(minutes: 1)),
-        groupKey: 'unassigned',
-        label: 'No class',
-        title: entry.title,
-        nodeId: 'entry:${entry.eventId ?? entry.start.microsecondsSinceEpoch}',
-        tracked: true,
-      ),
-    );
+    if (eventId != null &&
+        (backedEventIds.contains(eventId) ||
+            timedEventIds.contains(eventId))) {
+      continue;
+    }
+    final span = _entrySpan(entry, nodeById, nodeByEvent, eventById, range);
+    if (span != null) trackedSpans.add(span);
   }
 
   // Bucket by day, then union planned vs. tracked inside the waking window

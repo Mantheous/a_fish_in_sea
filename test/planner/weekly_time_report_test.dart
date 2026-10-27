@@ -150,6 +150,48 @@ void main() {
       expect(report.entries.single.live, isTrue);
     });
 
+    test('a live timer does not hide the runs before it', () {
+      final earlier = TimeSession(
+        id: TimeSession.idFor(
+          DateTime(2026, 9, 8, 9, 10),
+          DateTime(2026, 9, 8, 9, 40),
+        ),
+        start: DateTime(2026, 9, 8, 9, 10),
+        end: DateTime(2026, 9, 8, 9, 40),
+      );
+      final liveStart = DateTime(2026, 9, 8, 14);
+      final nodes = [
+        node(
+          'task',
+          calendarEventId: 'evt:1',
+          sessions: [earlier],
+          actualStart: earlier.start,
+          actualEnd: earlier.end,
+          timerStartedAt: liveStart,
+        ),
+      ];
+      final events = [
+        event(
+          'evt:1',
+          taskId: 'task',
+          sessions: [earlier],
+          actualStart: earlier.start,
+          actualEnd: earlier.end,
+        ),
+      ];
+      final report = buildWeeklyTimeReport(
+        nodes: nodes,
+        events: events,
+        reportsByDay: const {},
+        weekStart: _weekStart,
+        now: liveStart.add(const Duration(minutes: 30)),
+      );
+
+      expect(report.entries, hasLength(2));
+      expect(report.entries.where((e) => e.live), hasLength(1));
+      expect(report.weekTotal, const Duration(minutes: 60));
+    });
+
     test('accepted manual entry is used when no timer exists', () {
       final events = [event('e1')];
       final report = buildWeeklyTimeReport(

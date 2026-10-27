@@ -10,7 +10,13 @@ ScheduleFacet? scheduleAfterEditorSave({
   DateTime? end,
 }) {
   final hasValidBlock = start != null && end != null && end.isAfter(start);
-  if (due == null && !isFixed && !hasValidBlock) return null;
+  // The editor only owns due/fixed; a block set from the calendar survives.
+  // Checking only the *incoming* start/end dropped a block-only schedule on
+  // every rename because the editor never passes those arguments.
+  final hasPreservedBlock = previous?.hasCalendarBlock ?? false;
+  if (due == null && !isFixed && !hasValidBlock && !hasPreservedBlock) {
+    return null;
+  }
   return ScheduleFacet(
     due: due,
     start: hasValidBlock ? start : previous?.start,

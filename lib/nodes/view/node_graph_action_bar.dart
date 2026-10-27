@@ -49,8 +49,9 @@ class NodeGraphActionBar extends StatelessWidget {
     final scheme = theme.colorScheme;
     final tracking = node.isTracking;
     // Done goals cannot start a new recording (same rule as the task rows);
-    // a timer that is already running can always be stopped.
-    final canRecord = tracking || (node.isOpen && !node.isUnbounded);
+    // failed goals can, and starting reopens them. A timer that is already
+    // running can always be stopped.
+    final canRecord = tracking || (!node.isDone && !node.isUnbounded);
     // On phones the title would squeeze the buttons off the bar; the card
     // itself already shows which goal is selected.
     final showTitle = MediaQuery.sizeOf(context).width >= 600;
