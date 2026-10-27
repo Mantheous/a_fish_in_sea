@@ -206,6 +206,53 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('marquee converts the drag through the camera transform', (
+    tester,
+  ) async {
+    final nodes = NodeCubit();
+    nodes.emitSilent([
+      for (final id in ['a', 'b', 'c', 'd', 'e', 'f'])
+        goal(id, title: 'Goal $id'),
+    ]);
+    await tester.pumpWidget(harness(nodes));
+    await tester.pump();
+    await openGraph(tester);
+
+    // Zoom in so screen coordinates and layout coordinates differ a lot.
+    for (var i = 0; i < 4; i++) {
+      await tester.tap(find.byTooltip('Zoom in'));
+      await tester.pump();
+    }
+
+    final view = tester.getRect(find.byType(NodeGraphView));
+    Finder? target;
+    Rect? targetRect;
+    for (final id in ['a', 'b', 'c', 'd', 'e', 'f']) {
+      final rect = tester.getRect(find.byKey(ValueKey('graph-node-$id')));
+      if (rect.left > view.left + 20 &&
+          rect.right < view.right - 240 &&
+          rect.top > view.top + 60 &&
+          rect.bottom < view.bottom - 80) {
+        target = find.byKey(ValueKey('graph-node-$id'));
+        targetRect = rect;
+        break;
+      }
+    }
+    expect(target, isNotNull, reason: 'a card must be visible after zooming');
+
+    final start = targetRect!.topLeft - const Offset(6, 6);
+    final end = targetRect.bottomRight + const Offset(6, 6);
+    await tester.dragFrom(start, end - start);
+    await tester.pump();
+
+    expect(
+      tester.widget<NodeGraphCard>(target!).selected,
+      isTrue,
+      reason: 'the card under the marquee must be the one selected',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('space-drag pans instead of selecting', (tester) async {
     final nodes = NodeCubit();
     nodes.emitSilent(sample());
