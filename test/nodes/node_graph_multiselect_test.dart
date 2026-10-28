@@ -10,7 +10,6 @@ import 'package:a_fish_in_sea/nodes/view/node_graph_view.dart';
 import 'package:a_fish_in_sea/nodes/view/nodes_page.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
@@ -60,14 +59,12 @@ void main() {
     await tester.pump();
   }
 
-  Future<void> ctrlClick(WidgetTester tester, Finder finder) async {
-    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
-    await tester.tap(finder);
-    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  Future<void> enableMultiSelect(WidgetTester tester) async {
+    await tester.tap(find.byKey(const ValueKey('graph-multi-select-toggle')));
     await tester.pump();
   }
 
-  testWidgets('ctrl-click adds a second goal and opens the bulk editor', (
+  testWidgets('graph keeps its original pan/zoom tools plus multi-select', (
     tester,
   ) async {
     final nodes = NodeCubit();
@@ -76,10 +73,50 @@ void main() {
     await tester.pump();
     await openGraph(tester);
 
+    expect(
+      find.byKey(const ValueKey('graph-multi-select-toggle')),
+      findsOneWidget,
+    );
+    expect(find.byTooltip('Zoom out'), findsOneWidget);
+    expect(find.byTooltip('Zoom in'), findsOneWidget);
+    expect(find.byTooltip('Fit to screen'), findsOneWidget);
+    expect(find.byKey(const ValueKey('graph-pan-tool')), findsNothing);
+    expect(find.byKey(const ValueKey('graph-select-tool')), findsNothing);
+
+    // Original navigation: a drag pans.
+    final rootFinder = find.byKey(const ValueKey('graph-node-root'));
+    final before = tester.getTopLeft(rootFinder);
+    final view = tester.getRect(find.byType(NodeGraphView));
+    await tester.dragFrom(view.center, const Offset(60, 40));
+    await tester.pump();
+    final after = tester.getTopLeft(rootFinder);
+    expect(after.dx - before.dx, closeTo(60, 1.5));
+    expect(after.dy - before.dy, closeTo(40, 1.5));
+
+    // Original selection: tap selects; tap again edits.
+    await tester.tap(rootFinder);
+    await tester.pump();
+    expect(find.byKey(const ValueKey('graph-action-bar')), findsOneWidget);
+    await tester.tap(rootFinder);
+    await tester.pumpAndSettle();
+    expect(find.text('Edit node'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('multi-select tool toggles goals and opens the bulk editor', (
+    tester,
+  ) async {
+    final nodes = NodeCubit();
+    nodes.emitSilent(sample());
+    await tester.pumpWidget(harness(nodes));
+    await tester.pump();
+    await openGraph(tester);
+    await enableMultiSelect(tester);
+
     await tester.tap(find.byKey(const ValueKey('graph-node-root')));
     await tester.pump();
-    await ctrlClick(tester, find.byKey(const ValueKey('graph-node-child')));
-
+    await tester.tap(find.byKey(const ValueKey('graph-node-child')));
+    await tester.pump();
     expect(find.byKey(nodeGraphMultiBarKey), findsOneWidget);
     expect(find.text('2 selected'), findsOneWidget);
 
@@ -108,93 +145,23 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('long-press enters tap-to-toggle multi-select', (tester) async {
+  testWidgets('marquee selects cards while the tool is on', (tester) async {
     final nodes = NodeCubit();
     nodes.emitSilent(sample());
     await tester.pumpWidget(harness(nodes));
     await tester.pump();
     await openGraph(tester);
-
-    await tester.longPress(find.byKey(const ValueKey('graph-node-root')));
-    await tester.pump();
-    // Long-press selects one card; a plain tap now adds another instead of
-    // replacing the selection.
-    await tester.tap(find.byKey(const ValueKey('graph-node-child')));
-    await tester.pump();
-
-    expect(find.byKey(nodeGraphMultiBarKey), findsOneWidget);
-    expect(find.text('2 selected'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('bulk mark done completes the whole selection', (tester) async {
-    final nodes = NodeCubit();
-    nodes.emitSilent(sample());
-    await tester.pumpWidget(harness(nodes));
-    await tester.pump();
-    await openGraph(tester);
-
-    await tester.tap(find.byKey(const ValueKey('graph-node-root')));
-    await tester.pump();
-    await ctrlClick(tester, find.byKey(const ValueKey('graph-node-child')));
-    await tester.tap(find.byKey(const ValueKey('graph-multi-done')));
-    await tester.pump();
-
-    expect(nodes.byId('root')!.isDone, isTrue);
-    expect(nodes.byId('child')!.isDone, isTrue);
-    expect(nodes.byId('grand')!.isDone, isFalse);
-    expect(find.byKey(nodeGraphMultiBarKey), findsNothing);
-    expect(find.text('2 goals marked done'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('bulk delete removes the selection and confirms first', (
-    tester,
-  ) async {
-    final nodes = NodeCubit();
-    nodes.emitSilent(sample());
-    await tester.pumpWidget(harness(nodes));
-    await tester.pump();
-    await openGraph(tester);
-
-    await tester.tap(find.byKey(const ValueKey('graph-node-root')));
-    await tester.pump();
-    await ctrlClick(tester, find.byKey(const ValueKey('graph-node-child')));
-    await tester.tap(find.byKey(const ValueKey('graph-multi-delete')));
-    await tester.pumpAndSettle();
-    expect(find.text('Delete 2 goals?'), findsOneWidget);
-
-    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
-    await tester.pumpAndSettle();
-
-    expect(nodes.byId('root'), isNull);
-    expect(nodes.byId('child'), isNull);
-    // The grandchild lost its only remaining parent, so it cascades too.
-    expect(nodes.byId('grand'), isNull);
-    expect(nodes.byId('extra'), isNotNull);
-    expect(find.text('3 goals deleted'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('dragging empty canvas marquee-selects cards', (tester) async {
-    final nodes = NodeCubit();
-    nodes.emitSilent(sample());
-    await tester.pumpWidget(harness(nodes));
-    await tester.pump();
-    await openGraph(tester);
-
-    await tester.tap(find.byKey(const ValueKey('graph-select-tool')));
-    await tester.pump();
+    await enableMultiSelect(tester);
 
     final view = tester.getRect(find.byType(NodeGraphView));
     final root = tester.getRect(find.byKey(const ValueKey('graph-node-root')));
     final child = tester.getRect(
       find.byKey(const ValueKey('graph-node-child')),
     );
-    final start = Offset(view.left + 8, view.bottom - 8);
+    final start = Offset(view.left + 8, view.top + 8);
     final end = Offset(
       root.right + 8,
-      (root.top < child.top ? root.top : child.top) - 8,
+      (root.bottom > child.bottom ? root.bottom : child.bottom) + 8,
     );
     await tester.dragFrom(start, end - start);
     await tester.pump();
@@ -220,14 +187,13 @@ void main() {
     await tester.pumpWidget(harness(nodes));
     await tester.pump();
     await openGraph(tester);
+    await enableMultiSelect(tester);
 
     // Zoom in so screen coordinates and layout coordinates differ a lot.
     for (var i = 0; i < 4; i++) {
       await tester.tap(find.byTooltip('Zoom in'));
       await tester.pump();
     }
-    await tester.tap(find.byKey(const ValueKey('graph-select-tool')));
-    await tester.pump();
 
     final view = tester.getRect(find.byType(NodeGraphView));
     Finder? target;
@@ -258,32 +224,30 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('space-drag pans instead of selecting', (tester) async {
+  testWidgets('bulk mark done completes the whole selection', (tester) async {
     final nodes = NodeCubit();
     nodes.emitSilent(sample());
     await tester.pumpWidget(harness(nodes));
     await tester.pump();
     await openGraph(tester);
+    await enableMultiSelect(tester);
 
-    final rootFinder = find.byKey(const ValueKey('graph-node-root'));
-    final before = tester.getTopLeft(rootFinder);
-    final view = tester.getRect(find.byType(NodeGraphView));
-    await tester.sendKeyDownEvent(LogicalKeyboardKey.space);
+    await tester.tap(find.byKey(const ValueKey('graph-node-root')));
     await tester.pump();
-    await tester.dragFrom(view.center, const Offset(60, 40));
+    await tester.tap(find.byKey(const ValueKey('graph-node-child')));
     await tester.pump();
-    await tester.sendKeyUpEvent(LogicalKeyboardKey.space);
+    await tester.tap(find.byKey(const ValueKey('graph-multi-done')));
     await tester.pump();
 
-    final after = tester.getTopLeft(rootFinder);
-    expect(after.dx - before.dx, closeTo(60, 1.5));
-    expect(after.dy - before.dy, closeTo(40, 1.5));
+    expect(nodes.byId('root')!.isDone, isTrue);
+    expect(nodes.byId('child')!.isDone, isTrue);
+    expect(nodes.byId('grand')!.isDone, isFalse);
     expect(find.byKey(nodeGraphMultiBarKey), findsNothing);
-    expect(find.byKey(const ValueKey('graph-action-bar')), findsNothing);
+    expect(find.text('2 goals marked done'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('zoom controls expose the Figma-style percentage menu', (
+  testWidgets('bulk delete removes the selection and confirms first', (
     tester,
   ) async {
     final nodes = NodeCubit();
@@ -291,24 +255,55 @@ void main() {
     await tester.pumpWidget(harness(nodes));
     await tester.pump();
     await openGraph(tester);
+    await enableMultiSelect(tester);
 
     await tester.tap(find.byKey(const ValueKey('graph-node-root')));
     await tester.pump();
-    expect(find.byKey(const ValueKey('graph-action-bar')), findsOneWidget);
-
-    final label = find.byKey(const ValueKey('graph-zoom-label'));
-    expect(label, findsOneWidget);
-    final before = tester.widget<Text>(label).data;
-    await tester.tap(find.byTooltip('Zoom in'));
+    await tester.tap(find.byKey(const ValueKey('graph-node-child')));
     await tester.pump();
-    expect(tester.widget<Text>(label).data, isNot(before));
-    expect(
-      find.byKey(const ValueKey('graph-action-bar')),
-      findsOneWidget,
-      reason: 'using the floating controls must not clear the selection',
-    );
-    expect(find.byKey(const ValueKey('graph-pan-tool')), findsOneWidget);
-    expect(find.byKey(const ValueKey('graph-select-tool')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('graph-multi-delete')));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete 2 goals?'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pumpAndSettle();
+
+    expect(nodes.byId('root'), isNull);
+    expect(nodes.byId('child'), isNull);
+    // The grandchild lost its only remaining parent, so it cascades too.
+    expect(nodes.byId('grand'), isNull);
+    expect(nodes.byId('extra'), isNotNull);
+    expect(find.text('3 goals deleted'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('turning the tool off clears selection and restores pan', (
+    tester,
+  ) async {
+    final nodes = NodeCubit();
+    nodes.emitSilent(sample());
+    await tester.pumpWidget(harness(nodes));
+    await tester.pump();
+    await openGraph(tester);
+    await enableMultiSelect(tester);
+
+    await tester.tap(find.byKey(const ValueKey('graph-node-root')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('graph-node-child')));
+    await tester.pump();
+    expect(find.byKey(nodeGraphMultiBarKey), findsOneWidget);
+
+    await enableMultiSelect(tester); // toggle off
+    expect(find.byKey(nodeGraphMultiBarKey), findsNothing);
+
+    final rootFinder = find.byKey(const ValueKey('graph-node-root'));
+    final before = tester.getTopLeft(rootFinder);
+    final view = tester.getRect(find.byType(NodeGraphView));
+    await tester.dragFrom(view.center, const Offset(40, 25));
+    await tester.pump();
+    final after = tester.getTopLeft(rootFinder);
+    expect(after.dx - before.dx, closeTo(40, 1.5));
+    expect(after.dy - before.dy, closeTo(25, 1.5));
     expect(tester.takeException(), isNull);
   });
 }

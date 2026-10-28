@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../planner/bloc/calendar_cubit.dart';
@@ -28,17 +27,17 @@ import 'node_graph_viewport.dart';
 /// grows the tree in place: its `↓` button creates a subgoal beneath it and
 /// its `↑` button creates a parent goal above it.
 ///
-/// Pan is the default tool: dragging moves the graph, while tapping a card
-/// still selects it (tap again to edit). The Select tool button (or V) turns
-/// empty-canvas drags into marquee selection; shift/ctrl/cmd-click adds
-/// cards, and long-press enters tap-to-toggle selection on touch. Two or
-/// more selected goals float a bulk bar that opens the multi-goal editor
-/// (titles stay individual) and can mark the group done or delete it in one
-/// undoable step. Pan and zoom around large trees; repeating templates and
-/// goals with a very wide fan-out start collapsed so their generated
-/// instances or subgoal walls don't flood the graph. Folding is reported through [onCollapsedChanged]
-/// and can be restored with [collapsedIds], so leaving the Goals tab and
-/// coming back shows the same graph.
+/// Navigation is the original pan/zoom surface: drag pans, wheel or pinch
+/// zooms, and the floating pill offers zoom out/in and fit-to-screen. The
+/// pill also carries a multi-select tool; while it is active, empty-canvas
+/// drags draw a marquee and taps toggle membership instead of opening the
+/// editor. Two or more selected goals float a bulk bar that opens the
+/// multi-goal editor (titles stay individual) and can mark the group done or
+/// delete it in one undoable step. Repeating templates and goals with a very
+/// wide fan-out start collapsed so their generated instances or subgoal
+/// walls don't flood the graph. Folding is reported through
+/// [onCollapsedChanged] and can be restored with [collapsedIds], so leaving
+/// the Goals tab and coming back shows the same graph.
 class NodeGraphView extends StatefulWidget {
   const NodeGraphView({
     super.key,
@@ -116,14 +115,10 @@ class _NodeGraphViewState extends State<NodeGraphView> {
   /// selected card, and a tab switch.
   final Set<String> _selected = <String>{};
 
-  /// True after a long-press: on touch there are no modifier keys, so taps
-  /// toggle membership until the selection is closed.
-  bool _multiSelectMode = false;
-
-  /// Selection that existed when an additive marquee started. Marquee ids
-  /// replace the live selection, but this base is kept while the drag grows
-  /// and shrinks.
-  Set<String> _marqueeBase = const {};
+  /// True while the multi-select tool is active. Taps toggle membership and
+  /// empty-canvas drags draw a marquee; off restores the original graph
+  /// navigation and single-select behavior.
+  bool _multiSelect = false;
 
   /// Most recently added goal. The viewport pans just enough to show it
   /// without changing zoom, so growing the tree is visible even when the
@@ -155,13 +150,10 @@ class _NodeGraphViewState extends State<NodeGraphView> {
     if (visible != null) {
       _selected.removeWhere((id) => !visible.contains(id));
     }
-    if (_selected.isEmpty) _multiSelectMode = false;
   }
 
   void _clearSelectionState() {
     _selected.clear();
-    _multiSelectMode = false;
-    _marqueeBase = const {};
   }
 
   /// One-time seed, once goals exist. A set carried in
@@ -230,7 +222,6 @@ class _NodeGraphViewState extends State<NodeGraphView> {
       selectedIds: selected,
       showToggles: !restricted,
       onCardTap: _onCardTap,
-      onCardLongPress: _onCardLongPress,
       onBackgroundTap: _clearSelection,
       onToggle: _toggleCollapsed,
       onAddSubgoal: _addSubgoal,
@@ -257,11 +248,10 @@ class _NodeGraphViewState extends State<NodeGraphView> {
             fitToken: widget.fitToken,
             revealRect: reveal?.rect,
             revealToken: _revealToken,
+            multiSelect: _multiSelect,
+            onToggleMultiSelect: _toggleMultiSelect,
             onMarqueeStart: _onMarqueeStart,
             onMarqueeChanged: _onMarqueeChanged,
-            onMarqueeEnd: () => _marqueeBase = const {},
-            onSelectAll: () => _selectAll(layout.placements),
-            onClearSelection: _clearSelection,
             child: canvas,
           ),
         ),
@@ -330,82 +320,56 @@ class _NodeGraphViewState extends State<NodeGraphView> {
             child: GraphPill(
               text: widget.filterActive
                   ? 'Filtered-out goals collapse · links stay visible'
-                  : 'Drag to pan · tap to select · Select tool for marquee · long-press multi-select',
+                  : 'Tap to select · tap again to edit · −/+ collapses',
             ),
           ),
       ],
     );
   }
 
-  bool get _additivePressed =>
-      HardwareKeyboard.instance.isShiftPressed ||
-      HardwareKeyboard.instance.isControlPressed ||
-      HardwareKeyboard.instance.isMetaPressed;
+  void _toggleMultiSelect() {
+    setState(() {
+      _multiSelect = !_multiSelect;
+      if (!_multiSelect) _selected.clear();
+    });
+  }
 
   /// Card tap: the first tap selects the goal and opens its action bar; a
   /// tap on the only selected card opens the editor, the same as before.
-  /// With a modifier (or once touch multi-select started) the tap toggles
-  /// membership instead.
+  /// While the multi-select tool is on, taps toggle membership instead.
   void _onCardTap(Node node) {
-    final additive = _additivePressed;
+    if (_multiSelect) {
+      setState(() {
+        if (!_selected.remove(node.id)) _selected.add(node.id);
+      });
+      return;
+    }
     final sole = _selected.length == 1 && _selected.contains(node.id);
-    if (!additive && !_multiSelectMode && sole) {
+    if (sole) {
       showNodeEditor(context, existing: node);
       return;
     }
     setState(() {
-      if (additive || _multiSelectMode) {
-        if (!_selected.remove(node.id)) _selected.add(node.id);
-        if (_selected.isEmpty) _multiSelectMode = false;
-      } else {
-        _selected
-          ..clear()
-          ..add(node.id);
-        _multiSelectMode = false;
-      }
+      _selected
+        ..clear()
+        ..add(node.id);
     });
   }
 
-  /// Long-press is the touch entry to multi-select: it selects the card and
-  /// makes subsequent taps toggle instead of replacing the selection.
-  void _onCardLongPress(Node node) {
-    setState(() {
-      _multiSelectMode = true;
-      _selected.add(node.id);
-    });
-  }
-
-  void _onMarqueeStart(bool additive) {
-    _marqueeBase = additive ? Set.of(_selected) : const {};
-    if (!additive) {
-      setState(_clearSelectionState);
-    }
+  void _onMarqueeStart() {
+    setState(_clearSelectionState);
   }
 
   void _onMarqueeChanged(Set<String> ids) {
     setState(() {
       _selected
         ..clear()
-        ..addAll(_marqueeBase)
         ..addAll(ids);
-      _multiSelectMode = false;
-    });
-  }
-
-  void _selectAll(List<GraphNodePlacement> placements) {
-    setState(() {
-      _selected
-        ..clear()
-        ..addAll([
-          for (final placement in placements)
-            if (!placement.compact) placement.node.id,
-        ]);
-      _multiSelectMode = false;
     });
   }
 
   void _clearSelection() {
-    if (_selected.isEmpty && !_multiSelectMode) return;
+    if (_selected.isEmpty) return;
     setState(_clearSelectionState);
   }
 
@@ -419,7 +383,6 @@ class _NodeGraphViewState extends State<NodeGraphView> {
           (selectedId) =>
               selectedId != id && hasAncestor(widget.nodes, selectedId, id),
         );
-        if (_selected.isEmpty) _multiSelectMode = false;
       }
     });
     _reportCollapsed();
