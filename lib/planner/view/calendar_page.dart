@@ -186,6 +186,11 @@ class _CalendarPageState extends State<CalendarPage> {
   /// can recompute the drop time while the grid moves under a still pointer.
   Offset? _pairedDragPointer;
   DateTime? _pairedDragDropTime;
+
+  /// Day column last under the pointer *inside* the grid. Dragging over the
+  /// time ruler scrolls but keeps this day, so grabbing the ruler handle
+  /// never throws the tile onto the first/last day of the week.
+  DateTime? _pairedDragDay;
   List<DateTime> _pairedDragDays = const [];
   double _pairedDragCellWidth = 0;
   double _pairedDragPixelsPerMinute = 0;
@@ -2557,6 +2562,7 @@ class _CalendarPageState extends State<CalendarPage> {
     _pairedDragOrigin = globalPosition;
     _pairedDragPointer = globalPosition;
     _pairedDragDropTime = event.start;
+    _pairedDragDay = localDay(event.start);
     _pairedDragDays = days;
     _pairedDragCellWidth = cellWidth;
     _pairedDragPixelsPerMinute = pixelsPerMinute;
@@ -2612,7 +2618,9 @@ class _CalendarPageState extends State<CalendarPage> {
           ? _pairedDragStartMinutes
           : latestStart,
     );
-    final day = _dayUnderPointer(pointer, origin);
+    final pointerDay = _dayUnderPointer(pointer, origin);
+    if (pointerDay != null) _pairedDragDay = pointerDay;
+    final day = _pairedDragDay ?? localDay(original.start);
     _pairedDragDropTime = DateTime(
       day.year,
       day.month,
@@ -2620,10 +2628,10 @@ class _CalendarPageState extends State<CalendarPage> {
     ).add(Duration(minutes: targetMinutes.round()));
   }
 
-  /// Day column the pointer is over, clamped to the visible grid. A pointer
-  /// over the time ruler keeps the nearest day instead of jumping a column,
-  /// because the ruler is the vertical auto-scroll handle.
-  DateTime _dayUnderPointer(Offset pointer, Offset origin) {
+  /// Day column the pointer is over, or null when it is over the time
+  /// ruler (the vertical auto-scroll handle). Null keeps the caller's last
+  /// in-grid day instead of snapping to the first or last column.
+  DateTime? _dayUnderPointer(Offset pointer, Offset origin) {
     final stack = _calendarStackKey.currentContext?.findRenderObject();
     final Rect? bounds = stack is RenderBox && stack.hasSize
         ? stack.localToGlobal(Offset.zero) & stack.size
@@ -2633,8 +2641,9 @@ class _CalendarPageState extends State<CalendarPage> {
     final ruler = _calendarTimeRulerWidth;
     final gridLeft = _pairedDragIsRtl ? left : left + ruler;
     final gridRight = _pairedDragIsRtl ? right - ruler : right;
-    if (gridRight - gridLeft <= 0) return _pairedDragDays.first;
-    final x = pointer.dx.clamp(gridLeft + 0.5, gridRight - 0.5);
+    if (gridRight - gridLeft <= 0) return null;
+    final x = pointer.dx;
+    if (_pairedDragIsRtl ? x >= gridRight : x <= gridLeft) return null;
     final column =
         ((_pairedDragIsRtl ? gridRight - x : x - gridLeft) / _pairedDragCellWidth)
             .floor()
@@ -2707,6 +2716,7 @@ class _CalendarPageState extends State<CalendarPage> {
   Future<void> _onPairedPlanDragEnd(PlannerEvent event) async {
     final original = _pairedDragOriginal ?? event;
     final droppingTime = _pairedDragDropTime;
+    if (droppingTime != null) _revealDropTime(droppingTime);
     _clearPairedPlanDrag();
     if (droppingTime == null || droppingTime == original.start) {
       _isDragging = false;
@@ -2717,6 +2727,34 @@ class _CalendarPageState extends State<CalendarPage> {
     await _onDragEnd(
       AppointmentDragEndDetails(original, null, null, droppingTime),
     );
+  }
+
+  /// Scrolls the grid when a fast drag drops the tile outside the visible
+  /// hours, so the block cannot end up hidden above/below the viewport.
+  void _revealDropTime(DateTime drop) {
+    final position = _gridTracker.position;
+    final viewport = _gridTracker.viewportGlobal;
+    final pixelsPerMinute = _pairedDragPixelsPerMinute;
+    if (position == null ||
+        !position.hasPixels ||
+        viewport == null ||
+        pixelsPerMinute <= 0) {
+      return;
+    }
+    final topInContent =
+        (drop.hour * 60 + drop.minute - _pairedDragStartMinutes) *
+        pixelsPerMinute;
+    final visibleTop = position.pixels;
+    final visibleBottom = visibleTop + viewport.height;
+    if (topInContent >= visibleTop + 8 &&
+        topInContent <= visibleBottom - 48) {
+      return;
+    }
+    final target = (topInContent - viewport.height * 0.25).clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    position.jumpTo(target);
   }
 
   void _cancelPairedPlanDrag() {
@@ -2734,6 +2772,7 @@ class _CalendarPageState extends State<CalendarPage> {
     _pairedDragOrigin = null;
     _pairedDragPointer = null;
     _pairedDragDropTime = null;
+    _pairedDragDay = null;
     _pairedDragDays = const [];
   }
 
