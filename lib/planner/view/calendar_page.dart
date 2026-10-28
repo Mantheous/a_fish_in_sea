@@ -45,6 +45,7 @@ import 'event_colors.dart';
 import 'event_editor.dart';
 import 'feed_manager.dart';
 import 'plan_tile_drag.dart';
+import 'plan_tile_drag_session.dart';
 import 'plan_to_report_copy.dart';
 import 'report_lane_overlay.dart';
 import 'task_tile_helpers.dart';
@@ -179,27 +180,9 @@ class _CalendarPageState extends State<CalendarPage> {
   double _handlePxPerMinute = 1;
   bool _ignoreNativeDragEnd = false;
   bool _isDragging = false;
-  PlannerEvent? _pairedDragOriginal;
-  Offset? _pairedDragOrigin;
-
-  /// Latest pointer position of the tile drag. Kept so the auto-scroll ticker
-  /// can recompute the drop time while the grid moves under a still pointer.
-  Offset? _pairedDragPointer;
-  DateTime? _pairedDragDropTime;
-
-  /// Day column last under the pointer *inside* the grid. Dragging over the
-  /// time ruler scrolls but keeps this day, so grabbing the ruler handle
-  /// never throws the tile onto the first/last day of the week.
-  DateTime? _pairedDragDay;
-  List<DateTime> _pairedDragDays = const [];
-  double _pairedDragCellWidth = 0;
-  double _pairedDragPixelsPerMinute = 0;
-  bool _pairedDragIsRtl = false;
-  double _pairedDragScrollAtStart = 0;
-  double _pairedDragStartMinutes = 0;
-  double _pairedDragEndMinutes = 24 * 60;
-  double _pairedDragDurationMinutes = 60;
-  Timer? _pairedDragAutoScroll;
+  /// In-flight tile drag (null between drags). Owns the drop-time math and
+  /// the ruler/edge auto-scroll; the page only commits the result.
+  PlanTileDragSession? _pairedDrag;
 
   bool get _isWide => MediaQuery.of(context).size.width >= _wideBreakpoint;
   bool _appliedNarrowDefault = false;
@@ -316,7 +299,7 @@ class _CalendarPageState extends State<CalendarPage> {
     _liveTicker?.cancel();
     _suppressTimer?.cancel();
     _recordingTicker?.cancel();
-    _pairedDragAutoScroll?.cancel();
+    _pairedDrag?.cancel();
     _nodeTickerSub?.cancel();
     _calendarTickerSub?.cancel();
     _controller.removePropertyChangedListener(_onCalendarControllerChanged);
@@ -2558,167 +2541,43 @@ class _CalendarPageState extends State<CalendarPage> {
     required double pixelsPerMinute,
     required bool isRtl,
   }) {
-    _pairedDragOriginal = event;
-    _pairedDragOrigin = globalPosition;
-    _pairedDragPointer = globalPosition;
-    _pairedDragDropTime = event.start;
-    _pairedDragDay = localDay(event.start);
-    _pairedDragDays = days;
-    _pairedDragCellWidth = cellWidth;
-    _pairedDragPixelsPerMinute = pixelsPerMinute;
-    _pairedDragIsRtl = isRtl;
-    _pairedDragScrollAtStart = _gridTracker.scrollOffset;
+    final stack = _calendarStackKey.currentContext?.findRenderObject();
     final settings = context.read<SettingsCubit>().state;
-    _pairedDragStartMinutes = settings.dayStartHour * 60;
-    _pairedDragEndMinutes = settings.dayEndHour * 60;
-    final duration = event.end.isAfter(event.start)
-        ? event.end.difference(event.start).inMinutes
-        : 60;
-    _pairedDragDurationMinutes = duration.toDouble();
+    _pairedDrag?.cancel();
+    _pairedDrag = PlanTileDragSession(
+      original: event,
+      days: days,
+      stackRect: stack is RenderBox && stack.hasSize
+          ? stack.localToGlobal(Offset.zero) & stack.size
+          : null,
+      cellWidth: cellWidth,
+      pixelsPerMinute: pixelsPerMinute,
+      isRtl: isRtl,
+      timeRulerWidth: _calendarTimeRulerWidth,
+      startMinutes: settings.dayStartHour * 60,
+      endMinutes: settings.dayEndHour * 60,
+      tracker: _gridTracker,
+    )..start(globalPosition);
     _isDragging = true;
     _suppressTap = true;
-    // While the pointer is parked over the time ruler (or the top/bottom
-    // edge) keep scrolling the grid even though no pointer movement arrives.
-    _pairedDragAutoScroll?.cancel();
-    _pairedDragAutoScroll = Timer.periodic(
-      const Duration(milliseconds: 16),
-      _tickPairedPlanAutoScroll,
-    );
   }
 
   void _onPairedPlanDragMove(Offset globalPosition) {
-    _pairedDragPointer = globalPosition;
-    _updatePairedPlanDropTime();
-  }
-
-  /// Converts the pointer into a drop time from the *grid* geometry, not the
-  /// pointer delta alone: while the grid auto-scrolls under the pointer the
-  /// time under the tile changes even when the pointer stands still.
-  void _updatePairedPlanDropTime() {
-    final original = _pairedDragOriginal;
-    final origin = _pairedDragOrigin;
-    final pointer = _pairedDragPointer;
-    if (original == null || origin == null || pointer == null) return;
-    final pixelsPerMinute = _pairedDragPixelsPerMinute;
-    final cellWidth = _pairedDragCellWidth;
-    if (pixelsPerMinute <= 0 || cellWidth <= 0 || _pairedDragDays.isEmpty) {
-      return;
-    }
-    final scrollDelta = _gridTracker.scrollOffset - _pairedDragScrollAtStart;
-    final movedMinutes =
-        (pointer.dy - origin.dy + scrollDelta) / pixelsPerMinute;
-    final startMinutes =
-        original.start.hour * 60.0 +
-        original.start.minute +
-        movedMinutes.toDouble();
-    final latestStart = _pairedDragEndMinutes - _pairedDragDurationMinutes;
-    final targetMinutes = startMinutes.clamp(
-      _pairedDragStartMinutes,
-      latestStart < _pairedDragStartMinutes
-          ? _pairedDragStartMinutes
-          : latestStart,
-    );
-    final pointerDay = _dayUnderPointer(pointer, origin);
-    if (pointerDay != null) _pairedDragDay = pointerDay;
-    final day = _pairedDragDay ?? localDay(original.start);
-    _pairedDragDropTime = DateTime(
-      day.year,
-      day.month,
-      day.day,
-    ).add(Duration(minutes: targetMinutes.round()));
-  }
-
-  /// Day column the pointer is over, or null when it is over the time
-  /// ruler (the vertical auto-scroll handle). Null keeps the caller's last
-  /// in-grid day instead of snapping to the first or last column.
-  DateTime? _dayUnderPointer(Offset pointer, Offset origin) {
-    final stack = _calendarStackKey.currentContext?.findRenderObject();
-    final Rect? bounds = stack is RenderBox && stack.hasSize
-        ? stack.localToGlobal(Offset.zero) & stack.size
-        : null;
-    final left = bounds?.left ?? origin.dx;
-    final right = bounds?.right ?? origin.dx;
-    final ruler = _calendarTimeRulerWidth;
-    final gridLeft = _pairedDragIsRtl ? left : left + ruler;
-    final gridRight = _pairedDragIsRtl ? right - ruler : right;
-    if (gridRight - gridLeft <= 0) return null;
-    final x = pointer.dx;
-    if (_pairedDragIsRtl ? x >= gridRight : x <= gridLeft) return null;
-    final column =
-        ((_pairedDragIsRtl ? gridRight - x : x - gridLeft) / _pairedDragCellWidth)
-            .floor()
-            .clamp(0, _pairedDragDays.length - 1);
-    final index = _pairedDragIsRtl
-        ? _pairedDragDays.length - 1 - column
-        : column;
-    return _pairedDragDays[index];
-  }
-
-  void _tickPairedPlanAutoScroll(Timer timer) {
-    final plan = _gridTracker.position;
-    final pointer = _pairedDragPointer;
-    final viewport = _gridTracker.viewportGlobal;
-    if (plan == null || !plan.hasPixels || pointer == null || viewport == null) {
-      return;
-    }
-    final velocity = _pairedPlanAutoScrollVelocity(pointer, viewport);
-    if (velocity == 0) return;
-    final target = (plan.pixels + velocity).clamp(
-      plan.minScrollExtent,
-      plan.maxScrollExtent,
-    );
-    if ((target - plan.pixels).abs() < 0.5) return;
-    plan.jumpTo(target);
-    _updatePairedPlanDropTime();
-  }
-
-  /// Pixels per tick to scroll while dragging. Over the time ruler the
-  /// pointer's distance from the viewport's middle picks the direction and
-  /// speed; near the top/bottom edge the usual edge auto-scroll applies.
-  double _pairedPlanAutoScrollVelocity(Offset pointer, Rect viewport) {
-    final stack = _calendarStackKey.currentContext?.findRenderObject();
-    if (stack is! RenderBox || !stack.hasSize) return 0;
-    final bounds = stack.localToGlobal(Offset.zero) & stack.size;
-    if (pointer.dx < bounds.left || pointer.dx > bounds.right) return 0;
-    final rulerEdge = _pairedDragIsRtl
-        ? bounds.right - _calendarTimeRulerWidth
-        : bounds.left + _calendarTimeRulerWidth;
-    final overRuler = _pairedDragIsRtl
-        ? pointer.dx >= rulerEdge
-        : pointer.dx <= rulerEdge;
-    if (overRuler) {
-      final mid = viewport.center.dy;
-      final deadZone = viewport.height * 0.2;
-      final dy = pointer.dy - mid;
-      if (dy.abs() <= deadZone) return 0;
-      final travel = (viewport.height / 2 - deadZone).clamp(1.0, 1.0e6);
-      final depth = ((dy.abs() - deadZone) / travel).clamp(0.0, 1.0);
-      return dy.sign * (1.5 + depth * 6.5);
-    }
-    const edge = 28.0;
-    if (pointer.dy < viewport.top + edge) {
-      final depth = ((viewport.top + edge - pointer.dy) / edge).clamp(
-        0.0,
-        1.0,
-      );
-      return -(1.5 + depth * 6.5);
-    }
-    if (pointer.dy > viewport.bottom - edge) {
-      final depth = ((pointer.dy - (viewport.bottom - edge)) / edge).clamp(
-        0.0,
-        1.0,
-      );
-      return 1.5 + depth * 6.5;
-    }
-    return 0;
+    _pairedDrag?.update(globalPosition);
   }
 
   Future<void> _onPairedPlanDragEnd(PlannerEvent event) async {
-    final original = _pairedDragOriginal ?? event;
-    final droppingTime = _pairedDragDropTime;
-    if (droppingTime != null) _revealDropTime(droppingTime);
-    _clearPairedPlanDrag();
-    if (droppingTime == null || droppingTime == original.start) {
+    final session = _pairedDrag;
+    _pairedDrag = null;
+    if (session == null) {
+      _isDragging = false;
+      if (mounted) setState(() {});
+      _resetSuppressSoon();
+      return;
+    }
+    final original = session.original;
+    final droppingTime = session.finish();
+    if (droppingTime == original.start) {
       _isDragging = false;
       if (mounted) setState(() {});
       _resetSuppressSoon();
@@ -2729,51 +2588,13 @@ class _CalendarPageState extends State<CalendarPage> {
     );
   }
 
-  /// Scrolls the grid when a fast drag drops the tile outside the visible
-  /// hours, so the block cannot end up hidden above/below the viewport.
-  void _revealDropTime(DateTime drop) {
-    final position = _gridTracker.position;
-    final viewport = _gridTracker.viewportGlobal;
-    final pixelsPerMinute = _pairedDragPixelsPerMinute;
-    if (position == null ||
-        !position.hasPixels ||
-        viewport == null ||
-        pixelsPerMinute <= 0) {
-      return;
-    }
-    final topInContent =
-        (drop.hour * 60 + drop.minute - _pairedDragStartMinutes) *
-        pixelsPerMinute;
-    final visibleTop = position.pixels;
-    final visibleBottom = visibleTop + viewport.height;
-    if (topInContent >= visibleTop + 8 &&
-        topInContent <= visibleBottom - 48) {
-      return;
-    }
-    final target = (topInContent - viewport.height * 0.25).clamp(
-      position.minScrollExtent,
-      position.maxScrollExtent,
-    );
-    position.jumpTo(target);
-  }
-
   void _cancelPairedPlanDrag() {
-    if (_pairedDragOriginal == null) return;
-    _clearPairedPlanDrag();
+    if (_pairedDrag == null) return;
+    _pairedDrag?.cancel();
+    _pairedDrag = null;
     _isDragging = false;
     if (mounted) setState(() {});
     _resetSuppressSoon();
-  }
-
-  void _clearPairedPlanDrag() {
-    _pairedDragAutoScroll?.cancel();
-    _pairedDragAutoScroll = null;
-    _pairedDragOriginal = null;
-    _pairedDragOrigin = null;
-    _pairedDragPointer = null;
-    _pairedDragDropTime = null;
-    _pairedDragDay = null;
-    _pairedDragDays = const [];
   }
 
   /// Keeps the creation ghost on screen while the user pages with the
