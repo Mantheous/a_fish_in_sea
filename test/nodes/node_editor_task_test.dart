@@ -87,7 +87,11 @@ void main() {
     await tester.pumpWidget(harness(nodes));
     await tester.pump();
 
+    // First tap selects the card; the action bar's edit button opens the
+    // editor (single-tap-to-edit went away with the pan-default graph).
     await tester.tap(find.byKey(const ValueKey('graph-node-node:budget')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('graph-action-edit')));
     await tester.pumpAndSettle();
     final toggle = taskSwitch();
     expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
@@ -123,7 +127,11 @@ void main() {
     await tester.pumpWidget(harness(nodes));
     await tester.pump();
 
+    // First tap selects the card; the action bar's edit button opens the
+    // editor (single-tap-to-edit went away with the pan-default graph).
     await tester.tap(find.byKey(const ValueKey('graph-node-node:leaf')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('graph-action-edit')));
     await tester.pumpAndSettle();
     final toggle = taskSwitch();
     expect(tester.widget<SwitchListTile>(toggle).value, isTrue);

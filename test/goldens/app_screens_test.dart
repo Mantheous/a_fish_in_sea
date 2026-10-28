@@ -27,7 +27,15 @@ void main() {
   });
 
   testWidgets('calendar empty state', (tester) async {
-    await pumpGoldenPage(tester, const CalendarPage());
+    // Fixed week + hidden now-line: the live indicator and month header
+    // otherwise make this golden depend on wall-clock time.
+    await pumpGoldenPage(
+      tester,
+      CalendarPage(
+        initialDisplayDate: DateTime(2026, 1, 15),
+        showCurrentTimeIndicator: false,
+      ),
+    );
     await expectLater(
       find.byType(CalendarPage),
       matchesGoldenFile('app_screens_test.calendar.png'),
