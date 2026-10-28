@@ -44,6 +44,8 @@ import 'calendar_tile_metrics.dart';
 import 'event_colors.dart';
 import 'event_editor.dart';
 import 'feed_manager.dart';
+import 'plan_tile_drag.dart';
+import 'plan_tile_drag_session.dart';
 import 'plan_to_report_copy.dart';
 import 'report_lane_overlay.dart';
 import 'task_tile_helpers.dart';
@@ -178,13 +180,9 @@ class _CalendarPageState extends State<CalendarPage> {
   double _handlePxPerMinute = 1;
   bool _ignoreNativeDragEnd = false;
   bool _isDragging = false;
-  PlannerEvent? _pairedDragOriginal;
-  Offset? _pairedDragOrigin;
-  DateTime? _pairedDragDropTime;
-  double _pairedDragCellWidth = 0;
-  double _pairedDragPixelsPerMinute = 0;
-  int _pairedDragDayCount = 0;
-  bool _pairedDragIsRtl = false;
+  /// In-flight tile drag (null between drags). Owns the drop-time math and
+  /// the ruler/edge auto-scroll; the page only commits the result.
+  PlanTileDragSession? _pairedDrag;
 
   bool get _isWide => MediaQuery.of(context).size.width >= _wideBreakpoint;
   bool _appliedNarrowDefault = false;
@@ -301,6 +299,7 @@ class _CalendarPageState extends State<CalendarPage> {
     _liveTicker?.cancel();
     _suppressTimer?.cancel();
     _recordingTicker?.cancel();
+    _pairedDrag?.cancel();
     _nodeTickerSub?.cancel();
     _calendarTickerSub?.cancel();
     _controller.removePropertyChangedListener(_onCalendarControllerChanged);
@@ -669,7 +668,10 @@ class _CalendarPageState extends State<CalendarPage> {
                   )) {
                     _dataSource!.update(shown, feedColors, colorById);
                   }
-                  if (reportLanes) _scheduleGridDiscovery();
+                  // Track the time grid in both Plans and Plan + Report: the
+                  // drag needs its scroll offset and viewport to auto-scroll
+                  // the ruler, and the report overlay reads the same geometry.
+                  if (_view != CalendarView.month) _scheduleGridDiscovery();
                   // Keep the calendar at a stable tree position. Opening a
                   // drawer or report hint must not dispose/recreate SfCalendar
                   // and regenerate every appointment (or leave its scheduled
@@ -686,10 +688,16 @@ class _CalendarPageState extends State<CalendarPage> {
                         settings.dayStartHour,
                         settings.dayEndHour,
                       );
-                      final cellWidth = laneDays.isEmpty
+                      // Day columns for tile drags: the side-by-side view
+                      // already knows them; Plans mode derives the same grid
+                      // from the controller so both modes can drop on a day.
+                      final dayColumns = laneDays.isNotEmpty
+                          ? laneDays
+                          : _visibleDaysForLane();
+                      final dragCellWidth = dayColumns.isEmpty
                           ? 0.0
                           : (constraints.maxWidth - _calendarTimeRulerWidth) /
-                                laneDays.length;
+                                dayColumns.length;
                       final pixelsPerMinute =
                           slotSettings.timeIntervalHeight /
                           slotSettings.timeInterval.inMinutes;
@@ -724,6 +732,10 @@ class _CalendarPageState extends State<CalendarPage> {
                             assigneeLabelById: _projection.assigneeLabelById,
                             reportedEventIds: _projection.reportedEventIds,
                             showCopyToReport: reportLanes,
+                            dayColumns: dayColumns,
+                            cellWidth: dragCellWidth,
+                            pixelsPerMinute: pixelsPerMinute,
+                            isRtl: isRtl,
                           );
                           final raw = details.appointments.isNotEmpty
                               ? details.appointments.first
@@ -760,18 +772,6 @@ class _CalendarPageState extends State<CalendarPage> {
                             onPointerSignal: _gridTracker.onPlanPointerSignal,
                             onVerticalDragUpdate:
                                 _gridTracker.onPlanVerticalDrag,
-                            onLongPressStart: (drag) => _onPairedPlanDragStart(
-                              event,
-                              drag.globalPosition,
-                              cellWidth: cellWidth,
-                              pixelsPerMinute: pixelsPerMinute,
-                              dayCount: laneDays.length,
-                              isRtl: isRtl,
-                            ),
-                            onLongPressMoveUpdate: (drag) =>
-                                _onPairedPlanDragMove(drag.globalPosition),
-                            onLongPressEnd: (_) => _onPairedPlanDragEnd(event),
-                            onLongPressCancel: _cancelPairedPlanDrag,
                           );
                         },
                         onDragStart: _onDragStart,
@@ -897,6 +897,10 @@ class _CalendarPageState extends State<CalendarPage> {
     Map<String, String>? assigneeLabelById,
     Set<String>? reportedEventIds,
     bool showCopyToReport = false,
+    required List<DateTime> dayColumns,
+    required double cellWidth,
+    required double pixelsPerMinute,
+    required bool isRtl,
   }) {
     if (details.isMoreAppointmentRegion) {
       return Container(
@@ -1286,7 +1290,44 @@ class _CalendarPageState extends State<CalendarPage> {
         ),
       ),
     );
-    return tile;
+    if (!_canDragTile(event, remoteEditableFeedIds) ||
+        event.allDay ||
+        _view == CalendarView.month ||
+        dayColumns.isEmpty) {
+      return tile;
+    }
+    // Time-grid tiles drag with the pointer that is in use: mouse/stylus
+    // immediately, touch after a long press. Without this a desktop drag on
+    // a tile scrolls the grid instead of moving the block.
+    return PlanTileDragArea(
+      key: ValueKey('plan-drag:${event.id}'),
+      onPointerSignal: _gridTracker.onPlanPointerSignal,
+      onDragStart: (position) => _onPairedPlanDragStart(
+        event,
+        position,
+        days: dayColumns,
+        cellWidth: cellWidth,
+        pixelsPerMinute: pixelsPerMinute,
+        isRtl: isRtl,
+      ),
+      onDragUpdate: _onPairedPlanDragMove,
+      onDragEnd: () => _onPairedPlanDragEnd(event),
+      onDragCancel: _cancelPairedPlanDrag,
+      child: tile,
+    );
+  }
+
+  /// Whether a tile can be dropped somewhere else. Everything movable in
+  /// the calendar can be dragged; report chips and read-only synced or
+  /// repeating events keep their existing tap/edit flow.
+  bool _canDragTile(PlannerEvent event, Set<String>? remoteEditableFeedIds) {
+    if (isReportDisplayId(event.id)) return false;
+    if (event.id == calendarDraftEventId) return true;
+    if (isNodeBlockId(event.id)) return true;
+    if (remoteEditableFeedIds != null) {
+      return _isMovableFast(event, remoteEditableFeedIds);
+    }
+    return _isMovable(event);
   }
 
   Widget _resizeHandle({
@@ -2505,45 +2546,48 @@ class _CalendarPageState extends State<CalendarPage> {
   void _onPairedPlanDragStart(
     PlannerEvent event,
     Offset globalPosition, {
+    required List<DateTime> days,
     required double cellWidth,
     required double pixelsPerMinute,
-    required int dayCount,
     required bool isRtl,
   }) {
-    _pairedDragOriginal = event;
-    _pairedDragOrigin = globalPosition;
-    _pairedDragDropTime = event.start;
-    _pairedDragCellWidth = cellWidth;
-    _pairedDragPixelsPerMinute = pixelsPerMinute;
-    _pairedDragDayCount = dayCount;
-    _pairedDragIsRtl = isRtl;
+    final stack = _calendarStackKey.currentContext?.findRenderObject();
+    final settings = context.read<SettingsCubit>().state;
+    _pairedDrag?.cancel();
+    _pairedDrag = PlanTileDragSession(
+      original: event,
+      days: days,
+      stackRect: stack is RenderBox && stack.hasSize
+          ? stack.localToGlobal(Offset.zero) & stack.size
+          : null,
+      cellWidth: cellWidth,
+      pixelsPerMinute: pixelsPerMinute,
+      isRtl: isRtl,
+      timeRulerWidth: _calendarTimeRulerWidth,
+      startMinutes: settings.dayStartHour * 60,
+      endMinutes: settings.dayEndHour * 60,
+      tracker: _gridTracker,
+    )..start(globalPosition);
     _isDragging = true;
     _suppressTap = true;
   }
 
   void _onPairedPlanDragMove(Offset globalPosition) {
-    final original = _pairedDragOriginal;
-    final origin = _pairedDragOrigin;
-    if (original == null || origin == null) return;
-    final days = _pairedDragDayCount > 1 && _pairedDragCellWidth > 0
-        ? ((globalPosition.dx - origin.dx) / _pairedDragCellWidth).round() *
-              (_pairedDragIsRtl ? -1 : 1)
-        : 0;
-    final minutes = original.allDay || _pairedDragPixelsPerMinute <= 0
-        ? 0
-        : ((globalPosition.dy - origin.dy) / _pairedDragPixelsPerMinute)
-              .round();
-    _pairedDragDropTime = shiftByCalendarDays(original.start, days)
-        .add(Duration(minutes: minutes));
+    _pairedDrag?.update(globalPosition);
   }
 
   Future<void> _onPairedPlanDragEnd(PlannerEvent event) async {
-    final original = _pairedDragOriginal ?? event;
-    final droppingTime = _pairedDragDropTime;
-    _pairedDragOriginal = null;
-    _pairedDragOrigin = null;
-    _pairedDragDropTime = null;
-    if (droppingTime == null || droppingTime == original.start) {
+    final session = _pairedDrag;
+    _pairedDrag = null;
+    if (session == null) {
+      _isDragging = false;
+      if (mounted) setState(() {});
+      _resetSuppressSoon();
+      return;
+    }
+    final original = session.original;
+    final droppingTime = session.finish();
+    if (droppingTime == original.start) {
       _isDragging = false;
       if (mounted) setState(() {});
       _resetSuppressSoon();
@@ -2555,10 +2599,9 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   void _cancelPairedPlanDrag() {
-    if (_pairedDragOriginal == null) return;
-    _pairedDragOriginal = null;
-    _pairedDragOrigin = null;
-    _pairedDragDropTime = null;
+    if (_pairedDrag == null) return;
+    _pairedDrag?.cancel();
+    _pairedDrag = null;
     _isDragging = false;
     if (mounted) setState(() {});
     _resetSuppressSoon();

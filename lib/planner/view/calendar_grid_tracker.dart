@@ -108,11 +108,20 @@ class PlanGridTracker extends ChangeNotifier {
   /// appointment builders, which run inside the calendar's own build.
   void rememberPosition(BuildContext context, {required bool timeGrid}) {
     if (!timeGrid) return;
+    // Keep the grid we already track while it still sits in the calendar:
+    // SfCalendar builds every neighbouring day page too, and during a pager
+    // frame they can transiently report the visible rect. Re-adopting the
+    // last builder would bind the tracker (and the report lanes) to an
+    // off-screen page.
+    final current = _state;
+    if (current != null &&
+        current.mounted &&
+        _overlapsAnchor(current.context)) {
+      return;
+    }
     final scrollable = Scrollable.maybeOf(context);
     if (scrollable == null) return;
-    // SfCalendar keeps the neighbouring day/week pages laid out beside the
-    // visible one (±viewport width) and builds their appointments too. Only
-    // adopt a grid that actually sits in the calendar we draw.
+    // Only adopt a grid that actually sits in the calendar we draw.
     if (!_overlapsAnchor(scrollable.context)) return;
     _capture(scrollable);
   }
@@ -125,6 +134,17 @@ class PlanGridTracker extends ChangeNotifier {
     if (scrollable == null) return false;
     if (!identical(scrollable.position, _position)) {
       if (!_isTimeGridPosition(scrollable.position)) return false;
+      // SfCalendar syncs the scroll offset of the neighbouring day pages;
+      // their notifications must not steal the grid (and with it the report
+      // lanes) away from the page the user is looking at.
+      final current = _state;
+      if (current != null &&
+          current.mounted &&
+          current.position.hasPixels &&
+          _overlapsAnchor(current.context)) {
+        return false;
+      }
+      if (!_overlapsAnchor(scrollable.context)) return false;
       _capture(scrollable);
       return false;
     }
@@ -173,7 +193,10 @@ class PlanGridTracker extends ChangeNotifier {
     if (anchor is! RenderBox || !anchor.hasSize) return true;
     final rect = box.localToGlobal(Offset.zero) & box.size;
     final bounds = anchor.localToGlobal(Offset.zero) & anchor.size;
-    return rect.overlaps(bounds);
+    // The visible page's grid is centered in the calendar. A neighbouring
+    // page only touches an edge (or is mid-repositioning) — intersection
+    // alone would let it steal the tracker.
+    return bounds.contains(rect.center);
   }
 
   _FoundScrollable? _findTimeGrid(BuildContext root) {
