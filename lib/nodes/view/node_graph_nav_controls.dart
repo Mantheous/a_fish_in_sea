@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
 
-/// Floating zoom/tool pill, modeled on Figma's bottom-right controls: hand
-/// tool, zoom out/in, a percentage menu with presets, and fit-to-screen.
+/// Floating tool/zoom pill, modeled on Figma: explicit Select and Pan tools,
+/// zoom out/in, a percentage menu with presets, and fit-to-screen. Pan is the
+/// default tool; Select turns empty-canvas drags into marquee selection.
 class NodeGraphNavControls extends StatelessWidget {
   const NodeGraphNavControls({
     super.key,
     required this.zoomPercent,
     required this.handTool,
-    required this.onToggleHand,
+    required this.onSelectTool,
+    required this.onPanTool,
     required this.onZoomOut,
     required this.onZoomIn,
     required this.onZoomTo,
@@ -16,7 +18,8 @@ class NodeGraphNavControls extends StatelessWidget {
 
   final int zoomPercent;
   final bool handTool;
-  final VoidCallback onToggleHand;
+  final VoidCallback onSelectTool;
+  final VoidCallback onPanTool;
   final VoidCallback onZoomOut;
   final VoidCallback onZoomIn;
   final ValueChanged<double> onZoomTo;
@@ -33,14 +36,25 @@ class NodeGraphNavControls extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
+            key: const ValueKey('graph-select-tool'),
+            tooltip: 'Select tool (V)',
+            visualDensity: VisualDensity.compact,
+            iconSize: 18,
+            style: IconButton.styleFrom(
+              backgroundColor: handTool ? null : scheme.primaryContainer,
+            ),
+            onPressed: onSelectTool,
+            icon: const Icon(Icons.near_me_outlined),
+          ),
+          IconButton(
             key: const ValueKey('graph-pan-tool'),
-            tooltip: handTool ? 'Select tool (V)' : 'Pan tool (H)',
+            tooltip: 'Pan tool (H)',
             visualDensity: VisualDensity.compact,
             iconSize: 18,
             style: IconButton.styleFrom(
               backgroundColor: handTool ? scheme.primaryContainer : null,
             ),
-            onPressed: onToggleHand,
+            onPressed: onPanTool,
             icon: Icon(handTool ? Icons.back_hand : Icons.back_hand_outlined),
           ),
           IconButton(
@@ -75,9 +89,8 @@ class NodeGraphNavControls extends StatelessWidget {
               child: Text(
                 '$zoomPercent%',
                 key: const ValueKey('graph-zoom-label'),
-                style: Theme.of(
-                  context,
-                ).textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w600),
+                style: Theme.of(context).textTheme.labelSmall
+                    ?.copyWith(fontWeight: FontWeight.w600),
               ),
             ),
           ),

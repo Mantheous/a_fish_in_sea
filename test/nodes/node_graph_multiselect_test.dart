@@ -183,6 +183,9 @@ void main() {
     await tester.pump();
     await openGraph(tester);
 
+    await tester.tap(find.byKey(const ValueKey('graph-select-tool')));
+    await tester.pump();
+
     final view = tester.getRect(find.byType(NodeGraphView));
     final root = tester.getRect(find.byKey(const ValueKey('graph-node-root')));
     final child = tester.getRect(
@@ -223,6 +226,8 @@ void main() {
       await tester.tap(find.byTooltip('Zoom in'));
       await tester.pump();
     }
+    await tester.tap(find.byKey(const ValueKey('graph-select-tool')));
+    await tester.pump();
 
     final view = tester.getRect(find.byType(NodeGraphView));
     Finder? target;
@@ -303,6 +308,7 @@ void main() {
       reason: 'using the floating controls must not clear the selection',
     );
     expect(find.byKey(const ValueKey('graph-pan-tool')), findsOneWidget);
+    expect(find.byKey(const ValueKey('graph-select-tool')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }
