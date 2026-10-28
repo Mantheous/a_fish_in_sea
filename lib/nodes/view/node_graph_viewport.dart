@@ -3,23 +3,17 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../service/node_graph_layout.dart';
-import 'node_graph_camera.dart';
-import 'node_graph_nav_controls.dart';
 
-/// Figma-style pan/zoom surface for the goal graph.
+/// Pan/zoom surface matching the original goal graph: the canvas pans on a
+/// drag, the mouse wheel/pinch zooms, and the floating pill offers zoom
+/// out/in and fit-to-screen.
 ///
-/// Pan is the default tool: a drag moves the graph, while tapping a card
-/// still selects it, so single-goal editing keeps working without switching
-/// tools. The Select tool (pill button or V) turns empty-canvas drags into a
-/// marquee that selects every card it touches (shift/ctrl/cmd adds to the
-/// current selection). Hold space for a temporary pan, use a middle-mouse
-/// drag, or two-finger scroll; trackpads can pinch to zoom. Ctrl/cmd + wheel
-/// zooms around the cursor. The floating pill carries explicit Select/Pan
-/// buttons, zoom controls, a percentage menu, and fit-to-screen, mirroring
-/// the controls in Figma.
+/// Multi-select is an explicit tool toggled from the pill. While it is on,
+/// panning is disabled so dragging empty canvas draws a marquee and selects
+/// the cards it touches; tapping cards toggles membership. Turning the tool
+/// off returns the graph to its original pan-first behavior.
 class NodeGraphViewport extends StatefulWidget {
   const NodeGraphViewport({
     super.key,
@@ -29,11 +23,11 @@ class NodeGraphViewport extends StatefulWidget {
     this.fitToken = 0,
     this.revealRect,
     this.revealToken = 0,
+    this.multiSelect = false,
+    this.onToggleMultiSelect,
     this.onMarqueeStart,
     this.onMarqueeChanged,
     this.onMarqueeEnd,
-    this.onSelectAll,
-    this.onClearSelection,
   });
 
   final Size layoutSize;
@@ -41,154 +35,72 @@ class NodeGraphViewport extends StatefulWidget {
   final int fitToken;
 
   /// Cards that marquee selection can hit. Compact path markers are not
-  /// selectable in bulk: they are filter context, not members of the result.
+  /// selectable: they are filter context, not members of the result.
   final List<GraphNodePlacement> placements;
 
   /// Canvas-space rect to bring into view when [revealToken] changes.
   final Rect? revealRect;
   final int revealToken;
 
-  /// A marquee gesture started on empty canvas. [additive] is true when
-  /// shift/ctrl/cmd was held, in which case the caller keeps the previous
-  /// selection as the base.
-  final ValueChanged<bool>? onMarqueeStart;
+  /// True while the multi-select tool is active.
+  final bool multiSelect;
+  final VoidCallback? onToggleMultiSelect;
 
-  /// Live ids touched by the current marquee. Called only when the set
-  /// changes, so a drag does not rebuild the graph every pixel.
+  /// A marquee started on empty canvas (multi-select tool only).
+  final VoidCallback? onMarqueeStart;
+
+  /// Live ids touched by the current marquee.
   final ValueChanged<Set<String>>? onMarqueeChanged;
 
   /// The marquee gesture ended (released or cancelled).
   final VoidCallback? onMarqueeEnd;
 
-  final VoidCallback? onSelectAll;
-  final VoidCallback? onClearSelection;
-
   @override
   State<NodeGraphViewport> createState() => _NodeGraphViewportState();
 }
 
-const double _wheelScaleFactor = 200;
-
 class _NodeGraphViewportState extends State<NodeGraphViewport> {
-  final NodeGraphCamera _camera = NodeGraphCamera();
-  final FocusNode _focusNode = FocusNode(debugLabel: 'goal-graph');
+  static const double _minScale = 0.12;
+  static const double _maxScale = 2.5;
 
+  final TransformationController _controller = TransformationController();
+  Size _viewport = Size.zero;
   bool _didFit = false;
-  bool _userMovedCamera = false;
   bool _fitScheduled = false;
   bool _revealScheduled = false;
-  int _zoomPercent = 100;
 
-  /// Pan is the default: a drag moves the graph, while a tap still selects
-  /// the card under the pointer. The Select tool (pill button or V) switches
-  /// empty-canvas drags to marquee selection.
-  bool _handTool = true;
-  bool _spaceHeld = false;
-
-  final Map<int, Offset> _pointers = {};
-  _Gesture _gesture = _Gesture.none;
-  int? _activePointer;
-
-  Offset? _panStart;
-  Offset _panStartTranslation = Offset.zero;
-
+  final Set<int> _pointers = {};
+  int? _marqueePointer;
   Offset? _marqueeStart;
   Offset? _marqueeStartScene;
   Offset? _marqueeCurrent;
   Set<String> _marqueeIds = const {};
 
-  Matrix4? _pinchStart;
-  double _pinchStartScale = 1;
-  Offset _pinchStartFocal = Offset.zero;
-  double _pinchStartDistance = 0;
-
-  Matrix4? _trackpadStart;
-  Offset _trackpadFocal = Offset.zero;
-  double _trackpadScale = 1;
-
-  bool get _panMode => _handTool || _spaceHeld;
-
-  bool get _additivePressed =>
-      HardwareKeyboard.instance.isShiftPressed ||
-      HardwareKeyboard.instance.isControlPressed ||
-      HardwareKeyboard.instance.isMetaPressed;
-
-  @override
-  void initState() {
-    super.initState();
-    _camera.controller.addListener(_handleTransformChanged);
-    HardwareKeyboard.instance.addHandler(_handleGlobalKey);
-  }
-
   @override
   void didUpdateWidget(covariant NodeGraphViewport oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.fitToken != oldWidget.fitToken) {
-      // An explicit refit (filter change) resets the view for the new graph.
       _didFit = false;
-      _userMovedCamera = false;
       _scheduleFit();
     } else if (widget.revealToken != oldWidget.revealToken) {
-      _userMovedCamera = true;
       _scheduleReveal();
-    } else if (widget.layoutSize != oldWidget.layoutSize && !_userMovedCamera) {
-      // Nodes can arrive after the first fit (demo hydration, the homework
-      // structure post-frame, generated instances). Keep the initial view
-      // fitted until the user actually pans or zooms.
-      _scheduleFit();
+    }
+    if (oldWidget.multiSelect && !widget.multiSelect) {
+      // Turning the tool off stops an in-flight marquee without calling
+      // setState during didUpdateWidget; the rebuild is already coming.
+      _pointers.clear();
+      _marqueePointer = null;
+      _marqueeStart = null;
+      _marqueeStartScene = null;
+      _marqueeCurrent = null;
+      _marqueeIds = const {};
     }
   }
 
   @override
   void dispose() {
-    HardwareKeyboard.instance.removeHandler(_handleGlobalKey);
-    _camera.controller.removeListener(_handleTransformChanged);
-    _camera.dispose();
-    _focusNode.dispose();
+    _controller.dispose();
     super.dispose();
-  }
-
-  void _handleTransformChanged() {
-    final percent = (_camera.scale * 100).round();
-    if (percent != _zoomPercent && mounted) {
-      setState(() => _zoomPercent = percent);
-    }
-  }
-
-  bool _handleGlobalKey(KeyEvent event) {
-    if (event.logicalKey != LogicalKeyboardKey.space) return false;
-    final down = event is KeyDownEvent;
-    final up = event is KeyUpEvent;
-    if (!down && !up) return false;
-    if (down == _spaceHeld) return false;
-    if (mounted) setState(() => _spaceHeld = down);
-    // Never consume space: it still belongs to buttons and text fields.
-    return false;
-  }
-
-  KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
-    final ctrl =
-        HardwareKeyboard.instance.isControlPressed ||
-        HardwareKeyboard.instance.isMetaPressed;
-    if (event.logicalKey == LogicalKeyboardKey.keyA && ctrl) {
-      widget.onSelectAll?.call();
-      return KeyEventResult.handled;
-    }
-    if (event.logicalKey == LogicalKeyboardKey.escape) {
-      _cancelMarquee();
-      widget.onClearSelection?.call();
-      return KeyEventResult.handled;
-    }
-    if (event.logicalKey == LogicalKeyboardKey.keyH) {
-      setState(() => _handTool = true);
-      return KeyEventResult.handled;
-    }
-    if (event.logicalKey == LogicalKeyboardKey.keyV) {
-      setState(() => _handTool = false);
-      return KeyEventResult.handled;
-    }
-    return KeyEventResult.ignored;
   }
 
   void _scheduleFit() {
@@ -198,7 +110,7 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
       _fitScheduled = false;
       if (!mounted) return;
       _didFit = true;
-      _camera.fit(widget.layoutSize);
+      _fit();
     });
   }
 
@@ -210,156 +122,81 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _revealScheduled = false;
       if (!mounted) return;
-      final rect = widget.revealRect;
-      if (rect != null) _camera.reveal(rect);
+      _reveal();
     });
   }
 
-  void _handlePointerDown(PointerDownEvent event) {
-    _focusNode.requestFocus();
-    _pointers[event.pointer] = event.localPosition;
-    if (_pointers.length >= 2) {
-      _userMovedCamera = true;
-      _endGesture();
-      _gesture = _Gesture.pinch;
-      _pinchStart = _camera.controller.value.clone();
-      _pinchStartScale = _camera.scale;
-      _pinchStartFocal = _midpoint();
-      _pinchStartDistance = _distance();
-      return;
+  void _reveal() {
+    final rect = widget.revealRect;
+    if (rect == null || _viewport.isEmpty) return;
+    final m = _controller.value;
+    final scale = m.getMaxScaleOnAxis();
+    final t = m.getTranslation();
+    const padding = 24.0;
+    final left = rect.left * scale + t.x;
+    final top = rect.top * scale + t.y;
+    final right = rect.right * scale + t.x;
+    final bottom = rect.bottom * scale + t.y;
+    var dx = 0.0;
+    var dy = 0.0;
+    if (right > _viewport.width - padding) {
+      dx = _viewport.width - padding - right;
     }
-    if (_panRequested(event)) {
-      _gesture = _Gesture.pan;
-      _activePointer = event.pointer;
-      _panStart = event.localPosition;
-      _panStartTranslation = _camera.translation;
-      return;
+    if (left + dx < padding) dx = padding - left;
+    if (bottom > _viewport.height - padding) {
+      dy = _viewport.height - padding - bottom;
     }
-    if (event.kind == PointerDeviceKind.mouse &&
-        event.buttons != kPrimaryMouseButton) {
-      return;
+    if (top + dy < padding) dy = padding - top;
+    if (dx == 0 && dy == 0) return;
+    _controller.value = _matrix(scale, t.x + dx, t.y + dy);
+  }
+
+  Matrix4 _matrix(double scale, double tx, double ty) {
+    final m = Matrix4.identity();
+    m.setEntry(0, 0, scale);
+    m.setEntry(1, 1, scale);
+    m.setEntry(2, 2, scale);
+    m.setEntry(0, 3, tx);
+    m.setEntry(1, 3, ty);
+    return m;
+  }
+
+  void _fit() {
+    if (_viewport.isEmpty || widget.layoutSize.isEmpty) return;
+    final scale = math
+        .min(1.0, (_viewport.width - 48) / widget.layoutSize.width)
+        .clamp(_minScale, _maxScale);
+    final tx = (_viewport.width - widget.layoutSize.width * scale) / 2;
+    final scaledHeight = widget.layoutSize.height * scale;
+    final ty = scaledHeight < _viewport.height
+        ? math.max(16.0, (_viewport.height - scaledHeight) / 2)
+        : 16.0;
+    _controller.value = _matrix(scale, tx, ty);
+  }
+
+  void _zoomBy(double factor) {
+    if (_viewport.isEmpty) return;
+    final m = _controller.value;
+    final scale = m.getMaxScaleOnAxis();
+    final next = (scale * factor).clamp(_minScale, _maxScale);
+    if (next == scale) return;
+    final f = next / scale;
+    final center = Offset(_viewport.width / 2, _viewport.height / 2);
+    final t = m.getTranslation();
+    final tx = center.dx - f * (center.dx - t.x);
+    final ty = center.dy - f * (center.dy - t.y);
+    _controller.value = _matrix(next, tx, ty);
+  }
+
+  Offset _toScene(Offset local) {
+    try {
+      return MatrixUtils.transformPoint(
+        Matrix4.inverted(_controller.value),
+        local,
+      );
+    } catch (_) {
+      return local;
     }
-    if (_hitsCard(_camera.toScene(event.localPosition))) return;
-    _gesture = _Gesture.marquee;
-    _activePointer = event.pointer;
-    _marqueeStart = event.localPosition;
-    _marqueeStartScene = _camera.toScene(event.localPosition);
-    _marqueeCurrent = event.localPosition;
-    _marqueeIds = const {};
-    setState(() {});
-    widget.onMarqueeStart?.call(_additivePressed);
-  }
-
-  bool _panRequested(PointerDownEvent event) {
-    final pan = _panMode || (event.buttons & kMiddleMouseButton) != 0;
-    if (pan) _userMovedCamera = true;
-    return pan;
-  }
-
-  void _handlePointerMove(PointerMoveEvent event) {
-    if (!_pointers.containsKey(event.pointer)) return;
-    _pointers[event.pointer] = event.localPosition;
-    switch (_gesture) {
-      case _Gesture.pinch:
-        _updatePinch();
-      case _Gesture.pan:
-        if (event.pointer != _activePointer || _panStart == null) return;
-        final delta = event.localPosition - _panStart!;
-        _camera.setTransform(
-          _camera.scale,
-          Offset(
-            _panStartTranslation.dx + delta.dx,
-            _panStartTranslation.dy + delta.dy,
-          ),
-        );
-      case _Gesture.marquee:
-        if (event.pointer != _activePointer || _marqueeStart == null) return;
-        _marqueeCurrent = event.localPosition;
-        // The marquee is drawn in screen space but cards live in layout
-        // space. Convert both corners through the camera before comparing,
-        // otherwise a fit/zoomed graph selects whatever happens to sit at
-        // those raw coordinates in the unscaled layout.
-        final start = _marqueeStartScene;
-        if (start == null) return;
-        final rect = Rect.fromPoints(start, _camera.toScene(_marqueeCurrent!));
-        final ids = _idsIn(rect);
-        if (!setEquals(ids, _marqueeIds)) {
-          _marqueeIds = ids;
-          widget.onMarqueeChanged?.call(Set.unmodifiable(ids));
-        }
-        setState(() {});
-      case _Gesture.none:
-        break;
-    }
-  }
-
-  void _handlePointerUp(PointerEvent event) {
-    final hadPointer = _pointers.remove(event.pointer) != null;
-    if (!hadPointer) return;
-    if (_gesture == _Gesture.pinch) {
-      if (_pointers.length < 2) {
-        _gesture = _Gesture.none;
-        _pinchStart = null;
-      }
-      return;
-    }
-    if (event.pointer != _activePointer) return;
-    if (_gesture == _Gesture.marquee) _cancelMarquee();
-    _gesture = _Gesture.none;
-    _activePointer = null;
-    _panStart = null;
-  }
-
-  void _endGesture() {
-    if (_gesture == _Gesture.marquee) _cancelMarquee();
-    _gesture = _Gesture.none;
-    _activePointer = null;
-    _panStart = null;
-    _pinchStart = null;
-  }
-
-  void _cancelMarquee() {
-    final active = _marqueeStart != null;
-    if (active) {
-      setState(() {
-        _marqueeStart = null;
-        _marqueeStartScene = null;
-        _marqueeCurrent = null;
-        _marqueeIds = const {};
-      });
-      widget.onMarqueeEnd?.call();
-    }
-  }
-
-  Offset _midpoint() {
-    final points = _pointers.values.toList(growable: false);
-    if (points.length < 2) return Offset.zero;
-    return (points[0] + points[1]) / 2;
-  }
-
-  double _distance() {
-    final points = _pointers.values.toList(growable: false);
-    if (points.length < 2) return 0;
-    return (points[0] - points[1]).distance;
-  }
-
-  void _updatePinch() {
-    final start = _pinchStart;
-    if (start == null || _pointers.length < 2 || _pinchStartDistance == 0) {
-      return;
-    }
-    final distance = _distance();
-    if (distance == 0) return;
-    final scale = (_pinchStartScale * distance / _pinchStartDistance).clamp(
-      kGraphMinScale,
-      kGraphMaxScale,
-    );
-    final scene = _camera.sceneIn(start, _pinchStartFocal);
-    _camera.scaleAround(
-      nextScale: scale,
-      scenePoint: scene,
-      focal: _midpoint(),
-    );
   }
 
   bool _hitsCard(Offset scene) {
@@ -377,162 +214,162 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
     };
   }
 
-  void _handlePointerSignal(PointerSignalEvent event) {
-    _userMovedCamera = true;
-    if (event is PointerScrollEvent) {
-      final zoom =
-          HardwareKeyboard.instance.isControlPressed ||
-          HardwareKeyboard.instance.isMetaPressed;
-      if (zoom) {
-        _camera.zoomTo(
-          _camera.scale * math.exp(-event.scrollDelta.dy / _wheelScaleFactor),
-          focal: event.localPosition,
-        );
-        return;
-      }
-      var delta = event.scrollDelta;
-      // Shift+wheel is the horizontal pan on a mouse; trackpads already
-      // send both axes.
-      if (HardwareKeyboard.instance.isShiftPressed && delta.dx == 0) {
-        delta = Offset(delta.dy, 0);
-      }
-      _camera.translateBy(-delta);
+  void _handlePointerDown(PointerDownEvent event) {
+    if (!widget.multiSelect) return;
+    _pointers.add(event.pointer);
+    if (_pointers.length > 1) {
+      _cancelMarquee();
       return;
     }
-    if (event is PointerScaleEvent) {
-      _camera.zoomTo(_camera.scale * event.scale, focal: event.localPosition);
+    if (event.kind == PointerDeviceKind.mouse &&
+        event.buttons != kPrimaryMouseButton) {
+      return;
     }
+    if (_hitsCard(_toScene(event.localPosition))) return;
+    _marqueePointer = event.pointer;
+    _marqueeStart = event.localPosition;
+    _marqueeStartScene = _toScene(event.localPosition);
+    _marqueeCurrent = event.localPosition;
+    _marqueeIds = const {};
+    setState(() {});
+    widget.onMarqueeStart?.call();
   }
 
-  void _handleTrackpadStart(PointerPanZoomStartEvent event) {
-    _userMovedCamera = true;
-    _trackpadStart = _camera.controller.value.clone();
-    _trackpadFocal = event.localPosition;
-    _trackpadScale = _camera.scale;
-  }
-
-  void _handleTrackpadUpdate(PointerPanZoomUpdateEvent event) {
-    final start = _trackpadStart;
+  void _handlePointerMove(PointerMoveEvent event) {
+    if (!widget.multiSelect || event.pointer != _marqueePointer) return;
+    final start = _marqueeStartScene;
     if (start == null) return;
-    final scale = (_trackpadScale * event.scale).clamp(
-      kGraphMinScale,
-      kGraphMaxScale,
-    );
-    final scene = _camera.sceneIn(start, _trackpadFocal);
-    _camera.scaleAround(
-      nextScale: scale,
-      scenePoint: scene,
-      focal: _trackpadFocal + event.localPan,
-    );
+    _marqueeCurrent = event.localPosition;
+    // The marquee is drawn in screen space but cards live in layout space.
+    // Convert both corners through the transform before comparing, otherwise
+    // a fitted/zoomed graph selects cards elsewhere in the tree.
+    final rect = Rect.fromPoints(start, _toScene(event.localPosition));
+    final ids = _idsIn(rect);
+    if (!setEquals(ids, _marqueeIds)) {
+      _marqueeIds = ids;
+      widget.onMarqueeChanged?.call(Set.unmodifiable(ids));
+    }
+    setState(() {});
+  }
+
+  void _handlePointerUp(PointerEvent event) {
+    _pointers.remove(event.pointer);
+    if (event.pointer == _marqueePointer) _cancelMarquee();
+  }
+
+  void _cancelMarquee() {
+    final active = _marqueeStart != null;
+    _marqueePointer = null;
+    if (active) {
+      setState(() {
+        _marqueeStart = null;
+        _marqueeStartScene = null;
+        _marqueeCurrent = null;
+        _marqueeIds = const {};
+      });
+      widget.onMarqueeEnd?.call();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return LayoutBuilder(
       builder: (context, constraints) {
-        _camera.viewport = Size(constraints.maxWidth, constraints.maxHeight);
-        if (!_didFit && !_fitScheduled) _scheduleFit();
-        final scheme = Theme.of(context).colorScheme;
-        return Focus(
-          focusNode: _focusNode,
-          onKeyEvent: _handleKey,
-          child: Stack(
-            children: [
+        _viewport = Size(constraints.maxWidth, constraints.maxHeight);
+        if (!_didFit && !_fitScheduled) {
+          _scheduleFit();
+        }
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: Listener(
+                onPointerDown: _handlePointerDown,
+                onPointerMove: _handlePointerMove,
+                onPointerUp: _handlePointerUp,
+                onPointerCancel: _handlePointerUp,
+                child: InteractiveViewer(
+                  transformationController: _controller,
+                  constrained: false,
+                  boundaryMargin: const EdgeInsets.all(600),
+                  minScale: _minScale,
+                  maxScale: _maxScale,
+                  panEnabled: !widget.multiSelect,
+                  child: SizedBox(
+                    width: widget.layoutSize.width,
+                    height: widget.layoutSize.height,
+                    child: widget.child,
+                  ),
+                ),
+              ),
+            ),
+            if (_marqueeStart != null && _marqueeCurrent != null)
               Positioned.fill(
-                child: MouseRegion(
-                  cursor: _panMode
-                      ? (_gesture == _Gesture.pan
-                            ? SystemMouseCursors.grabbing
-                            : SystemMouseCursors.grab)
-                      : SystemMouseCursors.basic,
-                  child: Listener(
-                    behavior: HitTestBehavior.opaque,
-                    onPointerDown: _handlePointerDown,
-                    onPointerMove: _handlePointerMove,
-                    onPointerUp: _handlePointerUp,
-                    onPointerCancel: _handlePointerUp,
-                    onPointerSignal: _handlePointerSignal,
-                    onPointerPanZoomStart: _handleTrackpadStart,
-                    onPointerPanZoomUpdate: _handleTrackpadUpdate,
-                    onPointerPanZoomEnd: (_) => _trackpadStart = null,
-                    child: Stack(
-                      children: [
-                        Positioned.fill(
-                          child: ClipRect(
-                            child: AnimatedBuilder(
-                              animation: _camera.controller,
-                              child: AbsorbPointer(
-                                absorbing: _spaceHeld,
-                                child: SizedBox(
-                                  width: widget.layoutSize.width,
-                                  height: widget.layoutSize.height,
-                                  child: widget.child,
-                                ),
-                              ),
-                              builder: (context, child) => Transform(
-                                transform: _camera.controller.value,
-                                alignment: Alignment.topLeft,
-                                child: child,
-                              ),
-                            ),
-                          ),
-                        ),
-                        if (_marqueeStart != null && _marqueeCurrent != null)
-                          Positioned.fill(
-                            child: IgnorePointer(
-                              child: CustomPaint(
-                                painter: _MarqueePainter(
-                                  rect: Rect.fromPoints(
-                                    _marqueeStart!,
-                                    _marqueeCurrent!,
-                                  ),
-                                  color: scheme.primary,
-                                ),
-                              ),
-                            ),
-                          ),
-                      ],
+                child: IgnorePointer(
+                  child: CustomPaint(
+                    painter: _MarqueePainter(
+                      rect: Rect.fromPoints(_marqueeStart!, _marqueeCurrent!),
+                      color: scheme.primary,
                     ),
                   ),
                 ),
               ),
-              // Outside the Listener: zooming and switching tools must not
-              // start a marquee or clear the selection.
-              Positioned(
-                right: 12,
-                top: 10,
-                child: NodeGraphNavControls(
-                  zoomPercent: _zoomPercent,
-                  handTool: _handTool,
-                  onSelectTool: () => setState(() => _handTool = false),
-                  onPanTool: () => setState(() => _handTool = true),
-                  onZoomOut: () {
-                    _userMovedCamera = true;
-                    _camera.zoomBy(0.8);
-                  },
-                  onZoomIn: () {
-                    _userMovedCamera = true;
-                    _camera.zoomBy(1.25);
-                  },
-                  onZoomTo: (target) {
-                    _userMovedCamera = true;
-                    _camera.zoomTo(target);
-                  },
-                  onFit: () {
-                    _userMovedCamera = true;
-                    _camera.fit(widget.layoutSize);
-                  },
+            Positioned(
+              right: 12,
+              top: 10,
+              child: Material(
+                elevation: 1,
+                borderRadius: BorderRadius.circular(24),
+                color: scheme.surfaceContainerHigh.withValues(alpha: 0.94),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      key: const ValueKey('graph-multi-select-toggle'),
+                      tooltip: widget.multiSelect
+                          ? 'Exit multi-select'
+                          : 'Select multiple goals',
+                      visualDensity: VisualDensity.compact,
+                      iconSize: 18,
+                      style: IconButton.styleFrom(
+                        backgroundColor: widget.multiSelect
+                            ? scheme.primaryContainer
+                            : null,
+                      ),
+                      onPressed: widget.onToggleMultiSelect,
+                      icon: const Icon(Icons.checklist),
+                    ),
+                    IconButton(
+                      tooltip: 'Zoom out',
+                      visualDensity: VisualDensity.compact,
+                      iconSize: 18,
+                      onPressed: () => _zoomBy(0.8),
+                      icon: const Icon(Icons.remove),
+                    ),
+                    IconButton(
+                      tooltip: 'Zoom in',
+                      visualDensity: VisualDensity.compact,
+                      iconSize: 18,
+                      onPressed: () => _zoomBy(1.25),
+                      icon: const Icon(Icons.add),
+                    ),
+                    IconButton(
+                      tooltip: 'Fit to screen',
+                      visualDensity: VisualDensity.compact,
+                      iconSize: 18,
+                      onPressed: _fit,
+                      icon: const Icon(Icons.fit_screen_outlined),
+                    ),
+                  ],
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         );
       },
     );
   }
 }
-
-enum _Gesture { none, pan, marquee, pinch }
 
 class _MarqueePainter extends CustomPainter {
   const _MarqueePainter({required this.rect, required this.color});

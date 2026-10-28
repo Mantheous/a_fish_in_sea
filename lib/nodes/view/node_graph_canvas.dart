@@ -15,7 +15,6 @@ class NodeGraphCanvas extends StatelessWidget {
     required this.selectedIds,
     required this.showToggles,
     required this.onCardTap,
-    required this.onCardLongPress,
     required this.onBackgroundTap,
     required this.onToggle,
     required this.onAddSubgoal,
@@ -31,7 +30,6 @@ class NodeGraphCanvas extends StatelessWidget {
 
   final bool showToggles;
   final ValueChanged<Node> onCardTap;
-  final ValueChanged<Node> onCardLongPress;
 
   /// A tap on empty canvas clears the selection.
   final VoidCallback onBackgroundTap;
@@ -78,7 +76,6 @@ class NodeGraphCanvas extends StatelessWidget {
                 selected: selectedIds.contains(placement.node.id),
                 showToggle: showToggles,
                 onTap: () => onCardTap(placement.node),
-                onLongPress: () => onCardLongPress(placement.node),
                 onToggle: () => onToggle(placement.node.id),
                 onAddSubgoal: () => onAddSubgoal(placement.node),
                 onAddParent: () => onAddParent(placement.node),
