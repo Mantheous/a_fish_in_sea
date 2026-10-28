@@ -18,9 +18,9 @@ import 'package:mocktail/mocktail.dart';
 
 class MockStorage extends Mock implements Storage {}
 
-/// Small screens keep the touch graph but start with the hand tool selected,
-/// so a one-finger drag pans. Taps must still select, and the usual
-/// long-press multi-select stays available.
+/// Pan is the default tool on every screen size. Taps still select and edit a
+/// single goal; the Select tool button switches empty-canvas drags to a
+/// marquee.
 void main() {
   setUp(() {
     final storage = MockStorage();
@@ -51,8 +51,12 @@ void main() {
     child: const MaterialApp(home: NodesPage()),
   );
 
-  Future<void> pumpSmallGraph(WidgetTester tester, NodeCubit nodes) async {
-    tester.view.physicalSize = const Size(420, 900);
+  Future<void> pumpGraph(
+    WidgetTester tester,
+    NodeCubit nodes, {
+    Size size = const Size(420, 900),
+  }) async {
+    tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(harness(nodes));
@@ -61,7 +65,7 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('small screens start with pan selected but still tap to select', (
+  testWidgets('pan is default, and taps still select and edit a goal', (
     tester,
   ) async {
     final nodes = NodeCubit();
@@ -69,24 +73,26 @@ void main() {
       goal('root', title: 'Root goal'),
       goal('child', title: 'Child goal', parents: ['root']),
     ]);
-    await pumpSmallGraph(tester, nodes);
+    await pumpGraph(tester, nodes);
 
     final nav = tester.widget<NodeGraphNavControls>(
       find.byType(NodeGraphNavControls),
     );
-    expect(nav.handTool, isTrue, reason: 'auto pan on a compact viewport');
+    expect(nav.handTool, isTrue, reason: 'pan is the default tool');
 
+    // A tap selects the card (and pans zero pixels).
     await tester.tap(find.byKey(const ValueKey('graph-node-root')));
     await tester.pump();
-    expect(
-      find.byKey(const ValueKey('graph-action-bar')),
-      findsOneWidget,
-      reason: 'auto pan must not absorb card taps',
-    );
+    expect(find.byKey(const ValueKey('graph-action-bar')), findsOneWidget);
+
+    // A second tap opens the single-goal editor while still in pan mode.
+    await tester.tap(find.byKey(const ValueKey('graph-node-root')));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit node'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('small-screen drag pans, and select tool restores marquee', (
+  testWidgets('pan drags move the graph; Select restores marquee', (
     tester,
   ) async {
     final nodes = NodeCubit();
@@ -94,7 +100,7 @@ void main() {
       goal('root', title: 'Root goal'),
       goal('child', title: 'Child goal', parents: ['root']),
     ]);
-    await pumpSmallGraph(tester, nodes);
+    await pumpGraph(tester, nodes);
 
     final rootFinder = find.byKey(const ValueKey('graph-node-root'));
     final before = tester.getTopLeft(rootFinder);
@@ -106,8 +112,8 @@ void main() {
     expect(after.dy - before.dy, closeTo(30, 1.5));
     expect(find.byKey(nodeGraphMultiBarKey), findsNothing);
 
-    // Switching to the select tool restores drag-to-marquee.
-    await tester.tap(find.byKey(const ValueKey('graph-pan-tool')));
+    // Switching to Select restores drag-to-marquee.
+    await tester.tap(find.byKey(const ValueKey('graph-select-tool')));
     await tester.pump();
     final selectedNav = tester.widget<NodeGraphNavControls>(
       find.byType(NodeGraphNavControls),
@@ -131,23 +137,32 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('small-screen long-press still enters multi-select', (
-    tester,
-  ) async {
+  testWidgets('the wide graph also defaults to pan', (tester) async {
     final nodes = NodeCubit();
     nodes.emitSilent([
       goal('root', title: 'Root goal'),
       goal('child', title: 'Child goal', parents: ['root']),
     ]);
-    await pumpSmallGraph(tester, nodes);
+    await pumpGraph(tester, nodes, size: const Size(1200, 900));
 
-    await tester.longPress(find.byKey(const ValueKey('graph-node-root')));
-    await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('graph-node-child')));
-    await tester.pump();
+    final nav = tester.widget<NodeGraphNavControls>(
+      find.byType(NodeGraphNavControls),
+    );
+    expect(nav.handTool, isTrue);
 
-    expect(find.byKey(nodeGraphMultiBarKey), findsOneWidget);
-    expect(find.text('2 selected'), findsOneWidget);
+    final rootFinder = find.byKey(const ValueKey('graph-node-root'));
+    final before = tester.getTopLeft(rootFinder);
+    final view = tester.getRect(find.byType(NodeGraphView));
+    await tester.dragFrom(view.center, const Offset(40, 25));
+    await tester.pump();
+    final after = tester.getTopLeft(rootFinder);
+    expect(after.dx - before.dx, closeTo(40, 1.5));
+    expect(after.dy - before.dy, closeTo(25, 1.5));
+    expect(find.byKey(nodeGraphMultiBarKey), findsNothing);
+
+    await tester.tap(rootFinder);
+    await tester.pump();
+    expect(find.byKey(const ValueKey('graph-action-bar')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

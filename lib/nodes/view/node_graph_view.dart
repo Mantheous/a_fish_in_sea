@@ -28,15 +28,15 @@ import 'node_graph_viewport.dart';
 /// grows the tree in place: its `↓` button creates a subgoal beneath it and
 /// its `↑` button creates a parent goal above it.
 ///
-/// Multi-select: drag empty canvas for a marquee, or shift/ctrl/cmd-click
-/// cards on desktop; long-press enters tap-to-toggle selection on touch.
-/// Two or more selected goals float a bulk bar that opens the multi-goal
-/// editor (titles stay individual) and can mark the group done or delete it
-/// in one undoable step. Panning is deliberate so a drag can select: hold
-/// space, toggle the hand tool, middle-mouse drag, or scroll. Pan and zoom
-/// around large trees; repeating templates and goals with a very wide
-/// fan-out start collapsed so their generated instances or subgoal walls
-/// don't flood the graph. Folding is reported through [onCollapsedChanged]
+/// Pan is the default tool: dragging moves the graph, while tapping a card
+/// still selects it (tap again to edit). The Select tool button (or V) turns
+/// empty-canvas drags into marquee selection; shift/ctrl/cmd-click adds
+/// cards, and long-press enters tap-to-toggle selection on touch. Two or
+/// more selected goals float a bulk bar that opens the multi-goal editor
+/// (titles stay individual) and can mark the group done or delete it in one
+/// undoable step. Pan and zoom around large trees; repeating templates and
+/// goals with a very wide fan-out start collapsed so their generated
+/// instances or subgoal walls don't flood the graph. Folding is reported through [onCollapsedChanged]
 /// and can be restored with [collapsedIds], so leaving the Goals tab and
 /// coming back shows the same graph.
 class NodeGraphView extends StatefulWidget {
@@ -193,7 +193,6 @@ class _NodeGraphViewState extends State<NodeGraphView> {
   @override
   Widget build(BuildContext context) {
     _seedIfNeeded();
-    final compactScreen = MediaQuery.sizeOf(context).width < kGraphAutoPanWidth;
     final restricted = widget.visibleIds != null;
     final layout = layoutNodeGraph(
       nodes: widget.nodes,
@@ -331,9 +330,7 @@ class _NodeGraphViewState extends State<NodeGraphView> {
             child: GraphPill(
               text: widget.filterActive
                   ? 'Filtered-out goals collapse · links stay visible'
-                  : compactScreen
-                  ? 'Drag to pan · long-press to multi-select · pinch to zoom'
-                  : 'Drag or long-press to select · Space/H pan · ⌘/Ctrl-click adds',
+                  : 'Drag to pan · tap to select · Select tool for marquee · long-press multi-select',
             ),
           ),
       ],

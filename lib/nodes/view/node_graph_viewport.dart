@@ -11,14 +11,15 @@ import 'node_graph_nav_controls.dart';
 
 /// Figma-style pan/zoom surface for the goal graph.
 ///
-/// The canvas is no longer dragged to pan: dragging empty space draws a
-/// marquee and selects the cards it touches (shift/ctrl/cmd adds to the
-/// current selection). Panning is deliberate — hold space, toggle the hand
-/// tool, use a middle-mouse drag, or two-finger scroll — and apps with
-/// trackpads can pinch to zoom. Ctrl/cmd + wheel zooms around the cursor;
-/// plain wheel pans. The floating control pill carries the hand tool, zoom
-/// buttons, a percentage menu, and fit-to-screen, mirroring the controls in
-/// Figma.
+/// Pan is the default tool: a drag moves the graph, while tapping a card
+/// still selects it, so single-goal editing keeps working without switching
+/// tools. The Select tool (pill button or V) turns empty-canvas drags into a
+/// marquee that selects every card it touches (shift/ctrl/cmd adds to the
+/// current selection). Hold space for a temporary pan, use a middle-mouse
+/// drag, or two-finger scroll; trackpads can pinch to zoom. Ctrl/cmd + wheel
+/// zooms around the cursor. The floating pill carries explicit Select/Pan
+/// buttons, zoom controls, a percentage menu, and fit-to-screen, mirroring
+/// the controls in Figma.
 class NodeGraphViewport extends StatefulWidget {
   const NodeGraphViewport({
     super.key,
@@ -68,11 +69,6 @@ class NodeGraphViewport extends StatefulWidget {
 
 const double _wheelScaleFactor = 200;
 
-/// Graph viewports narrower than this start with the hand tool selected, so
-/// a phone drag pans instead of drawing a marquee. Tapping the hand tool (or
-/// pressing V) switches to selection; the choice then sticks.
-const double kGraphAutoPanWidth = 600;
-
 class _NodeGraphViewportState extends State<NodeGraphViewport> {
   final NodeGraphCamera _camera = NodeGraphCamera();
   final FocusNode _focusNode = FocusNode(debugLabel: 'goal-graph');
@@ -83,11 +79,10 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
   bool _revealScheduled = false;
   int _zoomPercent = 100;
 
-  bool _handTool = false;
-
-  /// True once the user picks a tool by hand. Until then a compact viewport
-  /// keeps the hand tool selected automatically.
-  bool _panToolChosen = false;
+  /// Pan is the default: a drag moves the graph, while a tap still selects
+  /// the card under the pointer. The Select tool (pill button or V) switches
+  /// empty-canvas drags to marquee selection.
+  bool _handTool = true;
   bool _spaceHeld = false;
 
   final Map<int, Offset> _pointers = {};
@@ -112,10 +107,6 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
   double _trackpadScale = 1;
 
   bool get _panMode => _handTool || _spaceHeld;
-
-  /// Explicit hand tool (or space) absorbs card taps. Auto-pan on a compact
-  /// viewport does not: taps still select cards, only drags pan.
-  bool get _hardPanMode => _spaceHeld || (_panToolChosen && _handTool);
 
   bool get _additivePressed =>
       HardwareKeyboard.instance.isShiftPressed ||
@@ -190,17 +181,11 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
       return KeyEventResult.handled;
     }
     if (event.logicalKey == LogicalKeyboardKey.keyH) {
-      setState(() {
-        _panToolChosen = true;
-        _handTool = true;
-      });
+      setState(() => _handTool = true);
       return KeyEventResult.handled;
     }
     if (event.logicalKey == LogicalKeyboardKey.keyV) {
-      setState(() {
-        _panToolChosen = true;
-        _handTool = false;
-      });
+      setState(() => _handTool = false);
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -447,9 +432,6 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
       builder: (context, constraints) {
         _camera.viewport = Size(constraints.maxWidth, constraints.maxHeight);
         if (!_didFit && !_fitScheduled) _scheduleFit();
-        if (!_panToolChosen) {
-          _handTool = MediaQuery.sizeOf(context).width < kGraphAutoPanWidth;
-        }
         final scheme = Theme.of(context).colorScheme;
         return Focus(
           focusNode: _focusNode,
@@ -480,7 +462,7 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
                             child: AnimatedBuilder(
                               animation: _camera.controller,
                               child: AbsorbPointer(
-                                absorbing: _hardPanMode,
+                                absorbing: _spaceHeld,
                                 child: SizedBox(
                                   width: widget.layoutSize.width,
                                   height: widget.layoutSize.height,
@@ -522,10 +504,8 @@ class _NodeGraphViewportState extends State<NodeGraphViewport> {
                 child: NodeGraphNavControls(
                   zoomPercent: _zoomPercent,
                   handTool: _handTool,
-                  onToggleHand: () => setState(() {
-                    _panToolChosen = true;
-                    _handTool = !_panMode;
-                  }),
+                  onSelectTool: () => setState(() => _handTool = false),
+                  onPanTool: () => setState(() => _handTool = true),
                   onZoomOut: () {
                     _userMovedCamera = true;
                     _camera.zoomBy(0.8);
