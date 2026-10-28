@@ -1,5 +1,4 @@
 import 'package:a_fish_in_sea/common/persistence/legacy_minified_keys.dart';
-import 'package:a_fish_in_sea/common/persistence/migration.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
@@ -58,16 +57,14 @@ Future<void> _initPersistentStorage() async {
     // Payloads written by release builds before the stable keys landed sit
     // under `minified:<compiler name>`; a deploy renames those classes and
     // orphaned the Tasks views/rules, calendar visibility, and session.
-    if (Migration.removeAfter('2026-10-27')) {
-      try {
-        final recovered = await migrateLegacyHydratedKeys(box);
-        if (recovered.isNotEmpty) {
-          debugPrint('[persistence] recovered legacy prefs: $recovered');
-        }
-      } catch (error) {
-        // Recovery is best-effort: a damaged box must never block boot.
-        debugPrint('[persistence] legacy prefs recovery skipped: $error');
+    try {
+      final recovered = await migrateLegacyHydratedKeys(box);
+      if (recovered.isNotEmpty) {
+        debugPrint('[persistence] recovered legacy prefs: $recovered');
       }
+    } catch (error) {
+      // Recovery is best-effort: a damaged box must never block boot.
+      debugPrint('[persistence] legacy prefs recovery skipped: $error');
     }
     // ignore: invalid_use_of_visible_for_testing_member
     HydratedBloc.storage = HydratedStorage(box);

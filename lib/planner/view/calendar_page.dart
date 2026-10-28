@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:intl/intl.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
 import '../../common/time/local_date.dart';
@@ -33,6 +32,7 @@ import '../service/calendar_report.dart';
 import '../service/event_reminders.dart';
 import '../service/report_adjustment.dart';
 import 'calendar_data_source.dart';
+import 'calendar_formats.dart';
 import 'calendar_grid_tracker.dart';
 import 'calendar_projection.dart';
 import 'calendar_filter_sheet.dart';
@@ -57,14 +57,18 @@ const double _calendarViewHeaderHeight = 60;
 /// (but still wide) windows stay calendar-first until the panel is opened.
 const double _panelDefaultBreakpoint = 1080;
 
-// Hoisted: DateFormat construction parses ICU skeletons — doing it per tile
-// per frame (30+ tiles) showed up in profiles.
-final _calendarTimeFormat = DateFormat('h:mm a');
-final _calendarMoveFormat = DateFormat('EEE, MMM d · h:mm a');
-final _calendarDayFormat = DateFormat('EEE, MMM d');
-
 class CalendarPage extends StatefulWidget {
-  const CalendarPage({super.key});
+  /// Test seam for deterministic goldens: fixes the visible week and hides
+  /// the live time indicator so pixels don't depend on wall-clock time.
+  /// Production uses null (live date) and true (show indicator).
+  final DateTime? initialDisplayDate;
+  final bool showCurrentTimeIndicator;
+
+  const CalendarPage({
+    super.key,
+    this.initialDisplayDate,
+    this.showCurrentTimeIndicator = true,
+  });
 
   @override
   State<CalendarPage> createState() => _CalendarPageState();
@@ -211,6 +215,12 @@ class _CalendarPageState extends State<CalendarPage> {
     super.initState();
     _view = context.read<SettingsCubit>().state.defaultCalendarView;
     _controller.view = _view;
+    // Deterministic goldens fix the visible week; production leaves the
+    // controller on the live date.
+    if (widget.initialDisplayDate != null) {
+      _controller.displayDate = widget.initialDisplayDate;
+      _controller.selectedDate = widget.initialDisplayDate;
+    }
     _controller.addPropertyChangedListener(_onCalendarControllerChanged);
     _wireRecordingTicker();
     // Claim a pending seed before the first build. The projection only puts
@@ -788,6 +798,8 @@ class _CalendarPageState extends State<CalendarPage> {
                         todayHighlightColor: Theme.of(
                           context,
                         ).colorScheme.primary,
+                        showCurrentTimeIndicator:
+                            widget.showCurrentTimeIndicator,
                         headerDateFormat: compactHeader ? 'MMM y' : null,
                         headerHeight: headerHeight,
                         viewHeaderHeight: _view == CalendarView.week
@@ -958,13 +970,13 @@ class _CalendarPageState extends State<CalendarPage> {
     if (report == null) {
       timeLabel = event.allDay
           ? 'All day'
-          : '${_calendarTimeFormat.format(event.start)} – ${_calendarTimeFormat.format(event.end)}';
+          : '${calendarTimeFormat.format(event.start)} – ${calendarTimeFormat.format(event.end)}';
     } else {
       final range =
-          '${_calendarTimeFormat.format(event.start)} – ${_calendarTimeFormat.format(event.end)}';
+          '${calendarTimeFormat.format(event.start)} – ${calendarTimeFormat.format(event.end)}';
       timeLabel = switch (report.kind) {
         ReportBlockKind.live =>
-          'Recording since ${_calendarTimeFormat.format(event.start)}',
+          'Recording since ${calendarTimeFormat.format(event.start)}',
         ReportBlockKind.timer => '$range · timer',
         ReportBlockKind.accepted => '$range · accepted',
       };
@@ -1620,9 +1632,9 @@ class _CalendarPageState extends State<CalendarPage> {
 
   String _movedText(PlannerEvent event) {
     if (event.allDay) {
-      return 'Moved to ${_calendarDayFormat.format(event.start)}';
+      return 'Moved to ${calendarDayFormat.format(event.start)}';
     }
-    return 'Moved to ${_calendarMoveFormat.format(event.start)}';
+    return 'Moved to ${calendarMoveFormat.format(event.start)}';
   }
 
   String _blockedMessage(PlannerEvent event) {
@@ -1988,8 +2000,8 @@ class _CalendarPageState extends State<CalendarPage> {
           messenger: messenger,
           message:
               'Reported time updated · '
-              '${_calendarTimeFormat.format(start)} – '
-              '${_calendarTimeFormat.format(end)}',
+              '${calendarTimeFormat.format(start)} – '
+              '${calendarTimeFormat.format(end)}',
           onUndo: undo.undo,
         );
       }
@@ -2109,8 +2121,8 @@ class _CalendarPageState extends State<CalendarPage> {
           SnackBar(
             content: Text(
               'Deleted ${block.title.isEmpty ? 'report' : block.title} · '
-              '${_calendarTimeFormat.format(block.start)} – '
-              '${_calendarTimeFormat.format(block.end)}',
+              '${calendarTimeFormat.format(block.start)} – '
+              '${calendarTimeFormat.format(block.end)}',
             ),
             action: SnackBarAction(label: 'Undo', onPressed: undo.undo),
           ),
