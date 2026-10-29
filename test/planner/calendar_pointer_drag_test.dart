@@ -180,17 +180,29 @@ void main() {
     await tester.pumpAndSettle();
 
     final before = currentDraft(tester);
+    final beforeRect = tester.getRect(draftTile());
     final scrollBefore = gridScroll(tester).pixels;
 
     double? scrollDuringDrag;
+    Rect? rectDuringDrag;
     await dragBy(
       tester,
       tester.getCenter(draftTile()),
       const Offset(0, 100),
-      onBeforeUp: () => scrollDuringDrag = gridScroll(tester).pixels,
+      onBeforeUp: () {
+        scrollDuringDrag = gridScroll(tester).pixels;
+        rectDuringDrag = tester.getRect(
+          find.byKey(const ValueKey('plan-drag-ghost')),
+        );
+      },
     );
 
     final after = currentDraft(tester);
+    expect(
+      rectDuringDrag!.top,
+      greaterThan(beforeRect.top + 20),
+      reason: 'the ghost should follow the pointer while the drag is live',
+    );
     expect(
       after.start.isAfter(before.start),
       isTrue,
@@ -245,6 +257,64 @@ void main() {
     );
     expect(moved.end.difference(moved.start), const Duration(hours: 1));
     expect(scrollDuringDrag, scrollBefore);
+  });
+
+  testWidgets('mouse drag shows the tile at the drop slot before the drop', (
+    tester,
+  ) async {
+    final app = await pumpCalendar(tester);
+    await tester.tap(find.text('Week'));
+    await tester.pumpAndSettle();
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month, now.day, 10);
+    app.calendar.addEvent(
+      PlannerEvent(
+        id: 'evt:preview',
+        subject: 'Preview me',
+        start: start,
+        end: start.add(const Duration(hours: 1)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    gridScroll(tester).jumpTo(0);
+    await tester.pumpAndSettle();
+
+    final tile = find.byKey(const ValueKey('tile:evt:preview'));
+    final ghost = find.byKey(const ValueKey('plan-drag-ghost'));
+    final before = tester.getRect(tile);
+    final gesture = await tester.startGesture(
+      tester.getCenter(tile),
+      kind: PointerDeviceKind.mouse,
+    );
+    await tester.pump(const Duration(milliseconds: 16));
+    await gesture.moveBy(const Offset(0, 160));
+    await tester.pump(const Duration(milliseconds: 16));
+
+    expect(ghost, findsOneWidget);
+    final during = tester.getRect(ghost);
+    expect(
+      during.top,
+      greaterThan(before.top + 20),
+      reason:
+          'the dragged tile should preview its drop slot, not sit still '
+          'until the drop (before=$before during=$during)',
+    );
+    expect(
+      tester.getRect(tile),
+      before,
+      reason:
+          'the real tile stays put until the drop, so the gesture that '
+          'owns it is never rebuilt mid-drag',
+    );
+
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(ghost, findsNothing);
+    expect(
+      tester.getRect(tile).top,
+      closeTo(during.top, 4),
+      reason: 'the drop should land on the slot the ghost showed',
+    );
   });
 
   testWidgets('touch long-press drag still moves the ghost', (tester) async {
@@ -315,6 +385,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final before = currentDraft(tester);
+    final beforeRect = tester.getRect(draftTile());
     final scrollBefore = gridScroll(tester).pixels;
     final grid = tester.getRect(find.byType(SfCalendar));
     final gesture = await tester.startGesture(
@@ -330,6 +401,9 @@ void main() {
     // Read while the drag is still live: the drop re-selects the ghost, and
     // the calendar scrolls back to it.
     final scrolledDuringDrag = gridScroll(tester).pixels;
+    final rectDuringDrag = tester.getRect(
+      find.byKey(const ValueKey('plan-drag-ghost')),
+    );
     await gesture.up();
     await tester.pumpAndSettle();
 
@@ -337,6 +411,13 @@ void main() {
       scrolledDuringDrag,
       lessThan(scrollBefore),
       reason: 'holding the drag over the ruler should scroll the grid',
+    );
+    expect(
+      rectDuringDrag.top,
+      lessThan(beforeRect.top),
+      reason:
+          'the ghost should travel with the auto-scrolled grid, not stay '
+          'parked at the grabbed slot',
     );
     // The ruler is the scroll handle, not a day column: the ghost must stay
     // on the day it was grabbed on.
@@ -348,9 +429,9 @@ void main() {
     // A fast drop can land outside the visible hours; the grid must reveal
     // it instead of leaving the ghost seemingly gone.
     expect(
-      tester.getRect(find.byType(SfCalendar)).contains(
-        tester.getRect(draftTile()).center,
-      ),
+      tester
+          .getRect(find.byType(SfCalendar))
+          .contains(tester.getRect(draftTile()).center),
       isTrue,
       reason: 'the dropped ghost should stay visible',
     );
@@ -385,8 +466,9 @@ void main() {
     );
   });
 
-  testWidgets('dragging past midnight clamps instead of losing the ghost',
-      (tester) async {
+  testWidgets('dragging past midnight clamps instead of losing the ghost', (
+    tester,
+  ) async {
     final app = await pumpCalendar(tester);
     await enableWeekPlanReport(tester);
     openGhost(app);

@@ -308,6 +308,46 @@ void main() {
       expect(calendar.byId('e2')!.start.isAfter(start), isTrue);
     });
 
+    testWidgets('a dragged plan previews its landing slot in the plan half', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const CalendarPage());
+      final context = tester.element(find.byType(CalendarPage));
+      final calendar = context.read<CalendarCubit>();
+      final now = DateTime.now();
+      final start = DateTime(now.year, now.month, now.day, 9);
+      calendar.addEvent(_event('e1', start));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('Plan + Report'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final tile = find.byKey(const ValueKey('tile:e1'));
+      final before = tester.getRect(tile);
+      final reportLane = tester.getRect(find.byType(ReportLaneView).first);
+      final gesture = await tester.startGesture(
+        tester.getCenter(tile),
+        kind: PointerDeviceKind.mouse,
+      );
+      await tester.pump(const Duration(milliseconds: 16));
+      await gesture.moveBy(const Offset(0, 120));
+      await tester.pump(const Duration(milliseconds: 16));
+
+      final ghost = find.byKey(const ValueKey('plan-drag-ghost'));
+      expect(ghost, findsOneWidget);
+      final ghostRect = tester.getRect(ghost);
+      expect(ghostRect.top, greaterThan(before.top + 20));
+      // The preview must stay in the plan track: never over the report lane
+      // it shares the day cell with.
+      expect(ghostRect.right, lessThanOrEqualTo(reportLane.left + 1));
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(ghost, findsNothing);
+      expect(tester.getRect(tile).top, closeTo(ghostRect.top, 4));
+    });
+
     testWidgets('wheel scrolling over a paired plan tile stays in the grid', (
       tester,
     ) async {
