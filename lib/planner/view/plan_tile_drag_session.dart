@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../common/time/local_date.dart';
+import '../model/event_reschedule.dart';
 import '../model/planner_event.dart';
 import 'calendar_grid_tracker.dart';
 
@@ -24,6 +25,7 @@ class PlanTileDragSession {
     required double startMinutes,
     required double endMinutes,
     required PlanGridTracker tracker,
+    this.onDropTimeChanged,
   }) : _days = days,
        _stackRect = stackRect,
        _cellWidth = cellWidth,
@@ -60,6 +62,16 @@ class PlanTileDragSession {
 
   /// Where the tile would be dropped right now.
   DateTime get dropTime => _dropTime;
+
+  /// The event laid out at the current drop slot, snapped exactly like the
+  /// committed drop ([shiftEvent]), so the preview and the result match.
+  PlannerEvent previewAt(int snapMinutes) =>
+      shiftEvent(original, _dropTime, snapMinutes: snapMinutes);
+
+  /// Called whenever [dropTime] changes, including the auto-scroll ticks
+  /// where the pointer stands still but the grid moves under it. The owner
+  /// uses this to paint the tile at the slot it would land on.
+  final ValueChanged<DateTime>? onDropTimeChanged;
 
   void start(Offset pointer) {
     _origin = pointer;
@@ -116,11 +128,14 @@ class PlanTileDragSession {
     );
     final pointerDay = _dayUnderPointer(pointer);
     if (pointerDay != null) _day = pointerDay;
-    _dropTime = DateTime(
+    final next = DateTime(
       _day.year,
       _day.month,
       _day.day,
     ).add(Duration(minutes: targetMinutes.round()));
+    if (next == _dropTime) return;
+    _dropTime = next;
+    onDropTimeChanged?.call(next);
   }
 
   /// Day column the pointer is over, or null when it is over the time ruler

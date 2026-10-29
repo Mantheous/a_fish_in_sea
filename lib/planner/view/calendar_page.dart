@@ -44,6 +44,7 @@ import 'calendar_tile_metrics.dart';
 import 'event_colors.dart';
 import 'event_editor.dart';
 import 'feed_manager.dart';
+import 'plan_drag_ghost.dart';
 import 'plan_tile_drag.dart';
 import 'plan_tile_drag_session.dart';
 import 'plan_to_report_copy.dart';
@@ -188,6 +189,20 @@ class _CalendarPageState extends State<CalendarPage> {
   /// the ruler/edge auto-scroll; the page only commits the result.
   PlanTileDragSession? _pairedDrag;
 
+  /// The tile ghost at the slot the in-flight drag would land on. A notifier
+  /// keeps the drag off the page's rebuild path: only the ghost layer
+  /// repaints as the slot changes. Painted beside the calendar so the tile
+  /// tree never changes during the gesture.
+  final ValueNotifier<PlanDragGhost?> _dragGhost = ValueNotifier(null);
+  String? _draggingEventId;
+  List<DateTime> _dragDays = const [];
+  double _dragCellWidth = 0;
+  double _dragPixelsPerMinute = 0;
+  double _dragStartHour = 0;
+  bool _dragIsRtl = false;
+  bool _dragSideBySide = false;
+  Color _dragColor = const Color(defaultPersonalEventColor);
+
   bool get _isWide => MediaQuery.of(context).size.width >= _wideBreakpoint;
   bool _appliedNarrowDefault = false;
 
@@ -310,6 +325,7 @@ class _CalendarPageState extends State<CalendarPage> {
     _suppressTimer?.cancel();
     _recordingTicker?.cancel();
     _pairedDrag?.cancel();
+    _dragGhost.dispose();
     _nodeTickerSub?.cancel();
     _calendarTickerSub?.cancel();
     _controller.removePropertyChangedListener(_onCalendarControllerChanged);
@@ -742,6 +758,7 @@ class _CalendarPageState extends State<CalendarPage> {
                             assigneeLabelById: _projection.assigneeLabelById,
                             reportedEventIds: _projection.reportedEventIds,
                             showCopyToReport: reportLanes,
+                            draggedEventId: _draggingEventId,
                             dayColumns: dayColumns,
                             cellWidth: dragCellWidth,
                             pixelsPerMinute: pixelsPerMinute,
@@ -857,6 +874,10 @@ class _CalendarPageState extends State<CalendarPage> {
                             ),
                           ),
                           if (reportCalendar != null) reportCalendar,
+                          PlanDragGhostLayer(
+                            ghost: _dragGhost,
+                            tracker: _gridTracker,
+                          ),
                           if (sideBySide && reportById.isEmpty)
                             Positioned(
                               left: 0,
@@ -909,6 +930,7 @@ class _CalendarPageState extends State<CalendarPage> {
     Map<String, String>? assigneeLabelById,
     Set<String>? reportedEventIds,
     bool showCopyToReport = false,
+    String? draggedEventId,
     required List<DateTime> dayColumns,
     required double cellWidth,
     required double pixelsPerMinute,
@@ -992,7 +1014,9 @@ class _CalendarPageState extends State<CalendarPage> {
     final durationMinutes = tileDuration(event).inSeconds / 60.0;
     final Widget tile = Opacity(
       key: ValueKey('tile:${event.id}'),
-      opacity: isDraft ? 0.85 : 1,
+      // While the drag ghost shows the landing slot, fade the tile it came
+      // from so the two do not read as two separate events.
+      opacity: event.id == draggedEventId ? 0.35 : (isDraft ? 0.85 : 1),
       child: Container(
         decoration: BoxDecoration(
           color: color,
@@ -1321,6 +1345,8 @@ class _CalendarPageState extends State<CalendarPage> {
         cellWidth: cellWidth,
         pixelsPerMinute: pixelsPerMinute,
         isRtl: isRtl,
+        sideBySide: showCopyToReport,
+        color: baseColor,
       ),
       onDragUpdate: _onPairedPlanDragMove,
       onDragEnd: () => _onPairedPlanDragEnd(event),
@@ -1987,8 +2013,7 @@ class _CalendarPageState extends State<CalendarPage> {
         displayId,
       );
     } catch (_) {}
-    final eventId =
-        entry?.eventId ?? reportOwnerIdForDisplayId(displayId);
+    final eventId = entry?.eventId ?? reportOwnerIdForDisplayId(displayId);
     if (eventId != null) {
       final event = calendar.byId(eventId);
       if (event != null) {
@@ -2562,10 +2587,21 @@ class _CalendarPageState extends State<CalendarPage> {
     required double cellWidth,
     required double pixelsPerMinute,
     required bool isRtl,
+    required bool sideBySide,
+    required Color color,
   }) {
     final stack = _calendarStackKey.currentContext?.findRenderObject();
     final settings = context.read<SettingsCubit>().state;
     _pairedDrag?.cancel();
+    _dragDays = days;
+    _dragCellWidth = cellWidth;
+    _dragPixelsPerMinute = pixelsPerMinute;
+    _dragStartHour = settings.dayStartHour;
+    _dragIsRtl = isRtl;
+    _dragSideBySide = sideBySide;
+    _dragGhost.value = null;
+    _dragColor = color;
+    setState(() => _draggingEventId = event.id);
     _pairedDrag = PlanTileDragSession(
       original: event,
       days: days,
@@ -2579,6 +2615,7 @@ class _CalendarPageState extends State<CalendarPage> {
       startMinutes: settings.dayStartHour * 60,
       endMinutes: settings.dayEndHour * 60,
       tracker: _gridTracker,
+      onDropTimeChanged: _onPairedPlanDropTimeChanged,
     )..start(globalPosition);
     _isDragging = true;
     _suppressTap = true;
@@ -2588,9 +2625,48 @@ class _CalendarPageState extends State<CalendarPage> {
     _pairedDrag?.update(globalPosition);
   }
 
+  /// Paints the ghost at the slot the drag would land on. The preview uses
+  /// the same snap as the drop, so releasing never moves the tile again.
+  /// Only a changed slot repaints the ghost layer: the calendar itself stays
+  /// untouched for the whole gesture.
+  void _onPairedPlanDropTimeChanged(DateTime dropTime) {
+    final session = _pairedDrag;
+    if (session == null || !mounted) return;
+    final settings = context.read<SettingsCubit>().state;
+    final preview = session.previewAt(settings.snapMinutes);
+    final day = localDay(preview.start);
+    final startMinutes =
+        preview.start.hour * 60.0 + preview.start.minute.toDouble();
+    final ghost = _dragGhost.value;
+    if (ghost != null &&
+        ghost.day == day &&
+        ghost.startMinutes == startMinutes) {
+      return;
+    }
+    _dragGhost.value = PlanDragGhost(
+      subject: preview.subject,
+      color: _dragColor,
+      days: _dragDays,
+      day: day,
+      startMinutes: startMinutes,
+      durationMinutes: preview.end
+          .difference(preview.start)
+          .inMinutes
+          .toDouble(),
+      cellWidth: _dragCellWidth,
+      pixelsPerMinute: _dragPixelsPerMinute,
+      startHour: _dragStartHour,
+      timeRulerWidth: _calendarTimeRulerWidth,
+      isRtl: _dragIsRtl,
+      sideBySide: _dragSideBySide,
+    );
+  }
+
   Future<void> _onPairedPlanDragEnd(PlannerEvent event) async {
     final session = _pairedDrag;
     _pairedDrag = null;
+    _dragGhost.value = null;
+    _draggingEventId = null;
     if (session == null) {
       _isDragging = false;
       if (mounted) setState(() {});
@@ -2614,6 +2690,8 @@ class _CalendarPageState extends State<CalendarPage> {
     if (_pairedDrag == null) return;
     _pairedDrag?.cancel();
     _pairedDrag = null;
+    _dragGhost.value = null;
+    _draggingEventId = null;
     _isDragging = false;
     if (mounted) setState(() {});
     _resetSuppressSoon();
