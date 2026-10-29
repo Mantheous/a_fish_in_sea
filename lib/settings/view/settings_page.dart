@@ -1,7 +1,6 @@
 import 'package:a_fish_in_sea/common/undo/undo_bar.dart';
 import 'package:a_fish_in_sea/anki/anki_connect.dart';
 import 'package:a_fish_in_sea/anki/anki_server.dart';
-import 'package:a_fish_in_sea/demo/demo_coordinator.dart';
 import 'package:a_fish_in_sea/demo/demo_mode.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/view/bank_connection_card.dart';
@@ -15,9 +14,8 @@ import 'package:a_fish_in_sea/reporting/service/location_service.dart';
 import 'package:a_fish_in_sea/reporting/view/places_sheet.dart';
 import 'package:a_fish_in_sea/settings/view/api_tokens_section.dart';
 import 'package:a_fish_in_sea/settings/view/colors_page.dart';
+import 'package:a_fish_in_sea/settings/view/sync_section.dart';
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
-import 'package:a_fish_in_sea/sync/sync_engine.dart';
-import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -59,7 +57,8 @@ class _SettingsPageState extends State<SettingsPage> {
             subtitle: 'Canvas and Learning Suite feeds for your courses.',
             child: FeedManagerBody(
               kinds: {FeedKind.canvas, FeedKind.learningSuite},
-              helpText: 'Canvas: one link covers all classes (Canvas web > '
+              helpText:
+                  'Canvas: one link covers all classes (Canvas web > '
                   'Calendar > Calendar Feed) — courses are split '
                   'automatically. Learning Suite: add each class separately.',
               itemNoun: 'class',
@@ -68,7 +67,8 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           _SettingsSection(
             title: 'Colors',
-            subtitle: 'Homework one color, a color per class or calendar, and '
+            subtitle:
+                'Homework one color, a color per class or calendar, and '
                 'the surfaces those choices repaint.',
             child: ListTile(
               contentPadding: EdgeInsets.zero,
@@ -79,14 +79,15 @@ class _SettingsPageState extends State<SettingsPage> {
                 'and choose where they apply.',
               ),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const ColorsPage()),
-              ),
+              onTap: () => Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const ColorsPage())),
             ),
           ),
           const _SettingsSection(
             title: 'Calendars',
-            subtitle: 'Default view, Google calendars, other iCal links, '
+            subtitle:
+                'Default view, Google calendars, other iCal links, '
                 'and the sync server used on the web.',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -114,7 +115,8 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const _SettingsSection(
             title: 'Location reporting',
-            subtitle: 'Record your path through the day to auto-report '
+            subtitle:
+                'Record your path through the day to auto-report '
                 'events and see on-task stats.',
             child: _LocationTrackingSection(),
           ),
@@ -123,24 +125,28 @@ class _SettingsPageState extends State<SettingsPage> {
             subtitle: DemoMode.isActive
                 ? 'Demo mode · mock data — nothing syncs or is saved.'
                 : 'Signed in as ${context.watch<AuthCubit>().state.email}. '
-                    'Offline-first: this device works without a connection and '
-                    'merges later; server copy wins true conflicts.',
-            child: const _SyncSection(),
+                      'Offline-first: this device works without a connection and '
+                      'merges later; server copy wins true conflicts.',
+            child: const SyncSection(),
           ),
           const _SettingsSection(
             title: 'API tokens',
-            subtitle: 'Long-lived tokens for third-party apps and AI agents. '
+            subtitle:
+                'Long-lived tokens for third-party apps and AI agents. '
                 'A token sees everything sync does; revoke any you no longer use.',
             child: ApiTokensSection(),
           ),
           _SettingsSection(
-            title: 'Bank connection',            subtitle: 'Connect a bank with Plaid to pull balances and '
+            title: 'Bank connection',
+            subtitle:
+                'Connect a bank with Plaid to pull balances and '
                 'transactions into Finances.',
             child: _BankSection(),
           ),
           const _SettingsSection(
             title: 'Anki',
-            subtitle: 'Where memorization goals read review counts from. '
+            subtitle:
+                'Where memorization goals read review counts from. '
                 'Native builds talk to desktop Anki with the AnkiConnect '
                 'add-on; browsers go through the app server instead — '
                 'sign in, then test below.',
@@ -184,188 +190,12 @@ class _SettingsSection extends StatelessWidget {
   }
 }
 
-/// Sync status + manual sync + sign-out.
-class _SyncSection extends StatelessWidget {
-  const _SyncSection();
+class _DefaultViewTile extends StatelessWidget {
+  const _DefaultViewTile();
 
   @override
   Widget build(BuildContext context) {
-    // Static flag (not a cubit watch): entry/exit always rebuilds the whole
-    // shell from main.dart, and this keeps standalone widget tests working
-    // without a DemoCubit in the tree.
-    if (DemoMode.isActive) return const _DemoSyncSection();
-    final engine = context.read<SyncEngine>();
-    return ValueListenableBuilder<EngineStatus>(
-      valueListenable: engine.status,
-      builder: (context, status, _) {
-        final syncing = status == EngineStatus.syncing;
-        final last = engine.lastSyncAt;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            ListTile(
-              leading: syncing
-                  ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.cloud_done_outlined),
-              title: Text(syncing
-                  ? 'Syncing…'
-                  : last == null
-                      ? 'Never synced'
-                      : 'Last synced ${_formatAgo(last)}'),
-              subtitle: engine.lastError == null
-                  ? null
-                  : Text(engine.lastError!,
-                      style: TextStyle(
-                          color: Theme.of(context).colorScheme.error)),
-              trailing: TextButton(
-                onPressed: syncing
-                    ? null
-                    : () => context.read<SyncEngine>().syncNow(),
-                child: const Text('Sync now'),
-              ),
-            ),
-            ValueListenableBuilder<List<String>>(
-              valueListenable: engine.protectedDeletions,
-              builder: (context, guarded, _) {
-                if (guarded.isEmpty) return const SizedBox.shrink();
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(
-                        'Sync held back deletions for: ${guarded.join(', ')}. '
-                        'This device is missing items the cloud still has. '
-                        'That usually means its local app storage was lost — '
-                        'not that you deleted them.',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      const SizedBox(height: 8),
-                      OutlinedButton.icon(
-                        onPressed: () {
-                          // Clear the bookkeeping so the next sync
-                          // re-downloads the cloud copy onto this device.
-                          context.read<SyncMetaCubit>().reset();
-                          context.read<SyncEngine>().syncNow();
-                        },
-                        icon: const Icon(Icons.restore),
-                        label: const Text('Restore missing items from cloud'),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-            OutlinedButton.icon(
-              onPressed: () => _confirmSignOut(context),
-              icon: const Icon(Icons.logout),
-              label: const Text('Sign out…'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  /// Explicit choice the account-switch fix needs: keeping leaves this
-  /// account's data on the device (isolated per account, restored on
-  /// re-login); removing wipes it locally (the cloud copy stays and
-  /// re-downloads on next sign-in).
-  Future<void> _confirmSignOut(BuildContext context) async {
-    final engine = context.read<SyncEngine>();
-    final choice = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Sign out?'),
-        content: const Text(
-          'Your tasks, events, finances and location history stay saved '
-          'in your cloud account either way. On a shared device, also '
-          'remove them from this device — signing back in downloads '
-          'them again.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Keep on this device'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Remove from this device'),
-          ),
-        ],
-      ),
-    );
-    if (choice == null) return;
-    engine.signOut(clearLocalData: choice);
-  }
-
-  String _formatAgo(DateTime t) {
-    final d = DateTime.now().difference(t);
-    if (d.inSeconds < 60) return 'just now';
-    if (d.inMinutes < 60) return '${d.inMinutes}m ago';
-    if (d.inHours < 24) return '${d.inHours}h ago';
-    return '${d.inDays}d ago';
-  }
-}
-
-/// Demo replacement for [_SyncSection]: mock-feed refresh + exit.
-class _DemoSyncSection extends StatelessWidget {
-  const _DemoSyncSection();
-
-  @override
-  Widget build(BuildContext context) {
-    final feedCubit = context.read<FeedCubit>();
-    return ValueListenableBuilder<bool>(
-      valueListenable: feedCubit.isSyncing,
-      builder: (context, syncing, _) => Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ListTile(
-            leading: syncing
-                ? const SizedBox(
-                    height: 20,
-                    width: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.science_outlined),
-            title: Text(syncing ? 'Refreshing mock feeds…' : 'Demo sync'),
-            subtitle: const Text(
-              'Mock Canvas, Google and iCal feeds refresh locally. '
-              'Submitted homework auto-completes, like the real thing.',
-            ),
-            trailing: TextButton(
-              onPressed: syncing
-                  ? null
-                  : () => feedCubit.syncAll(force: true),
-              child: const Text('Sync now'),
-            ),
-          ),
-          OutlinedButton.icon(
-            onPressed: () => DemoCoordinator.exitDemo(context),
-            icon: const Icon(Icons.logout),
-            label: const Text('Exit demo (discards mock data)'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DefaultViewTile extends StatelessWidget {  const _DefaultViewTile();
-
-  @override
-  Widget build(BuildContext context) {
-    final current =
-        context.watch<SettingsCubit>().state.defaultCalendarView;
+    final current = context.watch<SettingsCubit>().state.defaultCalendarView;
     return SegmentedButton<CalendarView>(
       segments: const [
         ButtonSegment(
@@ -386,9 +216,7 @@ class _DefaultViewTile extends StatelessWidget {  const _DefaultViewTile();
       ],
       selected: {current},
       onSelectionChanged: (selection) =>
-          context.read<SettingsCubit>().setDefaultCalendarView(
-                selection.first,
-              ),
+          context.read<SettingsCubit>().setDefaultCalendarView(selection.first),
     );
   }
 }
@@ -430,10 +258,7 @@ class _DayHoursTile extends StatelessWidget {
                 min: 0,
                 max: 24,
                 divisions: 48,
-                labels: RangeLabels(
-                  _formatHour(start),
-                  _formatHour(end),
-                ),
+                labels: RangeLabels(_formatHour(start), _formatHour(end)),
                 values: RangeValues(start, end),
                 onChanged: (values) => setDialogState(() {
                   start = values.start;
@@ -574,16 +399,18 @@ class _DefaultCalendarTile extends StatelessWidget {
     final settings = context.watch<SettingsCubit>().state;
     final feeds = context.watch<FeedCubit>().state;
     final writable = feeds
-        .where((f) =>
-            f.kind == FeedKind.google &&
-            f.calendarId != null &&
-            f.calendarId!.isNotEmpty)
+        .where(
+          (f) =>
+              f.kind == FeedKind.google &&
+              f.calendarId != null &&
+              f.calendarId!.isNotEmpty,
+        )
         .toList();
     final currentId = settings.defaultEventFeedId;
     final validCurrent =
         currentId != null && writable.any((f) => f.id == currentId)
-            ? currentId
-            : null;
+        ? currentId
+        : null;
     final currentName = validCurrent == null
         ? 'This device'
         : writable.firstWhere((f) => f.id == validCurrent).name;
@@ -620,15 +447,9 @@ class _DefaultCalendarTile extends StatelessWidget {
                 border: OutlineInputBorder(),
               ),
               items: [
-                const DropdownMenuItem(
-                  value: null,
-                  child: Text('This device'),
-                ),
+                const DropdownMenuItem(value: null, child: Text('This device')),
                 for (final feed in writable)
-                  DropdownMenuItem(
-                    value: feed.id,
-                    child: Text(feed.name),
-                  ),
+                  DropdownMenuItem(value: feed.id, child: Text(feed.name)),
               ],
               onChanged: (value) {
                 settingsCubit.setDefaultEventFeedId(value);
@@ -648,7 +469,8 @@ class _DefaultCalendarTile extends StatelessWidget {
   }
 }
 
-String _formatHour(double hour) {  if (hour >= 24) return '12 AM';
+String _formatHour(double hour) {
+  if (hour >= 24) return '12 AM';
   if (hour <= 0) return '12 AM';
   final h = hour.floor();
   final m = ((hour - h) * 60).round();
@@ -697,8 +519,7 @@ class _LocationTrackingSection extends StatelessWidget {
             'GPS fix every ${settings.trackingIntervalMinutes} min while recording',
           ),
           trailing: const Icon(Icons.edit_outlined),
-          onTap:
-              settings.trackingEnabled ? () => _editInterval(context) : null,
+          onTap: settings.trackingEnabled ? () => _editInterval(context) : null,
         ),
         ListTile(
           contentPadding: EdgeInsets.zero,
@@ -712,8 +533,8 @@ class _LocationTrackingSection extends StatelessWidget {
           Text(
             'Recording now — turning tracking off stops it.',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.error,
-                ),
+              color: Theme.of(context).colorScheme.error,
+            ),
           ),
         if (!LocationService.supported)
           Text(
@@ -736,8 +557,7 @@ class _LocationTrackingSection extends StatelessWidget {
             for (final choice in SettingsCubit.trackingIntervalChoices)
               ChoiceChip(
                 label: Text('$choice min'),
-                selected:
-                    settingsCubit.state.trackingIntervalMinutes == choice,
+                selected: settingsCubit.state.trackingIntervalMinutes == choice,
                 onSelected: (_) {
                   settingsCubit.setTrackingIntervalMinutes(choice);
                   Navigator.of(dialogContext).pop();
@@ -808,7 +628,8 @@ class _AnkiSectionState extends State<_AnkiSection> {
   void initState() {
     super.initState();
     _host = TextEditingController(
-        text: context.read<SettingsCubit>().state.ankiConnectHost);
+      text: context.read<SettingsCubit>().state.ankiConnectHost,
+    );
   }
 
   @override
@@ -829,11 +650,9 @@ class _AnkiSectionState extends State<_AnkiSection> {
       if (kIsWeb) {
         // Browsers cannot reach AnkiConnect directly — same check,
         // routed through the app server. Needs a signed-in account.
-        decks = await ankiServerDeckNames(
-            context.read<AuthCubit>().syncClient);
+        decks = await ankiServerDeckNames(context.read<AuthCubit>().syncClient);
       } else {
-        final client =
-            AnkiConnectClient(host: host, httpClient: http.Client());
+        final client = AnkiConnectClient(host: host, httpClient: http.Client());
         try {
           decks = await client.deckNames();
         } finally {
@@ -842,7 +661,8 @@ class _AnkiSectionState extends State<_AnkiSection> {
       }
       if (!context.mounted) return;
       setState(() {
-        _status = 'Connected — ${decks.length} deck'
+        _status =
+            'Connected — ${decks.length} deck'
             '${decks.length == 1 ? '' : 's'} found.';
       });
     } on AnkiServerException catch (e) {
@@ -872,7 +692,8 @@ class _AnkiSectionState extends State<_AnkiSection> {
             hintText: 'http://127.0.0.1:8765',
             border: OutlineInputBorder(),
           ),
-          onSubmitted: (v) => context.read<SettingsCubit>().setAnkiConnectHost(v),
+          onSubmitted: (v) =>
+              context.read<SettingsCubit>().setAnkiConnectHost(v),
         ),
         const SizedBox(height: 4),
         Text(
@@ -898,7 +719,8 @@ class _AnkiSectionState extends State<_AnkiSection> {
                   ? const SizedBox(
                       width: 16,
                       height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2))
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
                   : const Icon(Icons.link),
               label: const Text('Test connection'),
             ),

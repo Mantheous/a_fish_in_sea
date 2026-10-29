@@ -172,6 +172,7 @@ class _Device {
   late final SyncEngine engine;
   late final SettingsCubit settings;
   late final _TestPlaidCubit plaid;
+  late final WaterfallCubit waterfall;
 
   _Device(this.server) {
     auth = AuthCubit(client: () => server);
@@ -191,7 +192,7 @@ class _Device {
     final places = PlacesCubit();
     final reporting = ReportingCubit();
     final tracking = TrackingCubit();
-    final waterfall = WaterfallCubit(
+    waterfall = WaterfallCubit(
       nodeCubit: nodes,
       transactionsCubit: transactions,
       plaidCubit: plaid,
@@ -1028,6 +1029,56 @@ void main() {
     // Steady state stays quiet: a second clean sync also pushes nothing.
     await a.engine.syncNow();
     expect(server.clock, before);
+  });
+
+  test('signOut(clearLocalData: true) preserves the waterfall singleton '
+      'on re-login instead of pushing defaults over the cloud copy', () async {
+    final server = FakeSyncClient();
+    final d = _Device(server);
+    await d.auth.login('a@example.com', 'password123');
+    d.waterfall.applySyncedConfig(const {'startingBalance': 1234.5});
+    d.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
+    await d.engine.syncNow();
+    expect(
+      server.store['waterfall']?['singleton']?.data['startingBalance'],
+      1234.5,
+    );
+
+    d.engine.signOut(clearLocalData: true);
+    expect(d.waterfall.state.startingBalance, 0.0);
+
+    await d.auth.login('a@example.com', 'password123');
+    d.meta.reset();
+    await d.engine.syncNow();
+    // Restored from the sign-out snapshot ...
+    expect(d.waterfall.state.startingBalance, 1234.5);
+    // ... and the wiped defaults never reached the cloud copy.
+    expect(
+      server.store['waterfall']?['singleton']?.data['startingBalance'],
+      1234.5,
+    );
+  });
+
+  test('signOut(clearLocalData: true) with no sync baseline still restores '
+      'offline work on re-login', () async {
+    final server = FakeSyncClient();
+    final d = _Device(server);
+    await d.auth.login('a@example.com', 'password123');
+    // The first pull never completes: no cursor, no item meta.
+    d.nodes.addNode(
+      Node(id: 't1', title: 'offline only', createdAt: DateTime(2026)),
+    );
+    expect(d.meta.state.cursor, isNull);
+    expect(d.meta.state.items, isEmpty);
+
+    d.engine.signOut(clearLocalData: true);
+    expect(d.nodes.byId('t1'), isNull);
+
+    await d.auth.login('a@example.com', 'password123');
+    d.meta.reset();
+    await d.engine.syncNow();
+    expect(d.nodes.byId('t1')?.title, 'offline only');
+    expect(server.store['nodes']?.containsKey('t1'), isTrue);
   });
 
   test('an incomplete paged pull never advances the stored cursor', () async {
