@@ -34,11 +34,13 @@ DATA_PASS="data:safe"
 DATA_FAIL="data:blocked"
 SEC_PASS="sec:safe"
 SEC_FAIL="sec:blocked"
-# Feature removals are never auto-merged: the developer reviews the PR and
-# its before-removal screenshot (AGENTS.md usage-review rule). The builder
-# adds the label; the body marker is a second, model-forgetting-proof gate.
+# Usage-review PRs are never auto-merged: the developer reviews every
+# usage-derived change. A removal additionally carries a before screenshot
+# (AGENTS.md usage-review rule). The builder adds the label; the body marker
+# and the linked-issue label below are model-forgetting-proof gates.
 HUMAN_LABEL="needs-human-merge"
-USAGE_MARKER='<!-- usage-removal -->'
+USAGE_MARKER='<!-- usage-review-pr -->'
+USAGE_ISSUE_LABEL="usage-finding"
 REVIEW_MARKER='<!-- agent-review -->'
 DATA_MARKER='<!-- data-guard -->'
 SEC_MARKER='<!-- sec-guard -->'
@@ -71,19 +73,19 @@ for p in json.load(sys.stdin):
     echo "[merge] #$N body unavailable (gh hiccup) — skipping this poll (fail closed)"
     continue
   fi
-  # Even if the model forgets both the label and the body marker, a PR that
-  # closes (or is on the branch of) a usage-unused issue is a feature
-  # removal and must be held. Lookups that fail hold the PR rather than
-  # letting it through.
+  # Even if the model forgets both the label and the body marker, a PR whose
+  # branch issue (or a linked issue) carries the usage-finding label came
+  # from the usage review and must be held. Lookups that fail hold the PR
+  # rather than letting it through.
   LINKED_HOLD=0
   LINKED_LOOKUP_FAILED=0
   BRANCH_NUM="$(printf '%s' "$BRANCH" | sed -nE 's/^agent[\/-]([0-9]+).*/\1/p')"
   if [ -n "$BRANCH_NUM" ]; then
     if ! ISSUE_LABELS="$(gh issue view "$BRANCH_NUM" --json labels --jq '.labels[].name' 2>/dev/null)"; then
       LINKED_LOOKUP_FAILED=1
-    elif printf '%s\n' "$ISSUE_LABELS" | grep -qx "usage-unused"; then
+    elif printf '%s\n' "$ISSUE_LABELS" | grep -qx "$USAGE_ISSUE_LABEL"; then
       LINKED_HOLD=1
-      echo "[merge] #$N branch $BRANCH belongs to usage-unused issue #$BRANCH_NUM — holding"
+      echo "[merge] #$N branch $BRANCH belongs to $USAGE_ISSUE_LABEL issue #$BRANCH_NUM — holding"
     fi
   fi
   for LINKED in $(printf '%s' "$BODY" \
@@ -93,9 +95,9 @@ for p in json.load(sys.stdin):
       LINKED_LOOKUP_FAILED=1
       continue
     fi
-    if printf '%s\n' "$ISSUE_LABELS" | grep -qx "usage-unused"; then
+    if printf '%s\n' "$ISSUE_LABELS" | grep -qx "$USAGE_ISSUE_LABEL"; then
       LINKED_HOLD=1
-      echo "[merge] #$N closes usage-unused issue #$LINKED — feature removal, holding"
+      echo "[merge] #$N closes $USAGE_ISSUE_LABEL issue #$LINKED — holding"
     fi
   done
   if [ "$LINKED_LOOKUP_FAILED" = "1" ]; then
@@ -104,14 +106,14 @@ for p in json.load(sys.stdin):
   fi
   if [ "$LINKED_HOLD" = "1" ] || has "$HUMAN_LABEL" \
     || printf '%s' "$BODY" | grep -qF "$USAGE_MARKER"; then
-    echo "[merge] #$N held for human review (feature removal / $HUMAN_LABEL) — not auto-merging"
+    echo "[merge] #$N held for human review (usage review / $HUMAN_LABEL) — not auto-merging"
     KEY="/tmp/opencode/agent-loop-reported/merge-$N-human"
     mkdir -p "$(dirname "$KEY")"
     if [ ! -f "$KEY" ] || [ $(( $(date +%s) - $(stat -c %Y "$KEY") )) -ge 86400 ]; then
-      "$DIR/tg.sh" "🧑 PR #$N is ready for your review — the loop will not auto-merge feature removals:
+      "$DIR/tg.sh" "🧑 PR #$N is ready for your review — the loop will not auto-merge usage-review PRs:
 $TITLE
 $URL
-Check the 'before removal' screenshot in the PR body, then merge or close it.
+Check the change (and the before-removal screenshot for a removal), then merge or close it.
 Loop behavior: held every poll; this ping repeats at most once/day." || true
       touch "$KEY"
     else

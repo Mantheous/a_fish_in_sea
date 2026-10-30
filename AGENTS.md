@@ -113,11 +113,12 @@ respects the same queue gates as discovery.
 
 Unused features are never deleted automatically. The issue must prove
 14+ days of instrumentation and zero uses, the model must verify the
-feature is not new/broken/load-bearing, and the removal PR must include a
-before-removal screenshot plus `needs-human-merge`. `merge.sh` holds that
-PR for the developer; it is the one PR type the loop must not auto-merge.
-Adding an entry to the manifest is a promise that the app emits its event;
-do not list an uninstrumented feature.
+feature is not new/broken/load-bearing, and a removal PR must include a
+before-removal screenshot. Every usage-review PR is held for the
+developer (`needs-human-merge`; `merge.sh` also checks the linked issue
+label), so no usage-driven change auto-ships. Adding an entry to the
+manifest is a promise that the app emits its event; do not list an
+uninstrumented feature.
 
 Manual: `tools/agent/usage-review.sh --force` /
 `--dry-run`; state under the XDG state dir (`usage-review-last`,

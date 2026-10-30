@@ -192,15 +192,17 @@ def main() -> int:
                 }
             )
             continue
-        # Removal language must use the removal fingerprint. Otherwise a
-        # usage-fix-* issue could ship a deletion without the human-merge
-        # label/marker that the builder rule keys on.
+        # Removal language must use the removal fingerprint. This is a
+        # secondary guard; merge.sh structurally holds every usage-finding
+        # PR for a human, so a paraphrase cannot auto-merge either.
         if not fingerprint.startswith("usage-unused-"):
-            text = " ".join(
-                candidate.get(field, "")
-                for field in ("title", "impact", "evidence", "scope")
-            )
-            if re.search(r"\b(remove|delete|drop|retire|unregister)\b", text, re.I):
+            text = " ".join(candidate.get(field, "") for field in FIELDS)
+            if re.search(
+                r"\b(remov\w*|delet\w*|drop\w*|retir\w*|unregist\w*|"
+                r"eliminat\w*|disabl\w*|hide\w*|get rid|take out)\b",
+                text,
+                re.I,
+            ):
                 rejected.append(
                     {
                         "title": " ".join(candidate.get("title", "").split()),
