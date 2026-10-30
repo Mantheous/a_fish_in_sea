@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 
@@ -33,11 +34,13 @@ DateTime? reminderTimeFor(PlannerEvent event, {DateTime? now}) {
 
 int eventNotificationId(String eventId) => eventId.hashCode & 0x7fffffff;
 
-/// Best-effort local notification scheduling for event reminders.
-/// All failures are swallowed: reminders are a convenience, never a save
-/// blocker. Web has no exact-alarm support here, so it is a no-op there.
+/// Local reminders never block saving an event. Scheduling failures are
+/// shown through the app messenger, including after the editor closes.
+/// Web has no local notification support here, so it is a no-op there.
 class EventReminderService {
   EventReminderService._();
+
+  static final messengerKey = GlobalKey<ScaffoldMessengerState>();
 
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
@@ -46,27 +49,47 @@ class EventReminderService {
 
   static Future<void> ensureInitialized() async {
     if (_initialized || kIsWeb) return;
-    try {
-      await _plugin.initialize(
-        const InitializationSettings(
-          android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-          linux: LinuxInitializationSettings(
-            defaultActionName: 'Open',
-          ),
-        ),
-      );
-      _initialized = true;
-    } catch (_) {}
+    final initialized = await _plugin.initialize(
+      const InitializationSettings(
+        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        linux: LinuxInitializationSettings(defaultActionName: 'Open'),
+      ),
+    );
+    if (initialized != true) throw StateError('Reminder initialization failed');
+    _initialized = true;
   }
 
   static Future<void> scheduleReminder(PlannerEvent event) async {
     final minutes = event.reminderMinutesBefore;
     if (minutes == null || minutes <= 0) return;
     if (kIsWeb) return;
-    final fireAt = reminderTimeFor(event);
-    if (fireAt == null) return;
     try {
       await ensureInitialized();
+      final android = _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >();
+      if (android != null) {
+        if (await android.requestNotificationsPermission() != true) {
+          _warn(
+            'Allow notifications in Android settings, then save the event again.',
+          );
+          return;
+        }
+        if (await android.canScheduleExactNotifications() != true &&
+            await android.requestExactAlarmsPermission() != true) {
+          _warn(
+            'Allow alarms & reminders in Android settings, then save the event again.',
+          );
+          return;
+        }
+      }
+      // Permission dialogs may stay open until after the reminder time.
+      final fireAt = reminderTimeFor(event);
+      if (fireAt == null) {
+        _warn('Choose a reminder time that is still in the future.');
+        return;
+      }
       await _plugin.zonedSchedule(
         eventNotificationId(event.id),
         event.subject.isEmpty ? 'Upcoming event' : event.subject,
@@ -87,7 +110,17 @@ class EventReminderService {
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
       );
-    } catch (_) {}
+    } catch (_) {
+      _warn(
+        'Could not schedule the reminder. Please try saving the event again.',
+      );
+    }
+  }
+
+  static void _warn(String reason) {
+    messengerKey.currentState?.showSnackBar(
+      SnackBar(content: Text('Event saved. Reminder not scheduled. $reason')),
+    );
   }
 
   static Future<void> cancelReminder(String eventId) async {
