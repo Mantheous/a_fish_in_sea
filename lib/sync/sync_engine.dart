@@ -411,7 +411,7 @@ class SyncEngine {
       }
       case 'settings': {
         final env = Map<String, dynamic>.from(settings.toJson(settings.state));
-        _stripDeviceLocalFields('settings', env);
+        stripDeviceLocalSyncFields('settings', env);
         return {'singleton': env};
       }
       case 'waterfall': {
@@ -425,22 +425,11 @@ class SyncEngine {
         final env = plaid.toJson(plaid.state);
         final map =
             env == null ? <String, dynamic>{} : Map<String, dynamic>.from(env);
-        _stripDeviceLocalFields('plaid', map);
+        stripDeviceLocalSyncFields('plaid', map);
         return {'singleton': map};
       }
     }
     return {};
-  }
-
-  static void _stripDeviceLocalFields(
-      String collection, Map<String, dynamic> data) {
-    if (collection == 'settings') {
-      data.remove('icalProxyBase');
-      data.remove('ankiConnectHost');
-      data.remove('defaultCalendarView');
-    } else if (collection == 'plaid') {
-      data.remove('wasConnected');
-    }
   }
 
   // ── Apply pull ──────────────────────────────────────────────────────
@@ -477,10 +466,13 @@ class SyncEngine {
         }
         if (m == null) {
           final merged = Map<String, dynamic>.from(r.data);
-          _stripDeviceLocalFields(collection, merged);
+          stripDeviceLocalSyncFields(collection, merged);
           // Fresh bookkeeping (new device, reset meta): same rule as a
           // conflict — a locally running timer is live truth, not stale.
-          preserveRunningTimer(collection, current[r.itemId], merged);
+          preserveRunningTimer(
+            collection, current[r.itemId], merged,
+            preserveLocalSessions: true, // No baseline: retain local work.
+          );
           current[r.itemId] = merged;
           changed = true;
           // Meta tracks what the server holds, not our merged copy: any
@@ -495,15 +487,17 @@ class SyncEngine {
         }
         // Remote changed. No local change -> take server; local change
         // too -> conflict, server wins (documented policy). Both adopt
-        // the merged copy; the running-timer carve-out inside
-        // [preserveRunningTimer] is the only way local state survives
-        // a pull. When the merge resolves to the local copy (e.g. it
-        // kept an earlier timer start), the meta is left alone so the
-        // push phase propagates the merged version back to the server.
+        // the merged copy. Preserve completed sessions only when the item
+        // has unsent edits; otherwise a missing session is a remote deletion.
+        // Live timers remain protected independently. Meta tracks the remote
+        // payload so any preserved local work is pushed back to the server.
         final local = current[r.itemId];
         final merged = Map<String, dynamic>.from(r.data);
-        _stripDeviceLocalFields(collection, merged);
-        preserveRunningTimer(collection, local, merged);
+        stripDeviceLocalSyncFields(collection, merged);
+        preserveRunningTimer(
+          collection, local, merged,
+          preserveLocalSessions: local != null && m.hash != contentHash(local),
+        );
         upsertMeta[k] = ItemMeta(
           hash: contentHash(r.data),
           serverTime: seen,
