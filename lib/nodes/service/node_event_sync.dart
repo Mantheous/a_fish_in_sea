@@ -110,7 +110,7 @@ class NodeEventSync {
 
   /// Mirrors a manual timer correction from a task to every linked event,
   /// keeping the event-side report cache aligned with the task record.
-  static void setNodeReported(
+  static bool setNodeReported(
     NodeCubit nodes,
     CalendarCubit calendar,
     String nodeId,
@@ -118,18 +118,24 @@ class NodeEventSync {
     DateTime end,
   ) {
     final node = nodes.byId(nodeId);
-    if (node == null || node.recordedSessions.length > 1) return;
+    if (node == null || node.recordedSessions.length > 1) return false;
+    final safeEnd = end.isAfter(start)
+        ? end
+        : start.add(const Duration(minutes: 1));
+    final session = node.recordedSessions.singleOrNull;
+    if (session?.start == start && session?.end == safeEnd) return false;
     RevertableHydratedCubit.atomic([nodes, calendar], () {
-      nodes.setReported(nodeId, start, end);
+      nodes.setReported(nodeId, start, safeEnd);
       final saved = nodes.byId(nodeId);
       if (saved == null) return;
       _mirrorSessions(calendar, saved, replace: true);
     });
+    return true;
   }
 
   /// Moves one recorded run on the task and mirrors the task's whole list
   /// onto every linked event.
-  static void setNodeSession(
+  static bool setNodeSession(
     NodeCubit nodes,
     CalendarCubit calendar,
     String nodeId,
@@ -137,13 +143,20 @@ class NodeEventSync {
     DateTime start,
     DateTime end,
   ) {
-    if (nodes.byId(nodeId) == null) return;
+    final node = nodes.byId(nodeId);
+    if (node == null) return false;
+    final session = sessionById(node.recordedSessions, sessionId);
+    if (session == null) return false;
+    final safeEnd = end.isAfter(start)
+        ? end
+        : start.add(const Duration(minutes: 1));
     RevertableHydratedCubit.atomic([nodes, calendar], () {
-      nodes.updateSession(nodeId, sessionId, start, end);
+      nodes.updateSession(nodeId, sessionId, start, safeEnd);
       final saved = nodes.byId(nodeId);
       if (saved == null) return;
       _mirrorSessions(calendar, saved);
     });
+    return nodes.byId(nodeId) != node;
   }
 
   /// Deletes one recorded run on the task and from every linked event,
