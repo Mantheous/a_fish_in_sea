@@ -23,7 +23,7 @@ void main() {
     when(() => storage.delete(any())).thenAnswer((_) async {});
     when(() => storage.clear()).thenAnswer((_) async {});
     HydratedBloc.storage = storage;
-    await $.pumpWidgetAndSettle(const MyApp());
+    await $.pumpWidget(const MyApp());
     final stamp = DateTime.now().millisecondsSinceEpoch;
     await $(TextField).at(0).enterText('patrol-promoted-$stamp@example.com');
     await $(TextField).at(1).enterText('patrol-pass-1');
