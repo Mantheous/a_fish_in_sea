@@ -18,11 +18,23 @@ void main() {
     when(() => storage.delete(any())).thenAnswer((_) async {});
     when(() => storage.clear()).thenAnswer((_) async {});
     HydratedBloc.storage = storage;
-    await $.pumpWidgetAndSettle(const MyApp());
+    // The autofocus cursor keeps scheduling frames on web: wait for the
+    // controls instead of waiting for the sign-in screen to stop animating.
+    await $.pumpWidget(const MyApp());
+    await $(TextField).at(0).waitUntilVisible();
     final stamp = DateTime.now().microsecondsSinceEpoch;
-    await $(TextField).at(0).enterText('patrol-dst-$stamp@example.com');
-    await $(TextField).at(1).enterText('patrol-pass-1');
-    await $('Create account').tap();
+    await $(TextField)
+        .at(0)
+        .enterText(
+          'patrol-dst-$stamp@example.com',
+          settlePolicy: SettlePolicy.noSettle,
+        );
+    await $(
+      TextField,
+    ).at(1).enterText('patrol-pass-1', settlePolicy: SettlePolicy.noSettle);
+    FocusManager.instance.primaryFocus?.unfocus();
+    await $('Create account').tap(settlePolicy: SettlePolicy.noSettle);
+    await $(HomePage).waitUntilVisible(timeout: const Duration(seconds: 30));
     await $.pumpAndSettle();
     expect(find.byType(HomePage), findsOneWidget);
     await $(Icons.menu).tap();
