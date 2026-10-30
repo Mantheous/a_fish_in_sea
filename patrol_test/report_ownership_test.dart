@@ -23,6 +23,12 @@ void main() {
   patrolTest('Adjust preserves identical recordings on unrelated goals', (
     $,
   ) async {
+    // Stop the sign-in screen's repeating fish animation while settling.
+    $.tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(
+      $.tester.platformDispatcher.clearAccessibilityFeaturesTestValue,
+    );
     final storage = MockStorage();
     when(() => storage.read(any())).thenReturn(null);
     when(() => storage.write(any(), any())).thenAnswer((_) async {});

@@ -238,6 +238,7 @@ List<ReportBlock> buildReportBlocks({
       event.taskId ?? nodesByEvent[event.id]?.first.id;
   (bool, String, String) sessionKey(PlannerEvent event, String sessionId) {
     final nodeId = taskOwner(event);
+    // Node and event ids also have separate namespaces.
     return (nodeId != null, nodeId ?? event.id, sessionId);
   }
 
@@ -265,7 +266,7 @@ List<ReportBlock> buildReportBlocks({
   // node) still land on the event they belong to.
   for (final event in visibleEvents) {
     if (event.allDay) continue;
-    final candidates = eventsByNode[taskOwner(event)] ?? const <PlannerEvent>[];
+    final candidates = eventsByNode[event.taskId] ?? const <PlannerEvent>[];
     for (final session in event.sessions) {
       final key = sessionKey(event, session.id);
       if (sessionOwner.containsKey(key)) continue;
