@@ -128,11 +128,15 @@ class PlanTileDragSession {
     );
     final pointerDay = _dayUnderPointer(pointer);
     if (pointerDay != null) _day = pointerDay;
+    final minutes = targetMinutes.round();
+    // Grid slots are local clock times, even on 23- or 25-hour days.
     final next = DateTime(
       _day.year,
       _day.month,
       _day.day,
-    ).add(Duration(minutes: targetMinutes.round()));
+      minutes ~/ 60,
+      minutes % 60,
+    );
     if (next == _dropTime) return;
     _dropTime = next;
     onDropTimeChanged?.call(next);
