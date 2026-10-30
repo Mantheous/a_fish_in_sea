@@ -68,6 +68,13 @@ for value in "$MIN_INTERVAL" "$FAIL_BACKOFF" "$MIN_EVENTS" "$QUEUE_LOW" "$MAX_IN
 done
 mkdir -p "$STATE"
 
+# Dry-runs must not consume/backoff the schedule.
+backoff() {
+  if [ "$DRY" -eq 0 ]; then
+    date +%s -d "@$(( $(date +%s) + FAIL_BACKOFF ))" >"$RETRY"
+  fi
+}
+
 [ -d "$REPO" ] || { echo "[usage-review] repo not found: $REPO" >&2; exit 2; }
 cd "$REPO"
 
@@ -104,14 +111,14 @@ set -e
 cat "$TMP/digest.log" 2>/dev/null || true
 if [ "$DIGEST_STATUS" -ne 0 ]; then
   echo "[usage-review] digest unavailable (exit $DIGEST_STATUS) — no review this poll; backing off $((FAIL_BACKOFF / 3600))h"
-  date +%s -d "@$(( $(date +%s) + FAIL_BACKOFF ))" >"$RETRY"
+  backoff
   exit 0
 fi
 
 EVENTS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["volume"]["events"])' "$TMP/facts.json")"
 if [ "$EVENTS" -lt "$MIN_EVENTS" ] && [ "$FORCE" -eq 0 ]; then
   echo "[usage-review] only $EVENTS events in the window (need $MIN_EVENTS) — not enough signal yet; backing off $((FAIL_BACKOFF / 3600))h"
-  date +%s -d "@$(( $(date +%s) + FAIL_BACKOFF ))" >"$RETRY"
+  backoff
   exit 0
 fi
 
@@ -278,7 +285,7 @@ if ! "$LLM_RUN" --role usage --title "usage-$(date +%F-%H%M)" --read-only \
     --expect '^DISCOVERY: [0-9]+$' <"$PROMPT_FILE" >"$MSG_FILE" 2>"$ERR_FILE"; then
   echo "[usage-review] analysis run failed — no issues filed; backing off $((FAIL_BACKOFF / 3600))h"
   tail -n 8 "$ERR_FILE" 2>/dev/null || true
-  date +%s -d "@$(( $(date +%s) + FAIL_BACKOFF ))" >"$RETRY"
+  backoff
   exit 1
 fi
 cp "$MSG_FILE" "$STATE/usage-review-last-message.md" 2>/dev/null || true
@@ -299,7 +306,7 @@ echo "[usage-review] filtering candidates..."
 if ! FILTER_OUT="$(python3 "$FILTER" "${FILTER_ARGS[@]}" 2>"$TMP/filter.err")"; then
   echo "[usage-review] candidate filter failed — no issues filed; backing off $((FAIL_BACKOFF / 3600))h"
   tail -n 8 "$TMP/filter.err" 2>/dev/null || true
-  date +%s -d "@$(( $(date +%s) + FAIL_BACKOFF ))" >"$RETRY"
+  backoff
   exit 1
 fi
 printf '%s\n' "$FILTER_OUT" >"$TMP/filter.json"
@@ -330,7 +337,7 @@ fi
 FILED_COUNT="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1], encoding="utf-8")).get("filed", [])))' "$TMP/filter.json")"
 if [ "$FILED_COUNT" -eq 0 ] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1], encoding="utf-8")).get("errors") else 1)' "$TMP/filter.json"; then
   echo "[usage-review] every create failed — backing off $((FAIL_BACKOFF / 3600))h"
-  date +%s -d "@$(( $(date +%s) + FAIL_BACKOFF ))" >"$RETRY"
+  backoff
   exit 1
 fi
 
