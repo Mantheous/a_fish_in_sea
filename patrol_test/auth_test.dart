@@ -45,6 +45,7 @@ void main() {
     await $(TextField).at(1).tap();
     await $(TextField).at(1).enterText('patrol-pass-1');
     await $('Create account').tap();
+    await $(HomePage).waitUntilVisible();
     await $.pumpAndSettle();
 
     expect(find.byType(HomePage), findsOneWidget);
@@ -62,8 +63,14 @@ void main() {
     // Registration errors must be visible on the same card as well.
     await $('Create account').tap();
     await $('Email already registered').waitUntilVisible();
+    // Reattach the web test input connection before replacing focused text.
+    await $(TextField).at(0).tap();
+    await $(TextField).at(1).tap();
     await $(TextField).at(1).enterText('patrol-pass-1');
+    expect($.tester.widget<TextField>(find.byType(TextField).last).controller!.text,
+        'patrol-pass-1');
     await $('Sign in').tap();
+    await $(HomePage).waitUntilVisible();
     await $.pumpAndSettle();
     expect(find.byType(HomePage), findsOneWidget);
     expect(find.byType(AuthPage), findsNothing);
