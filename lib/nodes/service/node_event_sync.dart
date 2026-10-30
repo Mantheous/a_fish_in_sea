@@ -130,7 +130,7 @@ class NodeEventSync {
       if (saved == null) return;
       _mirrorSessions(calendar, saved, replace: true);
     });
-    return true;
+    return nodes.byId(nodeId) != node;
   }
 
   /// Moves one recorded run on the task and mirrors the task's whole list
