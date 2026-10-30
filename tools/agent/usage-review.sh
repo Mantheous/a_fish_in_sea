@@ -191,7 +191,7 @@ WHAT TO LOOK FOR, in priority order:
    - it is not newer than 30 days (read git history for the implementing
      file; a brand-new feature is still in development),
    - it is not a safety/accessibility/data path (auth, sync, settings,
-     import review, error recovery),
+     import review, feedback, error recovery),
    - it is not the only route to a capability (e.g. the only way to
      create an event),
    - no recent error suggests it is broken rather than unwanted.

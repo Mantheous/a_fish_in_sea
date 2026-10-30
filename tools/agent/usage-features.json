@@ -27,7 +27,6 @@
     {"id": "goals.editor", "label": "Goal editor", "kind": "action", "event": "node.editor.open", "how_to_reach": "Goals tab > + or tap a goal"},
     {"id": "goals.done", "label": "Complete a goal", "kind": "action", "event": "node.done", "how_to_reach": "Goals tab or calendar > tick a goal"},
     {"id": "event.create", "label": "Create an event", "kind": "action", "event": "event.editor.open", "where": {"mode": "create"}, "how_to_reach": "Calendar tab > + Event"},
-    {"id": "event.edit", "label": "Edit an event", "kind": "action", "event": "event.editor.open", "where": {"mode": "edit"}, "how_to_reach": "Calendar tab > open an event > Edit"},
     {"id": "import.open", "label": "Review an inbox import", "kind": "action", "event": "import.open", "how_to_reach": "Home tab > Import received card"},
     {"id": "feedback.submit", "label": "Send feedback", "kind": "action", "event": "feedback.submit", "how_to_reach": "Feedback tab > send a report"}
   ]
