@@ -13,6 +13,10 @@ trap 'rm -rf "$TMP"' EXIT
 BIN="$TMP/bin"
 mkdir -p "$BIN"
 
+# These tests use fake codex/opencode binaries, so skip the real bwrap probe.
+# The probe itself is exercised by test 10 with a deliberately broken bwrap.
+export FISH_LLM_CODEX_SANDBOX_CHECK=0
+
 cat >"$BIN/codex" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -183,6 +187,44 @@ ARGS10="$(cat "$TMP/args10")"
 assert_eq 0 "$ST" "data-guard: opencode default exits 0"
 assert_contains "$ARGS10" "--agent data-guardian" "data-guard: keeps guardian agent"
 assert_contains "$ARGS10" "--model opencode-go/deepseek-v4.1-flash#high" "data-guard: keeps deepseek model"
+
+echo
+# ── 10. broken codex sandbox is fail-closed (no tool-less review) ───────
+FAILBIN="$TMP/failbin"
+mkdir -p "$FAILBIN"
+cat >"$FAILBIN/bwrap" <<'FAKE'
+#!/usr/bin/env bash
+exit 1
+FAKE
+chmod +x "$FAILBIN/bwrap"
+rm -f "$TMP/args-gate"
+set +e
+printf 'x' | env PATH="$FAILBIN:$BIN:$PATH" FISH_LLM_CODEX_SANDBOX_CHECK=1 \
+  FAKE_CODEX_ARGS="$TMP/args-gate" FAKE_CODEX_MESSAGE='Verdict: pass' \
+  "$ADAPTER" --role review --expect '^Verdict:' >"$TMP/out-gate" 2>"$TMP/err-gate"
+ST=$?
+set -e
+assert_eq 2 "$ST" "sandbox gate: broken bwrap exits 2"
+if [ -e "$TMP/args-gate" ]; then
+  no "sandbox gate: codex was not invoked" "fake codex ran despite the broken sandbox"
+else
+  ok "sandbox gate: codex was not invoked"
+fi
+assert_contains "$(cat "$TMP/err-gate")" "apparmor_restrict_unprivileged_userns" \
+  "sandbox gate: tells the operator how to fix it"
+
+# ── 11. discover role defaults to codex/read-only ───────────────────────
+set +e
+OUT="$(printf 'audit' | env PATH="$BIN:$PATH" FAKE_CODEX_ARGS="$TMP/args-discover" \
+  FAKE_CODEX_MESSAGE='DISCOVERY: 0' \
+  "$ADAPTER" --role discover --expect '^DISCOVERY: [0-9]+$' 2>"$TMP/err-discover")"
+ST=$?
+set -e
+ARGS_DISCOVER="$(cat "$TMP/args-discover")"
+assert_eq 0 "$ST" "discover: codex default exits 0"
+assert_eq "DISCOVERY: 0" "$OUT" "discover: final message is stdout"
+assert_contains "$ARGS_DISCOVER" "-s read-only" "discover: read-only sandbox"
+assert_contains "$ARGS_DISCOVER" "-m gpt-6.1-sol" "discover: pins sol model"
 
 echo
 echo "passed: $PASS  failed: $FAIL"

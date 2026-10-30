@@ -73,8 +73,8 @@ done
 # backend | per-backend model | agent | auto | timeout (s)
 # Vision-heavy and long-running roles stay on opencode: triage reads issue
 # screenshots, builders/rework attach review screenshots, and ux-walk drives
-# the Playwright MCP server. Review + the guardians are text-only, read-only
-# roles — the fit for codex.
+# the Playwright MCP server. Review, the security guardian and proactive
+# discovery are text-only, read-only roles — the fit for codex.
 DEFAULT_BACKEND="opencode"
 DEFAULT_CODEX_MODEL="$CODEX_MODEL"
 DEFAULT_OPENCODE_MODEL="$OPENCODE_CHEAP_MODEL"
@@ -86,6 +86,12 @@ DEFAULT_TIMEOUT=1800
 case "$ROLE" in
   review)
     DEFAULT_BACKEND="codex"
+    ;;
+  discover)
+    # Proactive issue discovery: read-only repo audit, text-only. Files at
+    # most a couple of issues per run via tools/agent/discover.sh.
+    DEFAULT_BACKEND="codex"
+    DEFAULT_TIMEOUT=1800
     ;;
   security-guard)
     DEFAULT_BACKEND="codex"
@@ -169,6 +175,34 @@ AGENT="${AGENT:-$DEFAULT_AGENT}"
 [ -n "$TITLE" ] || TITLE="$ROLE"
 if ! [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
   echo "[llm-run] $ROLE: --timeout must be a positive integer (seconds)" >&2
+  exit 2
+fi
+
+# ── Codex sandbox health (fail closed) ──────────────────────────────────
+# Codex runs model-generated shell commands inside bubblewrap. On a host
+# where unprivileged user namespaces are blocked (Ubuntu 24.04 AppArmor
+# default: kernel.apparmor_restrict_unprivileged_userns=1) every shell call
+# fails with "bwrap: ... Operation not permitted". The model can still emit
+# a plausible final message, so a review would "pass" without ever reading
+# the diff. Probe cheaply and refuse to run instead of trusting that output.
+codex_sandbox_ok() {
+  [ "$(uname -s 2>/dev/null || echo unknown)" = "Linux" ] || return 0
+  if command -v bwrap >/dev/null 2>&1; then
+    timeout 5 bwrap --ro-bind / / true >/dev/null 2>&1 && return 0
+    return 1
+  fi
+  if command -v unshare >/dev/null 2>&1; then
+    timeout 5 unshare -Ur true >/dev/null 2>&1 && return 0
+    return 1
+  fi
+  return 0  # cannot probe on this host; do not block
+}
+if [ "$BACKEND" = "codex" ] && [ "$DEFAULT_SANDBOX" != "danger-full-access" ] \
+  && [ "${FISH_LLM_CODEX_SANDBOX_CHECK:-1}" != "0" ] && ! codex_sandbox_ok; then
+  echo "[llm-run] $ROLE: codex sandbox cannot start on this host — failing closed." >&2
+  echo "[llm-run] A tool-less model can emit a plausible verdict without reading anything; refusing to run." >&2
+  echo "[llm-run] Fix: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0" >&2
+  echo "[llm-run] (or set FISH_LLM_CODEX_SANDBOX_CHECK=0 only if you have verified the sandbox another way)" >&2
   exit 2
 fi
 

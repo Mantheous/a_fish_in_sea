@@ -72,7 +72,15 @@ Every headless LLM call in the loop goes through
 2026-10-22 PR review and the security guardian run on `codex` with
 `gpt-6.1-sol` (ChatGPT-subscription auth). Triage, builder, rework, and
 ux-walk stay on opencode because they need screenshots or Playwright;
-data-guard stays on its pinned deepseek model. Flip any role for one host without editing scripts:
+data-guard stays on its pinned deepseek model. Proactive discovery
+(`tools/agent/discover.sh`, role `discover`) is a read-only codex audit:
+it files at most 2 fingerprint-deduped `agent-pending` issues per 6h, and
+only while fewer than 2 are pending and fewer than 3 agent PRs are open,
+so it feeds the queue without flooding it. Codex roles fail closed when
+the host sandbox cannot start (bubblewrap needs unprivileged user
+namespaces; `llm-run.sh` prints the sysctl fix) — a tool-less model must
+never be able to produce a verdict. Flip any role for one host without
+editing scripts:
 
 ```bash
 FISH_LLM_REVIEW_BACKEND=opencode tools/agent/review.sh
