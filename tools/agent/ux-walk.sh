@@ -15,11 +15,14 @@ REPO="$HOME/Repos/a_fish_in_sea"
 cd "$REPO"
 DIR="$REPO/tools/agent"
 
-# Serialized model quota: never stack a ux-walker LLM run on top of a live
-# builder/rework session (same guard build.sh/review.sh already use).
+# Serialized model quota for the opencode case only: a ux-walk (opencode +
+# Playwright) must not stack on an opencode builder. Codex builders run on a
+# separate allowance, so the post-deploy walk still runs while they work.
 loop_runs() {
   tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^(agent-[0-9]|rework-[0-9])' || true
 }
+UX_BACKEND="${FISH_LLM_UX_WALK_BACKEND:-opencode}"
+BUILDER_BACKEND="${FISH_LLM_BUILDER_BACKEND:-opencode}"
 
 APP_URL="${UX_APP_URL:-http://127.0.0.1:8000/fish/}"
 BUILD_MARKER="build/web/.agent-build-desc"
@@ -60,11 +63,13 @@ if [ -z "$REASON" ]; then
 fi
 echo "[ux-walk] trigger: $REASON"
 
-# Don't stack a ux-walker LLM run on top of a live builder/rework session.
-RUNNING="$(loop_runs)"
-if [ "${RUNNING:-0}" -ge 1 ]; then
-  echo "[ux-walk] $RUNNING loop run(s) active — skipping ux walk this poll"
-  exit 0
+# Don't stack an opencode walk on top of an opencode builder/rework.
+if [ "$UX_BACKEND" = "opencode" ] && [ "$BUILDER_BACKEND" = "opencode" ]; then
+  RUNNING="$(loop_runs)"
+  if [ "${RUNNING:-0}" -ge 1 ]; then
+    echo "[ux-walk] $RUNNING opencode loop run(s) active — skipping ux walk this poll"
+    exit 0
+  fi
 fi
 
 STAMP="$(date +%F-%H%M)"
