@@ -61,7 +61,10 @@ class EventReminderService {
 
   static Future<void> scheduleReminder(PlannerEvent event) async {
     final minutes = event.reminderMinutesBefore;
-    if (minutes == null || minutes <= 0) return;
+    if (minutes == null || minutes <= 0) {
+      await cancelReminder(event.id);
+      return;
+    }
     if (kIsWeb) return;
     try {
       await ensureInitialized();

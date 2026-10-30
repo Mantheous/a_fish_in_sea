@@ -112,11 +112,63 @@ void main() {
       if (scenario == 'exact access denied') {
         expect(find.textContaining('Allow alarms & reminders'), findsOneWidget);
       }
-      if (scenario == 'no reminder') expect(calls, isEmpty);
+      if (scenario == 'no reminder') {
+        expect(methods, ['cancel']);
+        expect(
+          (calls.single.arguments as Map)['id'],
+          eventNotificationId(event.id),
+        );
+      }
       // Failed scheduling leaves the event and its chosen offset intact.
       expect(
         event.reminderMinutesBefore,
         scenario == 'no reminder' ? isNull : 10,
+      );
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+  }
+
+  for (final disabledOffset in <int?>[null, 0, -5]) {
+    testWidgets('enabled reminder is cancelled for offset $disabledOffset', (
+      tester,
+    ) async {
+      final calls = <MethodCall>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+        call,
+      ) async {
+        calls.add(call);
+        return true;
+      });
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      final start = DateTime.now().add(const Duration(days: 1));
+      final event = PlannerEvent(
+        id: 'disable-reminder',
+        subject: 'Appointment',
+        start: start,
+        end: start.add(const Duration(hours: 1)),
+        reminderMinutesBefore: 10,
+      );
+      await EventReminderService.scheduleReminder(event);
+      final scheduled = calls.singleWhere(
+        (call) => call.method == 'zonedSchedule',
+      );
+      calls.clear();
+
+      await EventReminderService.scheduleReminder(
+        event.copyWith(
+          reminderMinutesBefore: disabledOffset,
+          clearReminder: disabledOffset == null,
+        ),
+      );
+
+      expect(calls.map((call) => call.method), ['cancel']);
+      expect(
+        (calls.single.arguments as Map)['id'],
+        (scheduled.arguments as Map)['id'],
       );
     }, variant: TargetPlatformVariant.only(TargetPlatform.android));
   }
