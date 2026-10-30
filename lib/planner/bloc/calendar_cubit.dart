@@ -4,6 +4,7 @@ import '../../common/persistence/stable_storage_keys.dart';
 import '../../common/time/local_date.dart';
 import '../../common/time/time_session.dart';
 import '../../common/undo/revertable_hydrated_cubit.dart';
+import '../../common/usage/usage_log.dart';
 import '../model/planner_event.dart';
 
 class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
@@ -57,6 +58,7 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
   void toggleDone(String eventId) {
     final event = byId(eventId);
     if (event == null || !event.isTask) return;
+    UsageLog.instance.action('event.done', meta: {'done': !event.done});
     final now = DateTime.now();
     updateEvent(
       event.done

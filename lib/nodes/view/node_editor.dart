@@ -8,6 +8,7 @@ import 'package:a_fish_in_sea/anki/anki_connect.dart';
 import 'package:a_fish_in_sea/anki/anki_server.dart';
 import 'package:a_fish_in_sea/anki/anki_import.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
+import 'package:a_fish_in_sea/common/usage/usage_log.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/service/node_transaction_cleanup.dart';
@@ -44,7 +45,11 @@ Future<Node?> showNodeEditor(
   /// Existing goals to place under a brand-new node (e.g. "add parent
   /// goal" from a graph card). Ignored when [existing] is set.
   List<String> initialChildIds = const [],
-}) {
+}) async {
+  UsageLog.instance.action(
+    'node.editor.open',
+    meta: {'mode': existing == null ? 'create' : 'edit'},
+  );
   _NodeEditorDialog buildEditor() => _NodeEditorDialog(
     existing: existing,
     enableMoney: enableMoney,
@@ -52,8 +57,9 @@ Future<Node?> showNodeEditor(
     initialParentIds: initialParentIds,
     initialChildIds: initialChildIds,
   );
+  Node? saved;
   if (MediaQuery.sizeOf(context).width >= nodeEditorSideSheetBreakpoint) {
-    return showGeneralDialog<Node>(
+    saved = await showGeneralDialog<Node>(
       context: context,
       barrierDismissible: true,
       barrierLabel: 'Close goal editor',
@@ -75,11 +81,17 @@ Future<Node?> showNodeEditor(
         );
       },
     );
+  } else {
+    saved = await showDialog<Node>(
+      context: context,
+      builder: (dialogContext) => buildEditor(),
+    );
   }
-  return showDialog<Node>(
-    context: context,
-    builder: (dialogContext) => buildEditor(),
+  UsageLog.instance.action(
+    'node.editor.close',
+    meta: {'saved': saved != null},
   );
+  return saved;
 }
 
 class _NodeEditorDialog extends StatefulWidget {

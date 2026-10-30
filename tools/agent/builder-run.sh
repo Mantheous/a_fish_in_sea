@@ -144,6 +144,11 @@ if [ ! -d "$WT" ]; then
   exit 1
 fi
 echo "[builder] #$N worktree $WT branch $BRANCH"
+# Feature-removal PRs are held for a human; make the label exist before
+# the model is asked to add it, or gh pr edit would fail and the merge
+# guard would miss the hold.
+gh label create needs-human-merge --color "D93F0B" \
+  --description "Feature removal: developer reviews the before screenshot and merges" >/dev/null 2>&1 || true
 
 # Pre-download issue screenshots so the builder can VIEW them (same reason
 # as triage: headless agents read local images, not remote URLs).
@@ -166,6 +171,7 @@ Rules:
 9. Commit on $BRANCH, push origin $BRANCH, open PR with: gh pr create --base main --head $BRANCH --title \"[agent #$N] <title>\" --body \"Closes #$N. In plain words: <2-4 sentences saying what the user will notice and why, written for a maintainer who has NOT read the code — name screens and behavior, no jargon, no class/function names>. Scope: <one line, matches the latest triage plan + tester follow-ups>. UX scope: <screens/flows touched + how to reach them, or 'none — no user-visible change'>. Test log: <paste tail of flutter test>. Risk notes: <one line, plain words first, then technical detail if needed>. Screenshots: <host paths under /tmp/opencode/ you verified against, for UX-filed issues>\". If gh pr create fails with \"No commits between main and <branch>\" (your branch's commits are already in main), do NOT merge, push, or deploy anything to fix it — report PR_URL=NONE with that exact reason and stop; a human will sort out how it landed.
 10. If the gates fail and you cannot fix within reason, push the branch anyway and report FAIL status in the PR body.
 11. Commit messages on $BRANCH must NOT contain fix/fixes/fixed/close/closes/resolves #$N — if such a commit ever lands on main (e.g. through a merge), GitHub auto-closes the issue before the review/guardian gates have run. Use \"refs #$N\" in commit messages; the PR body is where \"Closes #$N\" belongs.
+12. If issue #N carries the usage-finding label, this change came from the usage review and a human must review the PR before it ships. If it also carries the usage-unused label, it is a FEATURE REMOVAL: before changing code, open the feature in the app and capture a screenshot of it (use the issue's How to reach / how_to_reach text; save it as /tmp/opencode/usage-$N-before.png). If you cannot capture it, stop and report FAIL in the PR body instead of removing the feature blind. The PR body MUST contain a line 'Before-removal screenshot: /tmp/opencode/usage-$N-before.png' for a removal, the marker <!-- usage-review-pr -->, and after creating the PR add the label needs-human-merge (gh pr edit <pr> --add-label needs-human-merge). Do NOT merge it. The loop holds every usage-finding PR for the developer.
 A separate reviewer agent will read your diff against the plan — write the PR body for a busy maintainer who has not read the code: plain words first, technical detail after.
 Report at the end: PR_URL=<url or NONE> STATUS=<ready|failed>."
 

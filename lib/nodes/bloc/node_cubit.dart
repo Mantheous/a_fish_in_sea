@@ -1,6 +1,7 @@
 import 'package:a_fish_in_sea/common/persistence/stable_storage_keys.dart';
 import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
+import 'package:a_fish_in_sea/common/usage/usage_log.dart';
 import 'package:a_fish_in_sea/finances/model/budget.dart';
 import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:a_fish_in_sea/finances/model/recurring_rule.dart';
@@ -877,6 +878,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   void toggleDone(String id, {DateTime? now}) {
     final node = byId(id);
     if (node == null) return;
+    UsageLog.instance.action('node.done', meta: {'done': !node.isDone});
     final at = now ?? DateTime.now();
     updateNode(
       node.isDone

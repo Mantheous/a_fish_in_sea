@@ -1,3 +1,4 @@
+import '../../common/usage/usage_log.dart';
 import '../sync/sync_client.dart';
 
 /// One bug report or feature request filed from the Feedback tab.
@@ -108,6 +109,7 @@ class FeedbackService {
       'app_platform': appPlatform,
       'app_version': appVersion,
     });
+    UsageLog.instance.action('feedback.submit', meta: {'kind': kind});
     return FeedbackReport.fromJson(
         Map<String, dynamic>.from((body ?? const <String, dynamic>{})));
   }

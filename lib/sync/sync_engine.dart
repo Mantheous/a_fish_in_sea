@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../common/usage/usage_log.dart';
 import '../demo/demo_mode.dart';
 import '../finances/bloc/plaid_cubit.dart';
 import '../finances/bloc/transactions_cubit.dart';
@@ -255,6 +256,7 @@ class SyncEngine {
     if (DemoMode.isActive) return;
     if (_running) return;
     if (!auth.state.isSignedIn) return;
+    final usageWatch = Stopwatch()..start();
     final sessionGeneration = auth.sessionGeneration;
     final currentEmail = auth.state.email.trim().toLowerCase();
     final prevEmail = meta.state.lastEmail?.trim().toLowerCase();
@@ -318,15 +320,28 @@ class SyncEngine {
       lastSyncAt = DateTime.now();
       lastError = null;
       status.value = EngineStatus.idle;
+      UsageLog.instance.sync(
+        durationMs: usageWatch.elapsedMilliseconds,
+        ok: true,
+      );
     } on SyncException catch (e) {
       if (_isCurrentSession(myEpoch, sessionGeneration)) {
         lastError = e.message;
         status.value = EngineStatus.error;
+        UsageLog.instance.sync(
+          durationMs: usageWatch.elapsedMilliseconds,
+          ok: false,
+          statusCode: e.statusCode == 0 ? null : e.statusCode,
+        );
       }
     } catch (e) {
       if (_isCurrentSession(myEpoch, sessionGeneration)) {
         lastError = e.toString();
         status.value = EngineStatus.error;
+        UsageLog.instance.sync(
+          durationMs: usageWatch.elapsedMilliseconds,
+          ok: false,
+        );
       }
     } finally {
       if (_epoch == myEpoch) {

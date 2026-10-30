@@ -82,7 +82,8 @@ concrete words — name the screen and the user-visible behavior, never a
 class or function name, and no unexplained jargon anywhere. The Summary
 lines especially must make sense without reading any code; technical
 detail belongs in the Files/Risk/Test fields only.
-5. Output ONLY the markdown below, no extra prose before or after:
+5. If the issue carries the usage-finding label, the plan must say the PR needs the needs-human-merge label and will wait for the developer. If it also carries usage-unused, the plan must require a before-removal screenshot as well. Never plan a feature removal otherwise.
+6. Output ONLY the markdown below, no extra prose before or after:
 ## Triage plan #$N
 Severity: <critical|high|medium|low>
 Summary: <exactly 2 lines in plain words: line1 what the user will notice, line2 proposed approach>
@@ -197,7 +198,8 @@ READ-ONLY task. Do NOT modify, create, delete, or commit any repo files. Do NOT 
 5. Write for the maintainer, who is NOT deep in the codebase: plain,
 concrete words — name the screen and the user-visible behavior, never a
 class or function name, and no unexplained jargon anywhere.
-6. Output ONLY the markdown below, no extra prose before or after:
+6. If the issue carries the usage-finding label, the revised plan must keep the needs-human-merge requirement; if it also carries usage-unused, keep the before-removal screenshot requirement too. Never plan a feature removal otherwise.
+7. Output ONLY the markdown below, no extra prose before or after:
 ## Triage plan #$N (rev)
 Replies: <one short plain-words line per follow-up point: what you changed or answered>
 Severity: <critical|high|medium|low>

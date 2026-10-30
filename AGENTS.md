@@ -95,6 +95,35 @@ guardians already fail closed. New vendors/roles get added to the
 adapter's role table, never by editing a call site. Tests:
 `tools/agent/test/llm-run-test.sh` (fake CLIs, no network).
 
+## Usage review: observe behavior, never content
+
+The app keeps a content-free event log (`lib/common/usage/`): screen
+dwell, closed-set action names, error *types*, and slow/failed syncs. No
+titles, notes, text, keystrokes, locations, or screenshots ever enter it.
+It lives in its own capped Hive box (not HydratedBloc/sync), so a bad row
+can only lose an event. Signed-in devices batch it to
+`POST /api/v1/usage/events`; the server validates a closed alphabet and
+keeps 120 days.
+
+`tools/agent/usage-review.sh` (role `usage`, codex/sol, weekly) reads the
+deterministic digest (`tools/agent/usage-digest.py`) and files at most two
+evidence-backed issues per run: friction, probable breakage, or a feature
+in `tools/agent/usage-features.json` with zero uses. It is read-only and
+respects the same queue gates as discovery.
+
+Unused features are never deleted automatically. The issue must prove
+14+ days of instrumentation and zero uses, the model must verify the
+feature is not new/broken/load-bearing, and a removal PR must include a
+before-removal screenshot. Every usage-review PR is held for the
+developer (`needs-human-merge`; `merge.sh` also checks the linked issue
+label), so no usage-driven change auto-ships. Adding an entry to the
+manifest is a promise that the app emits its event; do not list an
+uninstrumented feature.
+
+Manual: `tools/agent/usage-review.sh --force` /
+`--dry-run`; state under the XDG state dir (`usage-review-last`,
+`usage-index.json`).
+
 ## Persisted state: never wipe device data
 
 All app state is per-device HydratedBloc (`hydrated_box`: IndexedDB on

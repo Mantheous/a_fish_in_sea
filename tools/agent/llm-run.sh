@@ -93,6 +93,14 @@ case "$ROLE" in
     DEFAULT_BACKEND="codex"
     DEFAULT_TIMEOUT=1800
     ;;
+  usage)
+    # Proactive usage review: read-only analysis of the content-free event
+    # log, text-only. Files at most a couple of issues per run via
+    # tools/agent/usage-review.sh; removal candidates are held for a human
+    # merge. Codex/sol is used because this is a judgment-heavy audit.
+    DEFAULT_BACKEND="codex"
+    DEFAULT_TIMEOUT=1800
+    ;;
   security-guard)
     DEFAULT_BACKEND="codex"
     DEFAULT_AGENT="security-guardian"
