@@ -22,6 +22,10 @@ class MockStorage extends Mock implements Storage {}
 /// account per run on the dev server (same as the UX walker).
 void main() {
   patrolTest('auth errors are visible and good credentials open planner', ($) async {
+    // The sign-in fish loops forever; let settle wait for requests instead.
+    $.tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown($.tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
     final storage = MockStorage();
     when(() => storage.read(any())).thenReturn(null);
     when(() => storage.write(any(), any())).thenAnswer((_) async {});
