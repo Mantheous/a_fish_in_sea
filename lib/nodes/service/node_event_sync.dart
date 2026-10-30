@@ -176,6 +176,49 @@ class NodeEventSync {
     });
   }
 
+  /// Transfers the task's chunk and its calendar mirrors as one undo step.
+  /// Only the moved session ids leave the source events; independent runs
+  /// on either side remain intact.
+  static void reassignNodeChunk(
+    NodeCubit nodes,
+    CalendarCubit calendar,
+    String fromId,
+    String toId,
+  ) {
+    final from = nodes.byId(fromId);
+    final to = nodes.byId(toId);
+    if (fromId == toId || from == null || to == null) return;
+    if (!from.hasReported && !from.isTracking) return;
+    final movedIds = from.recordedSessions.map((s) => s.id).toSet();
+    RevertableHydratedCubit.atomic([nodes, calendar], () {
+      nodes.reassignChunk(fromId, toId);
+      final updates = [
+        for (final event in _linkedEvents(calendar, from))
+          _eventWithSessions(
+            event,
+            event.recordedSessions
+                .where((s) => !movedIds.contains(s.id))
+                .toList(),
+            replace: true,
+            clearTimerStartedAt: false,
+          ),
+      ];
+      if (updates.isNotEmpty) calendar.updateEvents(updates);
+      final saved = nodes.byId(toId)!;
+      final destinationUpdates = [
+        for (final event in _linkedEvents(calendar, saved))
+          _eventWithSessions(
+            event,
+            saved.recordedSessions,
+            clearTimerStartedAt: false,
+          ),
+      ];
+      if (destinationUpdates.isNotEmpty) {
+        calendar.updateEvents(destinationUpdates);
+      }
+    });
+  }
+
   static void _mirrorSessions(
     CalendarCubit calendar,
     Node saved, {
@@ -203,6 +246,7 @@ class NodeEventSync {
     List<TimeSession> sessions, {
     String? removeSessionId,
     bool replace = false,
+    bool clearTimerStartedAt = true,
   }) {
     var combined = replace ? <TimeSession>[] : event.recordedSessions;
     if (removeSessionId != null) {
@@ -218,7 +262,7 @@ class NodeEventSync {
       clearActualStart: span == null,
       actualEnd: span?.end,
       clearActualEnd: span == null,
-      clearTimerStartedAt: true,
+      clearTimerStartedAt: clearTimerStartedAt,
     );
   }
 
