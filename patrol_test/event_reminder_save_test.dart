@@ -14,7 +14,7 @@ class _Storage extends Mock implements Storage {}
 void main() {
   // Chrome covers save/edit without Android permissions. The Android method
   // channel and denial warning are covered by event_reminder_delivery_test.
-  patrolTest('appointment reminder survives saving and reopening', ($) async {
+  patrolTest('appointment reminder can be saved and then disabled', ($) async {
     $.tester.platformDispatcher.accessibilityFeaturesTestValue =
         const FakeAccessibilityFeatures(disableAnimations: true);
     addTearDown(
@@ -70,5 +70,29 @@ void main() {
     await $.pumpAndSettle();
     await reopened;
     expect(calendar.byId(saved.id)?.reminderMinutesBefore, 10);
+
+    final editing = showEventEditor(context, existing: calendar.byId(saved.id));
+    await $.pumpAndSettle();
+    await $.tester.ensureVisible(reminder);
+    await $.pumpAndSettle();
+    await $.tester.tap(reminder);
+    await $.pumpAndSettle();
+    await $('No reminder').tap();
+    await $.pumpAndSettle();
+    await $('Save').tap();
+    await $.pumpAndSettle();
+    expect(await editing, isTrue);
+    final disabled = calendar.byId(saved.id)!;
+    expect(disabled.reminderMinutesBefore, isNull);
+
+    final reopenedDisabled = showEventEditor(context, existing: disabled);
+    await $.pumpAndSettle();
+    await $.tester.ensureVisible(reminder);
+    await $.pumpAndSettle();
+    expect($.tester.state<FormFieldState<int?>>(reminder).value, isNull);
+    expect(find.text('No reminder'), findsOneWidget);
+    await $('Cancel').tap();
+    await $.pumpAndSettle();
+    await reopenedDisabled;
   });
 }
