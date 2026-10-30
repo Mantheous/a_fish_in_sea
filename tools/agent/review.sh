@@ -141,6 +141,10 @@ Loop behavior: PR is skipped every poll; this ping repeats at most once/day. No 
     fi
   fi
   echo "[review] #$N reviewing diff vs plan..."
+  # Keep this double-quoted prompt BACKTICK-FREE: a backtick here is command
+  # substitution, not markdown. On 2026-10-30 a 'Verdict: retry' snippet
+  # executed as a command ("Verdict:: command not found") and killed the
+  # whole review step.
   PROMPT="You are the reviewer agent. READ-ONLY on code: do NOT modify, create or delete any files. Do NOT run builds or tests. Do NOT commit or push. You may only use gh to READ.
 1. Run: gh pr view $N --json number,title,body,comments and: gh pr diff $N
 2. Find the linked issue (Closes #<n> in the PR body) and read its LATEST <!-- agent-plan --> triage comment PLUS any tester follow-ups after it: gh issue view <n> --json number,title,body,comments. The builder was told the contract is latest plan + follow-up clarifications (newest tester comment wins on conflict) — judge fidelity against that combined scope, not the first plan alone.
@@ -151,11 +155,11 @@ no class/function names, no unexplained jargon); technical detail belongs
 in the fields below it.
 5. If a required gh command fails (network/API error), do NOT invent a
 review or mark the PR unverified as changes-requested. Output exactly
-`Verdict: retry` and stop; the loop will retry on a later poll.
+Verdict: retry and stop; the loop will retry on a later poll.
 6. Output ONLY the markdown below, no extra prose before or after:
 ## Review #$N
 Plain words: <one sentence: what does this PR change for the user, and is it safe to merge?>
-Verdict: <pass | changes-requested>
+Verdict: <pass | changes-requested | retry>
 Plan fidelity: <one line: does the diff implement exactly the latest triage plan scope plus tester follow-up clarifications?>
 Correctness: <one line: bugs, edge cases, or wrong behavior you can see>
 Persistence: <ok | violation — cite the AGENTS.md rule>
