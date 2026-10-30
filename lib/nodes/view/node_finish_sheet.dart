@@ -13,6 +13,8 @@ import 'package:a_fish_in_sea/planner/bloc/calendar_draft_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/assignment_estimate.dart';
 
+import 'goal_picker.dart';
+
 /// Stops a recording timer (if running) and asks what to do next.
 /// The stop settles both stores: a linked calendar event's timer stops
 /// with the same reported interval, so the sheet and the calendar agree.
@@ -140,6 +142,52 @@ class _FinishSheet extends StatelessWidget {
 
   const _FinishSheet({required this.nodeId});
 
+  /// Parents the just-recorded node under a goal, so an ad-hoc recording
+  /// (lunch, a commute) can become a subgoal of whatever it was really
+  /// for without opening the full editor.
+  Future<void> _assignToGoal(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final picked = await showGoalPicker(
+      context,
+      excludeNodeId: nodeId,
+      title: 'Assign to goal',
+    );
+    if (picked == null || !context.mounted) return;
+    String? error;
+    try {
+      error = NodeEventLink.assignNodeToGoal(
+        context.read<NodeCubit>(),
+        nodeId,
+        picked.id,
+      );
+    } catch (_) {
+      error = 'Could not assign to that goal.';
+    }
+    if (error != null) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(error),
+            duration: const Duration(seconds: 3),
+            persist: false,
+          ),
+        );
+      return;
+    }
+    navigator.pop();
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('Assigned to “${picked.title}”'),
+          duration: const Duration(seconds: 3),
+          persist: false,
+        ),
+      );
+  }
+
   @override
   Widget build(BuildContext context) {
     Node? node;
@@ -235,6 +283,16 @@ class _FinishSheet extends StatelessWidget {
               label: const Text('Mark goal failed'),
               style: OutlinedButton.styleFrom(
                 foregroundColor: theme.colorScheme.error,
+              ),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () => _assignToGoal(context),
+              icon: const Icon(Icons.flag_outlined, size: 18),
+              label: Text(
+                node.parentIds.isEmpty
+                    ? 'Assign to goal'
+                    : 'Assign to another goal',
               ),
             ),
             const SizedBox(height: 8),
