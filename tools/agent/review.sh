@@ -8,9 +8,10 @@
 #
 # Backend: codex/gpt-6.1-sol through tools/agent/llm-run.sh (role `review`).
 # FISH_LLM_REVIEW_BACKEND=opencode falls back to the previous opencode model.
-# Verdicts are fail-closed: an empty/garbled run, or one without an exact
-# `Verdict: pass|changes-requested` line, labels nothing and is retried on
-# the next poll — it can never become an implicit review:pass.
+# Verdicts are fail-closed: an empty/garbled run, one without an exact
+# `Verdict: pass|changes-requested|retry` line, or one whose tools could not
+# reach GitHub/the diff labels nothing and is retried on the next poll — it
+# can never become an implicit review:pass or a bogus rework round.
 # PRs with review:changes-requested get bounded rework (max 2 rounds,
 # tracked by <!-- agent-rework --> comments) in their existing worktree.
 # After 2 rounds the verdict stands and a human is pinged. The reviewer
@@ -148,7 +149,10 @@ Loop behavior: PR is skipped every poll; this ping repeats at most once/day. No 
 line must make sense without reading any code (name screens and behavior,
 no class/function names, no unexplained jargon); technical detail belongs
 in the fields below it.
-5. Output ONLY the markdown below, no extra prose before or after:
+5. If a required gh command fails (network/API error), do NOT invent a
+review or mark the PR unverified as changes-requested. Output exactly
+`Verdict: retry` and stop; the loop will retry on a later poll.
+6. Output ONLY the markdown below, no extra prose before or after:
 ## Review #$N
 Plain words: <one sentence: what does this PR change for the user, and is it safe to merge?>
 Verdict: <pass | changes-requested>
@@ -166,7 +170,7 @@ Fix list: <if changes-requested: numbered, concrete, bounded items. If pass: non
   # non-zero model run, or a verdict line that does not match exactly is a
   # failed review (retried next poll), never an implicit pass.
   if ! printf '%s' "$PROMPT" | "$DIR/llm-run.sh" --role review --title "review-#$N" --read-only \
-      --expect '^Verdict: (pass|changes-requested)[[:space:]]*$' \
+      --expect '^Verdict: (pass|changes-requested|retry)[[:space:]]*$' \
       >"$REVIEW_FILE" 2>"$REVIEW_FILE.err"; then
     echo "[review] #$N reviewer run produced no usable verdict: $(tail -n 3 "$REVIEW_FILE.err")"
     rm -f "$REVIEW_FILE" "$REVIEW_FILE.err"
@@ -174,15 +178,27 @@ Fix list: <if changes-requested: numbered, concrete, bounded items. If pass: non
   fi
   rm -f "$REVIEW_FILE.err"
   REVIEW="$(cat "$REVIEW_FILE"; rm -f "$REVIEW_FILE")"
-  VERDICT_LINE="$(printf '%s\n' "$REVIEW" | grep -m1 -E '^Verdict: (pass|changes-requested)[[:space:]]*$' || true)"
+  VERDICT_LINE="$(printf '%s\n' "$REVIEW" | grep -m1 -E '^Verdict: (pass|changes-requested|retry)[[:space:]]*$' || true)"
   case "$VERDICT_LINE" in
     *changes-requested*) VERDICT="changes-requested" ;;
     *pass*) VERDICT="pass" ;;
+    *retry*)
+      echo "[review] #$N reviewer could not access GitHub/diff — leaving unlabeled, retried next poll (fail-closed)"
+      continue
+      ;;
     *)
       echo "[review] #$N no parseable verdict after the contract check — leaving unlabeled, retried next poll (fail-closed)"
       continue
       ;;
   esac
+  # Defensive net for a model that says changes-requested *because* its tools
+  # failed (observed on PR #241: "error connecting to api.github.com" became
+  # a bogus changes-requested and would have burned a rework round). A
+  # verdict is only useful if the reviewer actually saw the diff.
+  if printf '%s' "$REVIEW" | grep -qiE 'error connecting to api\.github\.com|diff was unavailable|GitHub access failed'; then
+    echo "[review] #$N reviewer lost GitHub access — leaving unlabeled, retried next poll (fail-closed)"
+    continue
+  fi
   # SHA-key the verdict (stale-pass guard): the merge step only trusts a
   # pass whose comment covers the PR's current head SHA. Fall back to the
   # live head SHA when the list-time value is empty.
