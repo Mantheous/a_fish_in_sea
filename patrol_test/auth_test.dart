@@ -1,6 +1,9 @@
 import 'package:a_fish_in_sea/main.dart';
 import 'package:a_fish_in_sea/navigation/view/home_page.dart';
+import 'package:a_fish_in_sea/sync/auth_cubit.dart';
+import 'package:a_fish_in_sea/sync/view/auth/auth_page.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:mocktail/mocktail.dart';
@@ -18,7 +21,11 @@ class MockStorage extends Mock implements Storage {}
 /// Uses a unique email per run so reruns never 409. Leaves one junk
 /// account per run on the dev server (same as the UX walker).
 void main() {
-  patrolTest('register flows into the planner', ($) async {
+  patrolTest('auth errors are visible and good credentials open planner', ($) async {
+    // The sign-in fish loops forever; let settle wait for requests instead.
+    $.tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown($.tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
     final storage = MockStorage();
     when(() => storage.read(any())).thenReturn(null);
     when(() => storage.write(any(), any())).thenAnswer((_) async {});
@@ -33,12 +40,39 @@ void main() {
     // Tap the visible fields first (refs #17): typing must land in the
     // tapped field, not nowhere.
     await $(TextField).at(0).tap();
-    await $(TextField).at(0).enterText('patrol-auth-$stamp@example.com');
+    final email = 'patrol-auth-$stamp@example.com';
+    await $(TextField).at(0).enterText(email);
     await $(TextField).at(1).tap();
     await $(TextField).at(1).enterText('patrol-pass-1');
     await $('Create account').tap();
+    await $(HomePage).waitUntilVisible();
     await $.pumpAndSettle();
 
     expect(find.byType(HomePage), findsOneWidget);
+    expect(find.byType(AuthPage), findsNothing);
+
+    final context = $.tester.element(find.byType(HomePage));
+    context.read<AuthCubit>().logout();
+    await $.pumpAndSettle();
+    await $(TextField).at(0).enterText(email);
+    await $(TextField).at(1).enterText('wrong-password');
+    await $('Sign in').tap();
+    await $('Invalid credentials').waitUntilVisible();
+    expect(find.byType(HomePage), findsNothing);
+
+    // Registration errors must be visible on the same card as well.
+    await $('Create account').tap();
+    await $('Email already registered').waitUntilVisible();
+    // Reattach the web test input connection before replacing focused text.
+    await $(TextField).at(0).tap();
+    await $(TextField).at(1).tap();
+    await $(TextField).at(1).enterText('patrol-pass-1');
+    expect($.tester.widget<TextField>(find.byType(TextField).last).controller!.text,
+        'patrol-pass-1');
+    await $('Sign in').tap();
+    await $(HomePage).waitUntilVisible();
+    await $.pumpAndSettle();
+    expect(find.byType(HomePage), findsOneWidget);
+    expect(find.byType(AuthPage), findsNothing);
   });
 }
