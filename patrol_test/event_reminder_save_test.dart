@@ -57,7 +57,15 @@ void main() {
     await $.pumpAndSettle();
     await $.tester.ensureVisible(find.byType(DropdownButtonFormField<int?>));
     await $.pumpAndSettle();
-    expect($('10 minutes before').visible, true);
+    expect(
+      $.tester
+          .state<FormFieldState<int?>>(
+            find.byType(DropdownButtonFormField<int?>),
+          )
+          .value,
+      10,
+    );
+    expect(find.text('10 minutes before'), findsOneWidget);
     await $('Cancel').tap();
     await $.pumpAndSettle();
     await reopened;
