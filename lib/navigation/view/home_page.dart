@@ -15,6 +15,7 @@ import 'package:a_fish_in_sea/nodes/service/node_tracking.dart';
 import 'package:a_fish_in_sea/nodes/view/node_checkbox.dart';
 import 'package:a_fish_in_sea/nodes/view/node_editor.dart';
 import 'package:a_fish_in_sea/nodes/view/node_finish_sheet.dart';
+import 'package:a_fish_in_sea/nodes/view/quick_record_sheet.dart';
 import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
@@ -77,9 +78,27 @@ class _HomePageState extends State<HomePage> {
     return Scaffold(
       appBar: AppBar(title: const Text('Home')),
       drawer: const AppDrawer(),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => showNodeEditor(context),
-        child: const Icon(Icons.add),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          FloatingActionButton.small(
+            heroTag: 'home-add',
+            tooltip: 'Add goal or task',
+            onPressed: () => showNodeEditor(context),
+            child: const Icon(Icons.add),
+          ),
+          const SizedBox(height: 8),
+          // Recording a new ad-hoc task is the common quick capture on
+          // this page, so it gets the labelled FAB; full editing stays on
+          // the small + above it.
+          FloatingActionButton.extended(
+            heroTag: 'home-record',
+            onPressed: () => showQuickRecordSheet(context),
+            icon: const Icon(Icons.fiber_manual_record),
+            label: const Text('Record'),
+          ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(12),
@@ -638,9 +657,23 @@ class _TimeTrackingCardState extends State<_TimeTrackingCard> {
                 ),
               ],
             ),
+            if (selection.recording == null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: OutlinedButton.icon(
+                  onPressed: () => showQuickRecordSheet(context),
+                  icon: const Icon(
+                    Icons.fiber_manual_record,
+                    size: 16,
+                    color: Color(0xFFFF5252),
+                  ),
+                  label: const Text('Record something new'),
+                ),
+              ),
             if (selection.isEmpty)
               const _EmptyLine(
-                'No nodes to track — add one with the + button.',
+                'No nodes to track — record something new or add one with '
+                'the + button.',
               ),
             if (selection.recording != null) ...[
               const _TimeGroupLabel('Recording now'),
