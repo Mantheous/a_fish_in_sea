@@ -205,13 +205,31 @@ class SyncClient {
 
   // ── Auth (no bearer needed) ──────────────────────────────────────────
 
+  Map<String, dynamic> _decodeSignIn(http.Response response) {
+    final body = _decode(response);
+    final access = body is Map ? body['access_token'] : null;
+    final refresh = body is Map ? body['refresh_token'] : null;
+    // A proxy/SPA fallback can answer 200 with HTML or an empty body.
+    // Never report success without the token pair needed to enter the app.
+    if (access is! String ||
+        access.isEmpty ||
+        refresh is! String ||
+        refresh.isEmpty) {
+      throw const SyncException(
+        502,
+        'The server did not complete sign-in. Please try again.',
+      );
+    }
+    return Map<String, dynamic>.from(body as Map);
+  }
+
   Future<Map<String, dynamic>> register(String email, String password) async {
     final r = await _withTimeout(_client.post(
       Uri.parse('$_base/api/v1/auth/register'),
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({'email': email, 'password': password}),
     ));
-    return Map<String, dynamic>.from((_decode(r) ?? const <String, dynamic>{}));
+    return _decodeSignIn(r);
   }
 
   Future<Map<String, dynamic>> login(String email, String password) async {
@@ -220,7 +238,7 @@ class SyncClient {
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({'email': email, 'password': password}),
     ));
-    return Map<String, dynamic>.from((_decode(r) ?? const <String, dynamic>{}));
+    return _decodeSignIn(r);
   }
 
   Future<Map<String, dynamic>> refresh(String refreshToken) async {
