@@ -4,6 +4,7 @@ import 'package:a_fish_in_sea/main.dart';
 import 'package:a_fish_in_sea/navigation/view/home_page.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
@@ -101,6 +102,25 @@ void main() {
     expect(
       chips.map((c) => c.block.title),
       unorderedEquals(['Goal 1', 'Goal 2']),
+    );
+    nodes.addNode(Node(id: 'moved', title: 'Moved goal', createdAt: start));
+    NodeEventLink.startNodeTracking(nodes, calendar, 'n1', now: start);
+    NodeEventLink.stopNodeTrackingAligned(nodes, calendar, 'n1', now: end);
+    final calendarContext = $.tester.element(find.byType(ReportChip).first);
+    unawaited(showEditNodeTimerSheet(calendarContext, nodeId: 'n1'));
+    await $.pumpAndSettle();
+    await $('Move to another goal').tap();
+    await $.pumpAndSettle();
+    await $('Moved goal').tap();
+    await $.pumpAndSettle();
+    expect(nodes.byId('n1')!.recordedSessions, isEmpty);
+    expect(nodes.byId('moved')!.recordedSessions, hasLength(1));
+    expect(calendar.byId('e1')!.recordedSessions, isEmpty);
+    expect(calendar.byId('sibling')!.recordedSessions, isEmpty);
+    final movedChips = $.tester.widgetList<ReportChip>(find.byType(ReportChip));
+    expect(
+      movedChips.map((c) => c.block.title),
+      unorderedEquals(['Moved goal', 'Goal 2']),
     );
     expect($.tester.takeException(), isNull);
   });
