@@ -44,6 +44,7 @@ step() {
 step close       "$REPO/tools/agent/close.sh"
 step approve     "$REPO/tools/agent/approve.sh"
 step build       "$REPO/tools/agent/build.sh"
+step discover    "$REPO/tools/agent/discover.sh"
 step triage      "$REPO/tools/agent/triage.sh"
 step tg-callbacks "$REPO/tools/agent/tg-callbacks.sh"
 step review      "$REPO/tools/agent/review.sh"
