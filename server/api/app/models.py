@@ -12,6 +12,7 @@ import datetime as dt
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -283,4 +284,39 @@ class ImportItem(Base):
     )  # pending|approved|rejected
     decided_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class UsageEvent(Base):
+    """Content-free interaction events from the app (see lib/common/usage).
+
+    Deliberately separate from `sync_items`: telemetry is append-only,
+    best-effort, and never restored into the client. A corrupt row can only
+    lose an event, never user data. User-supplied strings are validated to
+    a closed alphabet in schemas.py, and retention is bounded by the
+    endpoint's prune pass.
+    """
+
+    __tablename__ = "usage_events"
+    __table_args__ = (
+        UniqueConstraint("user_id", "event_id"),
+        Index("ix_usage_user_received", "user_id", "received_at"),
+        Index("ix_usage_user_name_received", "user_id", "name", "received_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    event_id: Mapped[str] = mapped_column(String(64))
+    session_id: Mapped[str] = mapped_column(String(64), default="")
+    kind: Mapped[str] = mapped_column(String(16))
+    name: Mapped[str] = mapped_column(String(64))
+    screen: Mapped[str] = mapped_column(String(64), default="")
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    platform: Mapped[str] = mapped_column(String(32), default="")
+    # Client wall clock (epoch ms) for dwell/session reconstruction; the
+    # server clock below is authoritative for retention and trends.
+    client_at_ms: Mapped[int] = mapped_column(BigInteger, index=True)
+    received_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
     )

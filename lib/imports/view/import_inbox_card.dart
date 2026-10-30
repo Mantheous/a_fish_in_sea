@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../demo/demo_coordinator.dart';
 import '../../demo/demo_mode.dart';
+import '../../common/usage/usage_log.dart';
 import '../../sync/auth_cubit.dart';
 import '../import_service.dart';
 import 'import_review_screen.dart';
@@ -68,6 +69,7 @@ class _ImportInboxCardState extends State<ImportInboxCard> {
         subtitle: Text('From $sources'),
         trailing: const Icon(Icons.chevron_right),
         onTap: () async {
+          UsageLog.instance.action('import.open');
           // One batch is the common case; several open as a picker.
           final batch = _batches.length == 1
               ? _batches.first

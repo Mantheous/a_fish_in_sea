@@ -4,6 +4,7 @@ import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
 import '../../common/persistence/stable_storage_keys.dart';
+import '../../common/usage/usage_log.dart';
 import '../model/color_prefs.dart';
 
 /// Mobile phones start on the day view; web desktop and desktop start on week.
@@ -127,8 +128,10 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
   void setIcalProxyBase(String url) =>
       emit(state.copyWith(icalProxyBase: url.trim()));
 
-  void setDefaultCalendarView(CalendarView view) =>
-      emit(state.copyWith(defaultCalendarView: view));
+  void setDefaultCalendarView(CalendarView view) {
+    UsageLog.instance.action('calendar.view.set', meta: {'view': view.name});
+    emit(state.copyWith(defaultCalendarView: view));
+  }
 
   void setDayStartHour(double hour) {
     final clamped = hour.clamp(0, 24).toDouble();

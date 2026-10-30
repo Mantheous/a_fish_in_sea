@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import '../../common/time/local_date.dart';
 import '../../common/undo/undo_cubit.dart';
+import '../../common/usage/usage_log.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_event_link.dart';
@@ -45,8 +46,12 @@ Future<bool?> showEventEditor(
   String? initialTaskId,
   ValueChanged<PlannerEvent>? onDraftChanged,
   bool allowDelete = true,
-}) {
-  return showModalBottomSheet<bool>(
+}) async {
+  UsageLog.instance.action(
+    'event.editor.open',
+    meta: {'mode': existing == null ? 'create' : 'edit'},
+  );
+  final saved = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
@@ -77,6 +82,11 @@ Future<bool?> showEventEditor(
       ),
     ),
   );
+  UsageLog.instance.action(
+    'event.editor.close',
+    meta: {'saved': saved == true},
+  );
+  return saved;
 }
 
 Future<void> showEventDetail(

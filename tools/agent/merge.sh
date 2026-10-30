@@ -34,6 +34,11 @@ DATA_PASS="data:safe"
 DATA_FAIL="data:blocked"
 SEC_PASS="sec:safe"
 SEC_FAIL="sec:blocked"
+# Feature removals are never auto-merged: the developer reviews the PR and
+# its before-removal screenshot (AGENTS.md usage-review rule). The builder
+# adds the label; the body marker is a second, model-forgetting-proof gate.
+HUMAN_LABEL="needs-human-merge"
+USAGE_MARKER='<!-- usage-removal -->'
 REVIEW_MARKER='<!-- agent-review -->'
 DATA_MARKER='<!-- data-guard -->'
 SEC_MARKER='<!-- sec-guard -->'
@@ -59,6 +64,23 @@ for p in json.load(sys.stdin):
 
   LABELS="$(gh pr view "$N" --json labels --jq '.labels[].name' 2>/dev/null || true)"
   has() { echo "$LABELS" | grep -qx "$1"; }
+  BODY="$(gh pr view "$N" --json body --jq '.body // ""' 2>/dev/null || true)"
+  if has "$HUMAN_LABEL" || printf '%s' "$BODY" | grep -qF "$USAGE_MARKER"; then
+    echo "[merge] #$N held for human review (feature removal / $HUMAN_LABEL) — not auto-merging"
+    KEY="/tmp/opencode/agent-loop-reported/merge-$N-human"
+    mkdir -p "$(dirname "$KEY")"
+    if [ ! -f "$KEY" ] || [ $(( $(date +%s) - $(stat -c %Y "$KEY") )) -ge 86400 ]; then
+      "$DIR/tg.sh" "🧑 PR #$N is ready for your review — the loop will not auto-merge feature removals:
+$TITLE
+$URL
+Check the 'before removal' screenshot in the PR body, then merge or close it.
+Loop behavior: held every poll; this ping repeats at most once/day." || true
+      touch "$KEY"
+    else
+      echo "[merge] #$N human-merge hold already pinged <24h ago — not repeating"
+    fi
+    continue
+  fi
   if has "$FAIL_LABEL" || has "$DATA_FAIL" || has "$SEC_FAIL"; then
     echo "[merge] #$N has a blocking label (changes-requested/data:blocked/sec:blocked) — skipping"
     continue
