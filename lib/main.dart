@@ -283,6 +283,7 @@ class _SyncBootstrapState extends State<_SyncBootstrap>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
       case AppLifecycleState.detached:
         _usage?.pause();
         break;
@@ -290,7 +291,6 @@ class _SyncBootstrapState extends State<_SyncBootstrap>
         _usage?.resume();
         break;
       case AppLifecycleState.inactive:
-      case AppLifecycleState.hidden:
         break;
     }
   }
