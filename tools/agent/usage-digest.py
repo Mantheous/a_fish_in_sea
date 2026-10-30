@@ -80,6 +80,27 @@ def _pick_user(con: sqlite3.Connection, days: int) -> sqlite3.Row | None:
         return row
 
     since_ms = int(time.time() * 1000) - days * DAY_MS
+    # Prefer the account with the most synced data: that is the developer's
+    # real planner. A newly registered account can post unlimited usage
+    # events; ranking by events alone would let it hijack the analysis.
+    rows = []
+    try:
+        rows = con.execute(
+            """
+            SELECT u.id, u.email, COUNT(s.id) AS n
+            FROM users u
+            LEFT JOIN sync_items s ON s.user_id = u.id
+            GROUP BY u.id
+            HAVING n > 0
+            ORDER BY n DESC
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    for row in rows:
+        email = (row["email"] or "").lower()
+        if not any(marker in email for marker in TEST_EMAIL_MARKERS):
+            return row
     rows = con.execute(
         """
         SELECT u.id, u.email, COUNT(e.id) AS n
@@ -91,21 +112,6 @@ def _pick_user(con: sqlite3.Connection, days: int) -> sqlite3.Row | None:
         ORDER BY n DESC
         """,
         (since_ms,),
-    ).fetchall()
-    for row in rows:
-        email = (row["email"] or "").lower()
-        if not any(marker in email for marker in TEST_EMAIL_MARKERS):
-            return row
-    # No real usage yet: fall back to the busiest non-test sync account so
-    # the first run can still report "instrumented, no events".
-    rows = con.execute(
-        """
-        SELECT u.id, u.email, COUNT(s.id) AS n
-        FROM users u
-        LEFT JOIN sync_items s ON s.user_id = u.id
-        GROUP BY u.id
-        ORDER BY n DESC
-        """
     ).fetchall()
     for row in rows:
         email = (row["email"] or "").lower()
@@ -236,13 +242,46 @@ def build_digest(db: Path, days: int, features_path: Path) -> dict:
     slow: dict[str, list[int]] = defaultdict(list)
     sync_failures = 0
     platform_counts: Counter[str] = Counter()
+    other_screen_events = 0
+    other_action_events = 0
+    other_error_events = 0
+    other_slow_events = 0
+
+    # The prompt is an LLM context, and any registered account can post
+    # events. Only names/values from the trusted feature manifest and the
+    # app's closed sets are allowed through; unknown strings are reduced to
+    # counts so they can never act as prompt-injection text.
+    features = json.loads(features_path.read_text())["features"]
+    known_screens = {f["event"] for f in features if f.get("kind") == "screen"}
+    known_actions = {f["event"] for f in features if f.get("kind") == "action"}
+    known_platforms = {
+        "web",
+        "android",
+        "ios",
+        "linux",
+        "macos",
+        "windows",
+        "fuchsia",
+    }
+    safe_meta = {
+        "view": {"day", "week", "month"},
+        "mode": {"create", "edit"},
+        "done": {"true", "false"},
+        "kind": {"bug", "feature"},
+        "to": known_screens | {"paused"},
+        "from": known_screens,
+    }
 
     for event in events:
         kind = event["kind"]
-        name = event["name"] or "unknown"
+        name = event["name"] or ""
         ts = int(event["client_at_ms"])
-        platform_counts[event["platform"] or "unknown"] += 1
+        platform = (event["platform"] or "").lower()
+        platform_counts[platform if platform in known_platforms else "other"] += 1
         if kind == "screen":
+            if name not in known_screens:
+                other_screen_events += 1
+                continue
             entry = screens[name]
             entry["visits"] += 1
             entry["last_ms"] = max(entry["last_ms"], ts)
@@ -252,16 +291,35 @@ def build_digest(db: Path, days: int, features_path: Path) -> dict:
                 if int(duration) < 3000:
                     entry["quick_backs"] += 1
         elif kind == "action":
+            if name not in known_actions:
+                other_action_events += 1
+                continue
             entry = actions[name]
             entry["count"] += 1
             entry["last_ms"] = max(entry["last_ms"], ts)
             for key, value in _parse_meta(event["meta"]).items():
-                entry["meta"][f"{key}={value}"] += 1
+                if key == "status":
+                    if isinstance(value, int):
+                        entry["meta"]["status"] += 1
+                    continue
+                allowed = safe_meta.get(key)
+                if not allowed:
+                    continue
+                token = str(value).lower()
+                entry["meta"][
+                    f"{key}={token if token in allowed else 'other'}"
+                ] += 1
         elif kind == "error":
-            meta = _parse_meta(event["meta"])
-            errors[(name, str(meta.get("type", "")), event["screen"] or "")] += 1
+            screen = event["screen"] or ""
+            if name in ("flutter", "uncaught") and screen in known_screens:
+                errors[(name, screen)] += 1
+            else:
+                other_error_events += 1
         elif kind == "slow":
-            slow[name].append(int(event["duration_ms"] or 0))
+            if name == "sync.slow":
+                slow[name].append(int(event["duration_ms"] or 0))
+            else:
+                other_slow_events += 1
         elif kind == "sync":
             sync_failures += 1
 
@@ -270,7 +328,6 @@ def build_digest(db: Path, days: int, features_path: Path) -> dict:
         key = (row["kind"], row["name"])
         last_by_name[key] = max(last_by_name.get(key, 0), int(row["last_ms"] or 0))
 
-    features = json.loads(features_path.read_text())["features"]
     feature_out = []
     for feature in features:
         uses = _feature_uses(feature, events)
@@ -306,13 +363,6 @@ def build_digest(db: Path, days: int, features_path: Path) -> dict:
             }
         )
 
-    measured_names = {(f["kind"], f["event"]) for f in features}
-    unmapped = Counter()
-    for event in events:
-        key = (event["kind"], event["name"])
-        if event["kind"] in ("screen", "action") and key not in measured_names:
-            unmapped[key] += 1
-
     screen_out = []
     for name, entry in sorted(screens.items(), key=lambda kv: -kv[1]["visits"]):
         durations = entry["durations"]
@@ -344,7 +394,7 @@ def build_digest(db: Path, days: int, features_path: Path) -> dict:
                 f"screen.{screen['name']}: {int(screen['quick_back_rate'] * 100)}% of visits leave in <3s"
             )
     for name, count in errors.items():
-        anomalies.append(f"error.{name[0]}/{name[1] or 'unknown'} on {name[2] or '?'}: {count}")
+        anomalies.append(f"error.{name[0]} on {name[1]}: {count}")
     for name, values in slow.items():
         if values:
             anomalies.append(
@@ -377,8 +427,8 @@ def build_digest(db: Path, days: int, features_path: Path) -> dict:
         "screens": screen_out,
         "actions": action_out,
         "errors": [
-            {"name": name, "type": typ, "screen": screen, "count": count}
-            for (name, typ, screen), count in errors.most_common()
+            {"name": name, "screen": screen, "count": count}
+            for (name, screen), count in errors.most_common()
         ],
         "slow": [
             {"name": name, "count": len(values), "p90_ms": _pct(values, 90), "max_ms": max(values)}
@@ -386,10 +436,12 @@ def build_digest(db: Path, days: int, features_path: Path) -> dict:
         ],
         "sync_failures": sync_failures,
         "features": feature_out,
-        "unmapped": [
-            {"kind": kind, "name": name, "count": count}
-            for (kind, name), count in unmapped.most_common()
-        ],
+        "other": {
+            "screen_events": other_screen_events,
+            "action_events": other_action_events,
+            "error_events": other_error_events,
+            "slow_events": other_slow_events,
+        },
         "anomalies": anomalies,
     }
 
@@ -408,6 +460,13 @@ def render_markdown(digest: dict) -> str:
         f"history {digest['account']['history_days']} days"
     )
     lines.append("")
+    if digest["other"]["screen_events"] or digest["other"]["action_events"]:
+        lines.append(
+            "Other events (unknown names, counts only): "
+            f"{digest['other']['screen_events']} screen, "
+            f"{digest['other']['action_events']} action"
+        )
+        lines.append("")
     lines.append("## Screens")
     lines.append("| screen | visits | median dwell | p90 dwell | quick-back rate |")
     lines.append("|---|---:|---:|---:|---:|")
@@ -440,10 +499,12 @@ def render_markdown(digest: dict) -> str:
         for item in digest["anomalies"]:
             lines.append(f"- {item}")
         lines.append("")
-    if digest["unmapped"]:
-        lines.append("## Unmapped events (not in the feature manifest)")
-        for item in digest["unmapped"]:
-            lines.append(f"- {item['kind']}.{item['name']}: {item['count']}")
+    if digest["other"]["error_events"] or digest["other"]["slow_events"]:
+        lines.append(
+            "Other health events (unknown names, counts only): "
+            f"{digest['other']['error_events']} error, "
+            f"{digest['other']['slow_events']} slow"
+        )
         lines.append("")
     return "\n".join(lines)
 

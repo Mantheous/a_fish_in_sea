@@ -87,4 +87,46 @@ assert "<!-- discovered: usage-unused-screen-tasks -->" in body
 print("ok - removal body contains the human-merge warning")
 PY
 
+# A removal claim that does not use the usage-unused fingerprint is rejected.
+cat >"$TMP/removal-msg.md" <<'EOF'
+DISCOVERY: 1
+## Candidate
+Title: Remove the Tasks tab because it has no visits
+Severity: low
+Confidence: high
+Fingerprint: usage-fix-tasks-tab-cleanup
+Where: lib/navigation/bloc/navigation_cubit.dart:4
+User impact: The Tasks tab can be removed; it was never opened.
+Evidence: screen.tasks uses=0 over 20 active days.
+Suggested scope: Delete the Tasks destination and its page.
+Test idea: drawer widget test that asserts the remaining destinations.
+EOF
+OUT3="$(python3 "$FILTER" --input "$TMP/removal-msg.md" --open "$TMP/closed.json" \
+  --closed "$TMP/closed.json" --prs "$TMP/prs.json" \
+  --index "$TMP/index.json" --dry-run 2>"$TMP/err3")"
+printf '%s\n' "$OUT3" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["selected"]==0, d; assert any("removal language" in r["reason"] for r in d["rejected"]), d'
+echo "ok - removal language without usage-unused fingerprint is rejected"
+
+# A candidate that quotes a local .env value is rejected.
+mkdir -p "$TMP/envroot"
+printf 'JWT_SECRET=super-secret-value-123\n' >"$TMP/envroot/.env"
+cat >"$TMP/secret-msg.md" <<'EOF'
+DISCOVERY: 1
+## Candidate
+Title: Calendar view switch is slow for the developer
+Severity: medium
+Confidence: high
+Fingerprint: usage-friction-calendar-view-slow
+Where: lib/planner/view/calendar_page.dart:213
+User impact: Switching views pauses briefly.
+Evidence: The local setting JWT_SECRET=super-secret-value-123 appears in the log.
+Suggested scope: Measure the view switch and cache the projection.
+Test idea: widget test timing the switch.
+EOF
+( cd "$TMP/envroot" && python3 "$FILTER" --input "$TMP/secret-msg.md" \
+  --open "$TMP/closed.json" --closed "$TMP/closed.json" --prs "$TMP/prs.json" \
+  --index "$TMP/index.json" --dry-run 2>"$TMP/err4" ) >"$TMP/out4"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["selected"]==0, d; assert any("server environment" in r["reason"] for r in d["rejected"]), d' "$TMP/out4"
+echo "ok - server .env value is rejected"
+
 echo "passed: usage filter"

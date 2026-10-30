@@ -62,10 +62,48 @@ for p in json.load(sys.stdin):
     *) echo "[merge] #$N ($BRANCH) not a numeric loop branch — skipping (never auto-merge ad-hoc/human branches)"; continue ;;
   esac
 
-  LABELS="$(gh pr view "$N" --json labels --jq '.labels[].name' 2>/dev/null || true)"
+  if ! LABELS="$(gh pr view "$N" --json labels --jq '.labels[].name' 2>/dev/null)"; then
+    echo "[merge] #$N labels unavailable (gh hiccup) — skipping this poll (fail closed)"
+    continue
+  fi
   has() { echo "$LABELS" | grep -qx "$1"; }
-  BODY="$(gh pr view "$N" --json body --jq '.body // ""' 2>/dev/null || true)"
-  if has "$HUMAN_LABEL" || printf '%s' "$BODY" | grep -qF "$USAGE_MARKER"; then
+  if ! BODY="$(gh pr view "$N" --json body --jq '.body // ""' 2>/dev/null)"; then
+    echo "[merge] #$N body unavailable (gh hiccup) — skipping this poll (fail closed)"
+    continue
+  fi
+  # Even if the model forgets both the label and the body marker, a PR that
+  # closes (or is on the branch of) a usage-unused issue is a feature
+  # removal and must be held. Lookups that fail hold the PR rather than
+  # letting it through.
+  LINKED_HOLD=0
+  LINKED_LOOKUP_FAILED=0
+  BRANCH_NUM="$(printf '%s' "$BRANCH" | sed -nE 's/^agent[\/-]([0-9]+).*/\1/p')"
+  if [ -n "$BRANCH_NUM" ]; then
+    if ! ISSUE_LABELS="$(gh issue view "$BRANCH_NUM" --json labels --jq '.labels[].name' 2>/dev/null)"; then
+      LINKED_LOOKUP_FAILED=1
+    elif printf '%s\n' "$ISSUE_LABELS" | grep -qx "usage-unused"; then
+      LINKED_HOLD=1
+      echo "[merge] #$N branch $BRANCH belongs to usage-unused issue #$BRANCH_NUM — holding"
+    fi
+  fi
+  for LINKED in $(printf '%s' "$BODY" \
+    | grep -oiE '(close[sd]?|fix(es|ed)?|resolve[sd]?) #[0-9]+' \
+    | grep -oE '[0-9]+' | sort -u); do
+    if ! ISSUE_LABELS="$(gh issue view "$LINKED" --json labels --jq '.labels[].name' 2>/dev/null)"; then
+      LINKED_LOOKUP_FAILED=1
+      continue
+    fi
+    if printf '%s\n' "$ISSUE_LABELS" | grep -qx "usage-unused"; then
+      LINKED_HOLD=1
+      echo "[merge] #$N closes usage-unused issue #$LINKED — feature removal, holding"
+    fi
+  done
+  if [ "$LINKED_LOOKUP_FAILED" = "1" ]; then
+    echo "[merge] #$N could not verify linked issue labels (gh hiccup) — skipping this poll (fail closed)"
+    continue
+  fi
+  if [ "$LINKED_HOLD" = "1" ] || has "$HUMAN_LABEL" \
+    || printf '%s' "$BODY" | grep -qF "$USAGE_MARKER"; then
     echo "[merge] #$N held for human review (feature removal / $HUMAN_LABEL) — not auto-merging"
     KEY="/tmp/opencode/agent-loop-reported/merge-$N-human"
     mkdir -p "$(dirname "$KEY")"
@@ -94,7 +132,10 @@ Loop behavior: held every poll; this ping repeats at most once/day." || true
     echo "[merge] #$N no head SHA (gh hiccup) — retried next poll"
     continue
   fi
-  BODIES="$(gh pr view "$N" --comments --json comments --jq '.comments[].body' 2>/dev/null || true)"
+  if ! BODIES="$(gh pr view "$N" --comments --json comments --jq '.comments[].body' 2>/dev/null)"; then
+    echo "[merge] #$N comments unavailable (gh hiccup) — skipping this poll (fail closed)"
+    continue
+  fi
   if ! echo "$BODIES" | grep -qF "$REVIEW_MARKER sha=$SHA"; then
     echo "[merge] #$N review:pass does not cover head $SHA (stale pass) — leaving for review.sh to re-check"
     continue

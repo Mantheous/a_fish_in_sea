@@ -11,7 +11,7 @@
 #      (comment + data:safe / data:blocked label), keyed to the head SHA so
 #      new commits trigger a re-audit.
 #   2. Preflight — for the revision deploy.sh is about to ship:
-#        a. deterministic: flutter test test/persistence test/sync
+#        a. deterministic: flutter test test/persistence test/sync test/usage
 #        b. data-guardian agent audit of the pending diff
 #      A block writes build/web/.agent-data-blocked (deploy.sh refuses to
 #      build that revision) and pings Telegram. Override a specific revision
@@ -163,7 +163,7 @@ if [ -f "$DESC_MARKER" ] && [ "$(cat "$DESC_MARKER")" = "$DESC" ]; then
 fi
 
 echo "[data-guard] preflight for $DESC"
-if ! "$FLUTTER" test test/persistence test/sync >/tmp/opencode/data-guard-tests.log 2>&1; then
+if ! "$FLUTTER" test test/persistence test/sync test/usage >/tmp/opencode/data-guard-tests.log 2>&1; then
   {
     echo "# Data guard preflight — deterministic tests FAILED"
     echo "Revision: $DESC"

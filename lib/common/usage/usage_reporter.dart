@@ -57,8 +57,9 @@ class UsageReporter {
     }
     _lastFlushStarted = started;
     _flushing = true;
+    UsageBatch? batch;
     try {
-      final batch = await log.takeBatch();
+      batch = await log.takeBatch();
       if (batch.isEmpty) return;
       final accepted = await client.apiPost('/api/v1/usage/events', {
         'events': batch.events,
@@ -71,6 +72,17 @@ class UsageReporter {
         await log.ack(batch.keys);
       }
     } catch (error) {
+      // A deterministic 4xx (validation) will never succeed on retry;
+      // dropping that batch prevents one bad row from wedging every later
+      // event behind it. 401/429 are retryable (refresh/daily cap).
+      if (batch != null &&
+          error is SyncException &&
+          error.statusCode >= 400 &&
+          error.statusCode < 500 &&
+          error.statusCode != 401 &&
+          error.statusCode != 429) {
+        await log.ack(batch.keys);
+      }
       // Offline / signed out / server hiccup: keep rows for the next try.
       debugPrint('[usage] flush deferred: $error');
     } finally {
@@ -87,6 +99,6 @@ class UsageReporter {
 
   static String get _platformLabel {
     if (kIsWeb) return 'web';
-    return defaultTargetPlatform.name;
+    return defaultTargetPlatform.name.toLowerCase();
   }
 }

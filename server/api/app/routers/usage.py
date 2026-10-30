@@ -8,6 +8,10 @@ is deliberately no GET/admin surface here.
 Safety properties:
 - JWT users only (never long-lived API tokens).
 - Closed-set names + bounded meta validated in schemas.UsageEventIn.
+- The digest (tools/agent/usage-digest.py) is the trust boundary for the
+  loop: it only renders names from the committed feature manifest and
+  reduces unknown tokens to counts, so an account cannot inject prose into
+  the model prompt through an event name.
 - Dedupe by (user_id, event_id), so a retried batch after a lost response
   is harmless.
 - Per-user daily cap + 120-day retention keep the table bounded even if a
@@ -41,18 +45,16 @@ def _utcnow() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
-async def _maybe_prune(
-    session: AsyncSession, user_id: int, now: dt.datetime
-) -> None:
+async def _maybe_prune(session: AsyncSession, now: dt.datetime) -> None:
     global _last_prune
     if time.monotonic() - _last_prune < _PRUNE_EVERY_S:
         return
     _last_prune = time.monotonic()
+    # Global by age, not per caller: a user who stops sending would
+    # otherwise keep expired rows forever. The hourly gate keeps the
+    # DELETE cheap; an idle server simply prunes on the next request.
     await session.execute(
-        delete(UsageEvent).where(
-            UsageEvent.user_id == user_id,
-            UsageEvent.received_at < now - _RETENTION,
-        )
+        delete(UsageEvent).where(UsageEvent.received_at < now - _RETENTION)
     )
     await session.commit()
 
@@ -108,5 +110,5 @@ async def ingest_usage(
     )
     result = await session.execute(stmt)
     await session.commit()
-    await _maybe_prune(session, user.id, now)
+    await _maybe_prune(session, now)
     return {"accepted": max(0, int(result.rowcount or 0))}

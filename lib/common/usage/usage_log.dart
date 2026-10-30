@@ -107,14 +107,30 @@ class UsageLog {
   /// disables the log for this launch rather than breaking boot.
   Future<void> open({UsageStore? store}) async {
     try {
-      final resolved =
-          store ?? HiveUsageStore(await Hive.openBox<dynamic>('usage_log'));
+      final resolved = store ?? HiveUsageStore(await _openBox());
       _store = resolved;
       _ready = true;
       await _pruneOld();
     } catch (error) {
       _ready = false;
       debugPrint('[usage] log disabled for this launch: $error');
+    }
+  }
+
+  /// Opens the dedicated box, recovering once from a corrupt file. The log
+  /// is disposable telemetry: losing queued events is preferable to a box
+  /// that throws on every boot and disables the feature forever.
+  Future<Box<dynamic>> _openBox() async {
+    try {
+      return await Hive.openBox<dynamic>('usage_log', crashRecovery: true);
+    } catch (error) {
+      debugPrint('[usage] box unreadable, recreating: $error');
+      try {
+        await Hive.deleteBoxFromDisk('usage_log');
+      } catch (_) {
+        // Web has no file to delete; the retry below will fail closed.
+      }
+      return Hive.openBox<dynamic>('usage_log', crashRecovery: true);
     }
   }
 

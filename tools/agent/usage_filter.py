@@ -32,6 +32,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from discover_filter import (  # noqa: E402
+    FIELDS,
     existing_markers,
     load_json,
     parse_candidates,
@@ -59,6 +60,27 @@ def _ensure_labels(repo: str) -> None:
 
 def _is_removal(candidate: dict[str, str]) -> bool:
     return candidate.get("fingerprint", "").strip().lower().startswith("usage-unused-")
+
+
+def _secret_values() -> set[str]:
+    """Values from local .env files, so a read-only model cannot quote one
+    into a public issue. Only long values are used to avoid false positives
+    on common words/flags; the strings never leave this process."""
+    values: set[str] = set()
+    for path in (".env", "server/api/.env", "server/.env"):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    _, value = line.split("=", 1)
+                    value = value.strip().strip('"').strip("'")
+                    if len(value) >= 12:
+                        values.add(value)
+        except OSError:
+            continue
+    return values
 
 
 def _body(candidate: dict[str, str], now: str) -> str:
@@ -150,6 +172,7 @@ def main() -> int:
 
     fingerprints, titles = existing_markers(open_issues + closed_issues, prs, index)
     parsed = parse_candidates(text)
+    secrets = _secret_values()
     selected: list[dict[str, str]] = []
     rejected: list[dict[str, str]] = []
 
@@ -169,6 +192,34 @@ def main() -> int:
                 }
             )
             continue
+        # Removal language must use the removal fingerprint. Otherwise a
+        # usage-fix-* issue could ship a deletion without the human-merge
+        # label/marker that the builder rule keys on.
+        if not fingerprint.startswith("usage-unused-"):
+            text = " ".join(
+                candidate.get(field, "")
+                for field in ("title", "impact", "evidence", "scope")
+            )
+            if re.search(r"\b(remove|delete|drop|retire|unregister)\b", text, re.I):
+                rejected.append(
+                    {
+                        "title": " ".join(candidate.get("title", "").split()),
+                        "reason": "removal language requires a usage-unused- fingerprint",
+                    }
+                )
+                continue
+        # A read-only model can read server/api/.env. Never let a candidate
+        # publish an exact value from it, even if it is not token-shaped.
+        if secrets:
+            blob = "\n".join(candidate.get(field, "") for field in FIELDS)
+            if any(secret in blob for secret in secrets):
+                rejected.append(
+                    {
+                        "title": " ".join(candidate.get("title", "").split()),
+                        "reason": "contains a value from the server environment",
+                    }
+                )
+                continue
         selected.append(candidate)
         fingerprints.add(fingerprint)
         titles.append(candidate["title"])

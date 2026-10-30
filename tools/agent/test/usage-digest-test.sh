@@ -16,6 +16,7 @@ import json, sqlite3, sys, time
 con = sqlite3.connect(sys.argv[1])
 con.executescript("""
 CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);
+CREATE TABLE sync_items (id INTEGER PRIMARY KEY, user_id INTEGER);
 CREATE TABLE usage_events (
  id INTEGER PRIMARY KEY, user_id INTEGER, event_id TEXT, session_id TEXT,
  kind TEXT, name TEXT, screen TEXT, duration_ms INTEGER, meta TEXT,
@@ -26,6 +27,9 @@ con.executemany(
     "INSERT INTO users VALUES (?,?)",
     [(1, "real@fish.test"), (2, "patrol-test@example.com"), (3, "perf-walk@example.com")],
 )
+# The real planner has synced rows; a spam account with many events but no
+# data must not win the account-inference ranking.
+con.executemany("INSERT INTO sync_items (user_id) VALUES (?)", [(1,), (1,), (1,), (2,)])
 now = int(time.time() * 1000)
 rows = []
 def add(user, kind, name, screen=None, dur=None, meta=None, days=0):
@@ -66,10 +70,10 @@ assert by_id["screen.tasks"]["uses"] == 0, by_id["screen.tasks"]
 assert by_id["screen.tasks"]["unused_candidate"], by_id["screen.tasks"]
 assert by_id["calendar.week"]["uses"] == 2, by_id["calendar.week"]
 assert by_id["calendar.day"]["uses"] == 0, by_id["calendar.day"]
-assert facts["errors"] and facts["errors"][0]["type"] == "typeerror", facts["errors"]
-# Content-free: no event titles/notes ever reach the digest.
+assert facts["errors"] and facts["errors"][0]["name"] == "flutter", facts["errors"]
+# Content-free: no event titles/notes/raw error types ever reach the digest.
 blob = json.dumps(facts)
-for forbidden in ("Quiz", "notes", "title", "location"):
+for forbidden in ("Quiz", "notes", "title", "location", "typeerror"):
     assert forbidden not in blob, forbidden
 print("ok - digest infers the real account and computes unused features")
 PY
