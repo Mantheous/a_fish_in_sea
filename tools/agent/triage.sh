@@ -20,16 +20,18 @@ cd "$REPO"
 DIR="$REPO/tools/agent"
 MARKER='<!-- agent-plan -->'
 
-# Serialized model quota: triage spawns headless opencode runs, so it must
-# not stack LLM calls on top of a live builder/rework session (the quota
-# death spiral build.sh/review.sh already guard against). Skip this poll
-# when any loop run is active; the next poll retries.
+# Serialized model quota for the opencode case only: triage must not stack
+# an opencode run on top of an opencode builder (the old quota death
+# spiral). When builders run on codex, triage stays on its own opencode
+# allowance and can plan new issues while builders work.
 loop_runs() {
   tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^(agent-[0-9]|rework-[0-9])' || true
 }
+TRIAGE_BACKEND="${FISH_LLM_TRIAGE_BACKEND:-opencode}"
+BUILDER_BACKEND="${FISH_LLM_BUILDER_BACKEND:-opencode}"
 RUNNING="$(loop_runs)"
-if [ "${RUNNING:-0}" -ge 1 ]; then
-  echo "[triage] $RUNNING loop run(s) already active — skipping triage this poll so builders are not starved"
+if [ "${RUNNING:-0}" -ge 1 ] && [ "$TRIAGE_BACKEND" = "opencode" ] && [ "$BUILDER_BACKEND" = "opencode" ]; then
+  echo "[triage] $RUNNING opencode loop run(s) already active — skipping triage this poll so builders are not starved"
   exit 0
 fi
 

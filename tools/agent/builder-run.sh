@@ -193,16 +193,27 @@ Report at the end: PR_URL=<url or NONE> STATUS=<ready|failed>."
 if [ "$RESUME_IN_PLACE" = "1" ] && [ -f "$WT/.agent-build.log" ]; then
   mv "$WT/.agent-build.log" "$WT/.agent-build-prev.log"
 fi
-# NOTE: `opencode run` without --model keeps the configured default (a
-# free-tier model). Pin --model explicitly so builders stay on opencode-go.
-if opencode run --auto --model opencode-go/muse-spark-1.3-contributor#xhigh --title "builder-#$N" "$PROMPT" >"$WT/.agent-build.log" 2>&1; then
-  echo "[builder] #$N opencode run finished"
+# NOTE: route the run through llm-run.sh so the builder backend is a per-host
+# choice (FISH_LLM_BUILDER_BACKEND=codex) instead of a hardcoded opencode
+# invocation. Run from INSIDE the worktree: codex's workspace-write sandbox
+# anchors writes on its cwd, and the git dir is added as a writable root by
+# llm-run.sh so commits work in a linked worktree.
+BUILD_LOG="$WT/.agent-build.log"
+BUILD_TRANSCRIPT="$WT/.agent-build-transcript.log"
+: >"$BUILD_TRANSCRIPT"
+if ( cd "$WT" && printf '%s' "$PROMPT" \
+    | FISH_LLM_TRANSCRIPT="$BUILD_TRANSCRIPT" \
+      "$DIR/llm-run.sh" --role builder --title "builder-#$N" ) >"$BUILD_LOG" 2>&1; then
+  echo "[builder] #$N builder run finished"
 else
-  echo "[builder] #$N opencode run exited non-zero (see $WT/.agent-build.log)"
+  echo "[builder] #$N builder run exited non-zero (see $BUILD_LOG)"
 fi
-PR_URL="$(grep -m1 -o 'https://github.com/[^ ]*/pull/[0-9]*' "$WT/.agent-build.log" || true)"
+PR_URL="$(grep -m1 -o 'https://github.com/[^ ]*/pull/[0-9]*' "$BUILD_LOG" 2>/dev/null || true)"
+if [ -z "$PR_URL" ] && [ -f "$BUILD_TRANSCRIPT" ]; then
+  PR_URL="$(grep -m1 -o 'https://github.com/[^ ]*/pull/[0-9]*' "$BUILD_TRANSCRIPT" 2>/dev/null || true)"
+fi
 [ -z "$PR_URL" ] && PR_URL="$(gh pr list --head "$BRANCH" --json url --jq '.[0].url // empty' || true)"
-[ -z "$PR_URL" ] && PR_URL="NONE (check $WT/.agent-build.log)"
+[ -z "$PR_URL" ] && PR_URL="NONE (check $BUILD_LOG)"
 # Outcome stamp for the dispatcher (build.sh): a run that produced no PR
 # writes a retry time (~1h + jitter via write_retry_stamp) instead of going
 # back into the every-15-minutes pool, so a model-rate-limited death cannot
@@ -213,7 +224,8 @@ RATE_NOTE=""
 if [[ "$PR_URL" == NONE* ]]; then
   write_retry_stamp
   RETRY_AT="$(cat "/tmp/opencode/agent-loop-cd/$N" 2>/dev/null || echo 0)"
-  if grep -qiE 'rate limit exceeded|rate_limit|http 429|too many requests' "$WT/.agent-build.log" 2>/dev/null; then
+  if grep -qiE 'rate limit exceeded|rate_limit|http 429|too many requests' "$BUILD_LOG" 2>/dev/null \
+    || { [ -f "$BUILD_TRANSCRIPT" ] && grep -qiE 'rate limit exceeded|rate_limit|http 429|too many requests' "$BUILD_TRANSCRIPT" 2>/dev/null; }; then
     RATE_NOTE="hit the model rate limit — "
   fi
   RATE_NOTE="${RATE_NOTE}retrying after ~$(date -d "@$RETRY_AT" '+%H:%M' 2>/dev/null || echo '1h'): "

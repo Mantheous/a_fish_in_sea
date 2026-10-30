@@ -10,6 +10,19 @@
 set -euo pipefail
 REPO="$HOME/Repos/a_fish_in_sea"
 cd "$REPO"
+
+# Per-host loop knobs (role backends, AGENT_BUILDER_SLOTS, discovery gates)
+# live outside the repo so they never dirty main. Export them so every step
+# and every nested script sees the same values; llm-run.sh also sources the
+# same file when it is invoked directly.
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}/a_fish_in_sea/llm-backends.env"
+if [ -f "$CONF" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$CONF"
+  set +a
+fi
+
 exec 9>/tmp/agent-loop.lock
 if ! flock -n 9; then
   echo "[agent-poll] previous run still active — skipping"

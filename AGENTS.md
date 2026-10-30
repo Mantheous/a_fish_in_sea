@@ -79,8 +79,16 @@ only while fewer than 2 are pending and fewer than 3 agent PRs are open,
 so it feeds the queue without flooding it. Codex roles fail closed when
 the host sandbox cannot start (bubblewrap needs unprivileged user
 namespaces; `llm-run.sh` prints the sysctl fix) — a tool-less model must
-never be able to produce a verdict. Flip any role for one host without
-editing scripts:
+never be able to produce a verdict. Builders and rework can also be
+flipped per host (`FISH_LLM_BUILDER_BACKEND=codex`,
+`FISH_LLM_REWORK_BACKEND=codex`); `llm-run.sh` gives codex workspace-write
+access to the network, the worktree git dir, and the Flutter/pub caches so
+commits and `flutter test` work. `AGENT_BUILDER_SLOTS` (default 1) controls
+concurrent builders; triage/review stop serializing when builders are on
+codex. Keep slots at 1-2 until a burst has been watched: parallel PRs can
+conflict and `merge.sh` never auto-rebases. Host-local knobs live in
+`~/.config/a_fish_in_sea/llm-backends.env`; `poll.sh` exports them to every
+step. Flip any role for one host without editing scripts:
 
 ```bash
 FISH_LLM_REVIEW_BACKEND=opencode tools/agent/review.sh
