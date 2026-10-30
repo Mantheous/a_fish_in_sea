@@ -269,6 +269,34 @@ if [ "$BACKEND" = "codex" ]; then
     -o "$LAST_FILE"
     -
   )
+  # Codex's workspace-write sandbox only writes under its cwd by default.
+  # A builder works in a linked git worktree, so commits need the exact
+  # git dir (outside cwd), and flutter test needs the SDK/pub/telemetry
+  # caches. Network access is required for git push / gh pr create.
+  if [ "$DEFAULT_SANDBOX" = "workspace-write" ]; then
+    CODEX_ARGS+=(-c "sandbox_workspace_write.network_access=true")
+    WRITABLE_ROOTS=()
+    GIT_DIR_ABS="$(git -C "$PWD" rev-parse --absolute-git-dir 2>/dev/null || true)"
+    [ -n "$GIT_DIR_ABS" ] && [ -d "$GIT_DIR_ABS" ] && WRITABLE_ROOTS+=("$GIT_DIR_ABS")
+    # A linked worktree's objects/refs live in the COMMON git dir, outside
+    # the per-worktree git dir. Without it codex can create a file but
+    # `git commit` hits a read-only objects dir.
+    GIT_COMMON_ABS="$(git -C "$PWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    case "$GIT_COMMON_ABS" in
+      /*) ;;
+      *) GIT_COMMON_ABS="$PWD/${GIT_COMMON_ABS:-}" ;;
+    esac
+    if [ -n "$GIT_COMMON_ABS" ] && [ -d "$GIT_COMMON_ABS" ] && [ "$GIT_COMMON_ABS" != "$GIT_DIR_ABS" ]; then
+      WRITABLE_ROOTS+=("$GIT_COMMON_ABS")
+    fi
+    for dir in "$HOME/flutter" "$HOME/.pub-cache" "$HOME/.dart-tool" "$HOME/.cache"; do
+      [ -n "$dir" ] && [ -d "$dir" ] && WRITABLE_ROOTS+=("$dir")
+    done
+    if [ "${#WRITABLE_ROOTS[@]}" -gt 0 ]; then
+      ROOTS_JSON="$(printf '"%s", ' "${WRITABLE_ROOTS[@]}" | sed 's/, $//')"
+      CODEX_ARGS+=(-c "sandbox_workspace_write.writable_roots=[$ROOTS_JSON]")
+    fi
+  fi
   timeout "$TIMEOUT" "$CODEX_BIN" "${CODEX_ARGS[@]}" <"$FULL_PROMPT" >"$OUT_FILE" 2>"$ERR_FILE"
   ST=$?
 else
@@ -282,6 +310,19 @@ else
 fi
 set -e
 ELAPSED="$(( $(date +%s) - START_TS ))"
+
+# Keep codex's full transcript for debugging builder runs. The caller only
+# gets the final message on stdout, which is too little to diagnose a failed
+# build; this file has every tool call. Best-effort: never fail the run for it.
+if [ "$BACKEND" = "codex" ] && [ -n "${FISH_LLM_TRANSCRIPT:-}" ]; then
+  {
+    cat "$OUT_FILE" 2>/dev/null || true
+    if [ -s "$ERR_FILE" ]; then
+      printf '\n--- codex stderr ---\n'
+      cat "$ERR_FILE" 2>/dev/null || true
+    fi
+  } >>"$FISH_LLM_TRANSCRIPT" 2>/dev/null || true
+fi
 
 if [ "$ST" -ne 0 ]; then
   echo "[llm-run] $ROLE ($BACKEND/$MODEL) failed exit=$ST after ${ELAPSED}s" >&2

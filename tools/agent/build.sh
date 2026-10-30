@@ -27,21 +27,38 @@ DIR="$REPO/tools/agent"
 CD_DIR="/tmp/opencode/agent-loop-cd"
 mkdir -p "$CD_DIR"
 
-builder_running() {
-  # Loop-owned opencode run sessions: builders (agent-<N>) and reworks
-  # (rework-<N>). The user's own interactive sessions never match.
-  [ "$(tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^(agent-[0-9]|rework-[0-9])' || true)" != "0" ]
+BUILDER_SLOTS="${AGENT_BUILDER_SLOTS:-1}"
+[[ "$BUILDER_SLOTS" =~ ^[1-9][0-9]*$ ]] \
+  || { echo "[build] AGENT_BUILDER_SLOTS must be a positive integer (got '$BUILDER_SLOTS')" >&2; exit 2; }
+BUILDER_BACKEND="${FISH_LLM_BUILDER_BACKEND:-opencode}"
+REWORK_BACKEND="${FISH_LLM_REWORK_BACKEND:-opencode}"
+
+builder_count() {
+  # Loop-owned builder sessions only. Ad-hoc names (agent-adhoc-*) and
+  # review-spawned reworks (rework-*) do not consume a builder slot.
+  tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^agent-[0-9]+$' || true
 }
+
+rework_count() {
+  tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^rework-[0-9]+$' || true
+}
+
+if [ "$(builder_count)" -ge "$BUILDER_SLOTS" ]; then
+  echo "[build] $(builder_count)/$BUILDER_SLOTS builder slot(s) in use — next issue launches on a later poll"
+  exit 0
+fi
+# Preserve the old single-opencode-run safety: when both builders and rework
+# use opencode, a rework and a builder must not stack on that quota.
+if [ "$BUILDER_BACKEND" = "opencode" ] && [ "$REWORK_BACKEND" = "opencode" ] \
+  && [ "$(rework_count)" -gt 0 ]; then
+  echo "[build] rework session active on opencode — serializing (no builder launch this poll)"
+  exit 0
+fi
 
 COUNT="$(gh issue list --label agent-approved --state open --limit 20 --json number 2>/dev/null \
   | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' || echo 0)"
-echo "[build] agent-approved open: $COUNT"
+echo "[build] agent-approved open: $COUNT (slots: $(builder_count)/$BUILDER_SLOTS, backend: $BUILDER_BACKEND)"
 [ "$COUNT" = "0" ] && exit 0
-
-if builder_running; then
-  echo "[build] a builder session is already running — serializing (one opencode run at a time; the next issue launches on a later poll)"
-  exit 0
-fi
 
 gh issue list --label agent-approved --state open --limit 20 --json number,title 2>/dev/null \
   | python3 -c 'import json,sys; [print(i["number"]) for i in json.load(sys.stdin)]' \
@@ -50,8 +67,8 @@ gh issue list --label agent-approved --state open --limit 20 --json number,title
     echo "[build] #$N tmux session agent-$N already running — skipping"
     continue
   fi
-  if builder_running; then
-    echo "[build] builder session for an earlier issue started this poll — serializing, #$N launches on a later poll"
+  if [ "$(builder_count)" -ge "$BUILDER_SLOTS" ]; then
+    echo "[build] $BUILDER_SLOTS builder slot(s) filled — remaining issues launch on a later poll"
     break
   fi
 
@@ -138,7 +155,7 @@ Loop behavior: retries the auto-PR each poll; this ping repeats at most once/day
       continue
     fi
   fi
-  echo "[build] #$N launching tmux session agent-$N"
+  echo "[build] #$N launching tmux session agent-$N (slot $(( $(builder_count) + 1 ))/$BUILDER_SLOTS)"
   tmux new-session -d -s "agent-$N" "$DIR/builder-run.sh $N"
   # Launch verification: a builder that dies seconds after launch leaves
   # no log and (for some early exits) no retry stamp, so the dispatcher
@@ -151,8 +168,8 @@ Loop behavior: retries the auto-PR each poll; this ping repeats at most once/day
     date +%s -d "@$(( $(date +%s) + 3600 ))" >"$CD_DIR/$N"
     continue
   fi
-  # One builder per poll: the loop's model quota is serialized. The next
-  # approved issue launches on the next poll (builder_running guard above).
-  break
+  # Keep filling slots. The guard at the top of the next iteration stops
+  # when BUILDER_SLOTS is reached; with the default 1 this is the old
+  # one-builder-per-poll behavior.
 done || true
 echo "[build] done"

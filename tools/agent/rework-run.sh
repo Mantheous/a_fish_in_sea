@@ -28,11 +28,18 @@ Rules:
 4. Commit on $BRANCH, push origin $BRANCH. NEVER push to main, NEVER commit to main.
 5. Remove the review:changes-requested label ($DIR/label.sh $N remove review:changes-requested — do NOT use gh pr edit, its label mutations are broken on this host) so the reviewer re-checks, and post a comment starting with <!-- agent-rework --> summarizing round $ROUND: open with one plain-words sentence (what the user will notice, understandable without reading the code — no jargon, no class/function names), then what changed per fix item plus gate results.
 Report at the end: STATUS=<ready|failed>."
-# NOTE: `opencode run` without --model keeps the configured default (a
-# free-tier model). Pin --model explicitly so rework stays on opencode-go.
-if opencode run --auto --model opencode-go/muse-spark-1.3-contributor#xhigh --title "rework-#$N-r$ROUND" "$PROMPT" >"$WT/.agent-rework-$ROUND.log" 2>&1; then
+# Route through llm-run.sh so rework uses the same per-host backend choice
+# as builders (FISH_LLM_REWORK_BACKEND=codex). Run from inside the worktree:
+# codex's workspace-write sandbox anchors on cwd, and llm-run adds the
+# worktree git dir as a writable root so commits work.
+REWORK_LOG="$WT/.agent-rework-$ROUND.log"
+REWORK_TRANSCRIPT="$WT/.agent-rework-$ROUND-transcript.log"
+: >"$REWORK_TRANSCRIPT"
+if ( cd "$WT" && printf '%s' "$PROMPT" \
+    | FISH_LLM_TRANSCRIPT="$REWORK_TRANSCRIPT" \
+      "$DIR/llm-run.sh" --role rework --title "rework-#$N-r$ROUND" ) >"$REWORK_LOG" 2>&1; then
   echo "[rework] #$N round $ROUND finished"
 else
-  echo "[rework] #$N round $ROUND exited non-zero (see $WT/.agent-rework-$ROUND.log)"
+  echo "[rework] #$N round $ROUND exited non-zero (see $REWORK_LOG)"
 fi
 echo "[rework] #$N done (no telegram: notify-quiet)"

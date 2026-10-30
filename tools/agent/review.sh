@@ -40,6 +40,7 @@ REWORK_MARKER='<!-- agent-rework -->'
 PASS_LABEL="review:pass"
 FAIL_LABEL="review:changes-requested"
 MAX_REWORK=2
+REVIEW_BACKEND="${FISH_LLM_REVIEW_BACKEND:-codex}"
 
 gh label create "$PASS_LABEL" --color "0E8A16" \
   --description "Reviewer: diff matches the plan, safe to merge" >/dev/null 2>&1 || true
@@ -51,10 +52,11 @@ COUNT="$(echo "$PRS" | python3 -c 'import json,sys; print(len(json.load(sys.stdi
 echo "[review] open PRs: $COUNT"
 [ "$COUNT" = "0" ] && exit 0
 
-# Serialized model quota: the loop allows at most 2 concurrent opencode runs
-# (one builder + one reviewer). The death spiral was 9+ runs at once. This
-# check is per-PR: reviewing two open PRs must not stack two reviewers on
-# top of a running builder.
+# Serialized model quota for the opencode fallback only. Codex reviews run
+# on a separate 5-hour rolling allowance, so they may overlap a running
+# builder (the old "2 loop runs at once" cap was an opencode death-spiral
+# guard, not a codex one). The cap still applies when the role is flipped
+# back to opencode with FISH_LLM_REVIEW_BACKEND=opencode.
 loop_runs() {
   tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^(agent-[0-9]|rework-[0-9])' || true
 }
@@ -127,12 +129,15 @@ Loop behavior: PR is skipped every poll; this ping repeats at most once/day. No 
   fi
 
   # --- fresh review path ---
-  # Check the quota slot BEFORE spending a reviewer run: with two open PRs
-  # and a builder alive, the second PR waits for the next poll.
-  RUNNING="$(loop_runs)"
-  if [ "${RUNNING:-0}" -ge 2 ]; then
-    echo "[review] $RUNNING loop runs already active — leaving #$N for the next poll"
-    break
+  # Check the opencode quota slot BEFORE spending a reviewer run: with two
+  # open PRs and a builder alive, the second PR waits for the next poll.
+  # Codex reviews have their own allowance and do not need this cap.
+  if [ "$REVIEW_BACKEND" = "opencode" ]; then
+    RUNNING="$(loop_runs)"
+    if [ "${RUNNING:-0}" -ge 2 ]; then
+      echo "[review] $RUNNING loop runs already active — leaving #$N for the next poll"
+      break
+    fi
   fi
   echo "[review] #$N reviewing diff vs plan..."
   PROMPT="You are the reviewer agent. READ-ONLY on code: do NOT modify, create or delete any files. Do NOT run builds or tests. Do NOT commit or push. You may only use gh to READ.

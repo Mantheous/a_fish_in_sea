@@ -226,6 +226,39 @@ assert_eq "DISCOVERY: 0" "$OUT" "discover: final message is stdout"
 assert_contains "$ARGS_DISCOVER" "-s read-only" "discover: read-only sandbox"
 assert_contains "$ARGS_DISCOVER" "-m gpt-6.1-sol" "discover: pins sol model"
 
+# ── 12. codex builder gets the workspace-write extras ───────────────────
+set +e
+OUT="$(printf 'build it' | env PATH="$BIN:$PATH" FISH_LLM_BUILDER_BACKEND=codex \
+  FAKE_CODEX_ARGS="$TMP/args-builder" \
+  FAKE_CODEX_MESSAGE='PR_URL=https://example.test/pull/1 STATUS=ready' \
+  FISH_LLM_TRANSCRIPT="$TMP/transcript12" \
+  "$ADAPTER" --role builder --timeout 30 2>"$TMP/err12")"
+ST=$?
+set -e
+ARGS_BUILDER="$(cat "$TMP/args-builder")"
+assert_eq 0 "$ST" "builder: codex override exits 0"
+assert_contains "$ARGS_BUILDER" "-s workspace-write" "builder: workspace-write sandbox"
+assert_contains "$ARGS_BUILDER" "sandbox_workspace_write.network_access=true" \
+  "builder: network enabled for push/gh"
+assert_contains "$ARGS_BUILDER" "sandbox_workspace_write.writable_roots=" \
+  "builder: worktree git dir added as writable root"
+assert_contains "$ARGS_BUILDER" "-m gpt-6.1-sol" "builder: pins sol model"
+assert_contains "$(cat "$TMP/transcript12")" "PR_URL=https://example.test/pull/1" \
+  "builder: full transcript is written for debugging"
+
+# ── 13. builder still defaults to opencode --auto (no behavior change) ──
+set +e
+OUT="$(printf 'build' | env PATH="$BIN:$PATH" FAKE_OPENCODE_ARGS="$TMP/args-builder-oc" \
+  FAKE_OPENCODE_MESSAGE='done' \
+  "$ADAPTER" --role builder --timeout 30 2>"$TMP/err13")"
+ST=$?
+set -e
+ARGS_OC="$(cat "$TMP/args-builder-oc")"
+assert_eq 0 "$ST" "builder: opencode default exits 0"
+assert_contains "$ARGS_OC" "--auto" "builder: opencode keeps --auto"
+assert_contains "$ARGS_OC" "--model opencode-go/muse-spark-1.3-contributor#xhigh" \
+  "builder: opencode keeps the pinned model"
+
 echo
 echo "passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]
