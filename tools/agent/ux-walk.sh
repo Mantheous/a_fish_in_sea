@@ -110,6 +110,15 @@ if ! opencode run --agent ux-walker --model opencode-go/gpt-6-luna#xhigh --title
   echo "[ux-walk] walker run failed (see $OUT/run.log) — no report was written, so ux-walk labels stay on their issues and $WALK_MARKER is not refreshed; the request retries on the next trigger"
   tail -n 5 "$OUT/run.log" || true
 else
+  # A zero exit is not proof of a walk. On 2026-10-29 the walker exited 0
+  # without writing report.md, and the loop still consumed the ux-walk labels
+  # from #235/#240 — those scopes were never actually walked. Require a
+  # non-empty report before refreshing the marker or clearing labels.
+  if [ ! -s "$REPORT" ]; then
+    echo "[ux-walk] walker exited 0 but wrote no report — keeping ux-walk labels for the next attempt"
+    tail -n 5 "$OUT/run.log" || true
+    exit 1
+  fi
   echo "[ux-walk] walker run finished — report: $REPORT"
   date -u +%FT%TZ >"$WALK_MARKER"
   rm -f "$FORCE_FILE"
