@@ -33,21 +33,30 @@ void main() {
     when(() => storage.clear()).thenAnswer((_) async {});
     HydratedBloc.storage = storage;
 
-    await $.pumpWidgetAndSettle(const MyApp());
+    // The sign-in fish animates continuously, so do not wait for it to settle.
+    await $.tester.pumpWidget(const MyApp());
+    await $('Sign in to sync').waitUntilVisible();
     expect($('Sign in to sync').visible, true);
 
     final stamp = DateTime.now().millisecondsSinceEpoch;
-    await $(TextField).at(0).enterText('patrol-sync-$stamp@example.com');
-    await $(TextField).at(1).enterText('patrol-pass-1');
-    await $('Create account').tap();
-    await $.pumpAndSettle();
+    await $(TextField).at(0).enterText('patrol-sync-$stamp@example.com',
+        settlePolicy: SettlePolicy.noSettle);
+    await $(TextField).at(1).enterText('patrol-pass-1',
+        settlePolicy: SettlePolicy.noSettle);
+    await $('Create account').tap(settlePolicy: SettlePolicy.noSettle);
+    await $(HomePage).waitUntilVisible(timeout: const Duration(seconds: 30));
 
     expect(find.byType(HomePage), findsOneWidget);
     final context = $.tester.element(find.byType(HomePage));
     final engine = context.read<SyncEngine>();
     final nodes = context.read<NodeCubit>();
+    final events = context.read<CalendarCubit>();
 
-    // The register flow ends with a sync; that is our baseline.
+    // The register flow ends with an asynchronous sync; wait for its baseline.
+    for (var retry = 0; engine.lastSyncAt == null && retry < 100; retry++) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await $.tester.pump();
+    }
     expect(engine.lastSyncAt, isNotNull);
     final before = engine.lastSyncAt!;
 
@@ -71,7 +80,6 @@ void main() {
     engine.stopAutoSyncOnChanges();
     engine.stopAutoSync();
     final client = engine.client;
-    final events = context.read<CalendarCubit>();
     final id = 'patrol-recording-$stamp';
     final start = DateTime(2026, 10, 20, 9);
     nodes.addNode(Node(id: id, title: 'Recorded task', createdAt: start));
