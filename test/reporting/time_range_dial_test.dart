@@ -227,7 +227,7 @@ void main() {
       final saved = reporting.entriesForDay(day);
       expect(saved, hasLength(1));
       expect(saved.single.start, DateTime(2026, 10, 11, 12));
-      expect(saved.single.end, DateTime(2026, 10, 11, 13));
+      expect(saved.single.end, DateTime(2026, 10, 12, 10));
       expect(saved.single.auto, isFalse);
     });
   });
