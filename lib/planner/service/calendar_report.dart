@@ -4,6 +4,8 @@ import '../../reporting/model/reported_entry.dart';
 import '../model/event_reschedule.dart';
 import '../model/planner_event.dart';
 
+part 'calendar_report_sessions.dart';
+
 enum ReportBlockKind { live, timer, accepted }
 
 const String reportDisplayIdPrefix = 'report:';
@@ -213,8 +215,8 @@ List<ReportBlock> buildReportBlocks({
   // mirrored onto every linked event for cache alignment, so each run must
   // be attributed to the event it actually happened during — Toggl-style,
   // every entry sits on its own row — and rendered exactly once. Session
-  // ids are stable across mirrors (TimeSession.idFor), so they dedupe the
-  // copies while genuinely distinct runs stay separate.
+  // ids are stable across mirrors (TimeSession.idFor), but unrelated tasks
+  // can have identical ids, so ownership and deduplication also need the task.
   final eventById = {for (final e in visibleEvents) e.id: e};
   final eventsByNode = <String, List<PlannerEvent>>{};
   void linkEvent(String? nodeId, PlannerEvent event) {
@@ -232,14 +234,27 @@ List<ReportBlock> buildReportBlocks({
       if (event != null) linkEvent(node.id, event);
     }
   }
-  final sessionOwner = <String, String>{};
+  String? taskOwner(PlannerEvent event) =>
+      event.taskId ?? nodesByEvent[event.id]?.first.id;
+  (bool, String, String) sessionKey(PlannerEvent event, String sessionId) {
+    final nodeId = taskOwner(event);
+    // Node and event ids also have separate namespaces.
+    return (nodeId != null, nodeId ?? event.id, sessionId);
+  }
+
+  final sessionOwner = <(bool, String, String), String>{};
   final liveOwner = <String, String>{};
   for (final node in nodes) {
     final candidates = eventsByNode[node.id];
     if (candidates == null || candidates.isEmpty) continue;
     for (final session in node.sessions) {
       final owner = _ownerEventId(candidates, session.start, session.end);
-      if (owner != null) sessionOwner.putIfAbsent(session.id, () => owner);
+      if (owner != null) {
+        sessionOwner.putIfAbsent(
+          sessionKey(eventById[owner]!, session.id),
+          () => owner,
+        );
+      }
     }
     final started = node.timerStartedAt;
     if (started != null) {
@@ -253,12 +268,13 @@ List<ReportBlock> buildReportBlocks({
     if (event.allDay) continue;
     final candidates = eventsByNode[event.taskId] ?? const <PlannerEvent>[];
     for (final session in event.sessions) {
-      if (sessionOwner.containsKey(session.id)) continue;
-      sessionOwner[session.id] =
+      final key = sessionKey(event, session.id);
+      if (sessionOwner.containsKey(key)) continue;
+      sessionOwner[key] =
           _ownerEventId(candidates, session.start, session.end) ?? event.id;
     }
   }
-  final emittedSessionIds = <String>{};
+  final emittedSessionIds = <(bool, String, String)>{};
   final emittedLiveNodeIds = <String>{};
 
   final blocks = <ReportBlock>[];
@@ -329,11 +345,13 @@ List<ReportBlock> buildReportBlocks({
       // and can each land on a different event.
       final owned = [
         for (final session in sessions)
-          if ((sessionOwner[session.id] ?? event.id) == event.id) session,
+          if ((sessionOwner[sessionKey(event, session.id)] ?? event.id) ==
+              event.id)
+            session,
       ];
       final hasMultiple = sessions.length > 1;
       for (final session in owned) {
-        if (!emittedSessionIds.add(session.id)) continue;
+        if (!emittedSessionIds.add(sessionKey(event, session.id))) continue;
         blocks.add(
           ReportBlock(
             displayId: hasMultiple
@@ -452,39 +470,6 @@ List<ReportBlock> buildReportBlocks({
   blocks.sort((a, b) => a.start.compareTo(b.start));
   return blocks;
 }
-
-/// Every distinct recorded run on an event and the tasks linked to it.
-///
-/// Task-event pairs mirror the same sessions, so ids dedupe the copies.
-/// When any side carries an explicit session list, legacy aggregate
-/// intervals are ignored: those spans would otherwise show up as an extra
-/// block after the first multi-session stop.
-List<TimeSession> _recordedSessions(PlannerEvent event, List<Node> linked) {
-  final explicit = <String, TimeSession>{};
-  for (final session in event.sessions) {
-    explicit[session.id] = session;
-  }
-  for (final node in linked) {
-    for (final session in node.sessions) {
-      explicit[session.id] = session;
-    }
-  }
-  if (explicit.isNotEmpty) return _sortedSessions(explicit.values);
-
-  final legacy = <String, TimeSession>{};
-  for (final session in event.recordedSessions) {
-    legacy[session.id] = session;
-  }
-  for (final node in linked) {
-    for (final session in node.recordedSessions) {
-      legacy[session.id] = session;
-    }
-  }
-  return _sortedSessions(legacy.values);
-}
-
-List<TimeSession> _sortedSessions(Iterable<TimeSession> sessions) =>
-    sessions.toList()..sort((a, b) => a.start.compareTo(b.start));
 
 /// Which of a task's plan events a recording belongs to.
 ///
