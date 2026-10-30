@@ -7,9 +7,12 @@ import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
+import 'package:a_fish_in_sea/planner/model/event_reschedule.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_page.dart';
+import 'package:a_fish_in_sea/planner/view/calendar_grid_tracker.dart';
+import 'package:a_fish_in_sea/planner/view/plan_tile_drag_session.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -21,6 +24,62 @@ class MockStorage extends Mock implements Storage {}
 class MockGoogleService extends Mock implements GoogleCalendarService {}
 
 void main() {
+  // Run with TZ=America/Denver to exercise both 2026 clock changes.
+  for (final day in [DateTime(2026, 3, 8), DateTime(2026, 11, 1)]) {
+    for (final crossDay in [false, true]) {
+      for (final minutes in [0, 38, -38]) {
+        test('drag on $day: crossDay=$crossDay, minutes=$minutes', () {
+          final sourceDay = DateTime(
+            day.year, day.month, day.day - (crossDay ? 1 : 0),
+          );
+          final start = DateTime(2026, sourceDay.month, sourceDay.day, 9);
+          final original = PlannerEvent(
+            id: 'dst-drag',
+            subject: 'Clock change',
+            start: start,
+            end: start.add(const Duration(hours: 1)),
+          );
+          final tracker = PlanGridTracker(
+            isMounted: () => true,
+            timeGridViewportThreshold: 100,
+          );
+          addTearDown(tracker.dispose);
+          final session = PlanTileDragSession(
+            original: original,
+            days: crossDay ? [sourceDay, day] : [day],
+            stackRect: const Rect.fromLTWH(0, 0, 250, 800),
+            cellWidth: 100,
+            pixelsPerMinute: 2,
+            isRtl: false,
+            timeRulerWidth: 50,
+            startMinutes: 0,
+            endMinutes: 1440,
+            tracker: tracker,
+          );
+          addTearDown(session.cancel);
+          session.start(const Offset(100, 400));
+          session.update(Offset(crossDay ? 200 : 120, 400 + minutes * 2.0));
+
+          final expected = DateTime(
+            day.year, day.month, day.day, 9, minutes,
+          );
+          expect(session.dropTime, expected);
+          final preview = session.previewAt(15);
+          final calendar = CalendarCubit()..addEvent(original);
+          addTearDown(calendar.close);
+          calendar.updateEvent(
+            shiftEvent(original, session.finish(), snapMinutes: 15),
+          );
+          final saved = calendar.byId(original.id)!;
+          expect(preview.start, snapToInterval(expected, 15));
+          expect(saved.start, preview.start);
+          expect(saved.end, preview.end);
+          expect(saved.end.difference(saved.start), const Duration(hours: 1));
+        });
+      }
+    }
+  }
+
   setUp(() {
     final storage = MockStorage();
     when(() => storage.read(any())).thenReturn(null);
