@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:a_fish_in_sea/main.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
+import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/view/calendar_page.dart';
@@ -14,9 +17,12 @@ import 'package:patrol/patrol.dart';
 class MockStorage extends Mock implements Storage {}
 
 void main() {
-  patrolTest('a recording made before Task promotion can still be resized', (
-    $,
-  ) async {
+  patrolTest('promoted recordings survive resize and task Adjust', ($) async {
+    $.tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(
+      $.tester.platformDispatcher.clearAccessibilityFeaturesTestValue,
+    );
     final storage = MockStorage();
     when(() => storage.read(any())).thenReturn(null);
     when(() => storage.write(any(), any())).thenAnswer((_) async {});
@@ -79,5 +85,40 @@ void main() {
     expect(saved.end.isAfter(end), isTrue);
     expect($.tester.getRect(chip).height, greaterThan(before.height));
     expect(find.textContaining('Reported time updated'), findsOneWidget);
+
+    // refs #260: the next recording belongs to the task. Adjusting it
+    // must preserve the earlier event-only recording and both identities.
+    final taskId = calendar.byId('promoted')!.taskId!;
+    final secondStart = start.add(const Duration(hours: 2));
+    final secondEnd = secondStart.add(const Duration(minutes: 20));
+    NodeEventLink.startNodeTracking(nodes, calendar, taskId, now: secondStart);
+    NodeEventLink.stopNodeTrackingAligned(
+      nodes,
+      calendar,
+      taskId,
+      now: secondEnd,
+    );
+    final second = nodes.byId(taskId)!.recordedSessions.single;
+    unawaited(showEditNodeTimerSheet(context, nodeId: taskId));
+    await $.pumpAndSettle();
+    final endTime = find.ancestor(
+      of: find.text('End time'),
+      matching: find.byType(InkWell),
+    );
+    await $.tester.tap(endTime);
+    await $.pumpAndSettle();
+    await $(Icons.keyboard_outlined).tap();
+    await $.pumpAndSettle();
+    await $(TextField).at(1).enterText('35');
+    await $('OK').tap();
+    await $.pumpAndSettle();
+    await $('Save').tap();
+    await $.pumpAndSettle();
+    final corrected = second.copyWith(
+      end: secondStart.add(const Duration(minutes: 35)),
+    );
+    expect(nodes.byId(taskId)!.recordedSessions, [corrected]);
+    expect(calendar.byId('promoted')!.recordedSessions, [saved, corrected]);
+    expect($.tester.takeException(), isNull);
   });
 }

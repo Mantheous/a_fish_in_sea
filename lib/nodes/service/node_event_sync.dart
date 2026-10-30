@@ -109,7 +109,7 @@ class NodeEventSync {
   }
 
   /// Mirrors a manual timer correction from a task to every linked event,
-  /// keeping the event-side report cache aligned with the task record.
+  /// keeping the corrected run's identity and any event-only runs intact.
   static bool setNodeReported(
     NodeCubit nodes,
     CalendarCubit calendar,
@@ -125,10 +125,21 @@ class NodeEventSync {
     final session = node.recordedSessions.singleOrNull;
     if (session?.start == start && session?.end == safeEnd) return false;
     RevertableHydratedCubit.atomic([nodes, calendar], () {
-      nodes.setReported(nodeId, start, safeEnd);
+      if (session == null) {
+        nodes.setReported(nodeId, start, safeEnd);
+      } else {
+        nodes.updateNode(
+          node.copyWith(
+            sessions: [session.copyWith(start: start, end: safeEnd)],
+            actualStart: start,
+            actualEnd: safeEnd,
+            clearTimerStartedAt: true,
+          ),
+        );
+      }
       final saved = nodes.byId(nodeId);
       if (saved == null) return;
-      _mirrorSessions(calendar, saved, replace: true);
+      _mirrorSessions(calendar, saved);
     });
     return nodes.byId(nodeId) != node;
   }
@@ -223,7 +234,6 @@ class NodeEventSync {
     CalendarCubit calendar,
     Node saved, {
     String? removeSessionId,
-    bool replace = false,
   }) {
     final updates = [
       for (final event in _linkedEvents(calendar, saved))
@@ -231,7 +241,6 @@ class NodeEventSync {
           event,
           saved.recordedSessions,
           removeSessionId: removeSessionId,
-          replace: replace,
         ),
     ];
     if (updates.isNotEmpty) calendar.updateEvents(updates);
@@ -239,8 +248,8 @@ class NodeEventSync {
 
   /// Unions the task's runs into the event's own list instead of replacing
   /// it: a run recorded directly on the event (for example a failed stop
-  /// that never reached the task) must survive a task-side edit. A manual
-  /// report correction ([replace]) intentionally rewrites the mirror.
+  /// that never reached the task) must survive a task-side edit. Only a
+  /// chunk transfer ([replace]) replaces the list with its remaining runs.
   static PlannerEvent _eventWithSessions(
     PlannerEvent event,
     List<TimeSession> sessions, {
