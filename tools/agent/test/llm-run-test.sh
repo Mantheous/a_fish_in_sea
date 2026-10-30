@@ -13,6 +13,9 @@ trap 'rm -rf "$TMP"' EXIT
 BIN="$TMP/bin"
 mkdir -p "$BIN"
 
+# Never let the host's real per-role overrides leak into these tests.
+export XDG_CONFIG_HOME="$TMP/xdg"
+
 # These tests use fake codex/opencode binaries, so skip the real bwrap probe.
 # The probe itself is exercised by test 10 with a deliberately broken bwrap.
 export FISH_LLM_CODEX_SANDBOX_CHECK=0
@@ -248,8 +251,8 @@ assert_contains "$(cat "$TMP/transcript12")" "PR_URL=https://example.test/pull/1
 
 # ── 13. builder still defaults to opencode --auto (no behavior change) ──
 set +e
-OUT="$(printf 'build' | env PATH="$BIN:$PATH" FAKE_OPENCODE_ARGS="$TMP/args-builder-oc" \
-  FAKE_OPENCODE_MESSAGE='done' \
+OUT="$(printf 'build' | env PATH="$BIN:$PATH" FISH_LLM_BUILDER_BACKEND=opencode \
+  FAKE_OPENCODE_ARGS="$TMP/args-builder-oc" FAKE_OPENCODE_MESSAGE='done' \
   "$ADAPTER" --role builder --timeout 30 2>"$TMP/err13")"
 ST=$?
 set -e

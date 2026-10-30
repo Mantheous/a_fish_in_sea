@@ -84,11 +84,11 @@ flipped per host (`FISH_LLM_BUILDER_BACKEND=codex`,
 `FISH_LLM_REWORK_BACKEND=codex`); `llm-run.sh` gives codex workspace-write
 access to the network, the worktree git dir, and the Flutter/pub caches so
 commits and `flutter test` work. `AGENT_BUILDER_SLOTS` (default 1) controls
-concurrent builders; triage/review stop serializing when builders are on
-codex. Keep slots at 1-2 until a burst has been watched: parallel PRs can
-conflict and `merge.sh` never auto-rebases. Host-local knobs live in
-`~/.config/a_fish_in_sea/llm-backends.env`; `poll.sh` exports them to every
-step. Flip any role for one host without editing scripts:
+concurrent builders; triage/review/guardians/ux-walk stop serializing when
+builders are on codex. Keep slots at 1-2 until a burst has been watched:
+parallel PRs can conflict and `merge.sh` never auto-rebases. Host-local
+knobs live in `~/.config/a_fish_in_sea/llm-backends.env`; `poll.sh` exports
+them to every step. Flip any role for one host without editing scripts:
 
 ```bash
 FISH_LLM_REVIEW_BACKEND=opencode tools/agent/review.sh

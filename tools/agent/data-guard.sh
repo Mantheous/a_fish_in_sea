@@ -25,10 +25,19 @@ cd "$REPO"
 DIR="$REPO/tools/agent"
 FLUTTER="$HOME/flutter/bin/flutter"
 
-# Serialized model quota: never stack a guardian LLM run on top of a live
-# builder/rework session (same guard build.sh/review.sh already use).
+# Serialized model quota for the opencode case only: when both the builder
+# and this guardian use opencode, a guardian LLM run must not stack on a live
+# builder/rework (the old quota death spiral). Codex builders have their own
+# allowance, so leaving this unconditional would starve PR audits whenever a
+# builder is running — and with AGENT_BUILDER_SLOTS>1 that is most polls.
 loop_runs() {
   tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^(agent-[0-9]|rework-[0-9])' || true
+}
+DATA_GUARD_BACKEND="${FISH_LLM_DATA_GUARD_BACKEND:-opencode}"
+BUILDER_BACKEND="${FISH_LLM_BUILDER_BACKEND:-opencode}"
+skip_for_opencode_quota() {
+  [ "$DATA_GUARD_BACKEND" = "opencode" ] && [ "$BUILDER_BACKEND" = "opencode" ] \
+    && [ "$(loop_runs)" -ge 1 ]
 }
 
 # Returns 0 when the audit range touches the data/persistence surface the
@@ -71,10 +80,9 @@ echo "$PRS" | while IFS='|' read -r N BRANCH SHA URL; do
     echo "[data-guard] PR #$N already audited at $SHA — skipping"
     continue
   fi
-  # Don't stack a guardian LLM run on top of a live builder/rework session.
-  RUNNING="$(loop_runs)"
-  if [ "${RUNNING:-0}" -ge 1 ]; then
-    echo "[data-guard] $RUNNING loop run(s) active — skipping PR #$N audit this poll"
+  # Don't stack an opencode guardian LLM run on top of an opencode builder.
+  if skip_for_opencode_quota; then
+    echo "[data-guard] opencode builder/rework active — skipping PR #$N audit this poll"
     continue
   fi
   echo "[data-guard] PR #$N ($BRANCH) auditing $SHA..."
@@ -187,10 +195,9 @@ if ! touches_data_surface; then
   echo "[data-guard] $DESC touches no model/cubit/sync/persistence/server-model files — deterministic tests passed, guardian LLM skipped"
   exit 0
 fi
-# Don't stack a guardian LLM run on top of a live builder/rework session.
-RUNNING="$(loop_runs)"
-if [ "${RUNNING:-0}" -ge 1 ]; then
-  echo "[data-guard] $RUNNING loop run(s) active — skipping guardian LLM audit this poll"
+# Don't stack an opencode guardian LLM run on top of an opencode builder.
+if skip_for_opencode_quota; then
+  echo "[data-guard] opencode builder/rework active — skipping guardian LLM audit this poll"
   exit 0
 fi
 
