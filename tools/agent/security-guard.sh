@@ -106,7 +106,7 @@ print(match.group(1) if match else "")
 PY
 )"
   if [ -n "${SEC_ISSUE_N:-}" ]; then
-    gh issue view "$SEC_ISSUE_N" --json number,title,body,comments >"$SEC_CTX/issue.json" 2>/dev/null || true
+    gh issue view "$SEC_ISSUE_N" --json number,title,body,comments,labels >"$SEC_CTX/issue.json" 2>/dev/null || true
   fi
   if [ ! -s "$SEC_CTX/pr.diff" ]; then
     echo "[sec-guard] PR #$N could not pre-fetch the diff — leaving unlabeled, retried next poll"

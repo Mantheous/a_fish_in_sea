@@ -161,7 +161,7 @@ print(match.group(1) if match else "")
 PY
 )"
   if [ -n "${ISSUE_N:-}" ]; then
-    gh issue view "$ISSUE_N" --json number,title,body,comments >"$CTX/issue.json" 2>/dev/null || true
+    gh issue view "$ISSUE_N" --json number,title,body,comments,labels >"$CTX/issue.json" 2>/dev/null || true
   fi
   if [ ! -s "$CTX/pr.diff" ]; then
     echo "[review] #$N could not pre-fetch the PR diff (gh) — leaving unlabeled, retried next poll"
