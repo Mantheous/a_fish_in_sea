@@ -47,7 +47,7 @@ void main() {
     await $.pumpAndSettle();
     await $('10 minutes before').tap();
     await $.pumpAndSettle();
-    await $('Save').tap();
+    await $('Add').tap();
     await $.pumpAndSettle();
     expect(await editor, isTrue);
     final saved = calendar.state.singleWhere((event) => event.subject == title);
