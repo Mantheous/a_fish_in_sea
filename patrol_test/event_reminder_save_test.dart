@@ -43,6 +43,7 @@ void main() {
     await $.pumpAndSettle();
     final reminder = find.byType(DropdownButtonFormField<int?>);
     await $.tester.ensureVisible(reminder);
+    await $.pumpAndSettle();
     await $.tester.tap(reminder);
     await $.pumpAndSettle();
     await $('10 minutes before').tap();
@@ -55,6 +56,7 @@ void main() {
     final reopened = showEventEditor(context, existing: saved);
     await $.pumpAndSettle();
     await $.tester.ensureVisible(find.byType(DropdownButtonFormField<int?>));
+    await $.pumpAndSettle();
     expect($('10 minutes before').visible, true);
     await $('Cancel').tap();
     await $.pumpAndSettle();
