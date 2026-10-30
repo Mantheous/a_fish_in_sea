@@ -30,6 +30,7 @@ import 'package:a_fish_in_sea/planner/bloc/tasks_view_options_cubit.dart';
 import 'package:a_fish_in_sea/planner/service/canvas_service.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
+import 'package:a_fish_in_sea/planner/service/event_reminders.dart';
 import 'package:a_fish_in_sea/reporting/bloc/places_cubit.dart';
 import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
 import 'package:a_fish_in_sea/reporting/bloc/tracking_cubit.dart';
@@ -322,6 +323,7 @@ class _SyncBootstrapState extends State<_SyncBootstrap>
         ),
       ],
       child: MaterialApp(
+        scaffoldMessengerKey: EventReminderService.messengerKey,
         debugShowCheckedModeBanner: false,
         title: 'a fish in sea',
         theme: ThemeData(
