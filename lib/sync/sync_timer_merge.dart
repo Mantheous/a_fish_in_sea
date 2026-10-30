@@ -7,8 +7,11 @@ String syncRecordStamp(DateTime timestamp) =>
 /// Preserves a live timer during server-wins conflict resolution.
 ///
 /// [preserveLocalSessions] is false for an unchanged, already-synced item:
-/// missing remote sessions must stay deleted. Without a baseline, or with
-/// unsent item edits, retain local sessions conservatively.
+/// recordings absent from an explicit remote list must stay deleted. Without
+/// a baseline, or with unsent item edits, retain local sessions conservatively.
+/// Legacy remote
+/// payloads without a `sessions` key always preserve local recordings; only
+/// an explicit list can communicate removals.
 ///
 /// Offset-less timestamps from older payloads remain readable through
 /// [DateTime.tryParse]; new node/event JSON writes these values in UTC.
@@ -18,7 +21,7 @@ void preserveRunningTimer(
   Map<String, dynamic> merged, {
   required bool preserveLocalSessions,
 }) {
-  if (preserveLocalSessions) {
+  if (preserveLocalSessions || !merged.containsKey('sessions')) {
     preserveRecordedSessions(collection, local, merged);
   }
   if (collection != 'nodes' && collection != 'events') return;
