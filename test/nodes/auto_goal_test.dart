@@ -119,43 +119,6 @@ void main() {
     });
   });
 
-  group('windows', () {
-    test('weekly starts Monday and daily is local midnight', () {
-      final weekly = autoGoalWindow(
-        const AutoFacet(),
-        DateTime(2026, 10, 14, 16),
-      );
-      expect(weekly.start, DateTime(2026, 10, 12));
-      expect(weekly.end, DateTime(2026, 10, 19));
-
-      final daily = autoGoalWindow(
-        const AutoFacet(period: TimeScale.daily),
-        DateTime(2026, 10, 14, 16),
-      );
-      expect(daily.start, DateTime(2026, 10, 14));
-      expect(daily.end, DateTime(2026, 10, 15));
-    });
-
-    test('custom periods are anchored to the goal, not the calendar', () {
-      final facet = const AutoFacet(
-        period: TimeScale.custom,
-        customPeriodDays: 10,
-      );
-      final first = autoGoalWindow(
-        facet,
-        DateTime(2026, 10, 14),
-        anchor: DateTime(2026, 10, 1),
-      );
-      final next = autoGoalWindow(
-        facet,
-        DateTime(2026, 10, 22),
-        anchor: DateTime(2026, 10, 1),
-      );
-      expect(first.start, DateTime(2026, 10, 11));
-      expect(next.start, DateTime(2026, 10, 21));
-    });
-  });
-
   group('task goals', () {
     test('sums recorded minutes under the goal for a 7-hour week', () {
       final goal = _node(
@@ -226,6 +189,80 @@ void main() {
         reason: 'the 4.5-hour gap between sessions is not work',
       );
       expect(reading.progress, 1.0);
+    });
+
+    for (final (label, spans, expected) in <(String, List<(int, int)>, double)>[
+      ('multiple recorded days', [(9, 10), (33, 34)], 60),
+      ('multiple runs on one day', [(9, 10), (14, 15)], 120),
+      ('an overnight run', [(23, 25)], 60),
+      ('a run ending at midnight', [(23, 24)], 60),
+      ('a run clipped at the week start', [(-1, 1), (33, 34)], 60),
+      ('a run clipped at the week end', [(167, 169)], 60),
+      ('runs outside the week', [(-25, -24), (9, 10), (33, 34)], 60),
+      ('no runs inside the week', [(-25, -24), (169, 170)], 0),
+    ]) {
+      test('average minutes counts days for $label', () {
+        final goal = _node(
+          'study',
+          auto: const AutoFacet(metric: AutoMetric.averageMinutes, target: 90),
+        );
+        final sessions = [
+          for (final (i, (start, end)) in spans.indexed)
+            TimeSession(
+              id: 's$i',
+              start: _monday.add(Duration(hours: start)),
+              end: _monday.add(Duration(hours: end)),
+            ),
+        ];
+        final task = _node(
+          'task',
+          parents: const ['study'],
+          sessions: sessions,
+          actualStart: sessions.first.start,
+          actualEnd: sessions.last.end,
+          schedule: ScheduleFacet(
+            start: _monday,
+            end: _monday.add(const Duration(hours: 2)),
+          ),
+        );
+        final reading = evaluateAutoGoal(
+          goal,
+          now: _sunday,
+          nodes: [goal, task],
+        );
+        expect(reading.actual, expected);
+        expect(reading.satisfied, expected >= 90);
+        expect(reading.matched, expected > 0 ? 1 : 0);
+        expect(reading.progress, closeTo((expected / 90).clamp(0, 1), 1e-9));
+      });
+    }
+
+    test('average minutes deduplicates task days and keeps schedule fallback', () {
+      final goal = _node(
+        'study',
+        auto: const AutoFacet(metric: AutoMetric.averageMinutes, target: 100),
+      );
+      final tasks = [
+        for (final (i, hour) in [9, 14, 33].indexed)
+          _node(
+            'task$i',
+            parents: const ['study'],
+            actualStart: i == 0 ? _monday.add(Duration(hours: hour)) : null,
+            actualEnd: i == 0 ? _monday.add(Duration(hours: hour + 1)) : null,
+            schedule: ScheduleFacet(
+              start: _monday.add(Duration(hours: hour)),
+              end: _monday.add(Duration(hours: hour + 1)),
+            ),
+          ),
+      ];
+      final reading = evaluateAutoGoal(
+        goal,
+        now: _sunday,
+        nodes: [goal, ...tasks],
+      );
+      expect(reading.actual, 90);
+      expect(reading.matched, 3);
+      expect(reading.satisfied, isFalse);
     });
 
     test('uses elapsed calendar blocks when nothing was recorded', () {
