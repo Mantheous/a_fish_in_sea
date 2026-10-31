@@ -271,7 +271,6 @@ WeeklyTimeReport buildWeeklyTimeReport({
         end: end,
         live: true,
       );
-      continue;
     }
     for (final session in node.recordedSessions) {
       if (!emittedSessions.add(session.id)) continue;
