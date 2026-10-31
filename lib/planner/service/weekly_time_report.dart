@@ -179,10 +179,12 @@ WeeklyTimeReport buildWeeklyTimeReport({
           : (at.isAfter(liveStart)
                 ? at
                 : liveStart.add(const Duration(minutes: 1)));
+      // Precedence follows the saved day bucket even when its report was
+      // moved into this week from a recording day outside the week.
+      if (liveStart != null) recordedDays.add(dayKey(liveStart));
       var represented =
           liveStart != null && liveEnd != null && overlaps(liveStart, liveEnd);
       if (represented) {
-        recordedDays.add(dayKey(liveStart));
         final liveKey =
             'live|${backing?.id ?? event.id}|'
             '${liveStart.microsecondsSinceEpoch}';
@@ -205,9 +207,9 @@ WeeklyTimeReport buildWeeklyTimeReport({
       // backing represented when a run was actually in range, so an
       // out-of-week event recording cannot hide this week's node session.
       for (final session in _pairedSessions(event, backing)) {
+        recordedDays.add(dayKey(session.start));
         if (!overlaps(session.start, session.end)) continue;
         represented = true;
-        recordedDays.add(dayKey(session.start));
         if (!emittedSessions.add(session.id)) continue;
         addIfOverlaps(
           title: event.subject,

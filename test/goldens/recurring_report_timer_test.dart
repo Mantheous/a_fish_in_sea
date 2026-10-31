@@ -12,6 +12,91 @@ import 'package:flutter_test/flutter_test.dart';
 import 'golden_app.dart';
 
 void main() {
+  for (final live in [false, true]) {
+    testWidgets(
+      '${live ? 'live' : 'stopped'} out-of-week recording suppresses moved report',
+      (tester) async {
+        final monday = DateTime(2026, 10, 5);
+        final tuesday = DateTime(2026, 10, 6, 9);
+        // Stopped: the preceding Sunday. Live: viewing an earlier week
+        // while a timer runs on a later Sunday.
+        final sunday = DateTime(2026, 10, live ? 18 : 4, 9);
+        final sundayEnd = sunday.add(const Duration(minutes: 45));
+        final tuesdayEnd = tuesday.add(const Duration(minutes: 30));
+        final event = PlannerEvent(
+          id: 'daily',
+          subject: 'Study',
+          start: DateTime(2026, 10, 4, 9),
+          end: DateTime(2026, 10, 4, 10),
+          recurrenceRule: 'FREQ=DAILY',
+          sessions: [
+            if (!live) TimeSession(id: 'sunday', start: sunday, end: sundayEnd),
+            TimeSession(id: 'tuesday', start: tuesday, end: tuesdayEnd),
+          ],
+          timerStartedAt: live ? sunday : null,
+        );
+        final reports = {
+          live ? '2026-10-18' : '2026-10-04': [
+            ReportedEntry(
+              id: 'rep:daily',
+              eventId: event.id,
+              title: 'Moved Sunday report',
+              start: monday.add(const Duration(hours: 9)),
+              end: monday.add(const Duration(hours: 10)),
+              status: ReportStatus.attended,
+              auto: false,
+            ),
+          ],
+        };
+        final blocks = buildReportBlocks(
+          visibleEvents: [event],
+          nodes: const [],
+          reportsByDay: reports,
+          now: sundayEnd,
+        );
+        expect(blocks, hasLength(2));
+        expect(
+          blocks.where((b) => b.kind == ReportBlockKind.accepted),
+          isEmpty,
+        );
+        final weekly = buildWeeklyTimeReport(
+          events: [event],
+          nodes: const [],
+          reportsByDay: reports,
+          weekStart: monday,
+          now: sundayEnd,
+        );
+        expect(weekly.entries, hasLength(1));
+        expect(weekly.entries.single.start, tuesday);
+        expect(weekly.entries.single.end, tuesdayEnd);
+        expect(weekly.weekTotal, const Duration(minutes: 30));
+        expect(weekly.byGoal.single.total, weekly.weekTotal);
+
+        await pumpGoldenPage(
+          tester,
+          Column(
+            children: [
+              Text('Weekly total: ${formatWeeklyDuration(weekly.weekTotal)}'),
+              Expanded(
+                child: ReportLaneView(
+                  blocks: blocks.where((b) => b.start == tuesday).toList(),
+                  day: tuesday,
+                  startHour: 9,
+                  endHour: 11,
+                  colorFor: (_) => Colors.teal,
+                  onTap: (_) {},
+                ),
+              ),
+            ],
+          ),
+        );
+        expect(find.text('Weekly total: 30m'), findsOneWidget);
+        expect(find.byType(ReportChip), findsOneWidget);
+        expect(find.text('Moved Sunday report'), findsNothing);
+      },
+    );
+  }
+
   for (final source in ['event', 'node', 'legacy', 'live', 'overnight']) {
     testWidgets('$source timer replaces only its recurring report day', (
       tester,
