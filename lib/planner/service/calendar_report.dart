@@ -5,6 +5,7 @@ import '../model/event_reschedule.dart';
 import '../model/planner_event.dart';
 
 part 'calendar_report_sessions.dart';
+part 'calendar_report_identity.dart';
 
 enum ReportBlockKind { live, timer, accepted }
 
@@ -123,21 +124,6 @@ ReportedEntry? findReportEntryForEvent(
   return fallback;
 }
 
-/// Finds the manual entry a report display id points at
-/// (`report:<entryId>`). Timer and live ids carry their event id instead,
-/// so those lookups come back null here.
-ReportedEntry? findReportEntryByDisplayId(
-  Map<String, List<ReportedEntry>> reportsByDay,
-  String displayId,
-) {
-  for (final entries in reportsByDay.values) {
-    for (final entry in entries) {
-      if ('$reportDisplayIdPrefix${entry.id}' == displayId) return entry;
-    }
-  }
-  return null;
-}
-
 /// Builds a new manual report entry seeded from a task-event's planned
 /// (or already timer-logged) time. The id reuses the auto-report scheme
 /// (`rep:<eventId>`) so saving it via [ReportingCubit.upsertEntry] cleanly
@@ -170,20 +156,20 @@ List<ReportBlock> buildReportBlocks({
   DateTime? now,
 }) {
   final at = now ?? DateTime.now();
-  final accepted = <ReportedEntry>[];
-  for (final entries in reportsByDay.values) {
-    for (final entry in entries) {
-      if (!entry.auto) accepted.add(entry);
+  final accepted = <(String, ReportedEntry)>[];
+  for (final day in reportsByDay.entries) {
+    for (final entry in day.value) {
+      if (!entry.auto) accepted.add((day.key, entry));
     }
   }
-  final acceptedByEvent = <String, List<ReportedEntry>>{};
-  final extras = <ReportedEntry>[];
-  for (final entry in accepted) {
+  final acceptedByEvent = <String, List<(String, ReportedEntry)>>{};
+  final extras = <(String, ReportedEntry)>[];
+  for (final (day, entry) in accepted) {
     final eventId = entry.eventId;
     if (eventId == null) {
-      extras.add(entry);
+      extras.add((day, entry));
     } else {
-      acceptedByEvent.putIfAbsent(eventId, () => []).add(entry);
+      acceptedByEvent.putIfAbsent(eventId, () => []).add((day, entry));
     }
   }
 
@@ -378,13 +364,13 @@ List<ReportBlock> buildReportBlocks({
 
     final matches = acceptedByEvent[event.id];
     if (matches != null) {
-      for (final entry in matches) {
+      for (final (day, entry) in matches) {
         final end = entry.end.isAfter(entry.start)
             ? entry.end
             : entry.start.add(const Duration(hours: 1));
         blocks.add(
           ReportBlock(
-            displayId: '$reportDisplayIdPrefix${entry.id}',
+            displayId: reportAcceptedDisplayIdFor(day, entry.id),
             title: entry.title,
             start: entry.start,
             end: end,
@@ -450,13 +436,13 @@ List<ReportBlock> buildReportBlocks({
     }
   }
 
-  for (final entry in extras) {
+  for (final (day, entry) in extras) {
     final end = entry.end.isAfter(entry.start)
         ? entry.end
         : entry.start.add(const Duration(hours: 1));
     blocks.add(
       ReportBlock(
-        displayId: '$reportDisplayIdPrefix${entry.id}',
+        displayId: reportAcceptedDisplayIdFor(day, entry.id),
         title: entry.title,
         start: entry.start,
         end: end,
