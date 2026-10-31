@@ -8,6 +8,9 @@ import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
+import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
+import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
+import 'package:a_fish_in_sea/reporting/service/day_plan.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/view/report_chip.dart';
 import 'package:flutter/material.dart';
@@ -122,6 +125,51 @@ void main() {
       movedChips.map((c) => c.block.title),
       unorderedEquals(['Moved goal', 'Goal 2']),
     );
+    // refs #262: the same recurring report id is saved in two day buckets.
+    final reporting = context.read<ReportingCubit>();
+    final feeds = context.read<FeedCubit>();
+    final yesterday = DateTime(today.year, today.month, today.day - 1);
+    calendar.addEvent(
+      PlannerEvent(
+        id: 'daily',
+        subject: 'Recurring study',
+        start: yesterday.add(const Duration(hours: 9)),
+        end: yesterday.add(const Duration(hours: 10)),
+        recurrenceRule: 'FREQ=DAILY',
+      ),
+    );
+    for (final day in [yesterday, today]) {
+      reporting.runAutoReport(
+        day: day,
+        planned: daySlices(calendar, feeds, day),
+        dwells: [],
+        placeNames: {},
+      );
+      final entry = reporting
+          .entriesForDay(day)
+          .singleWhere((entry) => entry.eventId == 'daily');
+      reporting.upsertEntry(day, entry);
+    }
+    final earlier = reporting.entriesForDay(yesterday).single;
+    await $.pumpAndSettle();
+    final chip = find.byWidgetPredicate(
+      (w) =>
+          w is ReportChip &&
+          w.block.entryId == earlier.id &&
+          w.block.start == start,
+    );
+    expect(chip, findsOneWidget);
+    final displayId = $.tester.widget<ReportChip>(chip).block.displayId;
+    await $.tester.tap(chip);
+    await $.pumpAndSettle();
+    await $.tester.tap(find.byKey(ValueKey('report-delete:$displayId')));
+    await $.pumpAndSettle();
+    expect(
+      reporting.entriesForDay(today).where((e) => e.id == earlier.id),
+      isEmpty,
+    );
+    expect(reporting.entriesForDay(yesterday), [earlier]);
+    expect(chip, findsNothing);
     expect($.tester.takeException(), isNull);
   });
 }

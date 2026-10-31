@@ -28,15 +28,17 @@ bool applyReportedInterval({
       ? end
       : start.add(const Duration(minutes: 1));
 
-  final entry = findReportEntryByDisplayId(reporting.state, block.displayId);
-  if (entry != null) {
+  final location = findReportEntryLocationByDisplayId(
+    reporting.state,
+    block.displayId,
+  );
+  if (location != null) {
+    final entry = location.entry;
+    final bucket = DateTime.tryParse(location.day);
+    if (bucket == null) return false;
     if (entry.start == start && entry.end == safeEnd) return false;
     final updated = entry.copyWith(start: start, end: safeEnd);
-    final oldDay = DateTime(
-      entry.start.year,
-      entry.start.month,
-      entry.start.day,
-    );
+    final oldDay = bucket;
     final newDay = DateTime(start.year, start.month, start.day);
     if (oldDay == newDay) {
       reporting.upsertEntry(oldDay, updated);
@@ -48,6 +50,8 @@ bool applyReportedInterval({
     }
     return true;
   }
+
+  if (block.kind == ReportBlockKind.accepted) return false;
 
   final eventId = block.eventId;
   final sessionId = block.sessionId;
@@ -149,12 +153,19 @@ bool deleteReportedBlock({
 }) {
   if (block.kind == ReportBlockKind.live) return false;
 
-  final entry = findReportEntryByDisplayId(reporting.state, block.displayId);
-  if (entry != null) {
-    final day = DateTime(entry.start.year, entry.start.month, entry.start.day);
-    reporting.deleteEntry(day, entry.id);
+  final location = findReportEntryLocationByDisplayId(
+    reporting.state,
+    block.displayId,
+  );
+  if (location != null) {
+    final entry = location.entry;
+    final bucket = DateTime.tryParse(location.day);
+    if (bucket == null) return false;
+    reporting.deleteEntry(bucket, entry.id);
     return true;
   }
+
+  if (block.kind == ReportBlockKind.accepted) return false;
 
   final sessionId = block.sessionId;
   final eventId = block.eventId;
