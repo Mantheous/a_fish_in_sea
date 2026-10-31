@@ -10,6 +10,7 @@ import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
+import 'package:a_fish_in_sea/reporting/model/reported_entry.dart';
 import 'package:a_fish_in_sea/reporting/service/day_plan.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/service/calendar_report.dart';
@@ -150,7 +151,7 @@ void main() {
       final entry = reporting
           .entriesForDay(day)
           .singleWhere((entry) => entry.eventId == 'daily');
-      reporting.upsertEntry(day, entry);
+      reporting.upsertEntry(day, entry.copyWith(status: ReportStatus.attended));
     }
     final earlier = reporting.entriesForDay(yesterday).single;
     await $.pumpAndSettle();
