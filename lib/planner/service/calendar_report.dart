@@ -1,6 +1,7 @@
 import '../../common/time/time_session.dart';
 import '../../nodes/model/node.dart';
 import '../../reporting/model/reported_entry.dart';
+import '../../reporting/reporting_logic.dart' show dayKey;
 import '../model/event_reschedule.dart';
 import '../model/planner_event.dart';
 
@@ -353,18 +354,18 @@ List<ReportBlock> buildReportBlocks({
           ),
         );
       }
-      if (owned.isNotEmpty) continue;
-      // Every run belongs to a sibling event (the task's other plan block):
-      // this block's lane stays empty, Toggl-style — the entry sits on the
-      // row it happened during. Accepted entries stay hidden too, since the
-      // task already has real recorded time.
-      continue;
     }
-    if (liveStart != null) continue;
+    // A saved report belongs to its day bucket, even if its interval was
+    // moved across midnight. Only recordings for that day replace it.
+    final recordedDays = {
+      for (final session in sessions) dayKey(session.start),
+      if (liveStart != null) dayKey(liveStart),
+    };
 
     final matches = acceptedByEvent[event.id];
     if (matches != null) {
       for (final (day, entry) in matches) {
+        if (recordedDays.contains(day)) continue;
         final end = entry.end.isAfter(entry.start)
             ? entry.end
             : entry.start.add(const Duration(hours: 1));
@@ -455,56 +456,6 @@ List<ReportBlock> buildReportBlocks({
 
   blocks.sort((a, b) => a.start.compareTo(b.start));
   return blocks;
-}
-
-/// Which of a task's plan events a recording belongs to.
-///
-/// Toggl-style attribution: an entry sits on the row it happened during, so
-/// a task planned twice (say Monday 9am and Wednesday 2pm) shows Monday's
-/// run on Monday and Wednesday's on Wednesday instead of stacking both on
-/// one of them. Picks the event with the largest overlap, then the nearest
-/// one; ties break on earliest start, then id, so the choice is stable
-/// across rebuilds.
-String? _ownerEventId(
-  List<PlannerEvent> candidates,
-  DateTime start,
-  DateTime end,
-) {
-  if (candidates.isEmpty) return null;
-  PlannerEvent? best;
-  var bestOverlap = -1;
-  var bestGap = -1;
-  for (final event in candidates) {
-    final overlap = _overlapSeconds(event, start, end);
-    final gap = _gapSeconds(event, start, end);
-    final better =
-        best == null ||
-        overlap > bestOverlap ||
-        (overlap == bestOverlap && gap < bestGap) ||
-        (overlap == bestOverlap &&
-            gap == bestGap &&
-            (event.start.isBefore(best.start) ||
-                (event.start == best.start &&
-                    event.id.compareTo(best.id) < 0)));
-    if (better) {
-      best = event;
-      bestOverlap = overlap;
-      bestGap = gap;
-    }
-  }
-  return best?.id;
-}
-
-int _overlapSeconds(PlannerEvent event, DateTime start, DateTime end) {
-  final from = start.isAfter(event.start) ? start : event.start;
-  final to = end.isBefore(event.end) ? end : event.end;
-  return to.isAfter(from) ? to.difference(from).inSeconds : 0;
-}
-
-int _gapSeconds(PlannerEvent event, DateTime start, DateTime end) {
-  if (!end.isBefore(event.start) && !start.isAfter(event.end)) return 0;
-  if (end.isBefore(event.start)) return event.start.difference(end).inSeconds;
-  return start.difference(event.end).inSeconds.abs();
 }
 
 /// Event ids that already carry a report, including the sibling events of

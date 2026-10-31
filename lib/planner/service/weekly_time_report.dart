@@ -4,6 +4,7 @@ import '../../common/time/time_session.dart';
 import '../../nodes/model/node.dart';
 import '../../nodes/service/node_progress.dart';
 import '../../reporting/model/reported_entry.dart';
+import '../../reporting/reporting_logic.dart' show dayKey;
 import '../model/planner_event.dart';
 import 'calendar_report.dart' show isReportDisplayId;
 
@@ -96,10 +97,10 @@ WeeklyTimeReport buildWeeklyTimeReport({
     }
   }
 
-  final acceptedByEvent = <String, List<ReportedEntry>>{};
+  final acceptedByEvent = <String, List<(String, ReportedEntry)>>{};
   final extras = <ReportedEntry>[];
-  for (final entries in reportsByDay.values) {
-    for (final entry in entries) {
+  for (final day in reportsByDay.entries) {
+    for (final entry in day.value) {
       // Missed events are the absence of work, and unconfirmed auto entries
       // are guesses: neither counts as logged time (same rule as
       // stats_logic's recorded-time accounting).
@@ -108,7 +109,7 @@ WeeklyTimeReport buildWeeklyTimeReport({
       if (eventId == null) {
         extras.add(entry);
       } else {
-        acceptedByEvent.putIfAbsent(eventId, () => []).add(entry);
+        acceptedByEvent.putIfAbsent(eventId, () => []).add((day.key, entry));
       }
     }
   }
@@ -162,6 +163,7 @@ WeeklyTimeReport buildWeeklyTimeReport({
     if (isReportDisplayId(event.id)) continue;
     final backing = backingFor(event);
     final goal = goalFor(backing);
+    final recordedDays = <String>{};
 
     // All-day blocks never carry a timed session, but the user can still
     // file an accepted manual report against one, so only skip the
@@ -180,12 +182,13 @@ WeeklyTimeReport buildWeeklyTimeReport({
       var represented =
           liveStart != null && liveEnd != null && overlaps(liveStart, liveEnd);
       if (represented) {
+        recordedDays.add(dayKey(liveStart));
         final liveKey =
             'live|${backing?.id ?? event.id}|'
             '${liveStart.microsecondsSinceEpoch}';
         // The task's other plan events carry the same live timer; emit it
-        // once, but still mark this event represented so an accepted
-        // manual entry cannot double-count the running work.
+        // once, but still cover this day so an accepted manual entry
+        // for the same occurrence cannot double-count the running work.
         if (emittedSessions.add(liveKey)) {
           addIfOverlaps(
             title: event.subject,
@@ -204,6 +207,7 @@ WeeklyTimeReport buildWeeklyTimeReport({
       for (final session in _pairedSessions(event, backing)) {
         if (!overlaps(session.start, session.end)) continue;
         represented = true;
+        recordedDays.add(dayKey(session.start));
         if (!emittedSessions.add(session.id)) continue;
         addIfOverlaps(
           title: event.subject,
@@ -215,13 +219,13 @@ WeeklyTimeReport buildWeeklyTimeReport({
       if (represented) {
         if (backing != null) consumedNodeIds.add(backing.id);
         coveredEventIds.add(event.id);
-        continue;
       }
     }
 
     final matches = acceptedByEvent[event.id];
     if (matches != null) {
-      for (final entry in matches) {
+      for (final (day, entry) in matches) {
+        if (recordedDays.contains(day)) continue;
         final end = entry.end.isAfter(entry.start)
             ? entry.end
             : entry.start.add(const Duration(hours: 1));
@@ -289,7 +293,7 @@ WeeklyTimeReport buildWeeklyTimeReport({
       backing = linked.first;
     }
     final goal = goalFor(backing);
-    for (final e in entry.value) {
+    for (final (_, e) in entry.value) {
       final end = e.end.isAfter(e.start)
           ? e.end
           : e.start.add(const Duration(hours: 1));

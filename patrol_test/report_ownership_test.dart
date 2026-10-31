@@ -12,6 +12,8 @@ import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
 import 'package:a_fish_in_sea/reporting/service/day_plan.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
+import 'package:a_fish_in_sea/planner/service/calendar_report.dart';
+import 'package:a_fish_in_sea/planner/service/weekly_time_report.dart';
 import 'package:a_fish_in_sea/planner/view/report_chip.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -170,6 +172,39 @@ void main() {
     );
     expect(reporting.entriesForDay(yesterday), [earlier]);
     expect(chip, findsNothing);
+    // refs #264: a new timer on today's occurrence preserves yesterday.
+    final timerStart = start.add(const Duration(hours: 2));
+    calendar.startTracking('daily', now: timerStart);
+    calendar.stopTracking(
+      'daily',
+      now: timerStart.add(const Duration(minutes: 30)),
+    );
+    await $.pumpAndSettle();
+    expect(reporting.entriesForDay(yesterday), [earlier]);
+    final blocks = buildReportBlocks(
+      visibleEvents: calendar.state,
+      nodes: nodes.state,
+      reportsByDay: reporting.state,
+    ).where((b) => b.eventId == 'daily').toList();
+    expect(blocks, hasLength(2));
+    expect(blocks.first.kind, ReportBlockKind.accepted);
+    expect(blocks.last.kind, ReportBlockKind.timer);
+    final weekly = buildWeeklyTimeReport(
+      events: [calendar.byId('daily')!],
+      nodes: [],
+      reportsByDay: reporting.state,
+      weekStart: yesterday,
+    );
+    expect(weekly.weekTotal, const Duration(minutes: 90));
+    expect(
+      find.byWidgetPredicate(
+        (w) =>
+            w is ReportChip &&
+            w.block.eventId == 'daily' &&
+            w.block.kind == ReportBlockKind.timer,
+      ),
+      findsOneWidget,
+    );
     expect($.tester.takeException(), isNull);
   });
 }
