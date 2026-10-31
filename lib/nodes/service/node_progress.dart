@@ -1,6 +1,8 @@
 import '../../common/time/local_date.dart';
 import '../model/node.dart';
 
+part 'node_progress_targets.dart';
+
 /// Progress of a leaf node given its actuals. Clamped to [0, 1].
 /// Money leaves compare actual vs target, effort leaves minutes vs target,
 /// anki leaves cached review counts vs target, plain leaves are binary on
@@ -105,6 +107,9 @@ Map<String, double> progressForest(
       return childrenProgress(
           [for (final k in rated) visit(k.id, {...stack})]);
     }
+    // Inferred targets count each descendant once across all sibling paths,
+    // matching the subtree actuals traversal. Each parent gets its own set.
+    final targetSeen = <String>{};
     final moneyFlavor = node.money != null ||
         kids.any((k) => k.money != null || _subtreeHasMoney(k.id, byParent));
     if (moneyFlavor) {
@@ -112,7 +117,7 @@ Map<String, double> progressForest(
           kids.fold<double>(
               0,
               (sum, k) =>
-                  sum + _subtreeMoneyTarget(k.id, byId, byParent, {}));
+                  sum + _subtreeMoneyTarget(k.id, byId, byParent, targetSeen));
       if (target <= 0) {
         return childrenProgress(
             [for (final k in kids) visit(k.id, {...stack})]);
@@ -130,7 +135,7 @@ Map<String, double> progressForest(
           : kids.fold<double>(
               0,
               (sum, k) =>
-                  sum + _subtreeEffortTarget(k.id, byId, byParent, {}));
+                  sum + _subtreeEffortTarget(k.id, byId, byParent, targetSeen));
       if (target <= 0) {
         return childrenProgress(
             [for (final k in kids) visit(k.id, {...stack})]);
@@ -148,7 +153,7 @@ Map<String, double> progressForest(
           : kids.fold<double>(
               0,
               (sum, k) =>
-                  sum + _subtreeAnkiTarget(k.id, byId, byParent, {}));
+                  sum + _subtreeAnkiTarget(k.id, byId, byParent, targetSeen));
       if (target <= 0) {
         return childrenProgress(
             [for (final k in kids) visit(k.id, {...stack})]);
@@ -366,38 +371,6 @@ double _subtreeMoneyActual(
   return total;
 }
 
-double _subtreeMoneyTarget(
-  String id,
-  Map<String, Node> byId,
-  Map<String, List<Node>> byParent,
-  Set<String> seen,
-) {
-  if (!seen.add(id)) return 0.0;
-  final node = byId[id];
-  if (node == null) return 0.0;
-  var total = node.money?.effectiveTarget ?? 0.0;
-  for (final kid in byParent[id] ?? const <Node>[]) {
-    total += _subtreeMoneyTarget(kid.id, byId, byParent, seen);
-  }
-  return total;
-}
-
-double _subtreeEffortTarget(
-  String id,
-  Map<String, Node> byId,
-  Map<String, List<Node>> byParent,
-  Set<String> seen,
-) {
-  if (!seen.add(id)) return 0.0;
-  final node = byId[id];
-  if (node == null) return 0.0;
-  var total = (node.effort?.targetMinutes ?? 0).toDouble();
-  for (final kid in byParent[id] ?? const <Node>[]) {
-    total += _subtreeEffortTarget(kid.id, byId, byParent, seen);
-  }
-  return total;
-}
-
 /// Cached Anki reviews for [node] plus all descendants. Unlike time and
 /// money, Anki actuals live on the facet (last synced count), so there is
 /// no overrides map — sync writes the numbers, progress reads them.
@@ -432,22 +405,6 @@ double _subtreeAnkiActual(
   var total = (node.anki?.reviewsActual ?? 0).toDouble();
   for (final kid in byParent[id] ?? const <Node>[]) {
     total += _subtreeAnkiActual(kid.id, byId, byParent, seen);
-  }
-  return total;
-}
-
-double _subtreeAnkiTarget(
-  String id,
-  Map<String, Node> byId,
-  Map<String, List<Node>> byParent,
-  Set<String> seen,
-) {
-  if (!seen.add(id)) return 0.0;
-  final node = byId[id];
-  if (node == null) return 0.0;
-  var total = (node.anki?.targetReviews ?? 0).toDouble();
-  for (final kid in byParent[id] ?? const <Node>[]) {
-    total += _subtreeAnkiTarget(kid.id, byId, byParent, seen);
   }
   return total;
 }
