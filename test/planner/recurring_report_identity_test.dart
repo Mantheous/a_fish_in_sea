@@ -5,6 +5,7 @@ import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/service/calendar_report.dart';
 import 'package:a_fish_in_sea/planner/service/report_adjustment.dart';
 import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
+import 'package:a_fish_in_sea/reporting/model/reported_entry.dart';
 import 'package:a_fish_in_sea/reporting/service/day_plan.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
@@ -22,6 +23,84 @@ void main() {
     when(() => storage.delete(any())).thenAnswer((_) async {});
     HydratedBloc.storage = storage;
   });
+
+  for (final resize in [true, false]) {
+    test(
+      resize
+          ? 'end-only resize preserves a bucket different from the start day'
+          : 'move onto an occupied recurrence day leaves both reports unchanged',
+      () async {
+        final calendar = CalendarCubit();
+        final nodes = NodeCubit();
+        final reporting = ReportingCubit();
+        addTearDown(() async {
+          await reporting.close();
+          await nodes.close();
+          await calendar.close();
+        });
+        final monday = DateTime(2026, 10, 5);
+        final tuesday = DateTime(2026, 10, 6);
+        calendar.addEvent(
+          PlannerEvent(
+            id: 'daily',
+            subject: 'Study',
+            start: monday.add(const Duration(hours: 9)),
+            end: monday.add(const Duration(hours: 10)),
+            recurrenceRule: 'FREQ=DAILY',
+          ),
+        );
+        final first = ReportedEntry(
+          id: 'rep:daily',
+          eventId: 'daily',
+          title: 'Study',
+          start: monday.add(const Duration(hours: 9)),
+          end: monday.add(const Duration(hours: 10)),
+          status: ReportStatus.attended,
+          auto: false,
+        );
+        final second = first.copyWith(
+          start: resize
+              ? monday.add(const Duration(hours: 23))
+              : tuesday.add(const Duration(hours: 9)),
+          end: tuesday.add(Duration(hours: resize ? 1 : 10)),
+        );
+        reporting.upsertEntry(monday, first);
+        reporting.upsertEntry(tuesday, second);
+        final before = reporting.state;
+        final block =
+            buildReportBlocks(
+              visibleEvents: calendar.state,
+              nodes: [],
+              reportsByDay: before,
+            ).singleWhere(
+              (block) =>
+                  block.displayId ==
+                  reportAcceptedDisplayIdFor('2026-10-06', second.id),
+            );
+        final start = resize ? second.start : first.start;
+        final end = resize
+            ? second.end.add(const Duration(minutes: 30))
+            : first.end;
+
+        expect(
+          applyReportedInterval(
+            reporting: reporting,
+            calendar: calendar,
+            nodes: nodes,
+            block: block,
+            start: start,
+            end: end,
+          ),
+          resize,
+        );
+        expect(reporting.entriesForDay(monday), [first]);
+        expect(reporting.entriesForDay(tuesday), [
+          resize ? second.copyWith(end: end) : second,
+        ]);
+        if (!resize) expect(reporting.state, before);
+      },
+    );
+  }
 
   for (final action in ['delete', 'resize', 'move', 'stale']) {
     test('$action targets only the selected recurring report day', () async {

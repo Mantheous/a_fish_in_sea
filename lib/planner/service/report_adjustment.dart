@@ -39,10 +39,21 @@ bool applyReportedInterval({
     if (entry.start == start && entry.end == safeEnd) return false;
     final updated = entry.copyWith(start: start, end: safeEnd);
     final oldDay = bucket;
-    final newDay = DateTime(start.year, start.month, start.day);
+    // Overnight reports may be stored under a day other than their start.
+    // Keep that bucket unless the start actually crosses a calendar date.
+    final sameStartDay =
+        entry.start.year == start.year &&
+        entry.start.month == start.month &&
+        entry.start.day == start.day;
+    final newDay = sameStartDay
+        ? oldDay
+        : DateTime(start.year, start.month, start.day);
     if (oldDay == newDay) {
       reporting.upsertEntry(oldDay, updated);
     } else {
+      if (reporting.entriesForDay(newDay).any((e) => e.id == entry.id)) {
+        return false;
+      }
       RevertableHydratedCubit.atomic([reporting], () {
         reporting.deleteEntry(oldDay, entry.id);
         reporting.upsertEntry(newDay, updated);
