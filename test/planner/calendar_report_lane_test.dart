@@ -9,7 +9,6 @@ import 'package:a_fish_in_sea/planner/view/calendar_report_lane.dart';
 import 'package:a_fish_in_sea/planner/view/report_chip.dart';
 import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
 import 'package:a_fish_in_sea/reporting/model/reported_entry.dart';
-
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';

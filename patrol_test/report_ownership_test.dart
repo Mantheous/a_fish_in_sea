@@ -49,6 +49,8 @@ void main() {
     final context = $.tester.element(find.byType(HomePage));
     final nodes = context.read<NodeCubit>();
     final calendar = context.read<CalendarCubit>();
+    final reporting = context.read<ReportingCubit>();
+    final feeds = context.read<FeedCubit>();
     context.read<SettingsCubit>().setDefaultCalendarView(CalendarView.day);
     final today = DateTime.now();
     final start = DateTime(today.year, today.month, today.day, 9);
@@ -126,15 +128,13 @@ void main() {
       unorderedEquals(['Moved goal', 'Goal 2']),
     );
     // refs #262: the same recurring report id is saved in two day buckets.
-    final reporting = context.read<ReportingCubit>();
-    final feeds = context.read<FeedCubit>();
     final yesterday = DateTime(today.year, today.month, today.day - 1);
     calendar.addEvent(
       PlannerEvent(
         id: 'daily',
         subject: 'Recurring study',
-        start: yesterday.add(const Duration(hours: 9)),
-        end: yesterday.add(const Duration(hours: 10)),
+        start: yesterday.add(const Duration(hours: 11)),
+        end: yesterday.add(const Duration(hours: 12)),
         recurrenceRule: 'FREQ=DAILY',
       ),
     );
@@ -156,7 +156,7 @@ void main() {
       (w) =>
           w is ReportChip &&
           w.block.entryId == earlier.id &&
-          w.block.start == start,
+          w.block.start == start.add(const Duration(hours: 2)),
     );
     expect(chip, findsOneWidget);
     final displayId = $.tester.widget<ReportChip>(chip).block.displayId;
