@@ -159,7 +159,12 @@ class _PlanAppointmentOverlayState extends State<_PlanAppointmentOverlay> {
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: widget.onTap,
+                      onVerticalDragStart:
+                          widget.tracker?.onPlanVerticalDragStart,
                       onVerticalDragUpdate: widget.onVerticalDragUpdate,
+                      onVerticalDragEnd: widget.tracker?.onPlanVerticalDragEnd,
+                      onVerticalDragCancel:
+                          widget.tracker?.onPlanVerticalDragCancel,
                       child: widget.child,
                     ),
                   ),
