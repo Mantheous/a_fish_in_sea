@@ -188,6 +188,7 @@ class SyncEngine {
     places.applyJson(const {'places': <dynamic>[]});
     reporting.applyJson(const {'days': <String, dynamic>{}});
     tracking.applySyncedPoints(const <Map<String, dynamic>>[]);
+    settings.resetSynced();
     waterfall.applySyncedConfig(const {'startingBalance': 0.0});
     plaid.clearLocalSession();
     protectedDeletions.value = const [];
@@ -212,23 +213,70 @@ class SyncEngine {
     return next;
   }
 
+  /// Applies a saved account's collections without retriggering the
+  /// change-driven sync (this is a restore, not a user edit).
+  void _applySnapshot(AccountSnapshot snap) {
+    _applyingRemote = true;
+    try {
+      for (final entry in snap.collections.entries) {
+        if (entry.value.isNotEmpty) _apply(entry.key, entry.value);
+      }
+    } finally {
+      _applyingRemote = false;
+    }
+  }
+
   AccountSnapshot? _restoreLocalAccountIfPresent(
     String email,
     Map<String, AccountSnapshot> snapshots,
   ) {
     final snap = snapshots[email];
     if (snap == null) return null;
-    for (final entry in snap.collections.entries) {
-      _apply(entry.key, entry.value);
-    }
+    _applySnapshot(snap);
     return snap;
+  }
+
+  /// Item meta may only be restored alongside collection content. A snapshot
+  /// whose collection was already empty means this device's local store was
+  /// empty at sign-out (lost/evicted) — restoring its item meta would make
+  /// the next push send tombstones for items this device cannot show, wiping
+  /// the cloud copy on every device. Dropping those entries and re-pulling
+  /// from scratch brings the cloud copy back instead.
+  static bool _snapshotHasCollectionContent(
+    AccountSnapshot snap,
+    String itemKey,
+  ) {
+    final slash = itemKey.indexOf('/');
+    if (slash <= 0) return true;
+    final content = snap.collections[itemKey.substring(0, slash)];
+    return content == null || content.isNotEmpty;
+  }
+
+  /// Restored bookkeeping for [snap]: item meta for collections that still
+  /// had content, and a cursor that is reset to null when any tracked item
+  /// was dropped so a full pull can recover it.
+  ({String? cursor, Map<String, ItemMeta> items}) _restoredBookkeeping(
+    AccountSnapshot snap,
+  ) {
+    final items = <String, ItemMeta>{
+      for (final entry in snap.items.entries)
+        if (_snapshotHasCollectionContent(snap, entry.key))
+          entry.key: entry.value,
+    };
+    return (
+      cursor: items.length == snap.items.length ? snap.cursor : null,
+      items: items,
+    );
   }
 
   /// Epoch-fences any in-flight sync, revokes the session, disconnects Plaid,
   /// and records the signed-out account's email + snapshot in [SyncMetaCubit]
   /// (keeping on-device data intact by default so unsynced local work is never
   /// lost even across app restarts, while isolating it if a different account
-  /// signs in next).
+  /// signs in next). The snapshot is kept even when [clearLocalData] clears
+  /// the visible cubits, so signing back in as the same account restores
+  /// anything not yet synced; it is keyed per account and never applied to
+  /// a different account, so the next account still starts empty.
   void signOut({bool clearLocalData = false}) {
     _epoch++;
     _running = false;
@@ -240,8 +288,13 @@ class SyncEngine {
     auth.logout();
     plaid.clearLocalSession();
     if (clearLocalData) {
-      clearLocalAccountData();
+      // Persist the recovery snapshot and cleared sync bookkeeping *before*
+      // clearing the visible cubits. If the app dies mid-wipe, the next boot
+      // finds an empty baseline plus the snapshot and restores it — rather
+      // than restarting with empty cubits and a live baseline, which would
+      // tombstone every tracked item on the next sync.
       meta.reset(clearLastEmail: true, accountSnapshots: updatedSnapshots);
+      clearLocalAccountData();
     } else {
       meta.reset(
         lastEmail:
@@ -268,33 +321,41 @@ class SyncEngine {
       clearLocalAccountData();
       final restored =
           _restoreLocalAccountIfPresent(currentEmail, updatedSnapshots);
+      final bookkeeping =
+          restored == null ? null : _restoredBookkeeping(restored);
       meta.reset(
         clearLastEmail: true,
         lastEmail: currentEmail,
-        cursor: restored?.cursor,
-        items: restored?.items,
+        cursor: bookkeeping?.cursor,
+        items: bookkeeping?.items,
         accountSnapshots: updatedSnapshots,
       );
     } else if (currentEmail.isNotEmpty) {
       final restored = meta.state.accountSnapshots[currentEmail];
+      final wiped =
+          (meta.state.lastEmail?.trim().toLowerCase() ?? '') != currentEmail;
+      final hasBaseline =
+          restored != null &&
+          (restored.cursor != null || restored.items.isNotEmpty);
       if (meta.state.cursor == null &&
           meta.state.items.isEmpty &&
-          restored != null &&
-          (restored.cursor != null || restored.items.isNotEmpty)) {
-        // Returning to a previously-synced account with no active baseline
-        // (e.g. after app restart): reseed its item meta so the normal pull
-        // conflict path runs instead of overwriting local edits. Live cubits
-        // stay authoritative for the same account — only backfill
-        // collections that are currently empty (e.g. storage was evicted),
-        // never overwrite live data with the sign-out-time snapshot.
-        for (final entry in restored.collections.entries) {
-          if (_extract(entry.key).isEmpty && entry.value.isNotEmpty) {
-            _apply(entry.key, entry.value);
-          }
-        }
+          (hasBaseline || (wiped && restored != null))) {
+        // Returning to a previously-seen account with no active baseline
+        // (e.g. after a "Remove from this device" sign-out, or an account
+        // whose first pull never completed): reseed its item meta so the
+        // normal pull conflict path runs instead of treating the server
+        // copy as new and overwriting offline edits.
+        //
+        // Only re-apply the snapshot's collections when this sign-in follows
+        // a wipe. A Keep sign-out leaves live cubits — including offline
+        // edits and deletions — authoritative; re-applying the sign-out
+        // snapshot there would silently undo work done while signed out.
+        if (wiped) _applySnapshot(restored!);
+        final bookkeeping =
+            restored == null ? null : _restoredBookkeeping(restored);
         meta.save(
-          cursor: restored.cursor,
-          upsert: restored.items,
+          cursor: bookkeeping?.cursor,
+          upsert: bookkeeping?.items,
           lastEmail: currentEmail,
         );
       } else if (prevEmail != currentEmail) {
