@@ -26,6 +26,7 @@ import '../model/recurrence.dart';
 import '../model/task_assignee.dart';
 import '../service/calendar_report.dart';
 import '../service/event_reminders.dart';
+import 'event_calendar_policy.dart';
 import 'event_editor_actions.dart';
 import 'event_colors.dart';
 import 'event_time_sections.dart';
@@ -247,21 +248,6 @@ class EventEditorFormState extends State<EventEditorForm> {
 
   bool get _isSeriesInstance =>
       widget.existing?.isRecurringInstance ?? false;
-
-  /// Whether the editor should offer a calendar picker for [existing].
-  /// Personal events and single (non-recurring) Google events can move
-  /// between "This device" and any writable Google calendar. Read-only
-  /// feed events aren't editable at all, and repeating Google events are
-  /// excluded: moving one occurrence vs. a whole series needs different
-  /// Google calls and would risk duplicating the series.
-  bool _canChangeCalendar(PlannerEvent existing, FeedCubit feeds) {
-    if (!feeds.isEventEditable(existing)) return false;
-    if (existing.isRecurringInstance) return false;
-    if (existing.isFromFeed && existing.recurrenceRule.isNotEmpty) {
-      return false;
-    }
-    return true;
-  }
 
   @override
   void initState() {
@@ -647,7 +633,8 @@ class EventEditorFormState extends State<EventEditorForm> {
                   saveTargetFeedId: _saveTargetFeedId,
                   canChangeCalendar: (feeds) => existing == null
                       ? true
-                      : _canChangeCalendar(existing, feeds),
+                      : canChangeEventCalendar(existing,
+                          editable: feeds.isEventEditable(existing)),
                   onChanged: (value) =>
                       setState(() => _saveTargetFeedId = value),
                 ),
@@ -1168,7 +1155,7 @@ class EventEditorFormState extends State<EventEditorForm> {
     final base = calendarCubit.byId(widget.existing!.id) ?? widget.existing!;
     final ruleForMove =
         _customRepeat ? base.recurrenceRule : config.ruleFor(start);
-    if (_canChangeCalendar(base, feedCubit)) {
+    if (canChangeEventCalendar(base, editable: feedCubit.isEventEditable(base))) {
       final destFeedId = feedCubit.byId(_saveTargetFeedId ?? '')?.kind ==
               FeedKind.google
           ? _saveTargetFeedId
@@ -2574,21 +2561,23 @@ class _EventDetailSheet extends StatelessWidget {
             }
           }
           final report = onReport;
-          return EventDetailView(
-            event: current,
-            onEdit: () {
-              Navigator.of(context).pop();
-              showEventEditor(context, existing: current);
-            },
-            onReport: report == null
-                ? null
-                : () {
-                    Navigator.of(context).pop();
-                    Future.microtask(report);
-                  },
-            onClose: () => Navigator.of(context).pop(),
-            report: this.report,
-            onRecordReport: onRecordReport,
+          return SingleChildScrollView(
+            child: EventDetailView(
+              event: current,
+              onEdit: () {
+                Navigator.of(context).pop();
+                showEventEditor(context, existing: current);
+              },
+              onReport: report == null
+                  ? null
+                  : () {
+                      Navigator.of(context).pop();
+                      Future.microtask(report);
+                    },
+              onClose: () => Navigator.of(context).pop(),
+              report: this.report,
+              onRecordReport: onRecordReport,
+            ),
           );
         },
       ),
@@ -2737,8 +2726,6 @@ class EventDetailView extends StatelessWidget {
             _TaskStatusTile(event: event),
             const SizedBox(height: 8),
             TaskTimeSection(event: event),
-            const SizedBox(height: 8),
-            _GoalAssignmentSection(event: event),
           ] else if (!event.allDay) ...[
             // Plain calendar events (Google / personal) can also be timed
             // like in Toggl: one tap on Start records from now, Stop saves
@@ -2746,6 +2733,8 @@ class EventDetailView extends StatelessWidget {
             const SizedBox(height: 8),
             TimeReportSection(event: event),
           ],
+          const SizedBox(height: 8),
+          _GoalAssignmentSection(event: event),
           const SizedBox(height: 8),
           if (event.isFromFeed)
             Padding(
@@ -2851,6 +2840,7 @@ class _GoalAssignmentSection extends StatelessWidget {
     try {
       all = context.watch<NodeCubit>().state;
     } catch (_) {}
+    if (!event.isTask && all.isEmpty) return const SizedBox.shrink();
     Node? backing;
     for (final n in all) {
       if (n.calendarEventId == event.id ||

@@ -162,7 +162,7 @@ void main() {
         subject: base.subject,
         start: base.start,
         end: base.end,
-        recurrenceRule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR',
+        recurrenceRule: 'FREQ=DAILY', // Visible on weekends too.
       ),
     ]);
     await expectFilledEdit(tester, 'Weekly series');
