@@ -168,8 +168,18 @@ class _ReportLaneViewState extends State<ReportLaneView> {
     if (base == null) return;
     _dragDy += details.delta.dy;
     final minutes = _dragDy / _dragPxPerMinute;
-    var shifted = (_dragTop ? base.start : base.end).add(
-      Duration(microseconds: (minutes * 60000000).round()),
+    final edge = _dragTop ? base.start : base.end;
+    // Placement follows the ruler's clock time, so resize in those same
+    // coordinates. Adding elapsed time slips an hour across a clock change.
+    var shifted = DateTime(
+      edge.year,
+      edge.month,
+      edge.day,
+      edge.hour,
+      edge.minute,
+      edge.second,
+      edge.millisecond,
+      edge.microsecond + (minutes * 60000000).round(),
     );
     // Never move an edge somewhere the lane cannot draw it: the chip stops
     // at the grid boundary and that boundary is what a release commits.
