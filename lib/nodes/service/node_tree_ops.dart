@@ -1,6 +1,54 @@
 import '../../common/time/local_date.dart';
 import '../model/node.dart';
 
+/// Builds a fresh goal copy while retaining its plan and remapping parents.
+/// Purchase history belongs to the original goal, including on descendants.
+Node copySubtreeNode(
+  Node n, {
+  required String sourceId,
+  required Map<String, String> remap,
+  required DateTime at,
+  String? attachToParentId,
+}) => Node(
+  id: remap[n.id]!,
+  title: n.id == sourceId ? '${n.title} (copy)' : n.title,
+  notes: n.notes,
+  parentIds: [
+    for (final p in n.parentIds) remap[p] ?? p,
+    if (n.id == sourceId && attachToParentId != null) attachToParentId,
+  ],
+  status: NodeStatus.open,
+  createdAt: at,
+  isUnbounded: n.isUnbounded,
+  isFavorite: n.isFavorite,
+  schedule: n.schedule,
+  money: n.money?.copyWith(
+    status: MoneyStatus.projected,
+    clearActual: true,
+    linkedTransactionIds: const [],
+  ),
+  effort: n.effort,
+  // A copy is a fresh goal: same deck and target, but the review
+  // count starts over (like money actuals, which are cleared too).
+  anki: n.anki?.copyWith(clearReviewsActual: true, clearLastSyncedAt: true),
+  recurrence: n.recurrence,
+  auto: n.auto,
+  extraMetrics: n.extraMetrics,
+  classFacet: n.classFacet,
+  classNodeId: n.classNodeId,
+  rule: n.rule,
+  instanceOfId: n.instanceOfId == null
+      ? null
+      : (remap[n.instanceOfId] ?? n.instanceOfId),
+  overriddenFields: Set.of(n.overriddenFields),
+  sourceEventId: null,
+  calendarEventId: null,
+  feedId: n.feedId,
+  classId: n.classId,
+  classLabel: n.classLabel,
+  assignees: n.assignees,
+);
+
 /// Result of [planBreakdown]: one slice per child step to create.
 class BreakdownSlice {
   final String title;
