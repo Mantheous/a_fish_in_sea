@@ -2840,6 +2840,7 @@ class _GoalAssignmentSection extends StatelessWidget {
     try {
       all = context.watch<NodeCubit>().state;
     } catch (_) {}
+    if (!event.isTask && all.isEmpty) return const SizedBox.shrink();
     Node? backing;
     for (final n in all) {
       if (n.calendarEventId == event.id ||

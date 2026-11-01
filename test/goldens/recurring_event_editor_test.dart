@@ -32,8 +32,10 @@ Future<void> linkAndEditRecurringEvent(WidgetTester tester, BuildContext context
   await tester.pumpAndSettle();
   expect(context.read<NodeCubit>().state.any((n) => n.parentIds.contains('class')), isTrue);
   await tester.ensureVisible(find.text('Edit'));
-  if (golden) await expectLater(find.byType(MaterialApp),
-    matchesGoldenFile('recurring_event_editor.png'));
+  await tester.pumpAndSettle();
+  if (golden) {
+    await expectLater(find.byType(MaterialApp), matchesGoldenFile('recurring_event_editor.png'));
+  }
   await tester.tap(find.text('Edit'));
   await tester.pumpAndSettle();
   expect(tester.takeException(), isNull);
