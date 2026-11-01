@@ -2278,9 +2278,6 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   };
 }
 
-List<String> nodeLinkedTxnIds(Node node) =>
-    node.money?.linkedTransactionIds ?? const [];
-
 bool _sameAssignees(List<dynamic> a, List<dynamic> b) {
   if (a.length != b.length) return false;
   for (var i = 0; i < a.length; i++) {

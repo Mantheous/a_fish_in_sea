@@ -2,6 +2,9 @@ import 'package:a_fish_in_sea/finances/model/transaction.dart';
 
 import '../model/node.dart';
 
+List<String> nodeLinkedTxnIds(Node node) =>
+    node.money?.linkedTransactionIds ?? const [];
+
 /// Refresh only linked bank contributions; retain manual actuals and all
 /// other money fields. Kept separate from the persisted cubit's business logic.
 Node settleNodeTransactions(Node node, Map<Transaction, Transaction> changes) {
