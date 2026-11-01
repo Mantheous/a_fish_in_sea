@@ -3,6 +3,7 @@ import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:a_fish_in_sea/finances/service/plaid_link_handler.dart';
+import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -186,6 +187,7 @@ class BankConnectionCard extends StatelessWidget {
 Future<void> syncPlaidTransactions(BuildContext context) async {
   final plaidCubit = context.read<PlaidCubit>();
   final transactionsCubit = context.read<TransactionsCubit>();
+  final nodeCubit = context.read<NodeCubit>();
   final startedInDemo = DemoMode.isActive;
 
   final rawTransactions = await plaidCubit.fetchTransactions();
@@ -195,7 +197,9 @@ Future<void> syncPlaidTransactions(BuildContext context) async {
   final transactions =
       rawTransactions.map((json) => Transaction.fromPlaid(json)).toList();
 
-  transactionsCubit.syncFromPlaid(transactions);
+  nodeCubit.applyTransactionChanges(
+    transactionsCubit.syncFromPlaid(transactions),
+  );
   await plaidCubit.fetchBalance();
 
   if (context.mounted) {

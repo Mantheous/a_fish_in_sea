@@ -6,6 +6,7 @@ import 'package:a_fish_in_sea/finances/model/budget.dart';
 import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:a_fish_in_sea/finances/model/recurring_rule.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
+import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:a_fish_in_sea/goals/model/goal.dart';
 import 'package:a_fish_in_sea/planner/model/assignment_rule.dart';
 import 'package:a_fish_in_sea/planner/model/assignment_template.dart';
@@ -25,6 +26,7 @@ import '../service/node_batch_graph.dart';
 import '../service/node_progress.dart';
 import '../service/node_recurrence_schedule.dart';
 import '../service/node_tree_ops.dart';
+import '../service/node_transaction_settlement.dart';
 
 /// Unified goals/tasks store. One DAG of [Node]s replaces Goal + Task +
 /// Budget + Expense; transactions and calendar events stay separate and
@@ -1381,6 +1383,14 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     emitChange([
       for (final n in state)
         if (n.id != absorbId) n.id == keepId ? merged : n,
+    ]);
+  }
+
+  /// Bank settlement is a system write and must not add an undo entry.
+  void applyTransactionChanges(Map<Transaction, Transaction> changes) {
+    if (changes.isEmpty) return;
+    emitSilent([
+      for (final node in state) settleNodeTransactions(node, changes),
     ]);
   }
 
