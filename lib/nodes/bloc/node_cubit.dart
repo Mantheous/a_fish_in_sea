@@ -713,50 +713,13 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final copies = <Node>[];
     for (final n in state) {
       if (!closure.contains(n.id)) continue;
-      final parents = [
-        for (final p in n.parentIds) remap[p] ?? p,
-        if (n.id == sourceId && attachToParentId != null) attachToParentId,
-      ];
-      copies.add(
-        Node(
-          id: remap[n.id]!,
-          title: n.id == sourceId ? '${n.title} (copy)' : n.title,
-          notes: n.notes,
-          parentIds: parents,
-          status: NodeStatus.open,
-          createdAt: at,
-          isUnbounded: n.isUnbounded,
-          isFavorite: n.isFavorite,
-          schedule: n.schedule,
-          money: n.money?.copyWith(
-            status: MoneyStatus.projected,
-            clearActual: true,
-          ),
-          effort: n.effort,
-          // A copy is a fresh goal: same deck and target, but the review
-          // count starts over (like money actuals, which are cleared too).
-          anki: n.anki?.copyWith(
-            clearReviewsActual: true,
-            clearLastSyncedAt: true,
-          ),
-          recurrence: n.recurrence,
-          auto: n.auto,
-          extraMetrics: n.extraMetrics,
-          classFacet: n.classFacet,
-          classNodeId: n.classNodeId,
-          rule: n.rule,
-          instanceOfId: n.instanceOfId == null
-              ? null
-              : (remap[n.instanceOfId] ?? n.instanceOfId),
-          overriddenFields: Set.of(n.overriddenFields),
-          sourceEventId: null,
-          calendarEventId: null,
-          feedId: n.feedId,
-          classId: n.classId,
-          classLabel: n.classLabel,
-          assignees: n.assignees,
-        ),
-      );
+      copies.add(copySubtreeNode(
+        n,
+        sourceId: sourceId,
+        remap: remap,
+        at: at,
+        attachToParentId: attachToParentId,
+      ));
     }
     emitChange([...state, ...copies]);
     return null;

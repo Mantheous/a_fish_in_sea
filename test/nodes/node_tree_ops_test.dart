@@ -1,5 +1,9 @@
+import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
+import 'package:a_fish_in_sea/finances/model/time_scale.dart';
+import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/node_budget_progress.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
 import 'package:a_fish_in_sea/nodes/service/node_tree_ops.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -233,7 +237,8 @@ void main() {
           parents: ['goal', 'other'],
           schedule: ScheduleFacet(due: DateTime(2026, 9, 15)),
           money: const MoneyFacet(
-              targetAmount: 50, actualAmount: 50)));
+              targetAmount: 50, actualAmount: 50,
+              linkedTransactionIds: ['purchase'])));
       cubit.addNode(node('grand', parents: ['child']));
       cubit.addNode(node('linked',
           parents: ['goal'],
@@ -256,6 +261,7 @@ void main() {
       );
       expect(childCopy.money?.status, MoneyStatus.projected);
       expect(childCopy.money?.actualAmount, isNull);
+      expect(childCopy.money?.linkedTransactionIds, isEmpty);
       expect(cubit.byId('grand_copy_t')?.parentIds, ['child_copy_t']);
       // Event links are stripped on copies; completion reset.
       final linkedCopy = cubit.byId('linked_copy_t')!;
@@ -264,6 +270,52 @@ void main() {
       expect(linkedCopy.isOpen, isTrue);
       // Originals untouched.
       expect(cubit.byId('child')?.parentIds, ['goal', 'other']);
+      expect(cubit.byId('child')?.money?.linkedTransactionIds, ['purchase']);
+    });
+
+    test('copied purchase history never doubles the shared budget spending', () {
+      final cubit = NodeCubit();
+      final undo = UndoCubit();
+      addTearDown(cubit.close);
+      addTearDown(undo.close);
+      final budget = node('budget', money: const MoneyFacet(
+        targetAmount: 500, period: TimeScale.monthly));
+      cubit.addNode(budget);
+      cubit.addNode(node('child', parents: ['budget'],
+          money: const MoneyFacet(targetAmount: 50)));
+      final purchase = Transaction(
+        id: 'purchase', accountId: 'checking', amount: -50,
+        date: DateTime(2026, 9, 12), name: 'Groceries',
+        assignedNodeId: 'child',
+      );
+      cubit.linkTransaction(nodeId: 'child', transactionId: purchase.id,
+          transactionAmount: purchase.amount);
+      final original = cubit.byId('child')!;
+      double spending() => moneyActualForActivePeriod(
+          budget, cubit.state, [purchase], now: DateTime(2026, 9, 15));
+      expect(spending(), 50);
+      undo.resetHistory();
+
+      expect(cubit.duplicateSubtree('child', idSuffix: 't'), isNull);
+      final copy = cubit.byId('child_copy_t')!;
+      expect(copy.parentIds, ['budget']);
+      expect(copy.money?.targetAmount, 50);
+      expect(copy.money?.status, MoneyStatus.projected);
+      expect(copy.money?.actualAmount, isNull);
+      expect(copy.money?.linkedTransactionIds, isEmpty);
+      expect(cubit.byId('child'), original);
+      expect(purchase.assignedNodeId, original.id);
+      expect(spending(), 50);
+      expect(undo.state.undoStack, hasLength(1));
+
+      undo.undo();
+      expect(cubit.byId(copy.id), isNull);
+      expect(cubit.byId('child'), original);
+      expect(spending(), 50);
+      undo.redo();
+      expect(cubit.byId(copy.id)?.money?.linkedTransactionIds, isEmpty);
+      expect(cubit.byId('child'), original);
+      expect(spending(), 50);
     });
 
     test('rejects missing nodes and self-subtree attachment', () {
