@@ -19,6 +19,11 @@ void main() {
   patrolTest('Duplicate subtree starts a money goal without purchases', (
     $,
   ) async {
+    $.tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(
+      $.tester.platformDispatcher.clearAccessibilityFeaturesTestValue,
+    );
     final storage = MockStorage();
     when(() => storage.read(any())).thenReturn(null);
     when(() => storage.write(any(), any())).thenAnswer((_) async {});
