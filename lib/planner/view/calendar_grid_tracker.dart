@@ -298,8 +298,9 @@ class PlanGridTracker extends ChangeNotifier {
     }
     if (_viewportGlobal == rect &&
         _viewportLocal == local &&
-        previousHeight == _contentHeight)
+        previousHeight == _contentHeight) {
       return;
+    }
     _viewportGlobal = rect;
     _viewportLocal = local;
     _notify();
