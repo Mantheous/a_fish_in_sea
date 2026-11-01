@@ -21,6 +21,7 @@ Node copySubtreeNode(
   createdAt: at,
   isUnbounded: n.isUnbounded,
   isFavorite: n.isFavorite,
+  taskFlag: n.taskFlag,
   schedule: n.schedule,
   money: n.money?.copyWith(
     status: MoneyStatus.projected,

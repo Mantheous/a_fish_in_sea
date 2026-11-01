@@ -3,6 +3,7 @@ import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/goal_graph_filter.dart';
 import 'package:a_fish_in_sea/nodes/service/node_budget_progress.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
 import 'package:a_fish_in_sea/nodes/service/node_tree_ops.dart';
@@ -22,6 +23,7 @@ Node node(
   String? sourceEventId,
   String? calendarEventId,
   String? instanceOfId,
+  bool? taskFlag,
 }) =>
     Node(
       id: id,
@@ -35,6 +37,7 @@ Node node(
       sourceEventId: sourceEventId,
       calendarEventId: calendarEventId,
       instanceOfId: instanceOfId,
+      taskFlag: taskFlag,
     );
 
 void main() {
@@ -228,6 +231,41 @@ void main() {
   });
 
   group('duplicateSubtree', () {
+    for (final flag in <bool?>[true, false, null]) {
+      test('preserves nullable task setting $flag on root and child', () {
+        final cubit = NodeCubit();
+        addTearDown(cubit.close);
+        cubit.addNode(node('goal', taskFlag: flag));
+        cubit.addNode(node('child', parents: ['goal'], taskFlag: flag));
+
+        expect(cubit.duplicateSubtree('goal', idSuffix: 't'), isNull);
+        const filter = GoalGraphFilter(kind: GoalKindFilter.task);
+        for (final id in ['goal', 'child']) {
+          final original = cubit.byId(id)!;
+          final copy = cubit.byId('${id}_copy_t')!;
+          expect(copy.schedule, isNull);
+          expect(copy.taskFlag, flag);
+          expect(copy.isTask, flag ?? false);
+          expect(filter.matches(copy, DateTime(2026, 9, 1)), flag ?? false);
+          expect(original.taskFlag, flag);
+        }
+      });
+    }
+
+    test('preserves explicit task off and inferred task on dated copies', () {
+      final cubit = NodeCubit();
+      addTearDown(cubit.close);
+      for (final flag in <bool?>[false, null]) {
+        final id = 'dated_$flag';
+        cubit.addNode(node(id, taskFlag: flag,
+            schedule: ScheduleFacet(due: DateTime(2026, 9, 15))));
+        expect(cubit.duplicateSubtree(id, idSuffix: 't'), isNull);
+        final copy = cubit.byId('${id}_copy_t')!;
+        expect(copy.taskFlag, flag);
+        expect(copy.isTask, flag ?? true);
+      }
+    });
+
     test('deep-copies the closure, keeps shared parents, strips links',
         () {
       final cubit = NodeCubit();
