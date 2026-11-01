@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../common/time/local_date.dart';
 import '../service/calendar_report.dart';
 import 'report_chip.dart';
 
@@ -113,13 +114,17 @@ class _ReportLaneViewState extends State<ReportLaneView> {
     widget.day.year,
     widget.day.month,
     widget.day.day,
-  ).add(Duration(minutes: (widget.startHour * 60).round()));
+    0,
+    (widget.startHour * 60).round(),
+  );
 
   DateTime get _gridEnd => DateTime(
     widget.day.year,
     widget.day.month,
     widget.day.day,
-  ).add(Duration(minutes: (widget.endHour * 60).round()));
+    0,
+    (widget.endHour * 60).round(),
+  );
 
   List<ReportBlock> get _displayBlocks {
     final preview = _dragPreview;
@@ -248,11 +253,13 @@ class _ReportLaneViewState extends State<ReportLaneView> {
                 return const SizedBox.shrink();
               }
               final pxPerMinute = widget.pixelsPerMinute ?? height / minutes;
-              final gridStart = DateTime(
-                widget.day.year,
-                widget.day.month,
-                widget.day.day,
-              ).add(Duration(minutes: (widget.startHour * 60).round()));
+              // Grid coordinates follow the ruler's wall clock, including on
+              // days with a repeated or skipped daylight-saving hour.
+              double minuteOfGrid(DateTime time) =>
+                  localDayDistance(widget.day, time) * 1440 +
+                  time.hour * 60 +
+                  time.minute -
+                  widget.startHour * 60;
               // Chips that overlap in time fan out a little instead of hiding
               // each other completely (two reports over one stretch happen when
               // an event has more than one accepted entry).
@@ -274,14 +281,8 @@ class _ReportLaneViewState extends State<ReportLaneView> {
                 // The lane is a whole day tall and the overlay translates it
                 // with the plan grid's scroll offset, so no per-chip scroll
                 // math is involved.
-                final rawStart = block.start
-                    .difference(gridStart)
-                    .inMinutes
-                    .toDouble();
-                final rawEnd = block.end
-                    .difference(gridStart)
-                    .inMinutes
-                    .toDouble();
+                final rawStart = minuteOfGrid(block.start);
+                final rawEnd = minuteOfGrid(block.end);
                 final top = rawStart.clamp(0, minutes).toDouble() * pxPerMinute;
                 final bottom =
                     rawEnd.clamp(0, minutes).toDouble() * pxPerMinute;

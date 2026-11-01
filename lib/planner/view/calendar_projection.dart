@@ -341,8 +341,20 @@ class CalendarProjection {
     final byDay = <DateTime, List<ReportBlock>>{};
     for (final visible in days) {
       final day = DateTime(visible.year, visible.month, visible.day);
-      final gridStart = day.add(Duration(minutes: (startHour * 60).round()));
-      final gridEnd = day.add(Duration(minutes: (endHour * 60).round()));
+      final gridStart = DateTime(
+        day.year,
+        day.month,
+        day.day,
+        0,
+        (startHour * 60).round(),
+      );
+      final gridEnd = DateTime(
+        day.year,
+        day.month,
+        day.day,
+        0,
+        (endHour * 60).round(),
+      );
       byDay[day] = [
         for (final block in grouped[day] ?? const <ReportBlock>[])
           if (block.end.isAfter(gridStart) && block.start.isBefore(gridEnd))

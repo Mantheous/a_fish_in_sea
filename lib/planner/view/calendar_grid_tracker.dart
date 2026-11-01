@@ -1,5 +1,6 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 
 /// The plan calendar's time-grid geometry: its scroll position and where
@@ -31,6 +32,8 @@ class PlanGridTracker extends ChangeNotifier {
   Rect? _viewportGlobal;
   Rect? _viewportLocal;
   bool _notifyScheduled = false;
+  double? _contentHeight;
+  Drag? _forwardedDrag;
 
   /// Notifies only when the time grid's on-screen rect changes — a window
   /// resize, the side panel opening, or Day ↔ Week swapping the grid.
@@ -42,6 +45,9 @@ class PlanGridTracker extends ChangeNotifier {
   /// measurable share of frame time.
   final ValueNotifier<Rect?> viewportGlobalListenable = ValueNotifier(null);
   final ValueNotifier<Rect?> viewportLocalListenable = ValueNotifier(null);
+
+  /// Measured content height, including the part outside the viewport.
+  final ValueNotifier<double?> contentHeightListenable = ValueNotifier(null);
 
   /// The time grid's scroll position, or null before the first discovery.
   ScrollPosition? get position => _position;
@@ -63,7 +69,10 @@ class PlanGridTracker extends ChangeNotifier {
   /// Drops the tracked grid so the next [discover] picks up the one the new
   /// view built. Called when Day ↔ Week swaps the calendar's internals.
   void reset() {
+    onPlanVerticalDragCancel();
     _position?.removeListener(_onScrollTick);
+    _contentHeight = null;
+    contentHeightListenable.value = null;
     _state = null;
     _position = null;
     _viewportGlobal = null;
@@ -88,7 +97,11 @@ class PlanGridTracker extends ChangeNotifier {
     // order can't tell the visible view from the ones Syncfusion keeps
     // built for the other Day/Week/Month modes.
     final current = _position;
-    if (current != null && current.hasPixels && _viewportGlobal != null) {
+    if (current != null &&
+        current.hasPixels &&
+        _viewportGlobal != null &&
+        _state!.mounted &&
+        _overlapsAnchor(_state!.context)) {
       return;
     }
     final found = _findTimeGrid(root);
@@ -162,15 +175,23 @@ class PlanGridTracker extends ChangeNotifier {
     });
   }
 
+  void onPlanVerticalDragStart(DragStartDetails details) {
+    onPlanVerticalDragCancel();
+    _forwardedDrag = _position?.drag(details, () => _forwardedDrag = null);
+  }
+
   void onPlanVerticalDrag(DragUpdateDetails details) {
-    final plan = _position;
-    if (plan == null || !plan.hasPixels) return;
-    final target = (plan.pixels - details.delta.dy).clamp(
-      plan.minScrollExtent,
-      plan.maxScrollExtent,
-    );
-    if ((plan.pixels - target).abs() < 0.5) return;
-    plan.jumpTo(target);
+    _forwardedDrag?.update(details);
+  }
+
+  void onPlanVerticalDragEnd(DragEndDetails details) {
+    _forwardedDrag?.end(details);
+    _forwardedDrag = null;
+  }
+
+  void onPlanVerticalDragCancel() {
+    _forwardedDrag?.cancel();
+    _forwardedDrag = null;
   }
 
   bool _isTimeGridPosition(ScrollPosition position) {
@@ -255,6 +276,18 @@ class PlanGridTracker extends ChangeNotifier {
   void _captureRenderBox(BuildContext scrollableContext) {
     final render = scrollableContext.findRenderObject();
     if (render is! RenderBox || !render.hasSize) return;
+    final previousHeight = _contentHeight;
+    // The grid is a ListView. Its sliver reports the actual content height
+    // even when a short hour range fits entirely inside the viewport.
+    void measure(RenderObject object) {
+      if (object is RenderSliver && object.geometry != null) {
+        _contentHeight = object.geometry!.scrollExtent;
+      } else {
+        object.visitChildren(measure);
+      }
+    }
+
+    measure(render);
     final rect = render.localToGlobal(Offset.zero) & render.size;
     final anchor = _anchorKey?.currentContext?.findRenderObject();
     final Rect? local;
@@ -263,7 +296,10 @@ class PlanGridTracker extends ChangeNotifier {
     } else {
       local = null;
     }
-    if (_viewportGlobal == rect && _viewportLocal == local) return;
+    if (_viewportGlobal == rect &&
+        _viewportLocal == local &&
+        previousHeight == _contentHeight)
+      return;
     _viewportGlobal = rect;
     _viewportLocal = local;
     _notify();
@@ -277,6 +313,14 @@ class PlanGridTracker extends ChangeNotifier {
   /// track the grid without a frame of lag.
   void _notify() {
     void publish() {
+      final position = _position;
+      contentHeightListenable.value =
+          _contentHeight ??
+          (position != null && position.hasContentDimensions
+              ? position.maxScrollExtent -
+                    position.minScrollExtent +
+                    position.viewportDimension
+              : null);
       // Viewport listeners only hear about real geometry changes: they are
       // the resize path, not the scroll path.
       if (viewportGlobalListenable.value != _viewportGlobal) {
@@ -306,6 +350,8 @@ class PlanGridTracker extends ChangeNotifier {
   @override
   void dispose() {
     _position?.removeListener(_onScrollTick);
+    onPlanVerticalDragCancel();
+    contentHeightListenable.dispose();
     viewportGlobalListenable.dispose();
     viewportLocalListenable.dispose();
     super.dispose();
