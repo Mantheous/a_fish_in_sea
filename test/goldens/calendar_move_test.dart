@@ -22,6 +22,38 @@ void main() {
       });
     }
   }
+  for (final legacy in [false, true]) {
+    testWidgets('repeating move survives refresh (legacy: $legacy)', (
+      tester,
+    ) async {
+      await pumpGoldenPage(tester, const SizedBox());
+      await verifyCalendarMove(
+        tester,
+        tester.element(find.byType(Scaffold).first),
+        source: null,
+        destination: 'b',
+        repeating: true,
+        legacy: legacy,
+      );
+    });
+  }
+  for (final refreshFails in [false, true]) {
+    testWidgets(
+      'unconfirmed repeating transfer keeps original ($refreshFails)',
+      (tester) async {
+        await pumpGoldenPage(tester, const SizedBox());
+        await verifyCalendarMove(
+          tester,
+          tester.element(find.byType(Scaffold).first),
+          source: null,
+          destination: 'b',
+          repeating: true,
+          refreshFails: refreshFails,
+          missingOccurrence: !refreshFails,
+        );
+      },
+    );
+  }
   testWidgets('failed create keeps the original recording', (tester) async {
     await pumpGoldenPage(tester, const SizedBox());
     await verifyCalendarMove(

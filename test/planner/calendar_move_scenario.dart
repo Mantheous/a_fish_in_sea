@@ -22,6 +22,9 @@ Future<void> verifyCalendarMove(
   required String? destination,
   bool legacy = false,
   bool createFails = false,
+  bool repeating = false,
+  bool refreshFails = false,
+  bool missingOccurrence = false,
   bool golden = false,
 }) async {
   final calendar = context.read<CalendarCubit>();
@@ -45,6 +48,7 @@ Future<void> verifyCalendarMove(
     end: start.add(const Duration(hours: 1)),
     feedId: source,
     sourceUid: source == null ? null : 'remote-original',
+    recurrenceRule: repeating ? 'FREQ=DAILY;COUNT=2' : '',
     sessions: legacy ? const [] : sessions,
     actualStart: sessions.first.start,
     actualEnd: sessions.last.end,
@@ -81,6 +85,39 @@ Future<void> verifyCalendarMove(
     expect(event.taskId, isNull);
   }
 
+  // The create returns a master, but fetches return expanded occurrences.
+  // Put a different occurrence first so transferring to an arbitrary row
+  // would duplicate or misplace the recording.
+  final expanded = [
+    PlannerEvent(
+      id: 'next-occurrence',
+      subject: base.subject,
+      start: start.add(const Duration(days: 1)),
+      end: base.end.add(const Duration(days: 1)),
+      feedId: destination,
+      sourceUid: 'new-remote-next',
+      seriesId: 'new-remote',
+    ),
+    if (!missingOccurrence)
+      PlannerEvent(
+        id: 'destination',
+        subject: base.subject,
+        start: start.toUtc(),
+        end: base.end.toUtc(),
+        feedId: destination,
+        sourceUid: 'new-remote-first',
+        seriesId: 'new-remote',
+      ),
+  ];
+  when(
+    () => google.fetchEvents(
+      calendarId: any(named: 'calendarId'),
+      feedId: any(named: 'feedId'),
+    ),
+  ).thenAnswer((_) async {
+    if (refreshFails) throw const GoogleCalendarException('Refresh denied');
+    return expanded;
+  });
   when(
     () => google.createEvent(
       calendarId: any(named: 'calendarId'),
@@ -93,12 +130,13 @@ Future<void> verifyCalendarMove(
     expectRecording(draft);
     if (createFails) throw const GoogleCalendarException('Creation denied');
     return PlannerEvent(
-      id: 'destination',
+      id: repeating ? 'series-master' : 'destination',
       subject: draft.subject,
       start: draft.start,
       end: draft.end,
       feedId: destination,
       sourceUid: 'new-remote',
+      recurrenceRule: draft.recurrenceRule,
     );
   });
   when(
@@ -149,10 +187,21 @@ Future<void> verifyCalendarMove(
   await tester.ensureVisible(find.text('Save'));
   await tester.tap(find.text('Save'));
   await tester.pumpAndSettle();
-  if (createFails) {
+  if (createFails || refreshFails || missingOccurrence) {
     expect(calendar.byId(base.id), base);
-    expect(calendar.state.where((e) => e.id != base.id), isEmpty);
-    expect(find.text('Creation denied'), findsOneWidget);
+    if (createFails) {
+      expect(calendar.state.where((e) => e.id != base.id), isEmpty);
+      expect(find.text('Creation denied'), findsOneWidget);
+    } else {
+      expect(
+        find.text(
+          'Couldn’t confirm the recorded time on the new calendar. '
+          'The original event has been kept.',
+        ),
+        findsOneWidget,
+      );
+      expect(calendar.state.where((e) => e.isTracking), [base]);
+    }
     verifyNever(
       () => google.deleteEvent(
         calendarId: any(named: 'calendarId'),
@@ -163,9 +212,27 @@ Future<void> verifyCalendarMove(
     await tester.pumpAndSettle();
   } else {
     expect(calendar.byId(base.id), isNull);
-    final moved = calendar.state.singleWhere((e) => e.subject == base.subject);
+    final moved = calendar.state.singleWhere(
+      (e) => e.feedId == destination && (!repeating || e.id == 'destination'),
+    );
     expect(moved.feedId, destination);
     expectRecording(moved);
+    if (repeating) {
+      // A later Google fetch still has no local recordings. The merge must
+      // retain them on just the first occurrence, without a phantom master.
+      await feeds.syncFeed(destination!);
+      expectRecording(calendar.byId(moved.id)!);
+      expect(calendar.byId('series-master'), isNull);
+      final next = calendar.byId('next-occurrence')!;
+      expect(next.recordedSessions, isEmpty);
+      expect(next.actualStart, isNull);
+      expect(next.actualEnd, isNull);
+      expect(next.timerStartedAt, isNull);
+      expect(calendar.state.where((e) => e.isTracking).length, 1);
+      verify(
+        () => google.fetchEvents(calendarId: destination, feedId: destination),
+      ).called(2);
+    }
     if (source != null) {
       verify(
         () =>

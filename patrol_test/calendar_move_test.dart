@@ -40,5 +40,12 @@ void main() {
         destination: route.$2,
       );
     }
+    await verifyCalendarMove(
+      $.tester,
+      context,
+      source: null,
+      destination: 'b',
+      repeating: true,
+    );
   });
 }
