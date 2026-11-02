@@ -26,6 +26,7 @@ import '../model/recurrence.dart';
 import '../model/task_assignee.dart';
 import '../service/calendar_report.dart';
 import '../service/event_reminders.dart';
+import '../service/feed_event_merge.dart';
 import 'event_calendar_policy.dart';
 import 'event_editor_actions.dart';
 import 'event_colors.dart';
@@ -1286,30 +1287,27 @@ class EventEditorFormState extends State<EventEditorForm> {
     } catch (_) {}
     final nodes = nodeCubit;
 
+    final draft = eventDraftForCalendarMove(
+      base: base,
+      subject: subject,
+      notes: notes,
+      location: location,
+      start: start,
+      end: end,
+      allDay: _allDay,
+      rule: rule,
+      taskId: _sourceTaskId,
+      isTask: _isTask,
+      done: done,
+      placeId: _placeId,
+      assignees: _people,
+      reminderMinutesBefore: _reminderMinutesBefore,
+    );
+
     if (destFeedId == null) {
       // Google → This device: snapshot locally first (never loses data),
       // then delete the remote copy.
-      final now = DateTime.now();
-      final completedAt =
-          done ? (base.done ? base.completedAt ?? now : now) : null;
-      final local = PlannerEvent(
-        id: 'evt:${DateTime.now().microsecondsSinceEpoch}',
-        subject: subject,
-        notes: notes,
-        location: location,
-        start: start,
-        end: end,
-        allDay: _allDay,
-        recurrenceRule: rule,
-        taskId: _sourceTaskId,
-        isTask: _isTask,
-        done: done,
-        completedAt: completedAt,
-        placeId: _placeId,
-        assignees: List.of(_people),
-        reminderMinutesBefore:
-            _reminderMinutesBefore ?? base.reminderMinutesBefore,
-      );
+      final local = draft;
       setState(() => _saving = true);
       calendarCubit.addEvent(local);
       if (_sourceTaskId != null && nodes != null) {
@@ -1353,25 +1351,6 @@ class EventEditorFormState extends State<EventEditorForm> {
       );
       return;
     }
-    final now = DateTime.now();
-    final draft = PlannerEvent(
-      id: 'evt:${DateTime.now().microsecondsSinceEpoch}',
-      subject: subject,
-      notes: notes,
-      location: location,
-      start: start,
-      end: end,
-      allDay: _allDay,
-      recurrenceRule: rule,
-      taskId: _sourceTaskId,
-      isTask: _isTask,
-      done: done,
-      completedAt: done ? (base.done ? base.completedAt ?? now : now) : null,
-      placeId: _placeId,
-      assignees: List.of(_people),
-      reminderMinutesBefore:
-          _reminderMinutesBefore ?? base.reminderMinutesBefore,
-    );
     setState(() => _saving = true);
     final result =
         await feedCubit.pushEventCreate(feed: destFeed, event: draft);
