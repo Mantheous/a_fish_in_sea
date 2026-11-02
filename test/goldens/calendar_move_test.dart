@@ -54,6 +54,24 @@ void main() {
       },
     );
   }
+  for (final destination in [null, 'b']) {
+    for (final legacy in [false, true]) {
+      testWidgets(
+        'failed delete to $destination keeps one recording owner (legacy: $legacy)',
+        (tester) async {
+          await pumpGoldenPage(tester, const SizedBox());
+          await verifyCalendarMove(
+            tester,
+            tester.element(find.byType(Scaffold).first),
+            source: 'a',
+            destination: destination,
+            legacy: legacy,
+            deleteFails: true,
+          );
+        },
+      );
+    }
+  }
   testWidgets('failed create keeps the original recording', (tester) async {
     await pumpGoldenPage(tester, const SizedBox());
     await verifyCalendarMove(

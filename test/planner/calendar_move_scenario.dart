@@ -4,6 +4,7 @@ import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
+import 'package:a_fish_in_sea/planner/service/calendar_report.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
 import 'package:a_fish_in_sea/planner/view/event_editor.dart';
@@ -22,6 +23,7 @@ Future<void> verifyCalendarMove(
   required String? destination,
   bool legacy = false,
   bool createFails = false,
+  bool deleteFails = false,
   bool repeating = false,
   bool refreshFails = false,
   bool missingOccurrence = false,
@@ -109,12 +111,25 @@ Future<void> verifyCalendarMove(
         seriesId: 'new-remote',
       ),
   ];
+  PlannerEvent? remoteCreated;
   when(
     () => google.fetchEvents(
       calendarId: any(named: 'calendarId'),
       feedId: any(named: 'feedId'),
     ),
-  ).thenAnswer((_) async {
+  ).thenAnswer((call) async {
+    if (deleteFails) {
+      return call.namedArguments[#feedId] == source
+          ? [
+              base.copyWith(
+                sessions: const [],
+                clearActualStart: true,
+                clearActualEnd: true,
+                clearTimerStartedAt: true,
+              ),
+            ]
+          : [remoteCreated!];
+    }
     if (refreshFails) throw const GoogleCalendarException('Refresh denied');
     return expanded;
   });
@@ -129,7 +144,7 @@ Future<void> verifyCalendarMove(
     final draft = call.namedArguments[#event] as PlannerEvent;
     expectRecording(draft);
     if (createFails) throw const GoogleCalendarException('Creation denied');
-    return PlannerEvent(
+    return remoteCreated = PlannerEvent(
       id: repeating ? 'series-master' : 'destination',
       subject: draft.subject,
       start: draft.start,
@@ -147,6 +162,7 @@ Future<void> verifyCalendarMove(
   ).thenAnswer((_) async {
     // The destination already contains every recording before remote deletion.
     expectRecording(calendar.state.singleWhere((e) => e.id != base.id));
+    if (deleteFails) throw const GoogleCalendarException('Deletion denied');
   });
   final route = Navigator.of(context).push<void>(
     MaterialPageRoute(
@@ -210,6 +226,40 @@ Future<void> verifyCalendarMove(
     );
     Navigator.of(context).pop();
     await tester.pumpAndSettle();
+  } else if (deleteFails) {
+    void expectOriginalOwnsRecordings() {
+      expectRecording(calendar.byId(base.id)!);
+      final copy = calendar.state.singleWhere((e) => e.id != base.id);
+      expect(copy.feedId, destination);
+      expect(copy.sessions, isEmpty);
+      expect(copy.recordedSessions, isEmpty);
+      expect(copy.actualStart, isNull);
+      expect(copy.actualEnd, isNull);
+      expect(copy.timerStartedAt, isNull);
+      expect(calendar.state.where((e) => e.isTracking).map((e) => e.id), [
+        base.id,
+      ]);
+      List<(ReportBlockKind, String?, DateTime, DateTime)> report(
+        List<PlannerEvent> events,
+      ) => buildReportBlocks(
+        visibleEvents: events,
+        nodes: context.read<NodeCubit>().state,
+        reportsByDay: const {},
+        now: base.end,
+      ).map((b) => (b.kind, b.sessionId, b.start, b.end)).toList();
+      // Compare every finished and live interval with the original day's
+      // report, so an extra recording or running block cannot go unnoticed.
+      expect(report(calendar.eventsOnDay(start)), report([base]));
+    }
+
+    expect(find.textContaining('Deletion denied'), findsOneWidget);
+    expectOriginalOwnsRecordings();
+    await feeds.syncFeed(source!);
+    if (destination != null) await feeds.syncFeed(destination);
+    expectOriginalOwnsRecordings();
+    verify(
+      () => google.deleteEvent(calendarId: source, eventId: 'remote-original'),
+    ).called(1);
   } else {
     expect(calendar.byId(base.id), isNull);
     final moved = calendar.state.singleWhere(

@@ -35,6 +35,8 @@ import 'people_field.dart';
 import 'reminder_prompt.dart' show ReminderField, maybePromptForEventReminder;
 import 'report_detail_card.dart';
 
+part 'event_editor_calendar_move.dart';
+
 Future<bool?> showEventEditor(
   BuildContext context, {
   PlannerEvent? existing,
@@ -1260,154 +1262,7 @@ class EventEditorFormState extends State<EventEditorForm> {
     widget.onFinished?.call();
   }
 
-  /// Moves an edited event between "This device" (null) and a Google
-  /// calendar, or between two Google calendars. Implemented as create in
-  /// the destination + delete from the source using the existing push
-  /// endpoints, so no server change is needed. Local-only state (task
-  /// flag, people, place) is re-asserted on the new copy; backing tasks
-  /// for the old id are removed.
-  Future<void> _moveEvent(
-    BuildContext context, {
-    required PlannerEvent base,
-    required String? destFeedId,
-    required String subject,
-    required String? notes,
-    required String? location,
-    required DateTime start,
-    required DateTime end,
-    required String rule,
-    required bool done,
-  }) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final feedCubit = context.read<FeedCubit>();
-    final calendarCubit = context.read<CalendarCubit>();
-    NodeCubit? nodeCubit;
-    try {
-      nodeCubit = context.read<NodeCubit>();
-    } catch (_) {}
-    final nodes = nodeCubit;
-
-    final draft = eventDraftForCalendarMove(
-      base: base,
-      subject: subject,
-      notes: notes,
-      location: location,
-      start: start,
-      end: end,
-      allDay: _allDay,
-      rule: rule,
-      taskId: _sourceTaskId,
-      isTask: _isTask,
-      done: done,
-      placeId: _placeId,
-      assignees: _people,
-      reminderMinutesBefore: _reminderMinutesBefore,
-    );
-
-    if (destFeedId == null) {
-      // Google → This device: snapshot locally first (never loses data),
-      // then delete the remote copy.
-      final local = draft;
-      setState(() => _saving = true);
-      calendarCubit.addEvent(local);
-      if (_sourceTaskId != null && nodes != null) {
-        try {
-          nodes.setCalendarEvent(_sourceTaskId!, local.id);
-        } catch (_) {}
-      }
-      _syncTaskLink(local);
-      await EventReminderService.scheduleReminder(local);
-      final error = await feedCubit.pushEventDelete(base);
-      if (!mounted) return;
-      setState(() => _saving = false);
-      if (error != null) {
-        messenger.showSnackBar(
-          SnackBar(
-            content: Text(
-              'Saved to this device, but couldn’t remove the Google copy: $error',
-            ),
-          ),
-        );
-        widget.onFinished?.call();
-        return;
-      }
-      if (nodes != null) {
-        try {
-          nodes.removeNodesForEvent(base.id);
-          nodes.clearCalendarEventForEvent(base.id);
-        } catch (_) {}
-      }
-      widget.onFinished?.call();
-      return;
-    }
-
-    final destFeed = feedCubit.byId(destFeedId);
-    if (destFeed == null ||
-        destFeed.kind != FeedKind.google ||
-        destFeed.calendarId == null ||
-        destFeed.calendarId!.isEmpty) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Choose a Google calendar to move to.')),
-      );
-      return;
-    }
-    setState(() => _saving = true);
-    final result =
-        await feedCubit.pushEventCreate(feed: destFeed, event: draft);
-    if (!mounted) return;
-    if (result.error != null) {
-      setState(() => _saving = false);
-      messenger.showSnackBar(SnackBar(content: Text(result.error!)));
-      return;
-    }
-    final newId = result.created?.id ?? draft.id;
-    if (_sourceTaskId != null && nodes != null) {
-      try {
-        nodes.setCalendarEvent(_sourceTaskId!, newId);
-      } catch (_) {}
-    }
-    _applyLocalAssignees(newId);
-    _restorePlaceId(newId);
-    _restoreReminder(newId);
-    _mirrorAssigneesToSourceTask();
-    _applyTaskLinkPostSync(newId);
-    await EventReminderService.scheduleReminder(
-      calendarCubit.byId(newId) ?? draft,
-    );
-    if (base.isFromFeed) {
-      final deleteError = await feedCubit.pushEventDelete(base);
-      if (!mounted) return;
-      setState(() => _saving = false);
-      if (deleteError != null) {
-        messenger.showSnackBar(
-          SnackBar(
-            content: Text(
-              'Saved to ${destFeed.name}, but couldn’t remove the original: $deleteError',
-            ),
-          ),
-        );
-        widget.onFinished?.call();
-        return;
-      }
-      if (nodes != null) {
-        try {
-          nodes.removeNodesForEvent(base.id);
-          nodes.clearCalendarEventForEvent(base.id);
-        } catch (_) {}
-      }
-    } else {
-      calendarCubit.deleteEvent(base.id);
-      if (nodes != null) {
-        try {
-          nodes.removeNodesForEvent(base.id);
-          nodes.clearCalendarEventForEvent(base.id);
-        } catch (_) {}
-      }
-      if (!mounted) return;
-      setState(() => _saving = false);
-    }
-    widget.onFinished?.call();
-  }
+  void _setMoveSaving(bool saving) => setState(() => _saving = saving);
 
   /// Re-asserts the editor's place on the freshly synced Google copy.
   /// Google never stores it, so without this a calendar move (or any

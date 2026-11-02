@@ -40,6 +40,15 @@ void main() {
         destination: route.$2,
       );
     }
+    for (final destination in [null, 'b']) {
+      await verifyCalendarMove(
+        $.tester,
+        context,
+        source: 'a',
+        destination: destination,
+        deleteFails: true,
+      );
+    }
     await verifyCalendarMove(
       $.tester,
       context,
