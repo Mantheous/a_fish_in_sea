@@ -3,6 +3,7 @@ import 'package:a_fish_in_sea/finances/model/time_scale.dart';
 import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/auto_goal.dart';
 import 'package:a_fish_in_sea/nodes/service/goal_graph_filter.dart';
 import 'package:a_fish_in_sea/nodes/service/node_budget_progress.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
@@ -231,6 +232,55 @@ void main() {
   });
 
   group('duplicateSubtree', () {
+    test('copied class owns its reopened work; original stays complete', () {
+      final cubit = NodeCubit();
+      addTearDown(cubit.close);
+      final originalClass = node('class').copyWith(
+        classFacet: const ClassFacet(),
+        auto: const AutoFacet(metric: AutoMetric.allDone),
+      );
+      final task = node('task', parents: ['class'], status: NodeStatus.done)
+          .copyWith(classNodeId: 'class');
+      cubit.addNode(originalClass);
+      cubit.addNode(task);
+      AutoGoalReading reading(Node cls) => evaluateAutoGoal(
+          cls, now: DateTime(2026, 9, 1), nodes: cubit.state);
+      expect(reading(originalClass).satisfied, isTrue);
+
+      expect(cubit.duplicateSubtree('class', idSuffix: 't'), isNull);
+      final copy = cubit.byId('class_copy_t')!;
+      final copiedTask = cubit.byId('task_copy_t')!;
+      expect(copiedTask.classNodeId, copy.id);
+      expect(copiedTask.parentIds, [copy.id]);
+      expect(copiedTask.isOpen, isTrue);
+      expect(reading(copy).totalCount, 1);
+      expect(reading(copy).doneCount, 0);
+      expect(reading(copy).satisfied, isFalse);
+      expect(reading(originalClass).totalCount, 1);
+      expect(reading(originalClass).doneCount, 1);
+      expect(reading(originalClass).progress, 1);
+      expect(reading(originalClass).satisfied, isTrue);
+      expect(cubit.byId('class'), originalClass);
+      expect(cubit.byId('task'), task);
+    });
+
+    for (final membership in <String?>['internal', 'external', null]) {
+      test('remaps only internal membership $membership, keeping provenance', () {
+        final original = node('task').copyWith(
+          classNodeId: membership,
+          feedId: 'feed', classId: 'course', classLabel: 'Course',
+        );
+        final copy = copySubtreeNode(original, sourceId: 'task',
+          remap: {'task': 'task-copy', 'internal': 'class-copy'},
+          at: DateTime(2026, 9, 1));
+        expect(copy.classNodeId,
+            membership == 'internal' ? 'class-copy' : membership);
+        expect(copy.feedId, original.feedId);
+        expect(copy.classId, original.classId);
+        expect(copy.classLabel, original.classLabel);
+      });
+    }
+
     for (final flag in <bool?>[true, false, null]) {
       test('preserves nullable task setting $flag on root and child', () {
         final cubit = NodeCubit();
