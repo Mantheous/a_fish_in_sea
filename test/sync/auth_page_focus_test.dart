@@ -76,6 +76,37 @@ void main() {
     expect(hasFocus(tester, 1), isTrue);
   });
 
+  testWidgets(
+    'password tap accepts input on the focused connection and masks it',
+    (tester) async {
+      await pumpAuthPage(tester);
+      await tester.enterText(find.byType(TextField).first, 'a@example.com');
+      await tester.tap(find.byType(TextField).last);
+      await tester.pump();
+      expect(hasFocus(tester, 1), isTrue);
+
+      // Unlike tester.enterText, this does not focus the field for the test.
+      // Input must reach the connection opened by the tap (refs #292).
+      const password = 'password123';
+      tester.testTextInput.enterText(password);
+      await tester.pump(const Duration(seconds: 2));
+
+      final editable = tester.widget<EditableText>(
+        find.byType(EditableText).last,
+      );
+      expect(editable.controller.text, password);
+      expect(editable.obscureText, isTrue);
+      final rendered = tester
+          .state<EditableTextState>(find.byType(EditableText).last)
+          .renderEditable;
+      expect(
+        rendered.text!.toPlainText(),
+        editable.obscuringCharacter * password.length,
+      );
+      expect(find.text('a@example.com'), findsOneWidget);
+    },
+  );
+
   testWidgets('tapping email accepts typing', (tester) async {
     await pumpAuthPage(tester);
     await tester.tap(find.byType(TextField).first);

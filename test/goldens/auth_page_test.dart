@@ -74,7 +74,26 @@ void main() {
         find.byType(TextField).first,
         'newcomer@example.com',
       );
-      await tester.enterText(find.byType(TextField).last, 'password123');
+      await tester.tap(find.byType(TextField).last);
+      await tester.pump();
+      final password = tester.widget<EditableText>(
+        find.byType(EditableText).last,
+      );
+      expect(password.focusNode.hasFocus, isTrue);
+      tester.testTextInput.enterText('password123');
+      await tester.pump(const Duration(seconds: 2));
+      expect(password.controller.text, 'password123');
+      expect(password.obscureText, isTrue);
+      if (scenario.name == 'bad_password') {
+        password.focusNode.unfocus();
+        await tester.pumpAndSettle();
+        await expectLater(
+          find.byType(AuthPage),
+          matchesGoldenFile('auth_page_test.masked_password.png'),
+        );
+        await tester.tap(find.byType(TextField).last);
+        await tester.pump();
+      }
       await tester.tap(find.text(scenario.button));
       await tester.pumpAndSettle();
       expect(find.text(scenario.error), findsOneWidget);
