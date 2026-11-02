@@ -7,6 +7,7 @@ import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
 import 'package:a_fish_in_sea/reporting/model/reported_entry.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
@@ -77,7 +78,33 @@ Future<void> verifyCalendarAlignment(
 
   aligned();
   if (golden != null) {
-    await expectLater(find.byType(MaterialApp), matchesGoldenFile(golden));
+    // Only capture the timetable: SfCalendar's header reads DateTime.now()
+    // directly to highlight today, independently of showCurrentTimeIndicator.
+    // Keep both plan and report lanes, their ruler, and their scroll viewport.
+    final finder = find.byType(SfCalendar);
+    final widget = tester.widget<SfCalendar>(finder);
+    final rect = tester.getRect(finder);
+    final grid = Rect.fromLTRB(
+      rect.left,
+      rect.top + widget.headerHeight + widget.viewHeaderHeight,
+      rect.right,
+      rect.bottom,
+    );
+    RenderObject boundary = tester.renderObject(find.byType(MaterialApp));
+    while (!boundary.isRepaintBoundary) {
+      boundary = boundary.parent!;
+    }
+    final origin = boundary is RenderBox
+        ? boundary.localToGlobal(Offset.zero)
+        : Offset.zero;
+    final image = await (boundary.debugLayer! as OffsetLayer).toImage(
+      grid.shift(-origin),
+    );
+    try {
+      await expectLater(image, matchesGoldenFile(golden));
+    } finally {
+      image.dispose();
+    }
   }
   final before = tester.getTopLeft(tile).dy;
   tester.binding.handlePointerEvent(

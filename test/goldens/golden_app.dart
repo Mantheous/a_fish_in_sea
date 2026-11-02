@@ -1,3 +1,5 @@
+import 'dart:ffi' hide Size;
+
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
@@ -32,6 +34,41 @@ class MockStorage extends Mock implements Storage {}
 class MockClient extends Mock implements http.Client {}
 
 class MockGoogleService extends Mock implements GoogleCalendarService {}
+
+/// Pin the native local clock used by DateTime and SfCalendar in this test
+/// process. Setting timezone-package's local location doesn't affect either.
+/// Native Linux/macOS golden runners expose these POSIX functions.
+void pinCalendarGoldenTimeZone() {
+  final native = DynamicLibrary.process();
+  final allocate = native
+      .lookupFunction<
+        Pointer<Uint8> Function(IntPtr),
+        Pointer<Uint8> Function(int)
+      >('malloc');
+  final free = native
+      .lookupFunction<
+        Void Function(Pointer<Uint8>),
+        void Function(Pointer<Uint8>)
+      >('free');
+  final setenv = native
+      .lookupFunction<
+        Int32 Function(Pointer<Uint8>, Pointer<Uint8>, Int32),
+        int Function(Pointer<Uint8>, Pointer<Uint8>, int)
+      >('setenv');
+  final name = allocate(3);
+  final value = allocate(15);
+  try {
+    name.asTypedList(3).setAll(0, [...'TZ'.codeUnits, 0]);
+    value.asTypedList(15).setAll(0, [...'America/Denver'.codeUnits, 0]);
+    if (setenv(name, value, 1) != 0) {
+      throw StateError('Could not pin the calendar golden to America/Denver');
+    }
+    native.lookupFunction<Void Function(), void Function()>('tzset')();
+  } finally {
+    free(name);
+    free(value);
+  }
+}
 
 /// Pumps [page] inside the real provider graph (mirrors MyApp in main.dart)
 /// with empty in-memory state, on a 1280x720 surface. Returns the
