@@ -2,51 +2,12 @@ import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
-import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hydrated_bloc/hydrated_bloc.dart';
-import 'package:mocktail/mocktail.dart';
 
-class MockStorage extends Mock implements Storage {}
-
-Node goal(String id, {List<String> parents = const []}) => Node(
-      id: id,
-      title: id,
-      parentIds: parents,
-      createdAt: DateTime(2026, 9, 1),
-    );
-
-PlannerEvent event(
-  String id, {
-  bool isTask = true,
-  String recurrenceRule = '',
-  String? seriesId,
-  String? feedId,
-  String? sourceUid,
-  DateTime? start,
-}) =>
-    PlannerEvent(
-      id: id,
-      subject: 'Event $id',
-      start: start ?? DateTime(2026, 9, 12, 9),
-      end: (start ?? DateTime(2026, 9, 12, 9))
-          .add(const Duration(hours: 1)),
-      recurrenceRule: recurrenceRule,
-      seriesId: seriesId,
-      feedId: feedId,
-      sourceUid: sourceUid,
-      isTask: isTask,
-    );
+import 'node_goal_link_fixtures.dart';
 
 void main() {
-  setUp(() {
-    final storage = MockStorage();
-    when(() => storage.read(any())).thenReturn(null);
-    when(() => storage.write(any(), any())).thenAnswer((_) async {});
-    when(() => storage.delete(any())).thenAnswer((_) async {});
-    when(() => storage.clear()).thenAnswer((_) async {});
-    HydratedBloc.storage = storage;
-  });
+  setUp(installGoalLinkStorage);
 
   group('assignEventToGoal', () {
     test('personal task parents its backing node under the goal', () {
@@ -125,7 +86,7 @@ void main() {
       expect(again.assigned, 0);
     });
 
-    test('series assigns every occurrence', () {
+    test('series assign and remove stay within the seed calendar', () {
       final nodes = NodeCubit();
       final calendar = CalendarCubit();
       expect(nodes.addNode(goal('goal')), isNull);
@@ -147,6 +108,29 @@ void main() {
         feedId: 'f',
         sourceUid: 'master-1_20260922T090000',
       ));
+      // The other calendar has both an untouched event and an existing
+      // assignment to the same goal. Neither may change in either operation.
+      for (final id in ['plain', 'assigned']) {
+        calendar.addEvent(event(
+          'gcal:other:$id',
+          feedId: 'other',
+          seriesId: 'master-1',
+          isTask: false,
+        ));
+      }
+      NodeEventLink.assignEventToGoal(
+        calendar, nodes, 'gcal:other:assigned', 'goal',
+        includeSeries: false,
+      );
+      final otherEvents =
+          calendar.state.where((e) => e.feedId == 'other').toList();
+      final otherNode = nodes.byId('gcal:other:assigned');
+      void expectOtherCalendarUnchanged() {
+        expect(calendar.state.where((e) => e.feedId == 'other'), otherEvents);
+        expect(nodes.byId('gcal:other:assigned'), otherNode);
+        expect(otherNode?.parentIds, contains('goal'));
+        expect(nodes.byId('gcal:other:plain'), isNull);
+      }
       final result = NodeEventLink.assignEventToGoal(
         calendar,
         nodes,
@@ -160,6 +144,17 @@ void main() {
       for (final id in ['gcal:f:m', 'gcal:f:i1', 'gcal:f:i2']) {
         expect(nodes.byId(id)?.parentIds, contains('goal'));
       }
+      expectOtherCalendarUnchanged();
+      final removed = NodeEventLink.unassignEventFromGoal(
+        calendar, nodes, 'gcal:f:i1', 'goal',
+        now: DateTime(2026, 9, 1),
+      );
+      expect(removed.error, isNull);
+      expect(removed.removed, 3);
+      for (final id in ['gcal:f:m', 'gcal:f:i1', 'gcal:f:i2']) {
+        expect(nodes.byId(id)?.parentIds, isNot(contains('goal')));
+      }
+      expectOtherCalendarUnchanged();
     });
 
     test('series assign skips past occurrences', () {
