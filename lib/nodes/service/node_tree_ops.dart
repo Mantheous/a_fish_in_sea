@@ -1,7 +1,7 @@
 import '../../common/time/local_date.dart';
 import '../model/node.dart';
 
-/// Builds a fresh goal copy while retaining its plan and remapping parents.
+/// Builds a fresh goal copy, remapping parents and internal class membership.
 /// Purchase history belongs to the original goal, including on descendants.
 Node copySubtreeNode(
   Node n, {
@@ -36,7 +36,7 @@ Node copySubtreeNode(
   auto: n.auto,
   extraMetrics: n.extraMetrics,
   classFacet: n.classFacet,
-  classNodeId: n.classNodeId,
+  classNodeId: remap[n.classNodeId] ?? n.classNodeId,
   rule: n.rule,
   instanceOfId: n.instanceOfId == null
       ? null
