@@ -2,6 +2,7 @@ import 'package:a_fish_in_sea/main.dart';
 import 'package:a_fish_in_sea/navigation/view/home_page.dart';
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
 import 'package:a_fish_in_sea/sync/view/auth/auth_page.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -42,8 +43,7 @@ void main() {
     await $(TextField).at(0).tap();
     final email = 'patrol-auth-$stamp@example.com';
     await $(TextField).at(0).enterText(email);
-    await $(TextField).at(1).tap();
-    await $(TextField).at(1).enterText('patrol-pass-1');
+    await _tapAndTypePassword($, 'patrol-pass-1');
     await $('Create account').tap();
     await $(HomePage).waitUntilVisible();
     await $.pumpAndSettle();
@@ -63,10 +63,9 @@ void main() {
     // Registration errors must be visible on the same card as well.
     await $('Create account').tap();
     await $('Email already registered').waitUntilVisible();
-    // Reattach the web test input connection before replacing focused text.
+    // Move off Password so the next tap opens a fresh input connection.
     await $(TextField).at(0).tap();
-    await $(TextField).at(1).tap();
-    await $(TextField).at(1).enterText('patrol-pass-1');
+    await _tapAndTypePassword($, 'patrol-pass-1');
     expect($.tester.widget<TextField>(find.byType(TextField).last).controller!.text,
         'patrol-pass-1');
     await $('Sign in').tap();
@@ -75,4 +74,23 @@ void main() {
     expect(find.byType(HomePage), findsOneWidget);
     expect(find.byType(AuthPage), findsNothing);
   });
+}
+
+Future<void> _tapAndTypePassword(PatrolIntegrationTester $, String value) async {
+  await $(TextField).at(1).tap();
+  final editable = $.tester.widget<EditableText>(find.byType(EditableText).last);
+  expect(editable.focusNode.hasFocus, isTrue);
+  if (kIsWeb) {
+    // Browser keystrokes must reach the connection opened by the tap. Using
+    // enterText here would focus/attach a test connection and hide regressions.
+    await $.platform.web.pressKeyCombo(keys: ['ControlOrMeta', 'A']);
+    for (final character in value.split('')) {
+      await $.platform.web.pressKey(key: character);
+    }
+  } else {
+    await $(TextField).at(1).enterText(value);
+  }
+  await $.pump();
+  expect(editable.controller.text, value);
+  expect(editable.obscureText, isTrue);
 }
