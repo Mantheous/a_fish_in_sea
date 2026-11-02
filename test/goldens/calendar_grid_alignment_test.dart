@@ -6,6 +6,9 @@ import 'golden_app.dart';
 
 void main() {
   // TZ=America/Denver exercises both daylight-saving clock changes.
+  // It does not freeze SfCalendar's DateTime.now()-driven "today" header:
+  // showCurrentTimeIndicator hides only the time line. The full-page golden
+  // still depends on today's date, so pinning TZ alone cannot stabilize it.
   for (final day in [DateTime(2026, 3, 8), DateTime(2026, 11, 1)]) {
     for (final start in [0.0, 6.0, 6.25]) {
       for (final view in ['Day', 'Week']) {
