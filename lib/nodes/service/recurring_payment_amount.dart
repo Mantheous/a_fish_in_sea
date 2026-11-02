@@ -17,9 +17,10 @@ MoneyFacet? recurringInstanceMoney(MoneyFacet? money) => money == null
       );
 
 /// One scan of existing copies, with no generation or intermediate writes.
-/// Titles can lag behind a template rename, so compare other generated fields
-/// and record individual title edits using the existing override markers.
-/// Comparing the remaining fields also protects older unmarked amount edits.
+/// Require exact generated defaults to protect legacy unmarked edits. Carry
+/// template title/notes changes into matching future copies when they happen,
+/// so later amount saves still recognize them without ignoring custom text
+/// or relying on template history that would be lost after a restart.
 Map<String, Node> recurringPaymentAmountUpdates(
   Node before,
   Node after,
@@ -31,28 +32,39 @@ Map<String, Node> recurringPaymentAmountUpdates(
     return {};
   }
   final amountChanged = before.money!.targetAmount != after.money!.targetAmount;
+  final titleChanged = before.title != after.title;
+  final notesChanged = before.notes != after.notes;
   if (before.isInstance) {
     final overrides = {
       ...after.overriddenFields,
       if (amountChanged) 'money.targetAmount',
-      if (before.title != after.title) 'title',
+      if (titleChanged) 'title',
     };
     return {
-      if (amountChanged || before.title != after.title)
+      if (amountChanged || titleChanged)
         after.id: after.copyWith(overriddenFields: overrides),
     };
   }
-  if (!amountChanged || !before.isTemplate || !after.isTemplate) return {};
+  if ((!amountChanged && !titleChanged && !notesChanged) ||
+      !before.isTemplate ||
+      !after.isTemplate) {
+    return {};
+  }
   return {
     for (final node in nodes)
       if (node.instanceOfId == before.id &&
-          node.copyWith(title: before.title) == originalInstance(node) &&
+          node == originalInstance(node) &&
           (node.schedule?.due ?? node.schedule?.start) != null &&
           !localDay(
             (node.schedule?.due ?? node.schedule!.start)!,
           ).isBefore(today))
         node.id: node.copyWith(
-          money: node.money!.copyWith(targetAmount: after.money!.targetAmount),
+          title: titleChanged ? after.title : node.title,
+          notes: notesChanged ? after.notes : node.notes,
+          clearNotes: notesChanged && after.notes == null,
+          money: amountChanged
+              ? node.money!.copyWith(targetAmount: after.money!.targetAmount)
+              : node.money,
         ),
   };
 }

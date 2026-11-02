@@ -27,7 +27,7 @@ class RecurringPaymentFixture {
   late Set<String> refreshedIds;
   late double oldBalance;
 
-  Future<void> pump(WidgetTester tester) async {
+  Future<void> pump(WidgetTester tester, {String? notes}) async {
     final storage = _Storage();
     when(() => storage.read(any())).thenReturn(null);
     when(() => storage.write(any(), any())).thenAnswer((_) async {});
@@ -64,6 +64,7 @@ class RecurringPaymentFixture {
     template = Node(
       id: 'rent',
       title: 'Rent',
+      notes: notes,
       createdAt: start,
       schedule: ScheduleFacet(due: start),
       money: const MoneyFacet(targetAmount: 100),
