@@ -37,13 +37,23 @@ class RecurringPaymentFixture {
     calendar = CalendarCubit();
     final transactions = TransactionsCubit();
     final plaid = PlaidCubit();
-    waterfall = WaterfallCubit(nodeCubit: nodes,
-      transactionsCubit: transactions, plaidCubit: plaid);
+    waterfall = WaterfallCubit(
+      nodeCubit: nodes,
+      transactionsCubit: transactions,
+      plaidCubit: plaid,
+    );
     tester.view.physicalSize = const Size(1280, 720);
     tester.view.devicePixelRatio = 1;
     addTearDown(() async {
       await tester.pumpWidget(const SizedBox());
-      for (final cubit in [waterfall, nodes, undo, calendar, transactions, plaid]) {
+      for (final cubit in [
+        waterfall,
+        nodes,
+        undo,
+        calendar,
+        transactions,
+        plaid,
+      ]) {
         await cubit.close();
       }
       tester.view.resetPhysicalSize();
@@ -97,29 +107,26 @@ class RecurringPaymentFixture {
       ],
     );
     refreshedId = copies[2].id;
-    refreshedIds = {
-      copies[2].id,
-      if (now.day == 1) copies[1].id,
-    };
+    refreshedIds = {copies[2].id, if (now.day == 1) copies[1].id};
     waterfall.rebuild();
     oldBalance = waterfall.state.rows
-        .singleWhere((r) => r.sourceId == refreshedId).runningBalance;
+        .singleWhere((r) => r.sourceId == refreshedId)
+        .runningBalance;
     before = List.of(nodes.state);
     undo.resetHistory();
-    await showPage(tester);
-  }
-
-  Future<void> showPage(WidgetTester tester) async {
-    await tester.pumpWidget(const SizedBox());
-    await tester.pumpWidget(MultiBlocProvider(
-      providers: [
-        BlocProvider.value(value: nodes),
-        BlocProvider.value(value: undo),
-        BlocProvider.value(value: calendar),
-      ],
-      child: MaterialApp(theme: ThemeData(colorSchemeSeed: Colors.teal),
-        home: const RulesAndBudgetsPage(showDrawer: false)),
-    ));
+    await tester.pumpWidget(
+      MultiBlocProvider(
+        providers: [
+          BlocProvider.value(value: nodes),
+          BlocProvider.value(value: undo),
+          BlocProvider.value(value: calendar),
+        ],
+        child: MaterialApp(
+          theme: ThemeData(colorSchemeSeed: Colors.teal),
+          home: const RulesAndBudgetsPage(showDrawer: false),
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
   }
 

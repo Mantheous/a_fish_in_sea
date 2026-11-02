@@ -17,8 +17,8 @@ MoneyFacet? recurringInstanceMoney(MoneyFacet? money) => money == null
       );
 
 /// One scan of existing copies, with no generation or intermediate writes.
-/// Older hand edits may lack override markers, so also compare the money
-/// against the complete previous generated copy before changing anything.
+/// Older hand edits may lack override markers, so compare each occurrence
+/// with its complete previous generated copy before changing anything.
 Map<String, Node> recurringPaymentAmountUpdates(
   Node before,
   Node after,
@@ -40,8 +40,9 @@ Map<String, Node> recurringPaymentAmountUpdates(
       if (node.instanceOfId == before.id &&
           node == originalInstance(node) &&
           (node.schedule?.due ?? node.schedule?.start) != null &&
-          !localDay((node.schedule?.due ?? node.schedule!.start)!)
-              .isBefore(today))
+          !localDay(
+            (node.schedule?.due ?? node.schedule!.start)!,
+          ).isBefore(today))
         node.id: node.copyWith(
           money: node.money!.copyWith(targetAmount: after.money!.targetAmount),
         ),
