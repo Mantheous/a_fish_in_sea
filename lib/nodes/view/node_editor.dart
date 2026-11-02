@@ -15,6 +15,7 @@ import 'package:a_fish_in_sea/finances/service/node_transaction_cleanup.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_editor_schedule.dart';
+import 'package:a_fish_in_sea/nodes/service/node_editor_recurrence.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
 import 'package:a_fish_in_sea/nodes/view/class_picker.dart';
 import 'package:a_fish_in_sea/nodes/view/metrics_fields.dart';
@@ -1147,10 +1148,12 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
       );
     }
 
-    NodeRecurrence? recurrence;
-    if (_hasRecurrence) {
-      recurrence = NodeRecurrence(frequency: _frequency, endDate: _recurEnd);
-    }
+    var recurrence = recurrenceAfterEditorSave(
+      previous: existing?.recurrence,
+      enabled: _hasRecurrence,
+      frequency: _frequency,
+      endDate: _recurEnd,
+    );
 
     RuleFacet? rule;
     if (_ruleKind != NodeRuleKind.none) {
