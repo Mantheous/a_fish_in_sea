@@ -88,6 +88,7 @@ class RecurringPaymentFixture {
     nodes.updateNode(
       nodes.byId(copies.last.id)!.copyWith(money: copies.last.money),
     );
+    nodes.updateNode(copies[10].copyWith(title: 'Hand edited rent'));
     nodes.writeNodes(
       upserts: [
         copies[3].copyWith(
@@ -103,7 +104,6 @@ class RecurringPaymentFixture {
         copies[9].copyWith(
           money: copies[9].money!.copyWith(status: MoneyStatus.due),
         ),
-        copies[10].copyWith(title: 'Hand edited rent'),
       ],
     );
     refreshedId = copies[2].id;
