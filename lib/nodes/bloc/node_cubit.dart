@@ -25,6 +25,7 @@ import '../service/node_event_detach.dart';
 import '../service/node_batch_graph.dart';
 import '../service/node_progress.dart';
 import '../service/node_recurrence_schedule.dart';
+import '../service/recurring_payment_amount.dart';
 import '../service/node_tree_ops.dart';
 import '../service/node_transaction_settlement.dart';
 
@@ -593,7 +594,17 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       final error = validateParents(updated, updated.parentIds);
       if (error != null) return error;
     }
-    emitChange(state.map((n) => n.id == updated.id ? updated : n).toList());
+    final amounts = recurringPaymentAmountUpdates(
+      current,
+      updated,
+      state,
+      today: localDay(DateTime.now()),
+      originalInstance: (n) => _spawnInstance(current, n.id, n.createdAt),
+    );
+    emitChange([
+      for (final n in state)
+        amounts[n.id] ?? (n.id == updated.id ? updated : n),
+    ]);
     return null;
   }
 
@@ -1644,20 +1655,6 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     } else {
       schedule = ScheduleFacet(due: day);
     }
-    MoneyFacet? money = template.money;
-    if (money != null) {
-      money = MoneyFacet(
-        targetAmount: money.targetAmount,
-        direction: money.direction,
-        status: MoneyStatus.projected,
-        period: money.period,
-        customPeriodDays: money.customPeriodDays,
-        isRecurring: false,
-        autoRollover: money.autoRollover,
-        rolloverAmount: 0.0,
-        isFixed: money.isFixed,
-      );
-    }
     return Node(
       id: id,
       title: template.title,
@@ -1665,7 +1662,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       parentIds: [template.id],
       createdAt: date,
       schedule: schedule,
-      money: money,
+      money: recurringInstanceMoney(template.money),
       effort: template.effort,
       // Instances inherit the deck and target but start unreviewed: the
       // template's cached count belongs to its own period, not the new
