@@ -1,0 +1,7 @@
+{
+  "server_url": "",
+  "api_token": "",
+  "enabled": true,
+  "report_days": 400,
+  "rollover_hour": 0
+}

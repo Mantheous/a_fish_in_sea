@@ -27,6 +27,25 @@ Classes & calendars sheet → Google → sign in once (from `http://localhost:80
 
 Everything (events, tasks, classes) is undoable via the undo/redo buttons in each page's app bar or the Undo action on delete snackbars.
 
+## Anki memorization goals
+
+Anki goals are fed by the add-on in `anki_addon/`, which pushes daily
+per-deck review totals to the server. This works on web, desktop, and
+phone without AnkiConnect or access from the server to your laptop.
+
+1. Sign in and open **Settings → Anki**.
+2. Download the `.ankiaddon` there and install it in Anki (Tools →
+   Add-ons → Install from file).
+3. Create an add-on token and paste the generated JSON into Tools →
+   Add-ons → A Fish in Sea → Config.
+4. Run **Tools → A Fish in Sea: Test connection**.
+
+The token is write-only (`anki:write`): it can submit deck names and
+counts, never read app data. The add-on reports only review totals —
+no card text, notes, tags, or schedule details.
+
+
+
 ## Agent-driven development
 
 Issues flow through an agent loop: a verified tester files an issue labelled `agent-pending`, a triage agent posts a plan, a maintainer approves (or denies) it, a builder agent implements the approved issue on its own `agent/<n>-<slug>` branch and opens a PR against `main`, and an independent reviewer agent verdicts the PR (`review:pass` / `review:changes-requested`, max 2 rework rounds). Merging stays human. Agents never push to or commit on `main`.

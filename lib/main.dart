@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:a_fish_in_sea/anki/anki_reports.dart';
+import 'package:a_fish_in_sea/anki/anki_reports_cubit.dart';
 import 'package:a_fish_in_sea/common/persistence/legacy_minified_keys.dart';
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/common/usage/usage_log.dart';
 import 'package:a_fish_in_sea/common/usage/usage_reporter.dart';
@@ -131,6 +134,32 @@ class MyApp extends StatelessWidget {
         }),
         BlocProvider(create: (_) => SyncMetaCubit()),
         BlocProvider(create: (_) => NodeCubit()),
+        // Live memorization progress from the Anki add-on. Reads the
+        // add-on's daily history, then writes only counts that changed
+        // (silent, so synced data never lands in undo history).
+        BlocProvider(
+          lazy: false,
+          create: (context) {
+            final auth = context.read<AuthCubit>();
+            final settings = context.read<SettingsCubit>();
+            final client = auth.syncClient;
+            return AnkiReportsCubit(
+              fetch: () {
+                final end = localDay(DateTime.now());
+                return fetchAnkiReport(
+                  client,
+                  start: shiftLocalDay(end, -399),
+                  end: end,
+                );
+              },
+              nodes: context.read<NodeCubit>(),
+              isSignedIn: () => auth.state.isSignedIn,
+              firstDayOfWeek: () => settings.state.firstDayOfWeek,
+              authChanges:
+                  auth.stream.map((s) => s.isSignedIn).distinct(),
+            );
+          },
+        ),
         BlocProvider(create: (_) => TransactionsCubit()),
         BlocProvider(create: (_) => PlaidCubit()),
         BlocProvider(
@@ -290,6 +319,9 @@ class _SyncBootstrapState extends State<_SyncBootstrap>
         break;
       case AppLifecycleState.resumed:
         _usage?.resume();
+        try {
+          context.read<AnkiReportsCubit>().refresh();
+        } catch (_) {}
         break;
       case AppLifecycleState.inactive:
         break;

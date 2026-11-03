@@ -229,8 +229,8 @@ double _leafValue(
     return (actual / target).clamp(0.0, 1.0);
   }
   if (node.anki != null) {
-    // Anki actuals are cached on the facet itself (synced from
-    // AnkiConnect or entered manually), so no external map is needed.
+    // Anki actuals are cached on the facet itself (written by the Anki
+    // reports cubit or entered manually), so no external map is needed.
     final target = node.anki!.targetReviews;
     if (target <= 0) return node.isDone ? 1.0 : 0.0;
     return ((node.anki!.reviewsActual ?? 0) / target).clamp(0.0, 1.0);

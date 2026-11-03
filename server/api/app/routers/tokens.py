@@ -15,9 +15,10 @@ from ..security import hash_api_token, new_api_token
 router = APIRouter(prefix="/tokens", tags=["tokens"])
 
 # "sync" implies full pull/push; per-collection scopes gate future
-# /items/* granularity. Anything else is rejected so invented scopes
-# can never gain meaning later.
-_VALID_SCOPES = {"sync"} | {
+# /items/* granularity. "anki:write" is the narrow ingest scope for the
+# Anki add-on: it can post review totals but cannot read app data.
+# Anything else is rejected so invented scopes can never gain meaning.
+_VALID_SCOPES = {"sync", "anki:write"} | {
     f"{c}:{op}" for c in COLLECTIONS for op in ("read", "write")
 }
 
