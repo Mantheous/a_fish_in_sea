@@ -117,7 +117,7 @@ void main() {
     expect(find.text('a@example.com'), findsOneWidget);
   });
 
-  testWidgets('first desktop mouse click focuses every part of Password', (
+  testWidgets('first and repeated mouse clicks focus Password', (
     tester,
   ) async {
     // Match the reported desktop viewport, including the scrollable card.
@@ -142,11 +142,15 @@ void main() {
       expect(hasFocus(tester, 0), isTrue);
       tester.testTextInput.enterText('newcomer@example.com');
       await tester.pump();
-      // One mouse click, with no enterText/requestFocus on Password.
-      await tester.tapAt(point, kind: PointerDeviceKind.mouse);
-      await tester.pump();
-      expect(hasFocus(tester, 1), isTrue);
-      expect(hasFocus(tester, 0), isFalse);
+      // Repeat the walk's two clicks (refs #304), without enterText or
+      // requestFocus on Password hiding a broken focus transition.
+      for (var click = 0; click < 2; click++) {
+        await tester.tapAt(point, kind: PointerDeviceKind.mouse);
+        await tester.pump();
+        expect(hasFocus(tester, 1), isTrue);
+        expect(hasFocus(tester, 0), isFalse);
+        expect(tester.takeException(), isNull);
+      }
       tester.testTextInput.enterText('password123');
       await tester.pump(const Duration(seconds: 2));
       final editable = tester.widget<EditableText>(
