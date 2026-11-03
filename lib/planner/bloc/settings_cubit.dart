@@ -248,6 +248,17 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
             trimmed.isEmpty ? defaultAnkiConnectHost : trimmed));
   }
 
+  /// Sign-out / account switch: drop the roamed settings so the next
+  /// account starts from defaults. Per-device values (server URL, Anki host,
+  /// and calendar view) stay as they were.
+  void resetSynced() {
+    emit(SettingsState(
+      icalProxyBase: state.icalProxyBase,
+      defaultCalendarView: state.defaultCalendarView,
+      ankiConnectHost: state.ankiConnectHost,
+    ));
+  }
+
   /// Sync apply: takes the roamed settings but keeps the per-device
   /// values (server URL, Anki host, and calendar view differ per device).
   void applySyncedJson(Map<String, dynamic> json) {
