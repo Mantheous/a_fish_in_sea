@@ -38,9 +38,8 @@ enum EngineStatus { idle, syncing, error }
 ///   server must not remote-control that); only the points roam
 /// - Settings.icalProxyBase (retired override; the app uses the one fixed
 ///   [ServerConfig] server, so the stale key never roams)
-/// - Settings.ankiConnectHost (per-device like the proxy above: a desktop
-///   talks to its own localhost, a phone to a LAN address — roaming one
-///   value would break the other device, so each device keeps its own)
+/// - Settings.ankiConnectHost (retired with the AnkiConnect build; kept
+///   device-local so old payloads round-trip and never roam)
 /// - Settings.defaultCalendarView (a phone wants day, a desktop wants week;
 ///   roaming one value would reset the other device's visible window, so
 ///   each device keeps its own — day hours still roam)

@@ -77,3 +77,6 @@ server/api/data/backups/
 
 # Golden-test failure dumps (regenerated on every failing run; never commit)
 test/goldens/failures/
+
+# Built Anki add-on archives (run anki_addon/build.sh)
+anki_addon/dist/

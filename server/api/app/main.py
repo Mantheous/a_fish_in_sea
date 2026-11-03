@@ -135,10 +135,10 @@ def create_app() -> FastAPI:
     app.include_router(imports.router, prefix="/api/v1")
     app.include_router(feedback.router, prefix="/api/v1")
     app.include_router(usage.router, prefix="/api/v1")
+    app.include_router(anki.router, prefix="/api/v1")
     # Google keeps its legacy /api/google/* paths so the Flutter client
     # needs no changes; tokens are per-user now (was: global on Flask).
     app.include_router(google.router, prefix="/api")
-    app.include_router(anki.router, prefix="/api")
     app.include_router(canvas.router, prefix="/api")
     app.include_router(fetch.router, prefix="/api/v1")
     app.include_router(proxy.router, prefix="/api")

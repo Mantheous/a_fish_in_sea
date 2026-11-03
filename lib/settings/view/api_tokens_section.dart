@@ -121,6 +121,14 @@ class _ApiTokensSectionState extends State<ApiTokensSection> {
     }
   }
 
+  static String _scopeLabel(ApiToken token) {
+    if (token.scopes.contains('sync')) return 'full sync access';
+    if (token.scopes.length == 1 && token.scopes.first == 'anki:write') {
+      return 'Anki add-on (write-only)';
+    }
+    return token.scopes.isEmpty ? 'no scopes' : token.scopes.join(', ');
+  }
+
   @override
   Widget build(BuildContext context) {
     if (DemoMode.isActive) {
@@ -165,7 +173,7 @@ class _ApiTokensSectionState extends State<ApiTokensSection> {
               leading: const Icon(Icons.key_outlined),
               title: Text(token.name.isEmpty ? 'Unnamed token' : token.name),
               subtitle: Text(
-                '${token.prefix}… · full sync access'
+                '${token.prefix}… · ${_scopeLabel(token)}'
                 '${token.review ? ' · needs approval' : ''}',
               ),
               trailing: IconButton(

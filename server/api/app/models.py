@@ -14,6 +14,7 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -285,6 +286,58 @@ class ImportItem(Base):
     decided_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class AnkiReviewDay(Base):
+    """One deck's review totals for one local calendar day.
+
+    Written by the Anki add-on (POST /api/v1/anki/report), read by the
+    app. Counts are *absolute* totals for the day, not increments: the
+    add-on recomputes a rolling window from `revlog` on every report, and
+    the ingest path keeps the per-key maximum. That makes retries, Anki
+    restarts, and a missed upload harmless without an event queue.
+
+    `day` is a calendar date with no timezone: the add-on buckets by the
+    local day of the review, matching the app's date rules. Nothing here
+    identifies a card or a note — only deck names and counts.
+    """
+
+    __tablename__ = "anki_review_days"
+    __table_args__ = (
+        UniqueConstraint("user_id", "day", "deck"),
+        Index("ix_anki_user_day", "user_id", "day"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    day: Mapped[dt.date] = mapped_column(Date)
+    deck: Mapped[str] = mapped_column(String(255))
+    cards: Mapped[int] = mapped_column(Integer, default=0)
+    reviews: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+
+
+class AnkiReportState(Base):
+    """Last successful add-on report, one row per user.
+
+    Separate from the daily rows so an "add-on connected" status still
+    exists when a report covers only old days, or when a fresh install
+    has no reviews yet.
+    """
+
+    __tablename__ = "anki_report_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), unique=True, index=True
+    )
+    last_report_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+    last_rows: Mapped[int] = mapped_column(Integer, default=0)
+    client: Mapped[str] = mapped_column(String(64), default="")
 
 
 class UsageEvent(Base):

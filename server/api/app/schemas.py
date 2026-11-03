@@ -349,3 +349,95 @@ class UsageBatchIn(BaseModel):
         if total > _MAX_USAGE_BATCH_BYTES:
             raise ValueError(f"usage batch exceeds {_MAX_USAGE_BATCH_BYTES} bytes")
         return self
+
+
+# ── Anki reports (add-on → server) ──────────────────────────────────────
+#
+# The add-on sends absolute per-day, per-deck totals for a rolling window.
+# Validation is deliberately narrow: this is the only writer of the
+# anki_review_days table, so bad input should fail at the door rather than
+# grow an unbounded table. `deck` is display-only (rendered as text), and
+# a day is a plain calendar date with no timezone.
+
+ANKI_MAX_REPORT_DAYS = 12_000
+ANKI_MAX_RANGE_DAYS = 400
+ANKI_MAX_REPORT_BYTES = 4 * 1024 * 1024
+
+
+class AnkiDayIn(BaseModel):
+    day: dt.date
+    deck: str = Field(min_length=1, max_length=255)
+    cards: int = Field(ge=0, le=1_000_000)
+    reviews: int = Field(ge=0, le=10_000_000)
+
+    model_config = {"extra": "ignore"}
+
+    @field_validator("deck")
+    @classmethod
+    def _deck(cls, value: str) -> str:
+        name = value.strip()
+        if not name:
+            raise ValueError("deck must not be blank")
+        return name
+
+
+class AnkiReportIn(BaseModel):
+    version: int = 1
+    client: str = Field(default="", max_length=64)
+    days: list[AnkiDayIn] = Field(
+        default_factory=list, max_length=ANKI_MAX_REPORT_DAYS
+    )
+
+    model_config = {"extra": "ignore"}
+
+    @field_validator("version")
+    @classmethod
+    def _version(cls, value: int) -> int:
+        if value != 1:
+            raise ValueError("unsupported Anki report version")
+        return value
+
+    @field_validator("client")
+    @classmethod
+    def _client(cls, value: str) -> str:
+        # Free-form but bounded; the app only ever renders it as text.
+        return value.strip()
+
+    @model_validator(mode="after")
+    def _size(self) -> "AnkiReportIn":
+        total = sum(len(d.model_dump_json().encode("utf-8")) for d in self.days)
+        if total > ANKI_MAX_REPORT_BYTES:
+            raise ValueError(f"Anki report exceeds {ANKI_MAX_REPORT_BYTES} bytes")
+        return self
+
+
+class AnkiDayOut(BaseModel):
+    day: dt.date
+    deck: str
+    cards: int
+    reviews: int
+
+
+class AnkiDeckOut(BaseModel):
+    name: str
+    cards: int
+    reviews: int
+    last_day: dt.date | None = None
+
+
+class AnkiReviewsOut(BaseModel):
+    days: list[AnkiDayOut]
+    decks: list[AnkiDeckOut]
+    last_report_at: dt.datetime | None = None
+    last_client: str = ""
+
+
+class AnkiSummaryOut(BaseModel):
+    ok: bool = True
+    email: str
+    last_report_at: dt.datetime | None = None
+    last_client: str = ""
+    decks: int = 0
+    days: int = 0
+    cards_7d: int = 0
+    reviews_7d: int = 0

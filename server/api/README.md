@@ -30,6 +30,16 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt
 - `POST /fetch/refresh {feed_id?, url?}` / `POST /fetch/refresh-due` — server fetches iCal URLs and caches raw ICS in `feed_snapshots`
 - `GET /fetch/snapshot?feed_id=` — cached ICS for clients to parse (Google feeds excluded: they sync client-side through `/api/google/*`)
 
+## Anki add-on (`/api/v1/anki`)
+
+The desktop add-on (`anki_addon/`) pushes daily per-deck review totals;
+every app platform reads them from the server.
+
+- `POST /anki/report {version,client,days:[{day,deck,cards,reviews}]}` — rolling absolute totals. Needs an `anki:write` token (minted in Settings → Anki); the server keeps the per-day/per-deck maximum, so retries and multiple profiles cannot double count.
+- `GET /anki/reviews?start=&end=` — days + per-deck totals for the current app window (max 400 days). Needs `sync` scope/JWT.
+- `GET /anki/summary` — add-on connection test (account, last report, 7-day totals). Needs `anki:write`.
+- `GET /anki/addon` — public download of the installable `.ankiaddon`, built from `anki_addon/a_fish_in_sea/` at request time (blank config, no secrets).
+
 ## Proxies (`/api/*`, same paths as the retired Flask server)
 
 - `/api/google/*` — per-user Google Calendar/People proxy: `auth_url`, `callback` (OAuth `state` binds the browser flow to the user), `status`, `disconnect`, `calendars`, `contacts`, `events` + `events/one` + write routes. Tokens live in `oauth_connections`, Fernet-encrypted when `TOKEN_FERNET_KEY` is set.

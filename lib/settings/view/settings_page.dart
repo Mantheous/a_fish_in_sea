@@ -1,6 +1,4 @@
 import 'package:a_fish_in_sea/common/undo/undo_bar.dart';
-import 'package:a_fish_in_sea/anki/anki_connect.dart';
-import 'package:a_fish_in_sea/anki/anki_server.dart';
 import 'package:a_fish_in_sea/demo/demo_coordinator.dart';
 import 'package:a_fish_in_sea/demo/demo_mode.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
@@ -13,15 +11,14 @@ import 'package:a_fish_in_sea/planner/view/feed_manager.dart';
 import 'package:a_fish_in_sea/reporting/bloc/tracking_cubit.dart';
 import 'package:a_fish_in_sea/reporting/service/location_service.dart';
 import 'package:a_fish_in_sea/reporting/view/places_sheet.dart';
+import 'package:a_fish_in_sea/settings/view/anki_addon_section.dart';
 import 'package:a_fish_in_sea/settings/view/api_tokens_section.dart';
 import 'package:a_fish_in_sea/settings/view/colors_page.dart';
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
 import 'package:a_fish_in_sea/sync/sync_engine.dart';
 import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:http/http.dart' as http;
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
 /// Configuration hub: classes, calendars, plus the bank connection.
@@ -130,7 +127,8 @@ class _SettingsPageState extends State<SettingsPage> {
           const _SettingsSection(
             title: 'API tokens',
             subtitle: 'Long-lived tokens for third-party apps and AI agents. '
-                'A token sees everything sync does; revoke any you no longer use.',
+                'The Anki add-on token is created in the Anki section and is '
+                'write-only. Revoke any token you no longer use.',
             child: ApiTokensSection(),
           ),
           _SettingsSection(
@@ -140,11 +138,10 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const _SettingsSection(
             title: 'Anki',
-            subtitle: 'Where memorization goals read review counts from. '
-                'Native builds talk to desktop Anki with the AnkiConnect '
-                'add-on; browsers go through the app server instead — '
-                'sign in, then test below.',
-            child: _AnkiSection(),
+            subtitle: 'Memorization goals read daily review totals pushed by '
+                'the Anki add-on. Works on web, desktop, and phone — no '
+                'AnkiConnect or port forwarding.',
+            child: AnkiAddonSection(),
           ),
         ],
       ),
@@ -755,139 +752,6 @@ class _BankSection extends StatelessWidget {
           ],
         );
       },
-    );
-  }
-}
-
-/// AnkiConnect endpoint (per-device) plus a connection test. Native
-/// builds test the endpoint directly; the web build tests through the
-/// app server (browsers cannot reach AnkiConnect themselves).
-class _AnkiSection extends StatefulWidget {
-  const _AnkiSection();
-
-  @override
-  State<_AnkiSection> createState() => _AnkiSectionState();
-}
-
-class _AnkiSectionState extends State<_AnkiSection> {
-  late final TextEditingController _host;
-  bool _testing = false;
-  String? _status;
-
-  @override
-  void initState() {
-    super.initState();
-    _host = TextEditingController(
-        text: context.read<SettingsCubit>().state.ankiConnectHost);
-  }
-
-  @override
-  void dispose() {
-    _host.dispose();
-    super.dispose();
-  }
-
-  Future<void> _test(BuildContext context) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final host = _host.text;
-    setState(() {
-      _testing = true;
-      _status = null;
-    });
-    try {
-      final List<String> decks;
-      if (kIsWeb) {
-        // Browsers cannot reach AnkiConnect directly — same check,
-        // routed through the app server. Needs a signed-in account.
-        decks = await ankiServerDeckNames(
-            context.read<AuthCubit>().syncClient);
-      } else {
-        final client =
-            AnkiConnectClient(host: host, httpClient: http.Client());
-        try {
-          decks = await client.deckNames();
-        } finally {
-          client.close();
-        }
-      }
-      if (!context.mounted) return;
-      setState(() {
-        _status = 'Connected — ${decks.length} deck'
-            '${decks.length == 1 ? '' : 's'} found.';
-      });
-    } on AnkiServerException catch (e) {
-      if (!context.mounted) return;
-      setState(() => _status = null);
-      messenger.showSnackBar(SnackBar(content: Text(e.message)));
-    } on AnkiException catch (e) {
-      if (!context.mounted) return;
-      setState(() => _status = null);
-      messenger.showSnackBar(SnackBar(content: Text(e.message)));
-    } finally {
-      if (context.mounted) setState(() => _testing = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final saved = context.watch<SettingsCubit>().state.ankiConnectHost;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        TextField(
-          controller: _host,
-          keyboardType: TextInputType.url,
-          decoration: const InputDecoration(
-            labelText: 'AnkiConnect address',
-            hintText: 'http://127.0.0.1:8765',
-            border: OutlineInputBorder(),
-          ),
-          onSubmitted: (v) => context.read<SettingsCubit>().setAnkiConnectHost(v),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Saved: $saved · per-device, never synced.',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            FilledButton(
-              onPressed: () {
-                context.read<SettingsCubit>().setAnkiConnectHost(_host.text);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Anki address saved')),
-                );
-              },
-              child: const Text('Save'),
-            ),
-            const SizedBox(width: 8),
-            OutlinedButton.icon(
-              onPressed: _testing ? null : () => _test(context),
-              icon: _testing
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.link),
-              label: const Text('Test connection'),
-            ),
-          ],
-        ),
-        if (_status != null) ...[
-          const SizedBox(height: 4),
-          Text(_status!, style: Theme.of(context).textTheme.bodySmall),
-        ],
-        if (kIsWeb) ...[
-          const SizedBox(height: 4),
-          Text(
-            'This browser reaches Anki through the app server — '
-            'sign in, then Test connection. The address above is only '
-            'used by native apps.',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ],
-      ],
     );
   }
 }

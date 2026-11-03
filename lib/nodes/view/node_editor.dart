@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 
-import 'package:a_fish_in_sea/anki/anki_connect.dart';
-import 'package:a_fish_in_sea/anki/anki_server.dart';
 import 'package:a_fish_in_sea/anki/anki_import.dart';
+import 'package:a_fish_in_sea/anki/anki_reports.dart';
+import 'package:a_fish_in_sea/anki/anki_reports_cubit.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/common/usage/usage_log.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
@@ -17,6 +15,7 @@ import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/nodes/service/node_editor_schedule.dart';
 import 'package:a_fish_in_sea/nodes/service/node_editor_recurrence.dart';
 import 'package:a_fish_in_sea/nodes/service/node_event_link.dart';
+import 'package:a_fish_in_sea/nodes/view/anki_goal_section.dart';
 import 'package:a_fish_in_sea/nodes/view/class_picker.dart';
 import 'package:a_fish_in_sea/nodes/view/metrics_fields.dart';
 import 'package:a_fish_in_sea/nodes/view/node_editor_date_row.dart';
@@ -24,7 +23,6 @@ import 'package:a_fish_in_sea/nodes/view/node_editor_side_sheet.dart';
 import 'package:a_fish_in_sea/nodes/view/parents_field.dart';
 import 'package:a_fish_in_sea/nodes/view/timer_edit_sheet.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
-import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/task_assignee.dart';
 import 'package:a_fish_in_sea/planner/view/class_names.dart';
@@ -560,105 +558,23 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
             ),
           ],
           const SizedBox(height: 8),
-          _sectionTitle(context, 'Memorization (Anki)'),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: const Text('Has memorization target'),
-            subtitle: const Text(
-              'Review N Anki cards per period — progress feeds from '
-              'AnkiConnect or manual counts',
-            ),
-            value: _hasAnki,
-            onChanged: (v) => setState(() => _hasAnki = v),
+          AnkiGoalSection(
+            enabled: _hasAnki,
+            onEnabledChanged: (v) => setState(() => _hasAnki = v),
+            deck: _deck,
+            targetReviews: _targetReviews,
+            manualReviews: _manualReviews,
+            customPeriodDays: _ankiCustomDays,
+            period: _ankiPeriod,
+            onPeriodChanged: (v) => setState(() => _ankiPeriod = v),
+            onDeckChanged: () => setState(() {}),
+            deckOptions: _reportedDecks(context),
+            syncedAt: _ankiSyncedAt,
+            syncing: _ankiSyncing,
+            onSync: () => _syncAnki(context),
+            onPaste: () => _importAnki(context),
+            serverCount: _liveAnkiCount(context),
           ),
-          if (_hasAnki) ...[
-            TextField(
-              controller: _deck,
-              decoration: const InputDecoration(
-                labelText: 'Deck (blank = all decks)',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _targetReviews,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Target reviews',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            DropdownButtonFormField<TimeScale?>(
-              initialValue: _ankiPeriod,
-              decoration: const InputDecoration(
-                labelText: 'Period (optional)',
-              ),
-              items: [
-                const DropdownMenuItem(
-                  value: null,
-                  child: Text('One-time'),
-                ),
-                for (final s in TimeScale.values)
-                  DropdownMenuItem(value: s, child: Text(s.displayName)),
-              ],
-              onChanged: (v) => setState(() => _ankiPeriod = v),
-            ),
-            if (_ankiPeriod == TimeScale.custom) ...[
-              const SizedBox(height: 8),
-              TextField(
-                controller: _ankiCustomDays,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Custom period (days)',
-                ),
-              ),
-            ],
-            const SizedBox(height: 8),
-            TextField(
-              controller: _manualReviews,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Reviews so far (this period)',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 4),
-            if (_ankiSyncedAt != null)
-              Text(
-                'Last counted '
-                '${MaterialLocalizations.of(context).formatFullDate(_ankiSyncedAt!)}',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            Row(
-              children: [
-                TextButton.icon(
-                  onPressed: _ankiSyncing ? null : () => _syncAnki(context),
-                  icon: _ankiSyncing
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.sync, size: 16),
-                  label: const Text('Sync from Anki'),
-                ),
-                TextButton.icon(
-                  onPressed: () => _importAnki(context),
-                  icon: const Icon(Icons.upload_outlined, size: 16),
-                  label: const Text('Paste stats'),
-                ),
-              ],
-            ),
-            if (kIsWeb)
-              Text(
-                'Sync from Anki goes through the app server here — '
-                'sign in first. Manual entry and pasted stats still '
-                'work offline.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-          ],
           const SizedBox(height: 8),
           _sectionTitle(context, 'Repeats'),
           SwitchListTile(
@@ -1133,18 +1049,39 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     AnkiFacet? anki;
     if (_hasAnki) {
       final deck = _deck.text.trim();
+      final deckName = deck.isEmpty ? null : deck;
+      final customDays = _ankiPeriod == TimeScale.custom
+          ? int.tryParse(_ankiCustomDays.text.trim())
+          : null;
       final manual = int.tryParse(_manualReviews.text.trim());
+      // The reports cubit may have written a fresher count while this
+      // editor was open, so prefer the live node over the snapshot taken
+      // at open. A blank manual field must not resurrect the old number.
+      final liveAnki = widget.existing == null
+          ? null
+          : cubit.byId(widget.existing!.id)?.anki;
+      final preview = _liveAnkiCount(context, listen: false);
+      final existingAnki = existing?.anki;
+      final formChanged = existing == null ||
+          existingAnki?.deckName != deckName ||
+          existingAnki?.period != _ankiPeriod ||
+          existingAnki?.customPeriodDays != customDays;
+      // Changing deck or period invalidates the old cache: carrying it
+      // over would show a different deck's progress until the next sync.
+      final carried = formChanged
+          ? null
+          : (liveAnki?.reviewsActual ?? existingAnki?.reviewsActual);
       anki = AnkiFacet(
-        deckName: deck.isEmpty ? null : deck,
+        deckName: deckName,
         targetReviews: int.tryParse(_targetReviews.text.trim()) ?? 0,
         period: _ankiPeriod,
-        customPeriodDays: _ankiPeriod == TimeScale.custom
-            ? int.tryParse(_ankiCustomDays.text.trim())
-            : null,
-        // A blank count keeps the previously synced number (or nothing
-        // on a new goal) instead of zeroing it.
-        reviewsActual: manual ?? existing?.anki?.reviewsActual,
-        lastSyncedAt: manual != null ? DateTime.now() : _ankiSyncedAt,
+        customPeriodDays: customDays,
+        reviewsActual: manual ?? preview?.cards ?? carried,
+        lastSyncedAt: manual != null || preview != null
+            ? DateTime.now()
+            : (formChanged
+                ? null
+                : (liveAnki?.lastSyncedAt ?? _ankiSyncedAt)),
       );
     }
 
@@ -1280,57 +1217,102 @@ class _NodeEditorDialogState extends State<_NodeEditorDialog> {
     Navigator.of(context).pop(result);
   }
 
-  /// Pulls today's review count from AnkiConnect into the manual field.
-  /// Native builds call AnkiConnect directly; the web build goes through
-  /// the app server (browsers cannot reach AnkiConnect themselves).
+  /// Deck names the add-on has reported, for the picker under the deck
+  /// field. Free text stays available for a deck that has not reported yet.
+  List<String> _reportedDecks(BuildContext context) {
+    if (!_hasAnki) return const [];
+    try {
+      return context
+          .watch<AnkiReportsCubit>()
+          .state
+          .data
+          .decks
+          .map((deck) => deck.name)
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Live count for the deck/period currently in the form. Watches the
+  /// reports cubit so a background refresh updates the preview without
+  /// closing the editor. Missing provider in a widget test reads as null.
+  AnkiFacetCount? _liveAnkiCount(
+    BuildContext context, {
+    bool listen = true,
+  }) {
+    if (!_hasAnki) return null;
+    try {
+      final reports = listen
+          ? context.watch<AnkiReportsCubit>()
+          : context.read<AnkiReportsCubit>();
+      return reports.countFor(
+            deckName: _deck.text.trim().isEmpty ? null : _deck.text.trim(),
+            period: _ankiPeriod,
+            customPeriodDays: int.tryParse(_ankiCustomDays.text.trim()),
+            anchor: widget.existing?.createdAt,
+          );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Pulls the add-on's current count for this goal's deck and period into
+  /// the manual field, so saving persists it for offline display.
   Future<void> _syncAnki(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
-    String host = '';
-    try {
-      host = context.read<SettingsCubit>().state.ankiConnectHost;
-    } catch (_) {}
-    final deck = _deck.text.trim();
+    if (!context.read<AuthCubit>().state.isSignedIn) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Sign in to read Anki reports from the server.'),
+        ),
+      );
+      return;
+    }
+    final reports = context.read<AnkiReportsCubit>();
     setState(() => _ankiSyncing = true);
     try {
-      final int count;
-      if (kIsWeb) {
-        count = await ankiServerReviewsToday(
-          context.read<AuthCubit>().syncClient,
-          deck: deck.isEmpty ? null : deck,
-        );
-      } else {
-        final client = AnkiConnectClient(host: host, httpClient: http.Client());
-        try {
-          count = await client.reviewsToday(deck: deck.isEmpty ? null : deck);
-        } finally {
-          client.close();
-        }
-      }
+      await reports.refresh();
+      final count = reports.countFor(
+        deckName: _deck.text.trim().isEmpty ? null : _deck.text.trim(),
+        period: _ankiPeriod,
+        customPeriodDays: int.tryParse(_ankiCustomDays.text.trim()),
+        anchor: widget.existing?.createdAt,
+      );
       if (!context.mounted) return;
+      if (count == null) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              reports.state.error ??
+                  'No add-on reports for this deck yet. Install the add-on '
+                      'in Anki, then retry.',
+            ),
+          ),
+        );
+        return;
+      }
       setState(() {
-        _manualReviews.text = count.toString();
+        _manualReviews.text = count.cards.toString();
         _ankiSyncedAt = DateTime.now();
       });
       messenger.showSnackBar(
         SnackBar(
           content: Text(
-            'Anki: $count card${count == 1 ? '' : 's'} reviewed today',
+            'Add-on: ${count.cards} card${count.cards == 1 ? '' : 's'} '
+            '(${count.reviews} answer${count.reviews == 1 ? '' : 's'}) '
+            'this period',
           ),
         ),
       );
-    } on AnkiServerException catch (e) {
-      if (!context.mounted) return;
-      messenger.showSnackBar(SnackBar(content: Text(e.message)));
-    } on AnkiException catch (e) {
-      if (!context.mounted) return;
-      messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } finally {
       if (context.mounted) setState(() => _ankiSyncing = false);
     }
   }
 
   /// Pastes "deck,count per line" stats (see parseAnkiReviewCounts) into
-  /// the manual field. The fallback for web and mobile-only users.
+  /// the manual field. The fallback when the add-on is not installed or
+  /// has not reported this deck yet.
   Future<void> _importAnki(BuildContext context) async {
     final pasted = TextEditingController();
     final result = await showDialog<AnkiImportResult>(
