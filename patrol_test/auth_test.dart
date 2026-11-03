@@ -77,20 +77,34 @@ void main() {
 }
 
 Future<void> _tapAndTypePassword(PatrolIntegrationTester $, String value) async {
-  await $(TextField).at(1).tap();
-  final editable = $.tester.widget<EditableText>(find.byType(EditableText).last);
-  expect(editable.focusNode.hasFocus, isTrue);
-  if (kIsWeb) {
-    // Browser keystrokes must reach the connection opened by the tap. Using
-    // enterText here would focus/attach a test connection and hide regressions.
-    await $.platform.web.pressKeyCombo(keys: ['ControlOrMeta', 'A']);
-    for (final character in value.split('')) {
-      await $.platform.web.pressKey(key: character);
+  // Expose the fields for a real browser click (refs #297). Dispose before
+  // Patrol checks for leaked handles at the end of the test body.
+  final semantics = $.tester.ensureSemantics();
+  try {
+    await $.pump();
+    if (kIsWeb) {
+      await $.platform.web.tap(WebSelector(label: 'Password (8+ characters)'));
+      await $.pump();
+    } else {
+      await $(TextField).at(1).tap();
     }
-  } else {
-    await $(TextField).at(1).enterText(value);
+    final editable = $.tester.widget<EditableText>(find.byType(EditableText).last);
+    expect(editable.focusNode.hasFocus, isTrue);
+    if (kIsWeb) {
+      // Browser keystrokes must reach the connection opened by the tap. Using
+      // enterText here would focus/attach a test connection and hide regressions.
+      await $.platform.web.pressKeyCombo(keys: ['ControlOrMeta', 'A']);
+      for (final character in value.split('')) {
+        await $.platform.web.pressKey(key: character);
+      }
+    } else {
+      await $(TextField).at(1).enterText(value);
+    }
+    await $.pump();
+    expect(editable.controller.text, value);
+    expect(editable.obscureText, isTrue);
+    expect($.tester.takeException(), isNull);
+  } finally {
+    semantics.dispose();
   }
-  await $.pump();
-  expect(editable.controller.text, value);
-  expect(editable.obscureText, isTrue);
 }
