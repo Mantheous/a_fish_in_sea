@@ -34,6 +34,11 @@ void main() {
     when(() => storage.clear()).thenAnswer((_) async {});
     HydratedBloc.storage = storage;
 
+    // Expose the fields to Playwright so the password regression uses a
+    // browser-generated click, rather than a Flutter test gesture (refs #297).
+    final semantics = $.tester.ensureSemantics();
+    addTearDown(semantics.dispose);
+
     await $.pumpWidgetAndSettle(const MyApp());
     expect($('Sign in to sync').visible, true);
 
@@ -77,7 +82,12 @@ void main() {
 }
 
 Future<void> _tapAndTypePassword(PatrolIntegrationTester $, String value) async {
-  await $(TextField).at(1).tap();
+  if (kIsWeb) {
+    await $.platform.web.tap(WebSelector(label: 'Password (8+ characters)'));
+    await $.pump();
+  } else {
+    await $(TextField).at(1).tap();
+  }
   final editable = $.tester.widget<EditableText>(find.byType(EditableText).last);
   expect(editable.focusNode.hasFocus, isTrue);
   if (kIsWeb) {
@@ -93,4 +103,5 @@ Future<void> _tapAndTypePassword(PatrolIntegrationTester $, String value) async 
   await $.pump();
   expect(editable.controller.text, value);
   expect(editable.obscureText, isTrue);
+  expect($.tester.takeException(), isNull);
 }

@@ -3,6 +3,7 @@ import 'package:a_fish_in_sea/sync/sync_client.dart';
 import 'package:a_fish_in_sea/sync/sync_engine.dart';
 import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
 import 'package:a_fish_in_sea/sync/view/auth/auth_page.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -114,6 +115,46 @@ void main() {
     await tester.enterText(find.byType(TextField).first, 'a@example.com');
     await tester.pump();
     expect(find.text('a@example.com'), findsOneWidget);
+  });
+
+  testWidgets('first desktop mouse click focuses every part of Password', (
+    tester,
+  ) async {
+    // Match the reported desktop viewport, including the scrollable card.
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await pumpAuthPage(tester);
+    final email = find.byType(TextField).first;
+    final password = find.byType(TextField).last;
+    final box = tester.getRect(password);
+
+    for (final point in [
+      tester.getCenter(find.byIcon(Icons.lock_outline)),
+      box.center,
+      Offset(box.right - 10, box.center.dy),
+    ]) {
+      await tester.enterText(email, 'newcomer@example.com');
+      expect(hasFocus(tester, 0), isTrue);
+      // One mouse click, with no enterText/requestFocus on Password.
+      await tester.tapAt(point, kind: PointerDeviceKind.mouse);
+      await tester.pump();
+      expect(hasFocus(tester, 1), isTrue);
+      expect(hasFocus(tester, 0), isFalse);
+      tester.testTextInput.enterText('password123');
+      await tester.pump(const Duration(seconds: 2));
+      final editable = tester.widget<EditableText>(
+        find.byType(EditableText).last,
+      );
+      expect(editable.controller.text, 'password123');
+      expect(editable.obscureText, isTrue);
+      expect(
+        tester.widget<TextField>(email).controller!.text,
+        'newcomer@example.com',
+      );
+      expect(tester.takeException(), isNull);
+    }
   });
 
   testWidgets('Next moves from email to password, Done validates',
