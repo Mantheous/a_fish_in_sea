@@ -77,6 +77,8 @@ void main() {
 }
 
 Future<void> _tapAndTypePassword(PatrolIntegrationTester $, String value) async {
+  final email = $.tester.widget<TextField>(find.byType(TextField).first);
+  final emailBeforeTyping = email.controller!.text;
   // Expose the fields for a real browser click (refs #297). Dispose before
   // Patrol checks for leaked handles at the end of the test body.
   final semantics = $.tester.ensureSemantics();
@@ -103,6 +105,10 @@ Future<void> _tapAndTypePassword(PatrolIntegrationTester $, String value) async 
     await $.pump();
     expect(editable.controller.text, value);
     expect(editable.obscureText, isTrue);
+    // The walk's malformed synthetic pointer events left focus on Email.
+    // Real browser clicks must keep password keystrokes out of it (refs #299).
+    expect(email.focusNode!.hasFocus, isFalse);
+    expect(email.controller!.text, emailBeforeTyping);
     expect($.tester.takeException(), isNull);
   } finally {
     semantics.dispose();

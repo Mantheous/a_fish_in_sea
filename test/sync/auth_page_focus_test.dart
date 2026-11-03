@@ -135,8 +135,13 @@ void main() {
       box.center,
       Offset(box.right - 10, box.center.dy),
     ]) {
-      await tester.enterText(email, 'newcomer@example.com');
+      // Exercise both directions without enterText forcing either field's
+      // focus: browser typing must follow the most recent click (refs #299).
+      await tester.tap(email, kind: PointerDeviceKind.mouse);
+      await tester.pump();
       expect(hasFocus(tester, 0), isTrue);
+      tester.testTextInput.enterText('newcomer@example.com');
+      await tester.pump();
       // One mouse click, with no enterText/requestFocus on Password.
       await tester.tapAt(point, kind: PointerDeviceKind.mouse);
       await tester.pump();
@@ -149,6 +154,14 @@ void main() {
       );
       expect(editable.controller.text, 'password123');
       expect(editable.obscureText, isTrue);
+      expect(
+        tester
+            .state<EditableTextState>(find.byType(EditableText).last)
+            .renderEditable
+            .text!
+            .toPlainText(),
+        editable.obscuringCharacter * 'password123'.length,
+      );
       expect(
         tester.widget<TextField>(email).controller!.text,
         'newcomer@example.com',
