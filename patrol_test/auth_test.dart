@@ -34,11 +34,6 @@ void main() {
     when(() => storage.clear()).thenAnswer((_) async {});
     HydratedBloc.storage = storage;
 
-    // Expose the fields to Playwright so the password regression uses a
-    // browser-generated click, rather than a Flutter test gesture (refs #297).
-    final semantics = $.tester.ensureSemantics();
-    addTearDown(semantics.dispose);
-
     await $.pumpWidgetAndSettle(const MyApp());
     expect($('Sign in to sync').visible, true);
 
@@ -82,26 +77,34 @@ void main() {
 }
 
 Future<void> _tapAndTypePassword(PatrolIntegrationTester $, String value) async {
-  if (kIsWeb) {
-    await $.platform.web.tap(WebSelector(label: 'Password (8+ characters)'));
+  // Expose the fields for a real browser click (refs #297). Dispose before
+  // Patrol checks for leaked handles at the end of the test body.
+  final semantics = $.tester.ensureSemantics();
+  try {
     await $.pump();
-  } else {
-    await $(TextField).at(1).tap();
-  }
-  final editable = $.tester.widget<EditableText>(find.byType(EditableText).last);
-  expect(editable.focusNode.hasFocus, isTrue);
-  if (kIsWeb) {
-    // Browser keystrokes must reach the connection opened by the tap. Using
-    // enterText here would focus/attach a test connection and hide regressions.
-    await $.platform.web.pressKeyCombo(keys: ['ControlOrMeta', 'A']);
-    for (final character in value.split('')) {
-      await $.platform.web.pressKey(key: character);
+    if (kIsWeb) {
+      await $.platform.web.tap(WebSelector(label: 'Password (8+ characters)'));
+      await $.pump();
+    } else {
+      await $(TextField).at(1).tap();
     }
-  } else {
-    await $(TextField).at(1).enterText(value);
+    final editable = $.tester.widget<EditableText>(find.byType(EditableText).last);
+    expect(editable.focusNode.hasFocus, isTrue);
+    if (kIsWeb) {
+      // Browser keystrokes must reach the connection opened by the tap. Using
+      // enterText here would focus/attach a test connection and hide regressions.
+      await $.platform.web.pressKeyCombo(keys: ['ControlOrMeta', 'A']);
+      for (final character in value.split('')) {
+        await $.platform.web.pressKey(key: character);
+      }
+    } else {
+      await $(TextField).at(1).enterText(value);
+    }
+    await $.pump();
+    expect(editable.controller.text, value);
+    expect(editable.obscureText, isTrue);
+    expect($.tester.takeException(), isNull);
+  } finally {
+    semantics.dispose();
   }
-  await $.pump();
-  expect(editable.controller.text, value);
-  expect(editable.obscureText, isTrue);
-  expect($.tester.takeException(), isNull);
 }
