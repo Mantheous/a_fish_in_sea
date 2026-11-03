@@ -44,7 +44,7 @@ void main() {
     final email = 'patrol-auth-$stamp@example.com';
     await $(TextField).at(0).enterText(email);
     await _tapAndTypePassword($, 'patrol-pass-1');
-    await $('Create account').tap();
+    await _tapAuthButton($, 'Create account');
     await $(HomePage).waitUntilVisible();
     await $.pumpAndSettle();
 
@@ -56,24 +56,43 @@ void main() {
     await $.pumpAndSettle();
     await $(TextField).at(0).enterText(email);
     await $(TextField).at(1).enterText('wrong-password');
-    await $('Sign in').tap();
+    await _tapAuthButton($, 'Sign in');
     await $('Invalid credentials').waitUntilVisible();
     expect(find.byType(HomePage), findsNothing);
 
     // Registration errors must be visible on the same card as well.
-    await $('Create account').tap();
+    await _tapAuthButton($, 'Create account');
     await $('Email already registered').waitUntilVisible();
     // Move off Password so the next tap opens a fresh input connection.
     await $(TextField).at(0).tap();
     await _tapAndTypePassword($, 'patrol-pass-1');
     expect($.tester.widget<TextField>(find.byType(TextField).last).controller!.text,
         'patrol-pass-1');
-    await $('Sign in').tap();
+    await _tapAuthButton($, 'Sign in');
     await $(HomePage).waitUntilVisible();
     await $.pumpAndSettle();
     expect(find.byType(HomePage), findsOneWidget);
     expect(find.byType(AuthPage), findsNothing);
   });
+}
+
+Future<void> _tapAuthButton(PatrolIntegrationTester $, String label) async {
+  if (!kIsWeb) {
+    await $(label).tap();
+    return;
+  }
+  // Exercise the browser's actual down/up sequence (refs #301), rather
+  // than WidgetTester's gesture injection. The walk sent pointerup with
+  // buttons: 1, which Flutter treats as a move with the button still held.
+  final semantics = $.tester.ensureSemantics();
+  try {
+    await $.pump();
+    await $.platform.web.tap(WebSelector(role: 'button', text: label));
+    await $.pumpAndSettle();
+    expect($.tester.takeException(), isNull);
+  } finally {
+    semantics.dispose();
+  }
 }
 
 Future<void> _tapAndTypePassword(PatrolIntegrationTester $, String value) async {
