@@ -87,7 +87,7 @@ Future<void> _tapAuthButton(PatrolIntegrationTester $, String label) async {
   final semantics = $.tester.ensureSemantics();
   try {
     await $.pump();
-    await $.platform.web.tap(WebSelector(role: 'button', label: label));
+    await $.platform.web.tap(WebSelector(role: 'button', text: label));
     await $.pumpAndSettle();
     expect($.tester.takeException(), isNull);
   } finally {
