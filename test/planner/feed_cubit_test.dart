@@ -153,6 +153,30 @@ void main() {
       expect(undo.canUndo, isTrue);
     });
 
+    test('class work time survives refresh and storage round trip', () async {
+      final assignmentIcs = ics.replaceAll('UID:a1', 'UID:event-assignment-42');
+      when(() => client.get(any())).thenAnswer((_) async => http.Response(assignmentIcs, 200));
+      feedCubit.addFeed(feed.copyWith(kind: FeedKind.canvas));
+      await feedCubit.syncAll();
+      final original = calendarCubit.state.single;
+      expect(feedCubit.isEventEditable(original), isTrue);
+      final start = DateTime(2030, 1, 3, 14);
+      final moved = original.copyWith(start: start,
+        end: start.add(const Duration(minutes: 90)), done: true,
+        completedAt: start, timerStartedAt: start);
+      calendarCubit.updateEvent(PlannerEvent.fromJson(moved.toJson()));
+      when(() => client.get(any())).thenAnswer((_) async =>
+        http.Response(assignmentIcs.replaceAll('Assignment A1', 'Updated assignment'), 200));
+      await feedCubit.syncFeed('f1');
+      final synced = calendarCubit.state.single;
+      expect(synced.start, moved.start);
+      expect(synced.end, moved.end);
+      expect(synced.done, isTrue);
+      expect(synced.timerStartedAt, moved.timerStartedAt);
+      expect(synced.completedAt, moved.completedAt);
+      expect(synced.subject, 'Updated assignment');
+    });
+
     test('sync errors are recorded on the feed', () async {
       when(() => client.get(any()))
           .thenAnswer((_) async => http.Response('boom', 500));

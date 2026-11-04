@@ -23,8 +23,21 @@ PlannerEvent preserveLocalFieldsOnWrite(
   final base = fresh.colorValue == null && local.colorValue != null
       ? fresh.copyWith(colorValue: local.colorValue)
       : fresh;
+  return preserveLocalTaskState(base, local);
+}
+
+/// Assignment work times belong to this device; Google times still come
+/// from the server. All other local task metadata survives either refresh.
+PlannerEvent preserveLocalTaskState(
+  PlannerEvent fresh,
+  PlannerEvent local, {
+  bool preserveWorkTime = false,
+}) {
   return preserveLocalFeedMetadata(
-    base.copyWith(
+    fresh.copyWith(
+      start: preserveWorkTime ? local.start : fresh.start,
+      end: preserveWorkTime ? local.end : fresh.end,
+      allDay: preserveWorkTime ? local.allDay : fresh.allDay,
       isTask: local.isTask,
       done: local.done,
       completedAt: local.completedAt,

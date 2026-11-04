@@ -634,7 +634,7 @@ class EventEditorFormState extends State<EventEditorForm> {
                   canChangeCalendar: (feeds) => existing == null
                       ? true
                       : canChangeEventCalendar(existing,
-                          editable: feeds.isEventEditable(existing)),
+                          editable: !existing.isFromFeed || feeds.isRemoteEditable(existing)),
                   onChanged: (value) =>
                       setState(() => _saveTargetFeedId = value),
                 ),
@@ -1155,7 +1155,7 @@ class EventEditorFormState extends State<EventEditorForm> {
     final base = calendarCubit.byId(widget.existing!.id) ?? widget.existing!;
     final ruleForMove =
         _customRepeat ? base.recurrenceRule : config.ruleFor(start);
-    if (canChangeEventCalendar(base, editable: feedCubit.isEventEditable(base))) {
+    if (canChangeEventCalendar(base, editable: !base.isFromFeed || feedCubit.isRemoteEditable(base))) {
       final destFeedId = feedCubit.byId(_saveTargetFeedId ?? '')?.kind ==
               FeedKind.google
           ? _saveTargetFeedId
@@ -2740,15 +2740,7 @@ class EventDetailView extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: Text(
-                pushesToGoogle
-                    ? event.isRecurringInstance
-                        ? 'Part of a repeating series on ${feed?.name ?? 'Google'} — '
-                            'dragging moves just this occurrence, editing '
-                            'lets you pick this occurrence or the whole series.'
-                        : 'Synced with ${feed?.name ?? 'Google'} — edits save '
-                            'back to Google Calendar.'
-                    : 'Synced from ${feed?.name ?? 'your class'} — changes there '
-                        'will overwrite local edits on the next sync.',
+                eventSyncDescription(event, feed, pushesToGoogle: pushesToGoogle),
                 style: theme.textTheme.bodySmall,
               ),
             ),

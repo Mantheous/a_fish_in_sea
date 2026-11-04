@@ -29,6 +29,10 @@ void main() {
       expect(isDraggableEvent(_event(feedId: 'feed:1')), isFalse);
     });
 
+    test('imported assignment is draggable', () {
+      expect(isDraggableEvent(_event(feedId: 'class').copyWith(isTask: true)), isTrue);
+    });
+
     test('recurring event is not draggable', () {
       expect(
         isDraggableEvent(_event(recurrenceRule: 'FREQ=DAILY;INTERVAL=1')),

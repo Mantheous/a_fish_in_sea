@@ -3,8 +3,9 @@ import 'planner_event.dart';
 
 const Duration minEventDuration = Duration(minutes: 15);
 
-bool isDraggableEvent(PlannerEvent event) =>
-    !event.isFromFeed && event.recurrenceRule.isEmpty;
+bool isDraggableEvent(PlannerEvent event, {bool remoteEditable = false}) =>
+    remoteEditable ||
+    ((!event.isFromFeed || event.isTask) && event.recurrenceRule.isEmpty);
 
 DateTime stripSeconds(DateTime value) => DateTime(
       value.year,
