@@ -7,11 +7,12 @@ import 'package:mocktail/mocktail.dart';
 import 'package:patrol/patrol.dart';
 
 import '../test/planner/dst_drag_scenario.dart';
+import '../test/planner/imported_assignment_scenario.dart';
 
 class MockStorage extends Mock implements Storage {}
 
 void main() {
-  patrolTest('DST sideways drops keep 9 AM in Day and Week', ($) async {
+  patrolTest('DST drops and imported assignment scheduling', ($) async {
     final storage = MockStorage();
     when(() => storage.read(any())).thenReturn(null);
     when(() => storage.write(any(), any())).thenAnswer((_) async {});
@@ -40,6 +41,7 @@ void main() {
     await $(Icons.menu).tap();
     await $('Calendar').tap();
     await $.pumpAndSettle();
+    await verifyImportedAssignment($.tester);
     for (final day in [DateTime(2026, 3, 8), DateTime(2026, 11, 1)]) {
       for (final view in ['Day', 'Week']) {
         await verifyDstCalendarDrag($.tester, day, view: view);

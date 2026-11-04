@@ -29,6 +29,10 @@ void main() {
       expect(isDraggableEvent(_event(feedId: 'feed:1')), isFalse);
     });
 
+    test('imported assignment is draggable', () {
+      expect(isDraggableEvent(_event(feedId: 'class').copyWith(isTask: true)), isTrue);
+    });
+
     test('recurring event is not draggable', () {
       expect(
         isDraggableEvent(_event(recurrenceRule: 'FREQ=DAILY;INTERVAL=1')),
@@ -62,6 +66,22 @@ void main() {
         DateTime(2026, 9, 9, 14, 5),
       );
     });
+  });
+
+  test('only imported task moves and resizes mark work time as chosen', () {
+    final assignment = _event(feedId: 'class').copyWith(isTask: true);
+    expect(assignment.workTimeScheduled, isFalse);
+    expect(shiftEvent(assignment, DateTime(2030, 1, 1)).workTimeScheduled, isTrue);
+    expect(
+      resizeEvent(assignment, null, DateTime(2030, 1, 1)).workTimeScheduled,
+      isTrue,
+    );
+    expect(shiftEvent(_event(), DateTime(2030, 1, 1)).workTimeScheduled, isFalse);
+    expect(
+      resizeEvent(_event(feedId: 'feed'), null, DateTime(2030, 1, 1))
+          .workTimeScheduled,
+      isFalse,
+    );
   });
 
   group('shiftEvent', () {
