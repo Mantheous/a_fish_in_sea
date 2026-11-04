@@ -77,14 +77,14 @@ Future<void> verifyImportedAssignment(
   ScaffoldMessenger.of(context).clearSnackBars();
   await tester.pumpAndSettle();
   expect(find.text('Edit'), findsOneWidget);
+  await tester.ensureVisible(find.text('Edit'));
+  await tester.pumpAndSettle();
   if (golden) {
     await expectLater(
       find.byType(CalendarPage),
       matchesGoldenFile('../goldens/imported_assignment.png'),
     );
   }
-  await tester.ensureVisible(find.text('Edit'));
-  await tester.pumpAndSettle();
   await tester.tap(find.text('Edit'));
   await tester.pumpAndSettle();
   await tester.ensureVisible(find.text('Save'));
