@@ -1,4 +1,10 @@
 import '../model/planner_event.dart';
+import '../model/feed.dart';
+
+/// Only class assignments support locally chosen work times.
+bool isLocallySchedulableAssignment(PlannerEvent event, Feed? feed) =>
+    event.isTask &&
+    (feed?.kind == FeedKind.canvas || feed?.kind == FeedKind.learningSuite);
 
 /// Keeps user-owned metadata when a fresh feed copy replaces an event.
 PlannerEvent preserveLocalFeedMetadata(
@@ -26,8 +32,8 @@ PlannerEvent preserveLocalFieldsOnWrite(
   return preserveLocalTaskState(base, local);
 }
 
-/// Assignment work times belong to this device; Google times still come
-/// from the server. All other local task metadata survives either refresh.
+/// Chosen assignment work times belong to this device; untouched times
+/// follow the source. All other local task metadata survives either refresh.
 PlannerEvent preserveLocalTaskState(
   PlannerEvent fresh,
   PlannerEvent local, {
@@ -38,6 +44,7 @@ PlannerEvent preserveLocalTaskState(
       start: preserveWorkTime ? local.start : fresh.start,
       end: preserveWorkTime ? local.end : fresh.end,
       allDay: preserveWorkTime ? local.allDay : fresh.allDay,
+      workTimeScheduled: local.workTimeScheduled,
       isTask: local.isTask,
       done: local.done,
       completedAt: local.completedAt,

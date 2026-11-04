@@ -68,6 +68,22 @@ void main() {
     });
   });
 
+  test('only imported task moves and resizes mark work time as chosen', () {
+    final assignment = _event(feedId: 'class').copyWith(isTask: true);
+    expect(assignment.workTimeScheduled, isFalse);
+    expect(shiftEvent(assignment, DateTime(2030, 1, 1)).workTimeScheduled, isTrue);
+    expect(
+      resizeEvent(assignment, null, DateTime(2030, 1, 1)).workTimeScheduled,
+      isTrue,
+    );
+    expect(shiftEvent(_event(), DateTime(2030, 1, 1)).workTimeScheduled, isFalse);
+    expect(
+      resizeEvent(_event(feedId: 'feed'), null, DateTime(2030, 1, 1))
+          .workTimeScheduled,
+      isFalse,
+    );
+  });
+
   group('shiftEvent', () {
     test('preserves duration when moved', () {
       final moved = shiftEvent(

@@ -37,6 +37,10 @@ PlannerEvent shiftEvent(
   DateTime droppingTime, {
   int snapMinutes = 1,
 }) {
+  event = event.copyWith(
+    workTimeScheduled:
+        event.workTimeScheduled || (event.isFromFeed && event.isTask),
+  );
   final duration = event.end.isAfter(event.start)
       ? event.end.difference(event.start)
       : const Duration(hours: 1);
@@ -66,7 +70,12 @@ PlannerEvent resizeEvent(
   if (!end.isAfter(start) || end.difference(start) < minEventDuration) {
     end = start.add(minEventDuration);
   }
-  return event.copyWith(start: start, end: end);
+  return event.copyWith(
+    start: start,
+    end: end,
+    workTimeScheduled:
+        event.workTimeScheduled || (event.isFromFeed && event.isTask),
+  );
 }
 
 bool isSameDay(DateTime a, DateTime b) => isSameLocalDay(a, b);

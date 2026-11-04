@@ -1,5 +1,6 @@
 import '../model/planner_event.dart';
 import '../model/feed.dart';
+import '../service/feed_event_merge.dart';
 
 /// Moving a repeating Google event needs separate occurrence/series calls.
 /// Keep the calendar fixed while allowing its other fields to be edited.
@@ -22,9 +23,10 @@ String eventSyncDescription(
         : 'Synced with ${feed?.name ?? 'Google'} — edits save '
               'back to Google Calendar.';
   }
-  return event.isTask
+  return isLocallySchedulableAssignment(event, feed)
       ? 'Synced from ${feed?.name ?? 'your class'} — work times are saved '
-            'on this device and kept when the class updates.'
+            'after you schedule them. Title, notes, and location update '
+            'from the class feed.'
       : 'Synced from ${feed?.name ?? 'your class'} — changes there '
             'will overwrite local edits on the next sync.';
 }

@@ -29,6 +29,7 @@ import '../service/event_reminders.dart';
 import '../service/event_editor_task_link.dart';
 import 'event_calendar_policy.dart';
 import 'event_editor_actions.dart';
+import 'event_editor_text_field.dart';
 import 'event_colors.dart';
 import 'event_time_sections.dart';
 import 'people_field.dart';
@@ -594,6 +595,9 @@ class EventEditorFormState extends State<EventEditorForm> {
     // reset the calendar dropdown via its ValueKey and made the editor feel
     // glitchy. Only the picker below watches feeds now.
     final existing = widget.existing;
+    final sourceOwnedText = existing != null &&
+        existing.isFromFeed &&
+        !context.read<FeedCubit>().isRemoteEditable(existing);
     return SafeArea(
       top: false,
       child: Stack(
@@ -639,13 +643,11 @@ class EventEditorFormState extends State<EventEditorForm> {
                   onChanged: (value) =>
                       setState(() => _saveTargetFeedId = value),
                 ),
-                TextField(
+                EventEditorTextField(
                   controller: _subject,
+                  label: 'Title',
+                  sourceOwned: sourceOwnedText,
                   autofocus: widget.autofocusTitle,
-                  decoration: const InputDecoration(
-                    labelText: 'Title',
-                    border: OutlineInputBorder(),
-                  ),
                 ),
                 const SizedBox(height: 12),
                 Row(
@@ -735,12 +737,10 @@ class EventEditorFormState extends State<EventEditorForm> {
                     _emitDraft();
                   },
                 ),            const SizedBox(height: 12),
-                TextField(
+                EventEditorTextField(
                   controller: _location,
-                  decoration: const InputDecoration(
-                    labelText: 'Location',
-                    border: OutlineInputBorder(),
-                  ),
+                  label: 'Location',
+                  sourceOwned: sourceOwnedText,
                 ),
                 const SizedBox(height: 12),
                 _PlaceField(
@@ -759,12 +759,10 @@ class EventEditorFormState extends State<EventEditorForm> {
                   },
                 ),
                 const SizedBox(height: 12),
-                TextField(
+                EventEditorTextField(
                   controller: _notes,
-                  decoration: const InputDecoration(
-                    labelText: 'Notes',
-                    border: OutlineInputBorder(),
-                  ),
+                  label: 'Notes',
+                  sourceOwned: sourceOwnedText,
                   maxLines: 2,
                 ),
                 const SizedBox(height: 4),
@@ -1197,6 +1195,10 @@ class EventEditorFormState extends State<EventEditorForm> {
     }
     final rule = _customRepeat ? base.recurrenceRule : config.ruleFor(start);
     final updated = base.copyWith(
+      workTimeScheduled: base.workTimeScheduled ||
+          (base.isFromFeed && feedCubit.isEventEditable(base) &&
+              !feedCubit.isRemoteEditable(base) &&
+              (start != base.start || end != base.end || _allDay != base.allDay)),
       subject: subject,
       notes: notes,
       clearNotes: notes == null,

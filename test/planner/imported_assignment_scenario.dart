@@ -84,6 +84,7 @@ Future<void> verifyImportedAssignment(
   final moved = calendar.byId(event.id)!;
   expect(moved.start.isAfter(start), isTrue);
   expect(moved.plannedDuration, const Duration(hours: 1));
+  expect(moved.workTimeScheduled, isTrue);
   rect = tester.getRect(tile);
   await tester.tapAt(Offset(rect.left + 30, rect.center.dy));
   await tester.pumpAndSettle();
@@ -139,6 +140,7 @@ Future<void> verifyImportedAssignment(
     expect(saved.start, editedStart);
     expect(saved.end, editedEnd);
     expect(saved.feedId, 'canvas');
+    expect(saved.workTimeScheduled, isTrue);
     expect(task.schedule!.start, saved.start);
     expect(task.schedule!.end, saved.end);
     expect(task.schedule!.due, due);
