@@ -89,6 +89,8 @@ class AuthCubit extends HydratedCubit<AuthState> {
     Future<Map<String, dynamic>> Function() call,
     String email,
   ) async {
+    const fallbackError =
+        'Could not sign in. Check your connection and try again.';
     final attempt = ++_authAttempt;
     // A new login attempt may replace the current identity. Invalidate
     // requests and refreshes bound to the prior account immediately.
@@ -106,12 +108,17 @@ class AuthCubit extends HydratedCubit<AuthState> {
       return true;
     } on SyncException catch (e) {
       if (attempt != _authAttempt) return false;
-      emit(state.copyWith(status: AuthStatus.signedOut, error: e.message));
-      return false;
-    } catch (e) {
-      if (attempt != _authAttempt) return false;
       emit(state.copyWith(
-          status: AuthStatus.signedOut, error: e.toString()));
+        status: AuthStatus.signedOut,
+        error: e.message.trim().isEmpty ? fallbackError : e.message,
+      ));
+      return false;
+    } catch (_) {
+      if (attempt != _authAttempt) return false;
+      // Browser/transport errors may not have a usable toString(). Always
+      // restore the form with a message, even when formatting the error fails.
+      emit(state.copyWith(
+          status: AuthStatus.signedOut, error: fallbackError));
       return false;
     }
   }

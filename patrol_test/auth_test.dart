@@ -60,6 +60,25 @@ void main() {
     await $('Invalid credentials').waitUntilVisible();
     expect(find.byType(HomePage), findsNothing);
 
+    // A failed reply must leave both actions usable, including a second
+    // sign-in attempt with the same credentials (refs #306).
+    expect(
+      $.tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Create account'),
+          )
+          .onPressed,
+      isNotNull,
+    );
+    await _tapAuthButton($, 'Sign in');
+    await $('Invalid credentials').waitUntilVisible();
+    expect(
+      $.tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Sign in'))
+          .onPressed,
+      isNotNull,
+    );
+
     // Registration errors must be visible on the same card as well.
     await _tapAuthButton($, 'Create account');
     await $('Email already registered').waitUntilVisible();
