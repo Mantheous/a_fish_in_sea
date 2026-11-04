@@ -103,11 +103,20 @@ Future<void> _tapAndTypePassword(PatrolIntegrationTester $, String value) async 
   final semantics = $.tester.ensureSemantics();
   try {
     await $.pump();
-    if (kIsWeb) {
-      await $.platform.web.tap(WebSelector(label: 'Password (8+ characters)'));
+    // Check both the initial click and the retry reported in #304. Use real
+    // browser events: MouseEvent('pointerdown') lacks required pointer data.
+    for (var click = 0; click < 2; click++) {
+      if (kIsWeb) {
+        await $.platform.web.tap(WebSelector(label: 'Password (8+ characters)'));
+      } else {
+        await $(TextField).at(1).tap();
+      }
       await $.pump();
-    } else {
-      await $(TextField).at(1).tap();
+      final field = $.tester.widget<EditableText>(find.byType(EditableText).last);
+      expect(field.focusNode.hasFocus, isTrue);
+      expect(email.focusNode!.hasFocus, isFalse);
+      expect(email.controller!.text, emailBeforeTyping);
+      expect($.tester.takeException(), isNull);
     }
     final editable = $.tester.widget<EditableText>(find.byType(EditableText).last);
     expect(editable.focusNode.hasFocus, isTrue);
