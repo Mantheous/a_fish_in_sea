@@ -8,6 +8,11 @@ import 'package:mocktail/mocktail.dart';
 
 class _Storage extends Mock implements Storage {}
 
+class _UnprintableError implements Exception {
+  @override
+  String toString() => throw StateError('Cannot format browser error');
+}
+
 const authResponseError =
     'The server did not complete sign-in. Please try again.';
 
@@ -21,6 +26,43 @@ void main() {
 
   for (final register in [false, true]) {
     final action = register ? 'register' : 'login';
+    for (final failure in [
+      _UnprintableError(),
+      http.ClientException('Failed to fetch'),
+      const SyncException(503, '   '),
+    ]) {
+      test(
+        '$action recovers from ${failure.runtimeType} and allows retry',
+        () async {
+          var attempts = 0;
+          final client = SyncClient(
+            serverBase: () => '',
+            accessToken: () => null,
+            refreshAccessToken: () async => null,
+            client: MockClient((_) async {
+              if (++attempts == 1) throw failure;
+              return http.Response(
+                '{"access_token":"access","refresh_token":"refresh"}',
+                200,
+              );
+            }),
+          );
+          final auth = AuthCubit(client: () => client);
+          addTearDown(auth.close);
+          final call = register ? auth.register : auth.login;
+          expect(await call('newcomer@example.com', 'password123'), isFalse);
+          expect(auth.state.status, AuthStatus.signedOut);
+          expect(
+            auth.state.error,
+            'Could not sign in. Check your connection and try again.',
+          );
+          expect(await call('newcomer@example.com', 'password123'), isTrue);
+          expect(auth.state.isSignedIn, isTrue);
+          expect(auth.state.error, isNull);
+          expect(attempts, 2);
+        },
+      );
+    }
     test('$action accepts the server token pair', () async {
       final client = SyncClient(
         serverBase: () => '',

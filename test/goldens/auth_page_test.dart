@@ -14,6 +14,13 @@ class _Storage extends Mock implements Storage {}
 void main() {
   for (final scenario in [
     (
+      name: 'transport_error',
+      button: 'Sign in',
+      status: 0,
+      body: '',
+      error: 'Could not sign in. Check your connection and try again.',
+    ),
+    (
       name: 'bad_password',
       button: 'Sign in',
       status: 401,
@@ -42,14 +49,19 @@ void main() {
       when(() => storage.read(any())).thenReturn(null);
       when(() => storage.write(any(), any())).thenAnswer((_) async {});
       HydratedBloc.storage = storage;
+      var attempts = 0;
       final auth = AuthCubit(
         client: () => SyncClient(
           serverBase: () => '',
           accessToken: () => null,
           refreshAccessToken: () async => null,
-          client: MockClient(
-            (_) async => http.Response(scenario.body, scenario.status),
-          ),
+          client: MockClient((_) async {
+            attempts++;
+            if (scenario.status == 0) {
+              throw http.ClientException('Failed to fetch');
+            }
+            return http.Response(scenario.body, scenario.status);
+          }),
         ),
       );
       addTearDown(auth.close);
@@ -104,10 +116,22 @@ void main() {
             .onPressed,
         isNotNull,
       );
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.widgetWithText(OutlinedButton, 'Create account'),
+            )
+            .onPressed,
+        isNotNull,
+      );
       await expectLater(
         find.byType(AuthPage),
         matchesGoldenFile('auth_page_test.${scenario.name}.png'),
       );
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+      expect(attempts, 2);
+      expect(find.text(scenario.error), findsOneWidget);
     });
   }
 }
