@@ -10,14 +10,17 @@ comes from the developer's repository documentation.
 
 Every model call receives a fresh map from `feature_docs.py` of tracked
 repository docs and their section headings. All roles must read the relevant
-sections of `docs/project-goal.md`, `product_specs.md` and feature-specific
-docs before proposing new behavior or resolving a feature disagreement.
+sections of `docs/project-goal.md` and feature-specific docs before proposing
+new behavior or resolving a feature disagreement. Human-owned `docs/` takes
+precedence over code and documentation elsewhere and must not be edited.
+`product_specs.md` supplies secondary context where relevant.
 Plans, reviews and PRs record `Feature docs:` with paths/sections and how the
 change fits the vision. The map is a discovery aid, not evidence that an
 agent read a document. Agents search beyond it when necessary. New human
 instructions win over older docs; conflicting or missing intent is stated
-explicitly. Protected human vision documents cannot be rewritten merely to
-justify a proposal. Newly committed feature docs enter the next run's map.
+explicitly. Agents proceed with their best interpretation and notify the
+human through the existing Telegram flow, as AGENTS.md directs. Newly
+committed feature docs enter the next run's map.
 
 ## Quota observations
 

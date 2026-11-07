@@ -11,18 +11,22 @@ def context(root):
     paths = subprocess.run(["git", "-C", str(root), "ls-files", "--", "*.md", "*.mdx"],
                            capture_output=True, text=True, check=True).stdout.splitlines()
     paths = [p for p in paths if not any(part.startswith(".") for part in Path(p).parts)]
-    priority = ["docs/project-goal.md", "product_specs.md", "README.md"]
-    paths.sort(key=lambda p: (priority.index(p) if p in priority else len(priority), p))
+    priority = ["docs/README.md", "docs/project-goal.md", "docs/pages.md"]
+    paths.sort(key=lambda p: (priority.index(p) if p in priority else
+                             len(priority) if p.startswith("docs/") else len(priority) + 1, p))
     lines = ["FEATURE VISION CONTRACT (repository documentation):",
         "Before proposing a feature, changing behavior or resolving a feature disagreement:",
-        "1. Read docs/project-goal.md and the relevant product_specs.md sections if present.",
+        "1. Read docs/README.md, docs/project-goal.md and relevant feature sections under docs/.",
+        "   docs/ is human-owned ground truth: it overrides code and documentation elsewhere.",
+        "   Never edit files under docs/. Read product_specs.md as secondary context if relevant.",
         "2. Find and READ relevant feature docs using the map below and a repository search.",
         "   This map is a navigation aid, not a substitute for reading the actual sections.",
         "3. Cite document paths/sections in your plan, review or PR under Feature docs:.",
         "   Explain how the proposal fits the intended user workflow and documented invariants.",
         "4. The latest explicit human direction wins over older docs. If docs conflict, cite",
-        "   both and explain the resolution; if intent remains ambiguous, state the exact gap",
-        "   rather than inventing a feature or treating current code as the product vision.",
+        "   both and explain the resolution. If intent remains ambiguous, state the exact gap,",
+        "   proceed with the best documented interpretation, and notify the human via the",
+        "   established Telegram flow as AGENTS.md directs; do not wait for docs to be fixed.",
         "5. When no relevant feature doc exists, say so explicitly and use the issue scope.",
         "   Never rewrite protected human vision documents unless a human explicitly requests it.",
         "Documentation map (tracked files; search for additional documents when needed):"]
