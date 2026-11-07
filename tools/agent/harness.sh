@@ -35,7 +35,7 @@ for row in rows:
         durations.append((parse(row["mergedAt"])-parse(row["createdAt"])).total_seconds()/3600)
 print(json.dumps(dict(recent_prs=len(rows), merged=len(durations), rework_rounds=reworks,
                      median_hours_to_merge=statistics.median(durations) if durations else None)))
-' 
+'
 }
 exit 0
 fi
