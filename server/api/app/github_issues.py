@@ -2,7 +2,7 @@
 
 Reporters only need an app account — never a GitHub account. Filed
 issues carry the `agent-pending` label so the existing agent triage
-loop (tools/agent/triage.sh) picks them up like any other issue.
+development controller picks them up like any other issue.
 """
 
 from __future__ import annotations
