@@ -30,6 +30,10 @@ def read_json(path, default):
         return default
 
 
+def mapping(value):
+    return value if isinstance(value, dict) else {}
+
+
 def timestamp(value):
     if isinstance(value, (int, float)):
         return float(value)
@@ -88,20 +92,20 @@ def snapshots(now):
     raw = read_json(os.environ.get("AGENT_QUOTA_FILE", str(state_dir() / "quota.json")), {})
     if not isinstance(raw, dict):
         raw = {}
-    raw["codex"] = {**(raw.get("codex") or {}), **codex_snapshot(now)}
-    raw["opencode"] = {**(raw.get("opencode") or {}), **read_json(state_dir() / "opencode-quota.json", {})}
-    agy = read_json(state_dir() / "agy-quota.json", {})
+    raw["codex"] = {**mapping(raw.get("codex")), **codex_snapshot(now)}
+    raw["opencode"] = {**mapping(raw.get("opencode")), **mapping(read_json(state_dir() / "opencode-quota.json", {}))}
+    agy = mapping(read_json(state_dir() / "agy-quota.json", {}))
     for provider, prefix in (("antigravity", "gemini"), ("antigravity-3p", "3p")):
-        raw.setdefault(provider, {})
+        raw[provider] = mapping(raw.get(provider))
         for period, suffix, seconds in (("five_hour", "5h", 18000), ("weekly", "weekly", 604800)):
-            row = agy.get(f"{prefix}-{suffix}", {})
-            if row and not row.get("disabled"):
+            row = mapping(agy.get(f"{prefix}-{suffix}"))
+            if row and isinstance(row.get("resets_at"), (int, float)) and not row.get("disabled"):
                 raw[provider][period] = {**row, "starts_at": row["resets_at"] - seconds}
     result = {}
     for provider in PERIODS:
         result[provider] = {}
         for period in dict.fromkeys(("five_hour", "weekly", PERIODS[provider])):
-            item = valid_window((raw.get(provider) or {}).get(period), now)
+            item = valid_window(mapping(raw.get(provider)).get(period), now)
             if item:
                 result[provider][period] = item
     return result
@@ -138,7 +142,7 @@ def allowed(provider, role, now=None):
     for window in windows.values():
         if window["used_percent"] >= (TARGET if optional else 98):
             return False
-    cooldown = read_json(state_dir() / f"cooldown-{provider}.json", {})
+    cooldown = mapping(read_json(state_dir() / f"cooldown-{provider}.json", {}))
     return cooldown.get("until", 0) <= now
 
 
@@ -147,7 +151,7 @@ def plan(now):
     modes = {p: pace(p, w, now) for p, w in quotas.items()}
     # Alternate actual builder starts, not poll numbers. A full queue never
     # blocks the other provider just because one subscription is exhausted.
-    last = read_json(state_dir() / "last-builder.json", {}).get("pool", "antigravity")
+    last = mapping(read_json(state_dir() / "last-builder.json", {})).get("pool", "antigravity")
     ring = ["codex", "antigravity", "antigravity-3p", "opencode"]
     offset = (ring.index(last) + 1) % len(ring) if last in ring else 0
     preferred = ring[offset:] + ring[:offset]
@@ -168,6 +172,18 @@ def plan(now):
         exports["FISH_LLM_BUILDER_BACKEND"] = "antigravity" if chosen == "antigravity-3p" else chosen
         if chosen.startswith("antigravity"):
             exports["FISH_LLM_BUILDER_MODEL"] = "claude-opus-4-6-thinking" if chosen.endswith("3p") else "gemini-3.8-flash-high"
+    # Keep the useful-work queue fed when Codex is reserved but agy has room.
+    # Audits use Gemini for inexpensive reads, not Opus just to burn allowance.
+    audit_pool = next((p for p in ("codex", "antigravity")
+                       if modes[p] not in ("reserve", "ahead", "unknown")
+                       and allowed(p, "discover", now)), "")
+    if audit_pool:
+        for role in ("DISCOVER", "HARNESS"):
+            exports[f"FISH_LLM_{role}_BACKEND"] = audit_pool
+            exports[f"FISH_LLM_{role}_MODEL"] = "gpt-6.1-sol" if audit_pool == "codex" else "gemini-3.8-flash-high"
+    if modes["opencode"] in ("ahead", "reserve") and modes["antigravity"] not in ("reserve", "unknown"):
+        exports["FISH_LLM_TRIAGE_BACKEND"] = "antigravity"
+        exports["FISH_LLM_TRIAGE_MODEL"] = "gemini-3.8-flash-high"
     return dict(target_percent=TARGET, modes=modes, quotas=quotas, exports=exports)
 
 

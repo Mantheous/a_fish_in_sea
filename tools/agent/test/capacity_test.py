@@ -110,6 +110,24 @@ class CapacityTest(unittest.TestCase):
             self.assertEqual(0, policy(comments, "abc")[2])
             self.assertEqual(1, policy(comments, "new-sha")[2])
 
+    def test_discovery_uses_agy_when_codex_is_reserved(self):
+        (self.state / "quota.json").write_text(json.dumps({
+            "codex": {"weekly": self.window(91)},
+            "antigravity": {"weekly": self.window(30)},
+            "opencode": {"monthly": self.window(85, .5, 30*86400)},
+        }))
+        exports = capacity.plan(self.now)["exports"]
+        self.assertEqual("antigravity", exports["FISH_LLM_DISCOVER_BACKEND"])
+        self.assertEqual("antigravity", exports["FISH_LLM_HARNESS_BACKEND"])
+        self.assertEqual("antigravity", exports["FISH_LLM_TRIAGE_BACKEND"])
+
+    def test_malformed_snapshot_rows_do_not_break_other_providers(self):
+        (self.state / "quota.json").write_text(json.dumps(dict(codex="bad", antigravity=[1])))
+        (self.state / "opencode-quota.json").write_text('[1,2]')
+        (self.state / "agy-quota.json").write_text(json.dumps({"gemini-weekly": "bad"}))
+        self.assertEqual({}, capacity.snapshots(self.now)["codex"])
+        self.assertTrue(capacity.allowed("codex", "review", self.now))
+
     def test_failed_structured_result_never_becomes_a_verdict(self):
         with self.assertRaises(ValueError):
             llm_output.extract("antigravity", json.dumps(dict(status="ERROR", response="Verdict: pass")))

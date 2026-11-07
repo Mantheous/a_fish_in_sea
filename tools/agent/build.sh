@@ -33,6 +33,20 @@ BUILDER_SLOTS="${AGENT_BUILDER_SLOTS:-1}"
 BUILDER_BACKEND="${FISH_LLM_BUILDER_BACKEND:-opencode}"
 REWORK_BACKEND="${FISH_LLM_REWORK_BACKEND:-opencode}"
 
+# A depleted allowance is not a failed issue attempt: leave it queued without
+# creating a tmux session or the builder's general one-hour failure cooldown.
+POOL="$(python3 - "$DIR" "$BUILDER_BACKEND" "${FISH_LLM_BUILDER_MODEL:-}" <<'POOL_PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from capacity import pool_for
+print(pool_for(sys.argv[2], sys.argv[3]))
+POOL_PY
+)"
+if ! python3 "$DIR/capacity.py" allow --pool "$POOL" --role builder; then
+  echo "[build] $POOL capacity reserved — leaving approved issues queued"
+  exit 0
+fi
+
 builder_count() {
   # Loop-owned builder sessions only. Ad-hoc names (agent-adhoc-*) and
   # review-spawned reworks (rework-*) do not consume a builder slot.

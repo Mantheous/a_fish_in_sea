@@ -42,7 +42,9 @@ used: providers price reasoning, context and caching differently.
 emits closed-set environment assignments consumed by `poll.sh`, never
 provider-supplied shell code. The planner rotates subscriptions after actual
 builder starts, avoids providers ahead of pace when another needs work, and
-routes to Gemini Flash, Opus, Codex or OpenCode's configured model. Writer
+routes to Gemini Flash, Opus, Codex or OpenCode's configured model. Discovery
+and research can use Gemini when Codex is reserved; triage shifts to Gemini
+when Go is ahead of its monthly pace. Writer
 slots remain bounded by `AGENT_BUILDER_SLOTS` (this host: 2), shared across
 builders and reworkers. Explicit incoming routing wins over host defaults.
 

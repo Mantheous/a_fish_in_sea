@@ -62,9 +62,9 @@ while IFS='=' read -r key value; do
   case "$key" in
     AGENT_DISCOVER_MIN_INTERVAL_S|AGENT_DISCOVER_QUEUE_LOW|AGENT_DISCOVER_MAX_INFLIGHT|AGENT_HARNESS_INTERVAL_S)
       [[ "$value" =~ ^[0-9]+$ ]] && export "$key=$value" ;;
-    FISH_LLM_BUILDER_MODEL)
-      case "$value" in gemini-3.8-flash-high|claude-opus-4-6-thinking) export "$key=$value" ;; esac ;;
-    FISH_LLM_BUILDER_BACKEND)
+    FISH_LLM_BUILDER_MODEL|FISH_LLM_DISCOVER_MODEL|FISH_LLM_HARNESS_MODEL|FISH_LLM_TRIAGE_MODEL)
+      case "$value" in gemini-3.8-flash-high|claude-opus-4-6-thinking|gpt-6.1-sol) export "$key=$value" ;; esac ;;
+    FISH_LLM_BUILDER_BACKEND|FISH_LLM_DISCOVER_BACKEND|FISH_LLM_HARNESS_BACKEND|FISH_LLM_TRIAGE_BACKEND)
       case "$value" in codex|antigravity|opencode) export "$key=$value" ;; esac ;;
   esac
 done <<<"$CAPACITY"
