@@ -54,14 +54,31 @@ step() {
   fi
 }
 
+# The plan emits only closed-set values. Never source provider-supplied JSON.
+step go-quota    python3 "$REPO/tools/agent/opencode_quota.py"
+step agy-quota   python3 "$REPO/tools/agent/agy_quota.py"
+CAPACITY="$(python3 "$REPO/tools/agent/capacity.py" plan)" || CAPACITY=""
+while IFS='=' read -r key value; do
+  case "$key" in
+    AGENT_DISCOVER_MIN_INTERVAL_S|AGENT_DISCOVER_QUEUE_LOW|AGENT_DISCOVER_MAX_INFLIGHT|AGENT_HARNESS_INTERVAL_S)
+      [[ "$value" =~ ^[0-9]+$ ]] && export "$key=$value" ;;
+    FISH_LLM_BUILDER_MODEL)
+      case "$value" in gemini-3.8-flash-high|claude-opus-4-6-thinking) export "$key=$value" ;; esac ;;
+    FISH_LLM_BUILDER_BACKEND)
+      case "$value" in codex|antigravity|opencode) export "$key=$value" ;; esac ;;
+  esac
+done <<<"$CAPACITY"
+step capacity    python3 "$REPO/tools/agent/capacity.py" report
 step close       "$REPO/tools/agent/close.sh"
 step approve     "$REPO/tools/agent/approve.sh"
-step build       "$REPO/tools/agent/build.sh"
 step discover    "$REPO/tools/agent/discover.sh"
 step usage-review "$REPO/tools/agent/usage-review.sh"
 step triage      "$REPO/tools/agent/triage.sh"
 step tg-callbacks "$REPO/tools/agent/tg-callbacks.sh"
 step review      "$REPO/tools/agent/review.sh"
+# Existing rejected work gets writer slots before new work.
+step build       "$REPO/tools/agent/build.sh"
+step harness     "$REPO/tools/agent/harness.sh"
 step data-guard  "$REPO/tools/agent/data-guard.sh"
 step sec-guard   "$REPO/tools/agent/security-guard.sh"
 step merge       "$REPO/tools/agent/merge.sh"

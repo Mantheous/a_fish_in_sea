@@ -43,7 +43,7 @@ rework_count() {
   tmux ls -F '#{session_name}' 2>/dev/null | grep -cE '^rework-[0-9]+$' || true
 }
 
-if [ "$(builder_count)" -ge "$BUILDER_SLOTS" ]; then
+if [ "$(( $(builder_count) + $(rework_count) ))" -ge "$BUILDER_SLOTS" ]; then
   echo "[build] $(builder_count)/$BUILDER_SLOTS builder slot(s) in use — next issue launches on a later poll"
   exit 0
 fi
@@ -67,7 +67,7 @@ gh issue list --label agent-approved --state open --limit 20 --json number,title
     echo "[build] #$N tmux session agent-$N already running — skipping"
     continue
   fi
-  if [ "$(builder_count)" -ge "$BUILDER_SLOTS" ]; then
+  if [ "$(( $(builder_count) + $(rework_count) ))" -ge "$BUILDER_SLOTS" ]; then
     echo "[build] $BUILDER_SLOTS builder slot(s) filled — remaining issues launch on a later poll"
     break
   fi

@@ -103,6 +103,26 @@ guardians already fail closed. New vendors/roles get added to the
 adapter's role table, never by editing a call site. Tests:
 `tools/agent/test/llm-run-test.sh` (fake CLIs, no network).
 
+## Loop capacity, escalation and research
+
+`tools/agent/LOOP.md` documents the capacity planner and provider collectors.
+Target 90% weekly usage for Codex and both Antigravity pools, and 90% monthly
+for OpenCode Go; pace against actual provider observations, never raw token
+estimates. Keep two writer slots shared by builders and reworkers. New work
+uses the first 90%; review/rework may use the reserve. Unknown quotas must
+remain visibly unknown. Never enable paid overages to meet the target.
+
+Every two completed reworks escalate reasoning (Sol high -> xhigh -> max
+by default); the strongest reviewer adjudicates disputed findings and keeps
+responsibility instead of stopping after two rounds. Infrastructure failures
+consume no round. Model judgment never bypasses data/security guardians.
+
+`harness.sh` feeds one measured improvement at a time through the existing
+issue/PR gates, using a content-free run digest, merge outcomes and cached
+primary research. Require a baseline, hypothesis, replay/eval, success metric
+and rollback condition. Follow the developer's product-vision documentation;
+never manufacture app scope to spend allowance.
+
 ## Usage review: observe behavior, never content
 
 The app keeps a content-free event log (`lib/common/usage/`): screen
