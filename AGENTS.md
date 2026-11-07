@@ -12,6 +12,13 @@ through PRs (`gh pr merge --merge`) — direct pushes to `main` are
 blocked by branch protection. Verify a conflicted or risky PR in a
 throwaway worktree on `main` before merging it.
 
+## Docs: Do not edit
+The docs folder contains human written files that contain ground truth 
+for how the app should function. If there is something in the docs that
+contradicts or is unclear you may ask the human to clarify them. However,
+the human is hard to reach so don't wait for them to fix the docs.
+Proceed with your best guess and let the human know via telegram.
+
 ## File size: split on touch, don't bulk-refactor
 
 Long files cost agent context, merge conflicts, and untestable
