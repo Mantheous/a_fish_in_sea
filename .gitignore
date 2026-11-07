@@ -57,7 +57,7 @@ lib/data/*.csv
 server/.plaid_users.json
 server/.google_users.json
 
-# Sync DB snapshots written by tools/agent/backup-db.sh + deploy.sh
+# Sync DB snapshots written by the private deployment controller
 # (local insurance only; restore by gunzipping over server/api/data/app.db)
 server/api/data/backups/
 
@@ -72,7 +72,7 @@ tools/ls_scrape/tasks.json
 playwright-report/
 DEBUG_PREFS.md
 
-# Server DB backups (real user data; produced by tools/agent/backup-db.sh)
+# Server DB backups (real user data; produced by the private deployment controller)
 server/api/data/backups/
 
 # Golden-test failure dumps (regenerated on every failing run; never commit)

@@ -8,7 +8,7 @@ is deliberately no GET/admin surface here.
 Safety properties:
 - JWT users only (never long-lived API tokens).
 - Closed-set names + bounded meta validated in schemas.UsageEventIn.
-- The digest (tools/agent/usage-digest.py) is the trust boundary for the
+- The private controller's usage digest is the trust boundary for the
   loop: it only renders names from the committed feature manifest and
   reduces unknown tokens to counts, so an account cannot inject prose into
   the model prompt through an event name.
