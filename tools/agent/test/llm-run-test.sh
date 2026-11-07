@@ -15,6 +15,8 @@ mkdir -p "$BIN"
 
 # Never let the host's real per-role overrides leak into these tests.
 export XDG_CONFIG_HOME="$TMP/xdg"
+export AGENT_STATE_DIR="$TMP/state"
+export AGENT_CODEX_SESSIONS="$TMP/no-sessions"
 
 # These tests use fake codex/opencode binaries, so skip the real bwrap probe.
 # The probe itself is exercised by test 10 with a deliberately broken bwrap.
@@ -46,7 +48,10 @@ cat >"$BIN/opencode" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >"${FAKE_OPENCODE_ARGS:-/dev/null}"
-printf '%s' "${FAKE_OPENCODE_MESSAGE:-}"
+python3 - <<'JSON'
+import json,os
+print(json.dumps(dict(type="text", part=dict(text=os.environ.get("FAKE_OPENCODE_MESSAGE", "")))))
+JSON
 FAKE
 chmod +x "$BIN/codex" "$BIN/opencode"
 
@@ -261,6 +266,60 @@ assert_eq 0 "$ST" "builder: opencode default exits 0"
 assert_contains "$ARGS_OC" "--auto" "builder: opencode keeps --auto"
 assert_contains "$ARGS_OC" "--model opencode-go/muse-spark-1.3-contributor#xhigh" \
   "builder: opencode keeps the pinned model"
+
+# Antigravity uses its native JSON envelope and preserves the output contract.
+cat >"$BIN/agy" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >"${FAKE_AGY_ARGS:-/dev/null}"
+python3 - <<'JSON'
+import json,os
+print(json.dumps(dict(status=os.environ.get("FAKE_AGY_STATUS", "SUCCESS"),
+    response=os.environ.get("FAKE_AGY_MESSAGE", "Verdict: pass"),
+    usage=dict(input_tokens=10, output_tokens=5))))
+JSON
+FAKE
+chmod +x "$BIN/agy"
+set +e
+OUT="$(printf 'read only' | env PATH="$BIN:$PATH" FISH_LLM_REVIEW_BACKEND=antigravity \
+  FAKE_AGY_ARGS="$TMP/args-agy" "$ADAPTER" --role review --read-only --expect '^Verdict: pass$' 2>"$TMP/err-agy")"
+ST=$?
+set -e
+assert_eq 0 "$ST" "agy: successful envelope passes contract"
+assert_eq 'Verdict: pass' "$OUT" "agy: returns response only"
+assert_contains "$(cat "$TMP/args-agy")" '--mode plan' "agy: read-only roles use plan mode"
+assert_contains "$(cat "$TMP/args-agy")" '--sandbox' "agy: terminal sandbox enabled"
+assert_not_contains "$(cat "$TMP/args-agy")" '--disable-slash-commands' "agy: plan mode remains effective"
+assert_contains "$(cat "$TMP/args-agy")" '"useG1Credits":false' "agy: paid overages disabled"
+set +e
+OUT="$(printf x | env PATH="$BIN:$PATH" FISH_LLM_REVIEW_BACKEND=antigravity \
+  FAKE_AGY_STATUS=ERROR "$ADAPTER" --role review 2>"$TMP/err-agy-fail")"
+ST=$?
+set -e
+assert_eq 3 "$ST" "agy: ERROR envelope fails even with child exit zero"
+assert_eq '' "$OUT" "agy: failed output is never a verdict"
+set +e
+OUT="$(printf x | env PATH="$BIN:$PATH" FAKE_CODEX_MESSAGE='Verdict: pass' \
+  FAKE_CODEX_ARGS="$TMP/args-tier" "$ADAPTER" --role review --tier 2 2>"$TMP/err-tier")"
+ST=$?
+set -e
+assert_eq 0 "$ST" "tier 2: strongest review runs"
+assert_contains "$(cat "$TMP/args-tier")" 'model_reasoning_effort=max' "tier 2: max effort"
+assert_contains "$(cat "$TMP/args-tier")" '-m gpt-6.1-sol' "tier 2: strongest installed model"
+# The ledger includes failures and usage but never prompt/response content.
+python3 - "$AGENT_STATE_DIR/runs.jsonl" <<'CHECK'
+import json,sys
+rows=[json.loads(line) for line in open(sys.argv[1])]
+assert any(row['exit']==3 and row['backend']=='antigravity' for row in rows)
+assert any(row['tokens'].get('input_tokens')==10 for row in rows)
+assert all(set(row) <= {'at','role','backend','pool','model','tier','seconds','exit','tokens'} for row in rows)
+CHECK
+ok "ledger: failures and numeric token usage retained without content"
+
+mkdir -p "$XDG_CONFIG_HOME/a_fish_in_sea"
+printf '%s\n' 'FISH_LLM_REVIEW_BACKEND=codex' >"$XDG_CONFIG_HOME/a_fish_in_sea/llm-backends.env"
+OUT="$(printf x | env PATH="$BIN:$PATH" FISH_LLM_REVIEW_BACKEND=antigravity \
+  "$ADAPTER" --role review 2>"$TMP/err-precedence")"
+assert_eq 'Verdict: pass' "$OUT" "caller capacity routing overrides host defaults"
 
 echo
 echo "passed: $PASS  failed: $FAIL"

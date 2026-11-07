@@ -29,10 +29,19 @@ REPO_ROOT="$(git -C "$SELF_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$
 
 # Optional per-host overrides, outside the repo so they never dirty main.
 CONF="${XDG_CONFIG_HOME:-$HOME/.config}/a_fish_in_sea/llm-backends.env"
+# Caller exports (including the poll's capacity plan) take precedence over
+# host defaults. Re-sourcing the config must not undo adaptive routing.
+declare -A INHERITED=()
+while IFS= read -r key; do
+  case "$key" in FISH_LLM_*) INHERITED["$key"]="${!key}" ;; esac
+done < <(compgen -e)
 if [ -f "$CONF" ]; then
   # shellcheck disable=SC1090
   . "$CONF"
 fi
+for key in "${!INHERITED[@]}"; do
+  export "$key=${INHERITED[$key]}"
+done
 
 CODEX_MODEL="${FISH_LLM_CODEX_MODEL:-gpt-6.1-sol}"
 CODEX_EFFORT="${FISH_LLM_CODEX_EFFORT:-high}"
@@ -52,9 +61,11 @@ AGENT=""
 MODEL=""
 TIMEOUT=""
 READ_ONLY=0
+TIER=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --tier) TIER="${2:-}"; shift 2 ;;
     --role) ROLE="${2:-}"; shift 2 ;;
     --title) TITLE="${2:-}"; shift 2 ;;
     --expect) EXPECT="${2:-}"; shift 2 ;;
@@ -87,7 +98,7 @@ case "$ROLE" in
   review)
     DEFAULT_BACKEND="codex"
     ;;
-  discover)
+  discover|harness)
     # Proactive issue discovery: read-only repo audit, text-only. Files at
     # most a couple of issues per run via tools/agent/discover.sh.
     DEFAULT_BACKEND="codex"
@@ -138,52 +149,58 @@ BACKEND="${!BACKEND_VAR:-$DEFAULT_BACKEND}"
 case "$BACKEND" in
   codex) BASE_MODEL="$DEFAULT_CODEX_MODEL" ;;
   opencode) BASE_MODEL="$DEFAULT_OPENCODE_MODEL" ;;
+  antigravity) BASE_MODEL="${FISH_LLM_AGY_MODEL:-gemini-3.8-flash-high}" ;;
   *) echo "[llm-run] $ROLE: unsupported backend '$BACKEND'" >&2; exit 2 ;;
 esac
 
-# The systemd timer's PATH does not include ~/.local/bin, where the codex
-# symlink lives. Resolve the binary without relying on the service PATH.
-resolve_bin() { # name override
+# Tiers deliberately override ordinary per-role routing. After two completed
+# reworks, use the strongest installed model with deeper reasoning. Models
+# can be changed per host without changing callers or silently downgrading.
+[[ "$TIER" =~ ^[012]$ ]] || { echo "[llm-run] tier must be 0, 1 or 2" >&2; exit 2; }
+MODEL="${MODEL:-${!MODEL_VAR:-$BASE_MODEL}}"
+if [ "$TIER" -gt 0 ]; then
+  BACKEND="${FISH_LLM_ESCALATION_BACKEND:-codex}"
+  MODEL="${FISH_LLM_ESCALATION_MODEL:-gpt-6.1-sol}"
+  CODEX_EFFORT=xhigh
+  [ "$TIER" -eq 2 ] && CODEX_EFFORT=max
+fi
+TIMEOUT="${TIMEOUT:-${!TIMEOUT_VAR:-$DEFAULT_TIMEOUT}}"
+AGENT="${AGENT:-$DEFAULT_AGENT}"
+[ -n "$TITLE" ] || TITLE="$ROLE"
+[[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || { echo "[llm-run] timeout must be positive" >&2; exit 2; }
+
+resolve_bin() {
   local name="$1" override="${2:-}" cand
   if [ -n "$override" ]; then
-    [ -x "$override" ] && { printf '%s\n' "$override"; return 0; }
+    [ -x "$override" ] && { printf '%s\n' "$override"; return; }
     return 1
   fi
-  if command -v "$name" >/dev/null 2>&1; then
-    command -v "$name"
-    return 0
-  fi
-  for cand in "$HOME/.local/bin/$name" "$HOME/.opencode/bin/$name" \
-              "/usr/local/bin/$name" "/usr/bin/$name"; do
-    [ -x "$cand" ] && { printf '%s\n' "$cand"; return 0; }
+  command -v "$name" 2>/dev/null && return
+  for cand in "$HOME/.local/bin/$name" "$HOME/.opencode/bin/$name" "/usr/local/bin/$name" "/usr/bin/$name"; do
+    [ -x "$cand" ] && { printf '%s\n' "$cand"; return; }
   done
   return 1
 }
-
-CODEX_BIN=""
-OPENCODE_BIN=""
-if [ "$BACKEND" = "codex" ]; then
-  CODEX_BIN="$(resolve_bin codex "${FISH_LLM_CODEX_BIN:-}" || true)"
-  if [ -z "$CODEX_BIN" ]; then
-    echo "[llm-run] $ROLE: codex binary not found (PATH, ~/.local/bin, ~/.opencode/bin, /usr/local/bin, /usr/bin); set FISH_LLM_CODEX_BIN" >&2
-    exit 2
-  fi
-else
-  OPENCODE_BIN="$(resolve_bin opencode "${FISH_LLM_OPENCODE_BIN:-}" || true)"
-  if [ -z "$OPENCODE_BIN" ]; then
-    echo "[llm-run] $ROLE: opencode binary not found (PATH, ~/.local/bin, ~/.opencode/bin, /usr/local/bin, /usr/bin); set FISH_LLM_OPENCODE_BIN" >&2
-    exit 2
-  fi
-fi
-
-MODEL="${MODEL:-${!MODEL_VAR:-$BASE_MODEL}}"
-TIMEOUT="${TIMEOUT:-${!TIMEOUT_VAR:-$DEFAULT_TIMEOUT}}"
-AGENT="${AGENT:-$DEFAULT_AGENT}"
-
-[ -n "$TITLE" ] || TITLE="$ROLE"
-if ! [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
-  echo "[llm-run] $ROLE: --timeout must be a positive integer (seconds)" >&2
-  exit 2
+CODEX_BIN="$(resolve_bin codex "${FISH_LLM_CODEX_BIN:-}" || true)"
+OPENCODE_BIN="$(resolve_bin opencode "${FISH_LLM_OPENCODE_BIN:-}" || true)"
+AGY_BIN="$(resolve_bin agy "${FISH_LLM_AGY_BIN:-}" || true)"
+case "$BACKEND" in
+  codex) BIN="$CODEX_BIN" ;;
+  opencode) BIN="$OPENCODE_BIN" ;;
+  antigravity) BIN="$AGY_BIN" ;;
+  *) echo "[llm-run] unsupported escalation backend" >&2; exit 2 ;;
+esac
+[ -n "$BIN" ] || { echo "[llm-run] $BACKEND binary not found" >&2; exit 2; }
+POOL="$(python3 - "$SELF_DIR" "$BACKEND" "$MODEL" <<'POOL_PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from capacity import pool_for
+print(pool_for(sys.argv[2], sys.argv[3]))
+POOL_PY
+)"
+if ! python3 "$SELF_DIR/capacity.py" allow --pool "$POOL" --role "$ROLE"; then
+  echo "[llm-run] $POOL allowance reserved or cooling down; retry next poll" >&2
+  exit 75
 fi
 
 # ── Codex sandbox health (fail closed) ──────────────────────────────────
@@ -221,7 +238,16 @@ OUT_FILE="$(mktemp)"
 ERR_FILE="$(mktemp)"
 LAST_FILE="$(mktemp)"
 FULL_PROMPT="$(mktemp)"
-cleanup() { rm -f "$PROMPT_FILE" "$MSG_FILE" "$OUT_FILE" "$ERR_FILE" "$LAST_FILE" "$FULL_PROMPT"; }
+START_TS="$(date +%s)"
+cleanup() {
+  local result=$? limited=()
+  if [ "$result" -ne 0 ] && grep -qiE 'rate.limit.exceeded|rate_limit|http 429|too many requests|quota.exhausted|usage.limit' "$ERR_FILE" "$OUT_FILE"; then
+    limited=(--limited)
+  fi
+  python3 "$SELF_DIR/llm_metrics.py" record --role "$ROLE" --backend "$BACKEND" \
+    --model "$MODEL" --tier "$TIER" --seconds "$(( $(date +%s) - START_TS ))" \
+    --exit "$result" --output "$OUT_FILE" "${limited[@]}" >/dev/null 2>&1 || true
+  rm -f "$PROMPT_FILE" "$MSG_FILE" "$OUT_FILE" "$ERR_FILE" "$LAST_FILE" "$FULL_PROMPT"; }
 trap cleanup EXIT
 
 cat >"$PROMPT_FILE"
@@ -229,11 +255,14 @@ if [ ! -s "$PROMPT_FILE" ]; then
   echo "[llm-run] $ROLE: empty prompt on stdin" >&2
   exit 2
 fi
-cp "$PROMPT_FILE" "$FULL_PROMPT"
+# Every role sees the current doc map, including proposals and escalations.
+# Keep it outside the task prose so it is not lost when a fresh agent starts.
+python3 "$SELF_DIR/feature_docs.py" "$REPO_ROOT" >"$FULL_PROMPT"
+cat "$PROMPT_FILE" >>"$FULL_PROMPT"
 
 # opencode applies a role's .md via --agent; codex has no equivalent, so
 # inline the same instructions (minus YAML frontmatter) ahead of the prompt.
-if [ -n "$AGENT" ] && [ "$BACKEND" = "codex" ]; then
+if [ -n "$AGENT" ] && [ "$BACKEND" != "opencode" ]; then
   AGENT_FILE="$REPO_ROOT/.opencode/agents/$AGENT.md"
   if [ ! -f "$AGENT_FILE" ]; then
     echo "[llm-run] $ROLE: agent instructions not found: $AGENT_FILE" >&2
@@ -245,8 +274,9 @@ if [ -n "$AGENT" ] && [ "$BACKEND" = "codex" ]; then
          fm == 1 && $0 == "---" { fm = 0; next }
          fm == 0 { print }' "$AGENT_FILE"
     printf '\n---\n\n'
-    cat "$PROMPT_FILE"
-  } >"$FULL_PROMPT"
+    cat "$FULL_PROMPT"
+  } >"$MSG_FILE"
+  cp "$MSG_FILE" "$FULL_PROMPT"
 fi
 
 # ── Read-only verification ──────────────────────────────────────────────
@@ -258,10 +288,11 @@ if [ "$READ_ONLY" = "1" ]; then
 fi
 
 START_TS="$(date +%s)"
+python3 "$SELF_DIR/llm_metrics.py" start --role "$ROLE" --backend "$BACKEND" --model "$MODEL" >/dev/null 2>&1 || true
 set +e
 if [ "$BACKEND" = "codex" ]; then
   CODEX_ARGS=(
-    exec
+    exec --json
     -C "$PWD"
     -s "$DEFAULT_SANDBOX"
     -m "$MODEL"
@@ -299,8 +330,23 @@ if [ "$BACKEND" = "codex" ]; then
   fi
   timeout "$TIMEOUT" "$CODEX_BIN" "${CODEX_ARGS[@]}" <"$FULL_PROMPT" >"$OUT_FILE" 2>"$ERR_FILE"
   ST=$?
+elif [ "$BACKEND" = "antigravity" ]; then
+  AGY_MODE=plan
+  [ "$DEFAULT_SANDBOX" = "workspace-write" ] && AGY_MODE=auto
+  AGY_ARGS=(--model "$MODEL" --effort "${FISH_LLM_AGY_EFFORT:-high}"
+    --sandbox --mode "$AGY_MODE" --output-format json
+    --settings '{"useG1Credits":false,"toolPermission":"proceed-in-sandbox","artifactReviewPolicy":"always-proceed"}')
+  # Linked worktrees need their shared Git metadata and Flutter caches.
+  if [ "$AGY_MODE" = auto ]; then
+    for dir in "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" "$HOME/flutter" "$HOME/.pub-cache"; do
+      [ -d "$dir" ] && AGY_ARGS+=(--add-dir "$dir")
+    done
+  fi
+  timeout "$TIMEOUT" "$AGY_BIN" "${AGY_ARGS[@]}" --print "$(cat "$FULL_PROMPT")" \
+    </dev/null >"$OUT_FILE" 2>"$ERR_FILE"
+  ST=$?
 else
-  OPENCODE_ARGS=(run)
+  OPENCODE_ARGS=(run --format json)
   [ "$DEFAULT_AUTO" = "1" ] && OPENCODE_ARGS+=(--auto)
   [ -n "$AGENT" ] && OPENCODE_ARGS+=(--agent "$AGENT")
   OPENCODE_ARGS+=(--model "$MODEL" --title "$TITLE")
@@ -333,10 +379,10 @@ fi
 if [ "$BACKEND" = "codex" ]; then
   tr -d '\r' <"$LAST_FILE" >"$MSG_FILE" || true
 else
-  tr -d '\r' <"$OUT_FILE" >"$MSG_FILE" || true
+  python3 "$SELF_DIR/llm_output.py" "$BACKEND" "$OUT_FILE" >"$MSG_FILE" || exit 3
 fi
 
-if [ ! -s "$MSG_FILE" ]; then
+if ! grep -q '[^[:space:]]' "$MSG_FILE"; then
   echo "[llm-run] $ROLE ($BACKEND/$MODEL) produced an empty final message after ${ELAPSED}s (fail-closed)" >&2
   tail -n 20 "$ERR_FILE" >&2 || true
   exit 3

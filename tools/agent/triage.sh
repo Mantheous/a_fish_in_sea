@@ -89,6 +89,7 @@ detail belongs in the Files/Risk/Test fields only.
 ## Triage plan #$N
 Severity: <critical|high|medium|low>
 Summary: <exactly 2 lines in plain words: line1 what the user will notice, line2 proposed approach>
+Feature docs: <paths/sections read, how scope fits their vision; or explicit missing-doc gap>
 Files to touch: <list of paths, or TBD with why>
 Risk: <low|high> — <one-line reason>
 Test idea: <one line: what test would prove it>
@@ -98,7 +99,7 @@ Effort: <S|M|L>"
     PLAN_FILE="$(mktemp)"
     # NOTE: `opencode run` without --model keeps the configured default (a
     # free-tier model). Pin --model explicitly so triage stays on opencode-go.
-    if ! opencode run --model opencode-go/muse-spark-1.3-contributor#xhigh --title "triage-#$N" "$PROMPT" </dev/null >"$PLAN_FILE" 2>"$PLAN_FILE.err"; then
+    if ! printf '%s' "$PROMPT" | "$DIR/llm-run.sh" --role triage --title "triage-#$N" --expect '^## Triage plan'  >"$PLAN_FILE" 2>"$PLAN_FILE.err"; then
       echo "[triage] #$N plan draft failed: $(tail -n 3 "$PLAN_FILE.err")"
       rm -f "$PLAN_FILE" "$PLAN_FILE.err"
       continue
@@ -206,6 +207,7 @@ class or function name, and no unexplained jargon anywhere.
 Replies: <one short plain-words line per follow-up point: what you changed or answered>
 Severity: <critical|high|medium|low>
 Summary: <exactly 2 lines in plain words: line1 what the user will notice (as clarified), line2 revised approach>
+Feature docs: <paths/sections read, how scope fits their vision; or explicit missing-doc gap>
 Files to touch: <list of paths, or TBD with why>
 Risk: <low|high> — <one-line reason>
 Test idea: <one line: what test would prove it>
@@ -213,7 +215,7 @@ Persistence impact: <none | description + migration gating per AGENTS.md>
 UX check: <needed (touches user-visible UI — builder must add the ux-walk label + scope per AGENTS.md; the loop walks it post-deploy, never pre-merge) | not needed — <why>>
 Effort: <S|M|L>"
   REV_FILE="$(mktemp)"
-  if ! opencode run --model opencode-go/muse-spark-1.3-contributor#xhigh --title "triage-rev-#$N" "$REVPROMPT" </dev/null >"$REV_FILE" 2>"$REV_FILE.err"; then
+  if ! printf '%s' "$REVPROMPT" | "$DIR/llm-run.sh" --role triage --title "triage-rev-#$N" --expect '^## Triage plan'  >"$REV_FILE" 2>"$REV_FILE.err"; then
     echo "[triage] #$N revision failed: $(tail -n 3 "$REV_FILE.err")"
     rm -f "$REV_FILE" "$REV_FILE.err"
     continue

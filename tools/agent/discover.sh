@@ -36,10 +36,14 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LLM_RUN="${AGENT_LLM_RUN:-$DIR/llm-run.sh}"
 FILTER="$DIR/discover_filter.py"
 STATE="${AGENT_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/a_fish_in_sea}"
-LAST="$STATE/discovery-last"
-RETRY="$STATE/discovery-retry"
+KIND="${AGENT_DISCOVER_KIND:-discovery}"
+[[ "$KIND" = discovery || "$KIND" = harness ]] || exit 2
+ROLE=discover
+[ "$KIND" = harness ] && ROLE=harness
+LAST="$STATE/$KIND-last"
+RETRY="$STATE/$KIND-retry"
 INDEX="$STATE/discovery-index.json"
-FORCE_FILE="$STATE/discovery-force"
+FORCE_FILE="$STATE/$KIND-force"
 
 MIN_INTERVAL="${AGENT_DISCOVER_MIN_INTERVAL_S:-21600}"
 FAIL_BACKOFF="${AGENT_DISCOVER_FAIL_BACKOFF_S:-3600}"
@@ -133,6 +137,9 @@ PROMPT_FILE="$TMP/prompt.txt"
 MSG_FILE="$TMP/message.txt"
 ERR_FILE="$TMP/message.err"
 {
+  if [ "$KIND" = harness ]; then
+    "$DIR/harness.sh" --context
+  fi
   cat <<'PROMPT'
 You are the proactive discovery agent for this repository (branch main,
 read-only). Find a SMALL number of real, current problems that are worth
@@ -140,6 +147,8 @@ one bounded PR each, so the build loop can fix them. Quality over
 quantity: finding nothing is a perfectly good result.
 
 WHAT TO LOOK FOR, in priority order:
+For a HARNESS RESEARCH AUDIT, follow its narrower tools/agent scope above;
+otherwise look for:
 1. User-visible bugs: a code path that produces wrong behavior, a stuck or
    blank screen, a broken create/edit/delete flow, or a wrong calculation.
    Cite the exact file:line and explain the path a user takes.
@@ -241,14 +250,14 @@ PY
 } >"$PROMPT_FILE"
 
 echo "[discover] running read-only audit..."
-if ! "$LLM_RUN" --role discover --title "discover-$(date +%F-%H%M)" --read-only \
+if ! "$LLM_RUN" --role "$ROLE" --title "discover-$(date +%F-%H%M)" --read-only \
     --expect '^DISCOVERY: [0-9]+$' <"$PROMPT_FILE" >"$MSG_FILE" 2>"$ERR_FILE"; then
   echo "[discover] audit run failed — no issues filed (see below); backing off $((FAIL_BACKOFF / 60))m"
   tail -n 8 "$ERR_FILE" 2>/dev/null || true
   date +%s -d "@$(( $(date +%s) + FAIL_BACKOFF ))" >"$RETRY"
   exit 1
 fi
-cp "$MSG_FILE" "$STATE/discovery-last-message.md" 2>/dev/null || true
+cp "$MSG_FILE" "$STATE/$KIND-last-message.md" 2>/dev/null || true
 
 REPO_SLUG="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)"
 FILTER_ARGS=(

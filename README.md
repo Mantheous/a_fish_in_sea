@@ -48,7 +48,7 @@ no card text, notes, tags, or schedule details.
 
 ## Agent-driven development
 
-Issues flow through an agent loop: a verified tester files an issue labelled `agent-pending`, a triage agent posts a plan, a maintainer approves (or denies) it, a builder agent implements the approved issue on its own `agent/<n>-<slug>` branch and opens a PR against `main`, and an independent reviewer agent verdicts the PR (`review:pass` / `review:changes-requested`, max 2 rework rounds). Merging stays human. Agents never push to or commit on `main`.
+Issues flow through an agent loop: a verified tester files an issue labelled `agent-pending`, triage reads the relevant feature docs and posts a plan, and the loop approves it unless the developer denies it or has unaddressed feedback. Builders work on isolated branches, independent reviewers and data/security guardians gate the current PR head, and fully gated PRs merge automatically. Rework escalates reasoning after every two completed attempts instead of stopping for a human. Agents never push directly to `main`. [Loop capacity, feature vision and research](tools/agent/LOOP.md) describes the 90% weekly Codex/Antigravity and monthly OpenCode targets, quota collectors and measured self-improvement.
 
 - Verified testers (the only accounts whose issues are picked up) are listed in `tools/testers.json`.
 - The loop scripts (triage, approve, build, review, deploy, ux-walk, poll, Telegram notify) live in `tools/agent/`.
