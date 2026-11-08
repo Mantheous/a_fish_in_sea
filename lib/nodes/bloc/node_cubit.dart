@@ -24,7 +24,9 @@ import '../service/node_feed_import.dart';
 import '../service/node_event_detach.dart';
 import '../service/node_batch_graph.dart';
 import '../service/node_progress.dart';
+import '../service/node_recurrence_instance.dart';
 import '../service/node_recurrence_schedule.dart';
+import '../service/recurring_payment_amount.dart';
 import '../service/node_tree_ops.dart';
 import '../service/node_transaction_settlement.dart';
 
@@ -593,7 +595,16 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       final error = validateParents(updated, updated.parentIds);
       if (error != null) return error;
     }
-    emitChange(state.map((n) => n.id == updated.id ? updated : n).toList());
+    final amounts = recurringPaymentAmountUpdates(
+      current,
+      updated,
+      state,
+      today: localDay(DateTime.now()),
+    );
+    emitChange([
+      for (final n in state)
+        amounts[n.id] ?? (n.id == updated.id ? updated : n),
+    ]);
     return null;
   }
 
@@ -1563,7 +1574,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     while (!cursor.isAfter(end)) {
       final id = _instanceId(templateId, cursor, recurrence.frequency);
       if (!known.contains(id)) {
-        fresh.add(_spawnInstance(template, id, cursor));
+        fresh.add(spawnRecurringInstance(template, id, cursor));
         known.add(id);
       }
       cursor = NodeRecurrenceSchedule.next(anchor, cursor, recurrence);
@@ -1603,86 +1614,6 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     _pendingBatchedInstances.clear();
     if (fresh.isNotEmpty) emitSilent([...state, ...fresh]);
     return total;
-  }
-
-  Node _spawnInstance(Node template, String id, DateTime date) {
-    final block = template.schedule;
-    Duration? length;
-    if (block?.start != null && block?.end != null) {
-      final d = block!.end!.difference(block.start!);
-      if (d.inMinutes > 0) length = d;
-    }
-    final day = localDay(date);
-    ScheduleFacet? schedule;
-    if (block != null) {
-      final dueTime = block.due;
-      final due = dueTime == null
-          ? day
-          : DateTime(
-              day.year,
-              day.month,
-              day.day,
-              dueTime.hour,
-              dueTime.minute,
-            );
-      DateTime? start;
-      DateTime? end;
-      if (length != null) {
-        final base = block.start;
-        start = base == null
-            ? day
-            : DateTime(day.year, day.month, day.day, base.hour, base.minute);
-        end = start.add(length);
-      }
-      schedule = ScheduleFacet(
-        due: due,
-        start: start,
-        end: end,
-        allDay: block.allDay,
-        isFixed: block.isFixed,
-      );
-    } else {
-      schedule = ScheduleFacet(due: day);
-    }
-    MoneyFacet? money = template.money;
-    if (money != null) {
-      money = MoneyFacet(
-        targetAmount: money.targetAmount,
-        direction: money.direction,
-        status: MoneyStatus.projected,
-        period: money.period,
-        customPeriodDays: money.customPeriodDays,
-        isRecurring: false,
-        autoRollover: money.autoRollover,
-        rolloverAmount: 0.0,
-        isFixed: money.isFixed,
-      );
-    }
-    return Node(
-      id: id,
-      title: template.title,
-      notes: template.notes,
-      parentIds: [template.id],
-      createdAt: date,
-      schedule: schedule,
-      money: money,
-      effort: template.effort,
-      // Instances inherit the deck and target but start unreviewed: the
-      // template's cached count belongs to its own period, not the new
-      // instance's.
-      anki: template.anki?.copyWith(
-        clearReviewsActual: true,
-        clearLastSyncedAt: true,
-      ),
-      instanceOfId: template.id,
-      sourceEventId: template.sourceEventId,
-      calendarEventId: template.calendarEventId,
-      feedId: template.feedId,
-      classId: template.classId,
-      classLabel: template.classLabel,
-      classNodeId: template.classNodeId,
-      assignees: template.assignees,
-    );
   }
 
   // ── Legacy importers (one-time adoption, permanent API) ─────────────
