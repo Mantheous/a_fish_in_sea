@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:equatable/equatable.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
+import '../../common/persistence/account_mutation_fence.dart';
 import 'package:a_fish_in_sea/common/persistence/stable_storage_keys.dart';
 import 'package:a_fish_in_sea/demo/demo_data.dart';
 import 'package:a_fish_in_sea/demo/demo_mode.dart';
@@ -66,7 +67,8 @@ class PlaidState extends Equatable {
 }
 
 /// Manages the Plaid bank connection lifecycle.
-class PlaidCubit extends HydratedCubit<PlaidState> {
+class PlaidCubit extends HydratedCubit<PlaidState>
+    with AccountMutationFence<PlaidState> {
   PlaidCubit({PlaidService? service, String? userId})
       : _serviceOverride = service,
         super(PlaidState(userId: userId ?? PlaidUserId.generate())) {

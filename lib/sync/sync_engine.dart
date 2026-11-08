@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 
+import '../common/persistence/account_mutation_fence.dart';
+import '../common/undo/undo_cubit.dart';
 import '../demo/demo_mode.dart';
 import '../finances/bloc/plaid_cubit.dart';
 import '../finances/bloc/transactions_cubit.dart';
@@ -20,6 +22,7 @@ import 'sync_meta_cubit.dart';
 import 'sync_timer_merge.dart';
 
 part 'sync_account_recovery.dart';
+part 'sync_collections.dart';
 
 enum EngineStatus { idle, syncing, error }
 
@@ -81,6 +84,8 @@ class SyncEngine {
   bool _running = false;
   int _epoch = 0;
   Future<void>? _accountTransition;
+  Future<void>? _accountPreparation;
+  final ValueNotifier<bool> accountTransitioning = ValueNotifier(false);
 
   /// Change-triggered sync: debounced [syncNow] after a local mutation, so
   /// edits (starting/completing a task or event) reach the server without
@@ -112,7 +117,10 @@ class SyncEngine {
     };
     // A persisted removal may have stopped before any domain write. Hide
     // those collections before the application shell can be constructed.
-    if (meta.state.pendingRemoval) clearLocalAccountData();
+    if (meta.state.pendingRemoval || meta.state.pendingRestoration) {
+      _blockAccountMutations();
+      if (meta.state.pendingRemoval) clearLocalAccountData();
+    }
   }
 
   static const List<String> collections = [
@@ -243,79 +251,6 @@ class SyncEngine {
       auth.sessionGeneration == sessionGeneration &&
       auth.state.isSignedIn;
 
-  // ── Extract (cubit -> {itemId: data}) ────────────────────────────────
-
-  Map<String, Map<String, dynamic>> _extract(String collection) {
-    List<dynamic> listOf(Map<String, dynamic>? env, String key) {
-      final l = env?[key];
-      return l is List ? l : const [];
-    }
-
-    Map<String, dynamic> asMap(dynamic e) =>
-        Map<String, dynamic>.from(e as Map);
-
-    Map<String, Map<String, dynamic>> idMap(List<dynamic> list) => {
-          for (final e in list)
-            if (asMap(e)['id'] is String)
-              (asMap(e)['id'] as String): asMap(e)
-        };
-
-    switch (collection) {
-      case 'nodes':
-        return idMap(listOf(nodes.toJson(nodes.state), 'nodes'));
-      case 'events':
-        return idMap(listOf(events.toJson(events.state), 'events'));
-      case 'feeds':
-        return idMap(listOf(feeds.toJson(feeds.state), 'feeds'));
-      case 'transactions':
-        return idMap(
-            listOf(transactions.toJson(transactions.state), 'transactions'));
-      case 'places':
-        return idMap(listOf(places.toJson(places.state), 'places'));
-      case 'reported_entries': {
-        final days = reporting.toJson(reporting.state)['days'];
-        final out = <String, Map<String, dynamic>>{};
-        if (days is Map) {
-          for (final entry in days.entries) {
-            final day = entry.key.toString();
-            final items = entry.value is List ? entry.value as List : const [];
-            out[day] = {
-              'day': day,
-              'entries': [
-                for (final e in items) Map<String, dynamic>.from(e as Map)
-              ],
-            };
-          }
-        }
-        return out;
-      }
-      case 'tracked_points': {
-        return idMap(
-            listOf(tracking.toJson(tracking.state), 'points'));
-      }
-      case 'settings': {
-        final env = Map<String, dynamic>.from(settings.toJson(settings.state));
-        _stripDeviceLocalFields('settings', env);
-        return {'singleton': env};
-      }
-      case 'waterfall': {
-        final env = waterfall.toJson(waterfall.state);
-        return {
-          'singleton':
-              env == null ? <String, dynamic>{} : Map<String, dynamic>.from(env)
-        };
-      }
-      case 'plaid': {
-        final env = plaid.toJson(plaid.state);
-        final map =
-            env == null ? <String, dynamic>{} : Map<String, dynamic>.from(env);
-        _stripDeviceLocalFields('plaid', map);
-        return {'singleton': map};
-      }
-    }
-    return {};
-  }
-
   static void _stripDeviceLocalFields(
       String collection, Map<String, dynamic> data) {
     if (collection == 'settings') {
@@ -406,60 +341,6 @@ class SyncEngine {
     // record's changed set, and the next push sends no tombstones for them.
     if (upsertMeta.isNotEmpty || removeMeta.isNotEmpty) {
       meta.save(upsert: upsertMeta, remove: removeMeta);
-    }
-  }
-
-  // ── Apply merged maps back into cubits (no undo records) ────────────
-
-  void _apply(String collection, Map<String, Map<String, dynamic>> items) {
-    switch (collection) {
-      case 'nodes':
-        nodes.applyJson({
-          'nodes': items.values.toList(),
-        });
-        break;
-      case 'events':
-        events.applyJson({
-          'events': items.values.toList(),
-        });
-        break;
-      case 'feeds':
-        feeds.applyJson({
-          'feeds': items.values.toList(),
-        });
-        break;
-      case 'transactions':
-        transactions.applySyncedJson({
-          'transactions': items.values.toList(),
-        });
-        break;
-      case 'places':
-        places.applyJson({
-          'places': items.values.toList(),
-        });
-        break;
-      case 'reported_entries':
-        reporting.applyJson({
-          'days': {
-            for (final e in items.entries) e.key: e.value['entries'],
-          },
-        });
-        break;
-      case 'tracked_points':
-        tracking.applySyncedPoints(items.values.toList());
-        break;
-      case 'settings':
-        final data = items['singleton'];
-        if (data != null) settings.applySyncedJson(data);
-        break;
-      case 'waterfall':
-        final data = items['singleton'];
-        if (data != null) waterfall.applySyncedConfig(data);
-        break;
-      case 'plaid':
-        final data = items['singleton'];
-        if (data != null) plaid.applySyncedIdentity(data);
-        break;
     }
   }
 

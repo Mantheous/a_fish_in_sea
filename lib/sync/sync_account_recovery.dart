@@ -5,21 +5,49 @@ part of 'sync_engine.dart';
 /// uses a durable intent followed by acknowledged writes before ownership
 /// can be released.
 extension AccountRecovery on SyncEngine {
+  List<AccountMutationFence<dynamic>> get _accountStores => [
+    nodes,
+    events,
+    feeds,
+    transactions,
+    places,
+    reporting,
+    tracking,
+    settings,
+    waterfall,
+    plaid,
+  ];
+
+  void _blockAccountMutations() {
+    for (final store in _accountStores) {
+      store.accountMutationsBlocked = true;
+    }
+    UndoCubit.instance?.resetHistory();
+  }
+
+  void _unblockAccountMutations() {
+    for (final store in _accountStores) {
+      store.accountMutationsBlocked = false;
+    }
+  }
+
   /// Clears all local domain cubits and bank session state. Used on sign-out
   /// and when switching to a different account so one user's local data can
   /// never be merged/pushed into another user's cloud account.
   void clearLocalAccountData() {
-    nodes.applyJson(const {'nodes': <dynamic>[]});
-    events.applyJson(const {'events': <dynamic>[]});
-    feeds.applyJson(const {'feeds': <dynamic>[]});
-    transactions.applySyncedJson(const {'transactions': <dynamic>[]});
-    places.applyJson(const {'places': <dynamic>[]});
-    reporting.applyJson(const {'days': <String, dynamic>{}});
-    tracking.applySyncedPoints(const <Map<String, dynamic>>[]);
-    settings.resetSynced();
-    waterfall.applySyncedConfig(const {'startingBalance': 0.0});
-    plaid.clearLocalSession();
-    protectedDeletions.value = const [];
+    AccountMutationFence.write(_accountStores, () {
+      nodes.applyJson(const {'nodes': <dynamic>[]});
+      events.applyJson(const {'events': <dynamic>[]});
+      feeds.applyJson(const {'feeds': <dynamic>[]});
+      transactions.applySyncedJson(const {'transactions': <dynamic>[]});
+      places.applyJson(const {'places': <dynamic>[]});
+      reporting.applyJson(const {'days': <String, dynamic>{}});
+      tracking.applySyncedPoints(const <Map<String, dynamic>>[]);
+      settings.resetSynced();
+      waterfall.applySyncedConfig(const {'startingBalance': 0.0});
+      plaid.clearLocalSession();
+      protectedDeletions.value = const [];
+    });
   }
 
   Map<String, AccountSnapshot> _withSnapshotFor(String email) {
@@ -42,9 +70,11 @@ extension AccountRecovery on SyncEngine {
   void _applySnapshot(AccountSnapshot snap) {
     _applyingRemote = true;
     try {
-      for (final entry in snap.collections.entries) {
-        if (entry.value.isNotEmpty) _apply(entry.key, entry.value);
-      }
+      AccountMutationFence.write(_accountStores, () {
+        for (final entry in snap.collections.entries) {
+          if (entry.value.isNotEmpty) _apply(entry.key, entry.value);
+        }
+      });
     } finally {
       _applyingRemote = false;
     }
@@ -129,6 +159,29 @@ extension AccountRecovery on SyncEngine {
     await _persistMeta();
   }
 
+  Future<void> _finishPendingRestoration() async {
+    if (!meta.state.pendingRestoration) return;
+    final email = meta.state.lastEmail;
+    final snapshot = meta.state.accountSnapshots[email];
+    if (snapshot == null) {
+      throw StateError('Account recovery snapshot is missing');
+    }
+    // Retry even when ownership was already persisted in a prior process.
+    // The original snapshot stays authoritative until every store is durable.
+    await _persistMeta();
+    _applySnapshot(snapshot);
+    await _persistCollections();
+    final bookkeeping = _restoredBookkeeping(snapshot);
+    meta.reset(
+      lastEmail: email,
+      pendingRestoration: false,
+      cursor: bookkeeping.cursor,
+      items: bookkeeping.items,
+      accountSnapshots: meta.state.accountSnapshots,
+    );
+    await _persistMeta();
+  }
+
   /// Preserve unsynced work before clearing any domain store. Keep the
   /// outgoing owner until all clearing has completed, including on restart.
   Future<void> signOut({bool clearLocalData = false}) async {
@@ -137,37 +190,84 @@ extension AccountRecovery on SyncEngine {
     _running = false;
     status.value = EngineStatus.idle;
     lastError = null;
-    final transition = _signOut(clearLocalData);
+    final email = auth.state.email.trim().toLowerCase();
+    _blockAccountMutations();
+    accountTransitioning.value = true;
+    // Invalidate authentication before the first storage await. A new login
+    // can wait for removal without being cancelled by a later logout.
+    auth.logout();
+    final transition = _signOut(clearLocalData, email);
     _accountTransition = transition;
     try {
       await transition;
+      _unblockAccountMutations();
     } finally {
       _accountTransition = null;
+      accountTransitioning.value = false;
     }
   }
 
-  Future<void> _signOut(bool clearLocalData) async {
+  Future<void> _signOut(bool clearLocalData, String email) async {
+    // A login/boot recovery already writing stores must settle before removal.
+    await _accountPreparation;
+    // Never replace the recovery copy with a partially restored live store.
+    await _finishPendingRestoration();
     if (meta.state.pendingRemoval) {
       // Never replace the original snapshot with partially cleared data.
       await _finishPendingRemoval();
     } else {
-      final email = auth.state.email.trim().toLowerCase();
+      final owner = email.isEmpty ? meta.state.lastEmail ?? '' : email;
       meta.reset(
-        lastEmail: email.isEmpty ? meta.state.lastEmail : email,
+        lastEmail: owner,
         pendingRemoval: clearLocalData,
-        accountSnapshots: email.isEmpty
+        accountSnapshots: owner.isEmpty
             ? meta.state.accountSnapshots
-            : _withSnapshotFor(email),
+            : _withSnapshotFor(owner),
       );
       await _persistMeta();
       if (clearLocalData) await _finishPendingRemoval();
     }
-    // The sign-in screen cannot expose another account during the writes.
-    plaid.clearLocalSession();
-    auth.logout();
+    AccountMutationFence.write(_accountStores, plaid.clearLocalSession);
   }
 
   Future<void> _prepareAccount(String email) async {
+    final previous = _accountPreparation;
+    final preparation = () async {
+      await previous;
+      await _prepareAccountFenced(email);
+    }();
+    _accountPreparation = preparation;
+    try {
+      await preparation;
+    } finally {
+      if (identical(_accountPreparation, preparation)) {
+        _accountPreparation = null;
+      }
+    }
+  }
+
+  Future<void> _prepareAccountFenced(String email) async {
+    final fenced =
+        meta.state.pendingRemoval ||
+        meta.state.pendingRestoration ||
+        meta.state.lastEmail != email ||
+        _accountStores.any((store) => store.accountMutationsBlocked);
+    if (fenced) {
+      _blockAccountMutations();
+      accountTransitioning.value = true;
+    }
+    try {
+      await _prepareAccountData(email);
+      if (fenced && _accountTransition == null) _unblockAccountMutations();
+    } finally {
+      if (fenced && _accountTransition == null) {
+        accountTransitioning.value = false;
+      }
+    }
+  }
+
+  Future<void> _prepareAccountData(String email) async {
+    await _finishPendingRestoration();
     await _finishPendingRemoval();
     final previous = meta.state.lastEmail?.trim().toLowerCase();
     if (previous != null &&
@@ -193,11 +293,17 @@ extension AccountRecovery on SyncEngine {
     if (meta.state.cursor == null &&
         meta.state.items.isEmpty &&
         (hasBaseline || (wiped && restored != null))) {
-      // Claim the incoming ownership before any restored collection writes.
-      // A subsequent switch will then clear even a partial restoration.
-      meta.save(lastEmail: email);
-      await _persistMeta();
-      if (wiped) _applySnapshot(restored);
+      if (wiped) {
+        // Claim ownership and recovery intent together before restoring any
+        // collection. A crash cannot make ownership imply completion.
+        meta.reset(
+          lastEmail: email,
+          pendingRestoration: true,
+          accountSnapshots: meta.state.accountSnapshots,
+        );
+        await _finishPendingRestoration();
+        return;
+      }
       final bookkeeping = _restoredBookkeeping(restored);
       meta.reset(
         lastEmail: email,
@@ -205,6 +311,7 @@ extension AccountRecovery on SyncEngine {
         items: bookkeeping.items,
         accountSnapshots: meta.state.accountSnapshots,
       );
+      await _persistMeta();
     } else if (previous != email) {
       meta.save(lastEmail: email);
       await _persistMeta();

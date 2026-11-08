@@ -29,6 +29,7 @@ import 'package:a_fish_in_sea/reporting/bloc/places_cubit.dart';
 import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
 import 'package:a_fish_in_sea/reporting/bloc/tracking_cubit.dart';
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
+import 'package:a_fish_in_sea/sync/view/account_transition_gate.dart';
 import 'package:a_fish_in_sea/sync/sync_client.dart';
 import 'package:a_fish_in_sea/sync/sync_engine.dart';
 import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
@@ -263,6 +264,7 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
         ),
       ],
       child: MaterialApp(
+        builder: (context, child) => AccountTransitionGate(child: child!),
         debugShowCheckedModeBanner: false,
         title: 'a fish in sea',
         theme: ThemeData(

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:a_fish_in_sea/common/persistence/stable_storage_keys.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
@@ -9,43 +8,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 
 import 'support/sync_test_device.dart';
-
-/// Domain writes can stop while sync metadata still persists, matching the
-/// separate HydratedBloc keys on a device interrupted during removal.
-class _InterruptedStorage implements Storage {
-  final data = <String, dynamic>{};
-  final paused = Completer<void>();
-  final metadataPaused = Completer<void>();
-  bool pauseDomainWrites = false;
-  bool pauseMetadataWrites = false;
-  bool domainWriteStarted = false;
-
-  @override
-  dynamic read(String key) => data[key];
-
-  @override
-  Future<void> write(String key, dynamic value) async {
-    if (pauseMetadataWrites && key == StableStorageKeys.syncMeta) {
-      await metadataPaused.future;
-    }
-    if (pauseDomainWrites && key != StableStorageKeys.syncMeta) {
-      domainWriteStarted = true;
-      await paused.future;
-    }
-    data[key] = jsonDecode(jsonEncode(value));
-  }
-
-  @override
-  Future<void> delete(String key) async => data.remove(key);
-  @override
-  Future<void> clear() async => data.clear();
-  @override
-  Future<void> close() async {}
-}
+import 'support/delayed_storage.dart';
 
 void main() {
   test('Remove waits for the snapshot before clearing any collection', () async {
-    final storage = _InterruptedStorage();
+    final storage = DelayedStorage();
     HydratedBloc.storage = storage;
     final d = SyncTestDevice(FakeSyncClient());
     await d.signIn();
@@ -57,7 +24,8 @@ void main() {
     final removal = d.engine.signOut(clearLocalData: true);
     await Future<void>.delayed(Duration.zero);
     expect(d.nodes.byId('draft'), isNotNull);
-    expect(d.auth.state.isSignedIn, isTrue);
+    expect(d.auth.state.isSignedIn, isFalse);
+    expect(d.engine.accountTransitioning.value, isTrue);
     final durableMeta = storage.data[StableStorageKeys.syncMeta] as Map;
     expect(durableMeta['pendingRemoval'], isNot(true));
 
@@ -79,7 +47,7 @@ void main() {
     test(
       'interrupted Remove then restart as $returningEmail isolates and recovers',
       () async {
-        final storage = _InterruptedStorage();
+        final storage = DelayedStorage();
         HydratedBloc.storage = storage;
         final server = FakeSyncClient();
         final d = SyncTestDevice(server);
@@ -112,10 +80,8 @@ void main() {
 
         // Restart from exactly the acknowledged writes, with A's collections
         // still present. Constructing the engine hides them before any UI.
-        final restartedStorage = _InterruptedStorage();
-        restartedStorage.data.addAll(
-          jsonDecode(jsonEncode(storage.data)) as Map<String, dynamic>,
-        );
+        final restartedStorage = DelayedStorage();
+        restartedStorage.data.addAll(storage.data);
         HydratedBloc.storage = restartedStorage;
         final restarted = SyncTestDevice(server);
         expect(restarted.nodes.state, isEmpty);

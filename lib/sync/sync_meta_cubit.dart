@@ -147,6 +147,10 @@ class SyncMetaState extends Equatable {
   /// not yet completed. Retain ownership until every clear is persisted.
   final bool pendingRemoval;
 
+  /// Snapshot restoration is unfinished until every domain store is durable.
+  /// Ownership alone cannot prove that recovery completed after a restart.
+  final bool pendingRestoration;
+
   /// Persisted per-account snapshots of sync meta + local collections so
   /// switching accounts on a shared device never loses unsynced local edits
   /// across app restarts AND never leaks one account's data into another.
@@ -157,6 +161,7 @@ class SyncMetaState extends Equatable {
     this.items = const {},
     this.lastEmail,
     this.pendingRemoval = false,
+    this.pendingRestoration = false,
     this.accountSnapshots = const {},
   });
 
@@ -165,6 +170,7 @@ class SyncMetaState extends Equatable {
     Map<String, ItemMeta>? items,
     String? lastEmail,
     bool? pendingRemoval,
+    bool? pendingRestoration,
     Map<String, AccountSnapshot>? accountSnapshots,
   }) =>
       SyncMetaState(
@@ -172,12 +178,14 @@ class SyncMetaState extends Equatable {
         items: items ?? this.items,
         lastEmail: lastEmail ?? this.lastEmail,
         pendingRemoval: pendingRemoval ?? this.pendingRemoval,
+        pendingRestoration: pendingRestoration ?? this.pendingRestoration,
         accountSnapshots: accountSnapshots ?? this.accountSnapshots,
       );
 
   @override
   List<Object?> get props =>
-      [cursor, items, lastEmail, pendingRemoval, accountSnapshots];
+      [cursor, items, lastEmail, pendingRemoval, pendingRestoration,
+        accountSnapshots];
 }
 
 class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
@@ -217,6 +225,7 @@ class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
   void reset({
     bool clearLastEmail = false,
     bool? pendingRemoval,
+    bool? pendingRestoration,
     String? lastEmail,
     String? cursor,
     Map<String, ItemMeta>? items,
@@ -243,6 +252,7 @@ class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
       items: items ?? const {},
       lastEmail: effectiveLast,
       pendingRemoval: pendingRemoval ?? state.pendingRemoval,
+      pendingRestoration: pendingRestoration ?? state.pendingRestoration,
       accountSnapshots: snaps,
     ));
   }
@@ -278,6 +288,7 @@ class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
         items: items,
         lastEmail: rawEmail is String && rawEmail.isNotEmpty ? rawEmail : null,
         pendingRemoval: json['pendingRemoval'] == true,
+        pendingRestoration: json['pendingRestoration'] == true,
         accountSnapshots: snaps,
       );
     } catch (_) {
@@ -294,6 +305,7 @@ class SyncMetaCubit extends HydratedCubit<SyncMetaState> {
         },
         if (state.lastEmail != null) 'lastEmail': state.lastEmail,
         if (state.pendingRemoval) 'pendingRemoval': true,
+        if (state.pendingRestoration) 'pendingRestoration': true,
         if (state.accountSnapshots.isNotEmpty)
           'accountSnapshots': {
             for (final e in state.accountSnapshots.entries)
