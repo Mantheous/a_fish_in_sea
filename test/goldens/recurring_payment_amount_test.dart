@@ -1,3 +1,5 @@
+import 'package:a_fish_in_sea/finances/model/time_scale.dart';
+import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -119,6 +121,117 @@ void main() {
         await tester.pumpAndSettle();
       },
     );
+  }
+
+  testWidgets(
+    'period-only editor save survives restore and later amount save',
+    (tester) async {
+      final f = RecurringPaymentFixture();
+      await f.pump(
+        tester,
+        money: const MoneyFacet(targetAmount: 100, period: TimeScale.monthly),
+      );
+      final protectedBefore = {
+        for (final n in f.nodes.state.where((n) => n.isInstance))
+          if (!f.refreshedIds.contains(n.id)) n.id: n,
+      };
+
+      await f.edit(tester, amount: null, period: TimeScale.weekly);
+
+      expect(f.nodes.byId(f.template.id)!.money!.period, TimeScale.weekly);
+      for (final entry in protectedBefore.entries) {
+        expect(f.nodes.byId(entry.key), entry.value);
+      }
+      for (final id in f.refreshedIds) {
+        expect(f.nodes.byId(id)!.money!.period, TimeScale.weekly);
+        expect(f.nodes.byId(id)!.money!.targetAmount, 100);
+      }
+      _restore(f);
+      await tester.pumpAndSettle();
+      f.before = List.of(f.nodes.state);
+      f.undo.resetHistory();
+      final emissions = <Object>[];
+      f.nodes.stream.listen(emissions.add);
+
+      await f.edit(tester);
+
+      expect(emissions, hasLength(1));
+      f.verify();
+      final saved = List.of(f.nodes.state);
+      f.verifyUndo();
+      expect(f.nodes.state, saved);
+      f.verify();
+      await tester.pumpAndSettle();
+    },
+  );
+
+  final settings = <String, MoneyFacet Function(MoneyFacet)>{
+    'custom period length': (m) => m.copyWith(customPeriodDays: 120),
+    'clearing custom period': (m) =>
+        m.copyWith(period: TimeScale.monthly, clearCustomPeriod: true),
+    'clearing period': (m) =>
+        m.copyWith(clearPeriod: true, clearCustomPeriod: true),
+    'income direction': (m) => m.copyWith(direction: MoneyDirection.income),
+    'saving direction': (m) => m.copyWith(direction: MoneyDirection.save),
+    'auto rollover': (m) => m.copyWith(autoRollover: true),
+  };
+  for (final setting in settings.entries) {
+    testWidgets('${setting.key} keeps restored future amounts fresh', (
+      tester,
+    ) async {
+      final f = RecurringPaymentFixture();
+      await f.pump(
+        tester,
+        money: const MoneyFacet(
+          targetAmount: 100,
+          period: TimeScale.custom,
+          customPeriodDays: 90,
+        ),
+      );
+      // An unmarked legacy setting edit must also keep the whole copy protected.
+      final legacy = f.nodes.instancesOf(f.template.id)[6];
+      f.nodes.writeNodes(
+        upserts: [
+          legacy.copyWith(
+            money: legacy.money!.copyWith(customPeriodDays: 7),
+            overriddenFields: {},
+          ),
+        ],
+      );
+      final protectedBefore = {
+        for (final n in f.nodes.state.where((n) => n.isInstance))
+          if (!f.refreshedIds.contains(n.id)) n.id: n,
+      };
+      final money = setting.value(f.template.money!);
+
+      expect(f.nodes.updateNode(f.template.copyWith(money: money)), isNull);
+
+      for (final entry in protectedBefore.entries) {
+        expect(f.nodes.byId(entry.key), entry.value);
+      }
+      for (final id in f.refreshedIds) {
+        expect(f.nodes.byId(id)!.money, money);
+      }
+      _restore(f);
+      await tester.pumpAndSettle();
+      f.before = List.of(f.nodes.state);
+      f.oldBalance = f.waterfall.state.rows
+          .singleWhere((r) => r.sourceId == f.refreshedId)
+          .runningBalance;
+      f.undo.resetHistory();
+      final emissions = <Object>[];
+      f.nodes.stream.listen(emissions.add);
+
+      await f.edit(tester);
+
+      expect(emissions, hasLength(1));
+      f.verify();
+      final saved = List.of(f.nodes.state);
+      f.verifyUndo();
+      expect(f.nodes.state, saved);
+      f.verify();
+      await tester.pumpAndSettle();
+    });
   }
 
   for (final initialNotes in [null, 'Original payment notes']) {

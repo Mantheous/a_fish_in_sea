@@ -31,6 +31,7 @@ class RecurringPaymentFixture {
     WidgetTester tester, {
     String? notes,
     bool isFixed = false,
+    MoneyFacet? money,
   }) async {
     final storage = _Storage();
     when(() => storage.read(any())).thenReturn(null);
@@ -71,7 +72,7 @@ class RecurringPaymentFixture {
       notes: notes,
       createdAt: start,
       schedule: ScheduleFacet(due: start),
-      money: MoneyFacet(targetAmount: 100, isFixed: isFixed),
+      money: money ?? MoneyFacet(targetAmount: 100, isFixed: isFixed),
       recurrence: NodeRecurrence(
         frequency: TimeScale.monthly,
         endDate: DateTime(now.year, now.month + 10, 1),
@@ -139,6 +140,7 @@ class RecurringPaymentFixture {
     WidgetTester tester, {
     String? amount = '150',
     bool toggleFixed = false,
+    TimeScale? period,
   }) async {
     await tester.tap(find.byIcon(Icons.edit_outlined));
     await tester.pumpAndSettle();
@@ -151,6 +153,17 @@ class RecurringPaymentFixture {
       final fixed = find.widgetWithText(SwitchListTile, 'Fixed amount');
       await tester.ensureVisible(fixed);
       await tester.tap(fixed);
+      await tester.pumpAndSettle();
+    }
+    if (period != null) {
+      final field = find.widgetWithText(
+        DropdownButtonFormField<TimeScale?>,
+        'Period (optional)',
+      );
+      await tester.ensureVisible(field);
+      await tester.tap(field);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(period.displayName).last);
       await tester.pumpAndSettle();
     }
     await tester.tap(find.text('Save'));
@@ -170,8 +183,12 @@ class RecurringPaymentFixture {
     final row = waterfall.state.rows.singleWhere(
       (r) => r.sourceId == refreshedId,
     );
-    expect(row.amount, -150);
-    expect(row.runningBalance, oldBalance - 50 * refreshedIds.length);
+    final sign =
+        nodes.byId(template.id)!.money!.direction == MoneyDirection.income
+        ? 1
+        : -1;
+    expect(row.amount, sign * 150);
+    expect(row.runningBalance, oldBalance + sign * 50 * refreshedIds.length);
     expect(undo.state.undoStack, hasLength(1));
   }
 
