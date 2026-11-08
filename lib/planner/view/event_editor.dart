@@ -27,8 +27,10 @@ import '../model/task_assignee.dart';
 import '../service/calendar_report.dart';
 import '../service/event_reminders.dart';
 import '../service/event_editor_task_link.dart';
+import '../service/feed_event_merge.dart' show isLocallySchedulableAssignment;
 import 'event_calendar_policy.dart';
 import 'event_editor_actions.dart';
+import 'event_editor_task_fields.dart';
 import 'event_editor_text_field.dart';
 import 'event_colors.dart';
 import 'event_time_sections.dart';
@@ -598,6 +600,11 @@ class EventEditorFormState extends State<EventEditorForm> {
     final sourceOwnedText = existing != null &&
         existing.isFromFeed &&
         !context.read<FeedCubit>().isRemoteEditable(existing);
+    final importedAssignment = existing != null &&
+        isLocallySchedulableAssignment(
+          existing,
+          context.read<FeedCubit>().byId(existing.feedId ?? ''),
+        );
     return SafeArea(
       top: false,
       child: Stack(
@@ -766,31 +773,21 @@ class EventEditorFormState extends State<EventEditorForm> {
                   maxLines: 2,
                 ),
                 const SizedBox(height: 4),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Task'),
-                  subtitle: const Text(
-                    'Tasks can be marked complete and show in the Tasks list',
-                  ),
-                  value: _isTask,
-                  onChanged: (value) {
+                EventEditorTaskFields(
+                  isTask: _isTask,
+                  done: _done,
+                  onTaskChanged: (value) {
                     setState(() {
                       _isTask = value;
                       if (!value) _done = false;
                     });
                     _emitDraft();
                   },
+                  onDoneChanged: (value) {
+                    setState(() => _done = value);
+                    _emitDraft();
+                  },
                 ),
-                if (_isTask)
-                  CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Completed'),
-                    value: _done,
-                    onChanged: (value) {
-                      setState(() => _done = value ?? false);
-                      _emitDraft();
-                    },
-                  ),
               ],
             ),
           ),
@@ -801,7 +798,7 @@ class EventEditorFormState extends State<EventEditorForm> {
             child: EventEditorActions(
               title: widget.title,
               hasExistingEvent: existing != null,
-              allowDelete: widget.allowDelete,
+              allowDelete: widget.allowDelete && !importedAssignment,
               saving: _saving,
               onDelete: () => _delete(context),
               onCancel: widget.onCancelled,
@@ -1256,8 +1253,11 @@ class EventEditorFormState extends State<EventEditorForm> {
       widget.onFinished?.call();
       return;
     }
-    calendarCubit.updateEvent(updated);
-    _syncTaskLink(updated);
+    NodeCubit? nodes;
+    try {
+      nodes = context.read<NodeCubit>();
+    } catch (_) {}
+    saveLocalEditorEvent(nodes, calendarCubit, updated);
     await EventReminderService.scheduleReminder(updated);
     widget.onFinished?.call();
   }

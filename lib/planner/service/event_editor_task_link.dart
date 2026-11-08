@@ -1,7 +1,22 @@
+import '../../common/undo/revertable_hydrated_cubit.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/model/node.dart';
 import '../bloc/calendar_cubit.dart';
 import '../model/planner_event.dart';
+
+/// A local editor save is one undo step, including removed backing tasks.
+void saveLocalEditorEvent(
+  NodeCubit? nodes,
+  CalendarCubit calendar,
+  PlannerEvent saved,
+) {
+  RevertableHydratedCubit.atomic([calendar, if (nodes != null) nodes], () {
+    calendar.updateEvent(saved);
+    if (nodes != null) {
+      syncEditorTaskLink(nodes, calendar, saved, syncFeedWorkTime: true);
+    }
+  });
+}
 
 /// Mirrors the editor's task flag and locally owned work interval.
 void syncEditorTaskLink(

@@ -1,4 +1,5 @@
 import 'package:a_fish_in_sea/common/time/time_session.dart';
+import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
@@ -127,6 +128,7 @@ Future<void> verifyImportedAssignment(
   await tester.pumpAndSettle();
   await tester.tap(find.text('Edit'));
   await tester.pumpAndSettle();
+  expect(find.text('Delete'), findsNothing);
   await _pickTime(tester, 'Start', '2', '15');
   await _pickTime(tester, 'End', '3', '45');
   await tester.ensureVisible(find.text('Save'));
@@ -191,6 +193,38 @@ END:VCALENDAR
     expect(refresh.state.single.lastError, isNull);
     expect(refresh.state.single.lastSyncAt, isNotNull);
     await tester.pumpAndSettle();
+    expectAligned();
+
+    // Task-off Save must undo the event change and the removed task as
+    // one gesture, including history that the feed cannot reconstruct.
+    final undo = context.read<UndoCubit>();
+    final beforeEvent = calendar.byId(event.id)!;
+    final beforeTask = nodes.byId(event.id)!;
+    undo.resetHistory();
+    await tester.ensureVisible(find.text('Edit'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Edit'));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete'), findsNothing);
+    final taskSwitch = find.widgetWithText(SwitchListTile, 'Task');
+    await tester.ensureVisible(taskSwitch);
+    await tester.tap(taskSwitch);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(calendar.byId(event.id)!.isTask, isFalse);
+    expect(nodes.byId(event.id), isNull);
+    expect(undo.state.undoStack, hasLength(1));
+
+    undo.undo();
+    await tester.pumpAndSettle();
+    expect(calendar.byId(event.id), beforeEvent);
+    expect(nodes.byId(event.id), beforeTask);
+    expectAligned();
+    await refresh.syncFeed('canvas');
+    await tester.pumpAndSettle();
+    expect(refresh.state.single.lastError, isNull);
+    expect(nodes.byId(event.id), beforeTask);
     expectAligned();
   } finally {
     await refresh.close();
