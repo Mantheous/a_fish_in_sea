@@ -111,6 +111,9 @@ class GoogleCalendarService {
   /// push into a 401 "Invalid token" — the sync client already retries
   /// this way, the Google proxy did not.
   final Future<String?> Function()? refreshAccessToken;
+
+  /// Account lifetime, unchanged by an ordinary token refresh.
+  final int Function()? sessionGeneration;
   final http.Client _client;
 
   GoogleCalendarService({
@@ -118,6 +121,7 @@ class GoogleCalendarService {
     required this.userId,
     this.authToken,
     this.refreshAccessToken,
+    this.sessionGeneration,
     http.Client? client,
   }) : _client = client ?? http.Client();
 
@@ -156,12 +160,23 @@ class GoogleCalendarService {
   /// a closure so [_headers] is re-read and the retry carries the fresh
   /// token.
   Future<http.Response> _send(Future<http.Response> Function() request) async {
+    final generation = sessionGeneration?.call();
     final first = await _attempt(request);
+    _checkSession(generation);
     if (first.statusCode != 401 || refreshAccessToken == null) return first;
     if (!_isAppSessionExpiry(first)) return first;
     final fresh = await refreshAccessToken!();
+    _checkSession(generation);
     if (fresh == null || fresh.isEmpty) return first;
-    return _attempt(request);
+    final retried = await _attempt(request);
+    _checkSession(generation);
+    return retried;
+  }
+
+  void _checkSession(int? generation) {
+    if (sessionGeneration?.call() != generation) {
+      throw const GoogleCalendarException('Account changed', statusCode: 401);
+    }
   }
 
   /// True when a 401 looks like our own JWT expired, not a Google-side

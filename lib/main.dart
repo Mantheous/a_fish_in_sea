@@ -126,11 +126,13 @@ class MyApp extends StatelessWidget {
             accessToken: () => ref?.state.accessToken,
             refreshAccessToken: () =>
                 ref?.refreshAccessToken() ?? Future.value(null),
+            sessionGeneration: () => ref?.sessionGeneration ?? 0,
           );
           ref = AuthCubit(client: () => client);
           SyncAuth.tokenProvider = () => ref?.state.accessToken;
           SyncAuth.refreshProvider =
               () => ref?.refreshAccessToken() ?? Future.value(null);
+          SyncAuth.sessionGenerationProvider = () => ref?.sessionGeneration ?? 0;
           return ref;
         }),
         BlocProvider(create: (_) => SyncMetaCubit()),
@@ -195,6 +197,8 @@ class MyApp extends StatelessWidget {
                   context.read<AuthCubit>().state.accessToken,
               refreshAccessToken: () =>
                   context.read<AuthCubit>().refreshAccessToken(),
+              sessionGeneration: () =>
+                  context.read<AuthCubit>().sessionGeneration,
             ),
             proxyBase: () =>
                 context.read<SettingsCubit>().state.icalProxyBase,
