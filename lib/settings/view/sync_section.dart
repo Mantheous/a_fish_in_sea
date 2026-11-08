@@ -2,7 +2,6 @@ import 'package:a_fish_in_sea/demo/demo_coordinator.dart';
 import 'package:a_fish_in_sea/demo/demo_mode.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/sync/sync_engine.dart';
-import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -77,12 +76,7 @@ class SyncSection extends StatelessWidget {
                       ),
                       const SizedBox(height: 8),
                       OutlinedButton.icon(
-                        onPressed: () {
-                          // Clear the bookkeeping so the next sync
-                          // re-downloads the cloud copy onto this device.
-                          context.read<SyncMetaCubit>().reset();
-                          context.read<SyncEngine>().syncNow();
-                        },
+                        onPressed: engine.restoreMissingItemsFromCloud,
                         icon: const Icon(Icons.restore),
                         label: const Text('Restore missing items from cloud'),
                       ),
@@ -134,7 +128,7 @@ class SyncSection extends StatelessWidget {
       ),
     );
     if (choice == null) return;
-    engine.signOut(clearLocalData: choice);
+    await engine.signOut(clearLocalData: choice);
   }
 
   String _formatAgo(DateTime t) {

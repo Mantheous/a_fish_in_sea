@@ -70,6 +70,11 @@ class AuthCubit extends HydratedCubit<AuthState> {
 
   int _authAttempt = 0;
 
+  /// SyncEngine finishes durable account isolation before the signed-in
+  /// state makes the application shell visible. Authentication fails closed
+  /// if the device cannot persist that transition.
+  Future<void> Function(String email)? prepareAccount;
+
   AuthCubit({required SyncClient Function() client})
       : _client = client,
         super(const AuthState());
@@ -96,6 +101,8 @@ class AuthCubit extends HydratedCubit<AuthState> {
     emit(state.copyWith(status: AuthStatus.working, clearError: true));
     try {
       final tokens = await call();
+      if (attempt != _authAttempt) return false;
+      await prepareAccount?.call(email);
       if (attempt != _authAttempt) return false;
       emit(AuthState(
         status: AuthStatus.signedIn,

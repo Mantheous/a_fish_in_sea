@@ -1,253 +1,13 @@
-import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
-import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
-import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
-import 'package:a_fish_in_sea/finances/service/plaid_service.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
-import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
-import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
-import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
-import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
-import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
-import 'package:a_fish_in_sea/planner/service/ical_service.dart';
-import 'package:a_fish_in_sea/reporting/bloc/places_cubit.dart';
-import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
-import 'package:a_fish_in_sea/reporting/model/place.dart';
-import 'package:a_fish_in_sea/reporting/bloc/tracking_cubit.dart';
-import 'package:a_fish_in_sea/sync/auth_cubit.dart';
-import 'package:a_fish_in_sea/sync/sync_client.dart';
 import 'package:a_fish_in_sea/sync/sync_engine.dart';
 import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
-class MockStorage extends Mock implements Storage {}
-
-class _TestPlaidCubit extends PlaidCubit {
-  _TestPlaidCubit()
-    : super(
-        service: PlaidService(
-          baseUrl: 'https://plaid.test',
-          userId: 'test-user',
-          client: MockClient((_) async => http.Response('{}', 200)),
-        ),
-      );
-
-  void seedConnected(String itemId) {
-    emit(
-      state.copyWith(status: PlaidConnectionStatus.connected, itemId: itemId),
-    );
-  }
-}
-
-class _Row {
-  Map<String, dynamic> data;
-  bool deleted;
-  DateTime updatedAt;
-  _Row(this.data, this.deleted, this.updatedAt);
-}
-
-/// In-memory stand-in for the FastAPI server (same pull/push semantics).
-class FakeSyncClient extends SyncClient {
-  FakeSyncClient()
-    : super(
-        serverBase: () => '',
-        accessToken: () => 'tok',
-        refreshAccessToken: () async => 'tok',
-      );
-
-  final store = <String, Map<String, _Row>>{};
-  var pushCalls = 0;
-  var clock = DateTime.utc(2026, 9, 12);
-
-  DateTime _tick() {
-    clock = clock.add(const Duration(seconds: 1));
-    return clock;
-  }
-
-  @override
-  Future<Map<String, dynamic>> login(String email, String password) async => {
-    'access_token': 'a',
-    'refresh_token': 'r',
-  };
-
-  @override
-  Future<Map<String, dynamic>> register(String email, String password) async =>
-      {'access_token': 'a', 'refresh_token': 'r'};
-
-  @override
-  Future<({List<SyncRecord> changes, String serverTime})> pull({
-    String? since,
-    List<String>? collections,
-  }) async {
-    final out = <SyncRecord>[];
-    final sinceDt = since == null || since.isEmpty
-        ? null
-        : DateTime.parse(since);
-    for (final coll in store.entries) {
-      if (collections != null &&
-          collections.isNotEmpty &&
-          !collections.contains(coll.key)) {
-        continue;
-      }
-      for (final e in coll.value.entries) {
-        if (sinceDt != null && !e.value.updatedAt.isAfter(sinceDt)) continue;
-        out.add(
-          SyncRecord(
-            collection: coll.key,
-            itemId: e.key,
-            data: Map<String, dynamic>.from(e.value.data),
-            deleted: e.value.deleted,
-            rev: 1,
-            updatedAt: e.value.updatedAt,
-          ),
-        );
-      }
-    }
-    out.sort((a, b) => a.updatedAt.compareTo(b.updatedAt));
-    return (changes: out, serverTime: clock.toIso8601String());
-  }
-
-  @override
-  Future<({List<SyncRecord> applied, Set<String> guarded})> push(
-    List<Map<String, dynamic>> changes,
-  ) async {
-    pushCalls++;
-    final applied = <SyncRecord>[];
-    for (final c in changes) {
-      final coll = store.putIfAbsent(c['collection'] as String, () => {});
-      final now = _tick();
-      coll[c['item_id'] as String] = _Row(
-        Map<String, dynamic>.from(c['data'] as Map? ?? {}),
-        c['deleted'] as bool? ?? false,
-        now,
-      );
-      applied.add(
-        SyncRecord(
-          collection: c['collection'] as String,
-          itemId: c['item_id'] as String,
-          data: Map<String, dynamic>.from(c['data'] as Map? ?? {}),
-          deleted: c['deleted'] as bool? ?? false,
-          rev: 1,
-          updatedAt: now,
-        ),
-      );
-    }
-    return (applied: applied, guarded: const <String>{});
-  }
-}
-
-/// Simulates the real SyncClient's fail-closed behavior on an incomplete
-/// paged pull (empty page with has_more, or a page without next_cursor):
-/// it throws instead of returning a watermark, so the engine must not
-/// advance its stored cursor (refs #57).
-class _IncompletePullClient extends FakeSyncClient {
-  bool failPull = false;
-
-  @override
-  Future<({List<SyncRecord> changes, String serverTime})> pull({
-    String? since,
-    List<String>? collections,
-  }) async {
-    if (failPull) {
-      throw const SyncException(
-        500,
-        'Sync server omitted the cursor for an incomplete pull',
-      );
-    }
-    return super.pull(since: since, collections: collections);
-  }
-}
-
-class _Device {
-  final FakeSyncClient server;
-  late final AuthCubit auth;
-  late final SyncMetaCubit meta;
-  late final NodeCubit nodes;
-  late final CalendarCubit events;
-  late final FeedCubit feeds;
-  late final SyncEngine engine;
-  late final SettingsCubit settings;
-  late final _TestPlaidCubit plaid;
-  late final WaterfallCubit waterfall;
-  late final TransactionsCubit transactions;
-  late final PlacesCubit places;
-  late final ReportingCubit reporting;
-  late final TrackingCubit tracking;
-
-  _Device(this.server) {
-    auth = AuthCubit(client: () => server);
-    meta = SyncMetaCubit();
-    nodes = NodeCubit();
-    events = CalendarCubit();
-    feeds = FeedCubit(
-      calendarCubit: events,
-      nodeCubit: nodes,
-      icalService: IcalService(),
-      googleService: GoogleCalendarService(baseUrl: () => '', userId: () => ''),
-      proxyBase: () => '',
-    );
-    settings = SettingsCubit();
-    transactions = TransactionsCubit();
-    plaid = _TestPlaidCubit();
-    places = PlacesCubit();
-    reporting = ReportingCubit();
-    tracking = TrackingCubit();
-    waterfall = WaterfallCubit(
-      nodeCubit: nodes,
-      transactionsCubit: transactions,
-      plaidCubit: plaid,
-    );
-    engine = SyncEngine(
-      client: server,
-      auth: auth,
-      meta: meta,
-      events: events,
-      feeds: feeds,
-      nodes: nodes,
-      transactions: transactions,
-      places: places,
-      reporting: reporting,
-      tracking: tracking,
-      settings: settings,
-      waterfall: waterfall,
-      plaid: plaid,
-    );
-  }
-
-  /// A fresh engine over the same cubits with [metaCubit] as bookkeeping —
-  /// used to simulate an app restart without tearing down the UI state.
-  SyncEngine engineOver(SyncMetaCubit metaCubit) => SyncEngine(
-        client: server,
-        auth: auth,
-        meta: metaCubit,
-        events: events,
-        feeds: feeds,
-        nodes: nodes,
-        transactions: transactions,
-        places: places,
-        reporting: reporting,
-        tracking: tracking,
-        settings: settings,
-        waterfall: waterfall,
-        plaid: plaid,
-      );
-
-  SyncMetaCubit rehydratedMeta() {
-    final fresh = SyncMetaCubit();
-    fresh.emit(fresh.fromJson(meta.toJson(meta.state))!);
-    return fresh;
-  }
-
-  Future<void> signIn() async {
-    final ok = await auth.login('a@example.com', 'password123');
-    assert(ok);
-  }
-}
+import 'support/sync_test_device.dart';
 
 void main() {
   late Storage storage;
@@ -263,8 +23,8 @@ void main() {
 
   test('node created on device A appears on device B after sync', () async {
     final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
+    final a = SyncTestDevice(server);
+    final b = SyncTestDevice(server);
     await a.signIn();
     await b.signIn();
 
@@ -280,8 +40,8 @@ void main() {
 
   test('true conflict resolves server-wins', () async {
     final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
+    final a = SyncTestDevice(server);
+    final b = SyncTestDevice(server);
     await a.signIn();
     await b.signIn();
 
@@ -304,7 +64,7 @@ void main() {
       final undo = UndoCubit();
       addTearDown(undo.close);
       final server = FakeSyncClient();
-      final a = _Device(server);
+      final a = SyncTestDevice(server);
       await a.signIn();
 
       a.nodes.addNode(
@@ -316,10 +76,10 @@ void main() {
 
       // Another device creates t2 directly on the server (newer than a's
       // cursor, so the next pull delivers it like a background sync would).
-      server.store.putIfAbsent('nodes', () => {})['t2'] = _Row(
+      server.store.putIfAbsent('nodes', () => {})['t2'] = SyncRow(
         Node(id: 't2', title: 'from B', createdAt: DateTime(2026)).toJson(),
         false,
-        server._tick(),
+        server.tick(),
       );
       await a.engine.syncNow();
 
@@ -341,8 +101,8 @@ void main() {
 
   test('delete on A propagates as tombstone to B', () async {
     final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
+    final a = SyncTestDevice(server);
+    final b = SyncTestDevice(server);
     await a.signIn();
     await b.signIn();
 
@@ -361,8 +121,8 @@ void main() {
     'mass deletion from a wiped device is withheld, not propagated',
     () async {
       final server = FakeSyncClient();
-      final a = _Device(server);
-      final b = _Device(server);
+      final a = SyncTestDevice(server);
+      final b = SyncTestDevice(server);
       await a.signIn();
       await b.signIn();
 
@@ -392,7 +152,7 @@ void main() {
 
   test('settings server URL stays per-device', () async {
     final server = FakeSyncClient();
-    final a = _Device(server);
+    final a = SyncTestDevice(server);
     await a.signIn();
 
     a.settings.setIcalProxyBase('http://phone:8000');
@@ -408,8 +168,8 @@ void main() {
     'settings and Plaid singletons do not ping-pong between devices',
     () async {
       final server = FakeSyncClient();
-      final a = _Device(server);
-      final b = _Device(server);
+      final a = SyncTestDevice(server);
+      final b = SyncTestDevice(server);
       await a.signIn();
       await b.signIn();
 
@@ -464,8 +224,8 @@ void main() {
     'task completion and visible hours sync; calendar view stays per-device',
     () async {
       final server = FakeSyncClient();
-      final phone = _Device(server);
-      final desktop = _Device(server);
+      final phone = SyncTestDevice(server);
+      final desktop = SyncTestDevice(server);
       await phone.signIn();
       await desktop.signIn();
 
@@ -512,8 +272,8 @@ void main() {
     'a local mutation triggers an automatic sync without the timer',
     () async {
       final server = FakeSyncClient();
-      final a = _Device(server);
-      final b = _Device(server);
+      final a = SyncTestDevice(server);
+      final b = SyncTestDevice(server);
       await a.signIn();
       await b.signIn();
       a.engine.startAutoSyncOnChanges(
@@ -541,8 +301,8 @@ void main() {
     'a running timer survives a conflicting pull (server-wins except timers)',
     () async {
       final server = FakeSyncClient();
-      final a = _Device(server);
-      final b = _Device(server);
+      final a = SyncTestDevice(server);
+      final b = SyncTestDevice(server);
       await a.signIn();
       await b.signIn();
 
@@ -575,8 +335,8 @@ void main() {
 
   test('conflicting running timers keep the earliest start', () async {
     final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
+    final a = SyncTestDevice(server);
+    final b = SyncTestDevice(server);
     await a.signIn();
     await b.signIn();
 
@@ -610,8 +370,8 @@ void main() {
 
   test('remote edit propagates to a device with no local changes', () async {
     final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
+    final a = SyncTestDevice(server);
+    final b = SyncTestDevice(server);
     await a.signIn();
     await b.signIn();
 
@@ -629,8 +389,8 @@ void main() {
 
   test('a remote stop lands even under a conflicting local edit', () async {
     final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
+    final a = SyncTestDevice(server);
+    final b = SyncTestDevice(server);
     await a.signIn();
     await b.signIn();
 
@@ -668,8 +428,8 @@ void main() {
     'a newer local run keeps an older run recorded on another device',
     () async {
       final server = FakeSyncClient();
-      final a = _Device(server);
-      final b = _Device(server);
+      final a = SyncTestDevice(server);
+      final b = SyncTestDevice(server);
       await a.signIn();
       await b.signIn();
 
@@ -707,8 +467,8 @@ void main() {
 
   test('old remote actuals never stop a restarted timer', () async {
     final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
+    final a = SyncTestDevice(server);
+    final b = SyncTestDevice(server);
     await a.signIn();
     await b.signIn();
 
@@ -746,259 +506,11 @@ void main() {
   });
 
   test(
-    'switching accounts or signing out never leaks previous user data into next account',
-    () async {
-      final server = FakeSyncClient();
-      final shared = _Device(server);
-
-      await shared.auth.login('alice@example.com', 'password123');
-      shared.nodes.addNode(
-        Node(
-          id: 'alice-secret',
-          title: 'Alice secret task',
-          createdAt: DateTime(2026),
-        ),
-      );
-      await shared.engine.syncNow();
-      expect(server.store['nodes']?.containsKey('alice-secret'), isTrue);
-
-      // Case 2: Alice also adds an UNSYNCED offline item before signing out, then
-      // the app restarts (fresh SyncEngine constructed from persisted SyncMetaCubit)
-      // and Bob signs in. Zero of Alice's items leak to Bob's cloud, AND Alice's
-      // unsynced item is preserved in SyncMetaCubit.accountSnapshots across the
-      // restart so it comes back when Alice signs back in.
-      shared.nodes.addNode(
-        Node(
-          id: 'alice-unsynced',
-          title: 'Offline draft',
-          createdAt: DateTime(2026),
-        ),
-      );
-      shared.engine.signOut();
-      expect(shared.nodes.byId('alice-unsynced'), isNotNull);
-      expect(shared.meta.state.items, isEmpty);
-      expect(shared.meta.state.lastEmail, 'alice@example.com');
-
-      // Simulate app restart: re-hydrate SyncMetaCubit from JSON and build a
-      // fresh SyncEngine over the existing cubits.
-      final rehydratedMeta = SyncMetaCubit();
-      rehydratedMeta.emit(
-        rehydratedMeta.fromJson(shared.meta.toJson(shared.meta.state))!,
-      );
-      final restartedEngine = SyncEngine(
-        client: server,
-        auth: shared.auth,
-        meta: rehydratedMeta,
-        events: shared.events,
-        feeds: shared.feeds,
-        nodes: shared.nodes,
-        transactions: TransactionsCubit(),
-        places: PlacesCubit(),
-        reporting: ReportingCubit(),
-        tracking: TrackingCubit(),
-        settings: shared.settings,
-        waterfall: WaterfallCubit(
-          nodeCubit: shared.nodes,
-          transactionsCubit: TransactionsCubit(),
-          plaidCubit: PlaidCubit(),
-        ),
-        plaid: PlaidCubit(),
-      );
-
-      // Simulate Bob's empty cloud account on the server.
-      server.store.clear();
-
-      await shared.auth.login('bob@example.com', 'password123');
-      rehydratedMeta
-          .reset(); // AuthPage resets cursor/items, preserving lastEmail
-      await restartedEngine.syncNow();
-
-      expect(shared.nodes.byId('alice-secret'), isNull);
-      expect(shared.nodes.byId('alice-unsynced'), isNull);
-      expect(
-        server.store['nodes']?.containsKey('alice-secret') ?? false,
-        isFalse,
-      );
-      expect(
-        server.store['nodes']?.containsKey('alice-unsynced') ?? false,
-        isFalse,
-      );
-
-      // When Alice signs back in later, her unsynced offline item is restored
-      // from the persisted snapshot!
-      await shared.auth.login('alice@example.com', 'password123');
-      rehydratedMeta.reset();
-      await restartedEngine.syncNow();
-      expect(shared.nodes.byId('alice-unsynced')?.title, 'Offline draft');
-    },
-  );
-
-  test(
-    'sign out, edit offline, same-account re-login keeps the offline edit',
-    () async {
-      final server = FakeSyncClient();
-      final d = _Device(server);
-      await d.signIn();
-      d.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
-      await d.engine.syncNow();
-      expect(server.store['nodes']?.containsKey('t1'), isTrue);
-
-      // Sign out (keeps on-device data), edit + add while signed out.
-      d.engine.signOut();
-      d.nodes.updateNode(d.nodes.byId('t1')!.copyWith(title: 'offline edit'));
-      d.nodes.addNode(
-        Node(id: 't2', title: 'offline new', createdAt: DateTime(2026)),
-      );
-
-      // Same account signs back in (AuthPage resets cursor/items).
-      await d.auth.login('a@example.com', 'password123');
-      d.meta.reset();
-      await d.engine.syncNow();
-
-      // Nothing is wiped to the sign-out-time snapshot; both items push.
-      expect(d.nodes.byId('t1')?.title, 'offline edit');
-      expect(d.nodes.byId('t2')?.title, 'offline new');
-      expect(server.store['nodes']?['t1']?.data['title'], 'offline edit');
-      expect(server.store['nodes']?.containsKey('t2'), isTrue);
-    },
-  );
-
-  test('signOut mid-sync fences in-flight sync so meta stays reset', () async {
-    final server = FakeSyncClient();
-    final d = _Device(server);
-    await d.signIn();
-    d.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
-
-    final syncFuture = d.engine.syncNow();
-    d.engine.signOut();
-    await syncFuture;
-
-    expect(d.auth.state.isSignedIn, isFalse);
-    expect(d.meta.state.cursor, isNull);
-    expect(d.meta.state.items, isEmpty);
-    // Local data stays intact on sign-out.
-    expect(d.nodes.byId('t1')?.title, 'v1');
-  });
-
-  test(
-    'signOut(clearLocalData: true) wipes local cubits; re-login restores',
-    () async {
-      final server = FakeSyncClient();
-      final d = _Device(server);
-      await d.auth.login('a@example.com', 'password123');
-      d.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
-      await d.engine.syncNow();
-      expect(server.store['nodes']?.containsKey('t1'), isTrue);
-
-      // Unsynced offline item, then sign out removing on-device data.
-      d.nodes.addNode(
-        Node(id: 't2', title: 'offline only', createdAt: DateTime(2026)),
-      );
-      d.engine.signOut(clearLocalData: true);
-      expect(d.nodes.byId('t1'), isNull);
-      expect(d.nodes.byId('t2'), isNull);
-      expect(d.plaid.state.isConnected, isFalse);
-      expect(d.meta.state.items, isEmpty);
-      expect(d.meta.state.lastEmail, isNull);
-      expect(
-        d.meta.state.accountSnapshots.containsKey('a@example.com'),
-        isTrue,
-      );
-
-      // Same account signs back in (AuthPage resets cursor/items): the
-      // sign-out snapshot backfills local state and the previously-unsynced
-      // item uploads instead of being lost with the wipe.
-      await d.auth.login('a@example.com', 'password123');
-      d.meta.reset();
-      await d.engine.syncNow();
-      expect(d.nodes.byId('t1')?.title, 'v1');
-      expect(d.nodes.byId('t2')?.title, 'offline only');
-      expect(server.store['nodes']?.containsKey('t2'), isTrue);
-    },
-  );
-
-  test(
-    'returning to account A reseeds meta so conflicts merge instead of clobber',
-    () async {
-      final server = FakeSyncClient();
-      final shared = _Device(server);
-
-      // Alice syncs t1, then makes an offline edit + an offline-only t2.
-      await shared.auth.login('alice@example.com', 'password123');
-      shared.nodes.addNode(
-        Node(id: 't1', title: 'v1', createdAt: DateTime(2026)),
-      );
-      await shared.engine.syncNow();
-      expect(server.store['nodes']?.containsKey('t1'), isTrue);
-      shared.nodes.updateNode(
-        shared.nodes.byId('t1')!.copyWith(title: 'A edit'),
-      );
-      shared.nodes.addNode(
-        Node(id: 't2', title: 'Offline only', createdAt: DateTime(2026)),
-      );
-      shared.engine.signOut();
-
-      // Fresh engine over rehydrated meta (simulates app restart).
-      final rehydratedMeta = SyncMetaCubit();
-      rehydratedMeta.emit(
-        rehydratedMeta.fromJson(shared.meta.toJson(shared.meta.state))!,
-      );
-      final restartedEngine = SyncEngine(
-        client: server,
-        auth: shared.auth,
-        meta: rehydratedMeta,
-        events: shared.events,
-        feeds: shared.feeds,
-        nodes: shared.nodes,
-        transactions: TransactionsCubit(),
-        places: PlacesCubit(),
-        reporting: ReportingCubit(),
-        tracking: TrackingCubit(),
-        settings: shared.settings,
-        waterfall: WaterfallCubit(
-          nodeCubit: shared.nodes,
-          transactionsCubit: TransactionsCubit(),
-          plaidCubit: PlaidCubit(),
-        ),
-        plaid: PlaidCubit(),
-      );
-
-      // Bob uses the device meanwhile; server-side change to t1 lands from
-      // another device while Alice is away.
-      server.store.clear();
-      await shared.auth.login('bob@example.com', 'password123');
-      rehydratedMeta.reset();
-      await restartedEngine.syncNow();
-      expect(shared.nodes.byId('t1'), isNull);
-      expect(shared.nodes.byId('t2'), isNull);
-
-      // Seed the server-side newer version of t1 directly.
-      server.store['nodes'] = {
-        't1': _Row(
-          {'id': 't1', 'title': 'Server edit'},
-          false,
-          DateTime.utc(2026, 9, 13),
-        ),
-      };
-
-      // Alice returns: offline-only t2 must survive and push; t1 is a true
-      // conflict (both sides edited) so documented server-wins applies but
-      // the merge runs through the normal conflict path with reseeded meta.
-      await shared.auth.login('alice@example.com', 'password123');
-      rehydratedMeta.reset();
-      await restartedEngine.syncNow();
-      expect(shared.nodes.byId('t2')?.title, 'Offline only');
-      expect(shared.nodes.byId('t1')?.title, 'Server edit');
-      expect(server.store['nodes']?.containsKey('t2'), isTrue);
-    },
-  );
-
-  test(
     'preserved running timer is pushed to the server on the same sync',
     () async {
       final server = FakeSyncClient();
-      final a = _Device(server);
-      final b = _Device(server);
+      final a = SyncTestDevice(server);
+      final b = SyncTestDevice(server);
       await a.signIn();
       await b.signIn();
 
@@ -1033,8 +545,8 @@ void main() {
 
   test('identical change on both sides does not push twice', () async {
     final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
+    final a = SyncTestDevice(server);
+    final b = SyncTestDevice(server);
     await a.signIn();
     await b.signIn();
 
@@ -1060,188 +572,9 @@ void main() {
     expect(server.clock, before);
   });
 
-  test('signOut(clearLocalData: true) preserves the waterfall singleton '
-      'on re-login instead of pushing defaults over the cloud copy', () async {
-    final server = FakeSyncClient();
-    final d = _Device(server);
-    await d.auth.login('a@example.com', 'password123');
-    d.waterfall.applySyncedConfig(const {'startingBalance': 1234.5});
-    d.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
-    await d.engine.syncNow();
-    expect(
-      server.store['waterfall']?['singleton']?.data['startingBalance'],
-      1234.5,
-    );
-
-    d.engine.signOut(clearLocalData: true);
-    expect(d.waterfall.state.startingBalance, 0.0);
-
-    await d.auth.login('a@example.com', 'password123');
-    d.meta.reset();
-    await d.engine.syncNow();
-    // Restored from the sign-out snapshot ...
-    expect(d.waterfall.state.startingBalance, 1234.5);
-    // ... and the wiped defaults never reached the cloud copy.
-    expect(
-      server.store['waterfall']?['singleton']?.data['startingBalance'],
-      1234.5,
-    );
-  });
-
-  test('signOut(clearLocalData: true) with no sync baseline still restores '
-      'offline work on re-login', () async {
-    final server = FakeSyncClient();
-    final d = _Device(server);
-    await d.auth.login('a@example.com', 'password123');
-    // The first pull never completes: no cursor, no item meta.
-    d.nodes.addNode(
-      Node(id: 't1', title: 'offline only', createdAt: DateTime(2026)),
-    );
-    expect(d.meta.state.cursor, isNull);
-    expect(d.meta.state.items, isEmpty);
-
-    d.engine.signOut(clearLocalData: true);
-    expect(d.nodes.byId('t1'), isNull);
-
-    await d.auth.login('a@example.com', 'password123');
-    d.meta.reset();
-    await d.engine.syncNow();
-    expect(d.nodes.byId('t1')?.title, 'offline only');
-    expect(server.store['nodes']?.containsKey('t1'), isTrue);
-  });
-
-  test(
-      'Remove sign-out persists the recovery snapshot before wiping so a '
-      'restart restores unsynced work', () async {
-    final server = FakeSyncClient();
-    final d = _Device(server);
-    await d.auth.login('a@example.com', 'password123');
-    d.nodes.addNode(
-      Node(id: 't1', title: 'unsynced', createdAt: DateTime(2026)),
-    );
-
-    d.engine.signOut(clearLocalData: true);
-    expect(d.nodes.byId('t1'), isNull);
-
-    // The serialized bookkeeping already holds the snapshot with an empty
-    // baseline. A crash right after this point therefore cannot leave empty
-    // cubits paired with a live baseline (which would tombstone the cloud).
-    final persisted = d.meta.fromJson(d.meta.toJson(d.meta.state))!;
-    expect(persisted.lastEmail, isNull);
-    expect(persisted.cursor, isNull);
-    expect(persisted.items, isEmpty);
-    expect(
-      persisted.accountSnapshots['a@example.com']
-          ?.collections['nodes']?['t1']?['title'],
-      'unsynced',
-    );
-
-    // Restart with the wiped cubits and rehydrated bookkeeping, re-login.
-    final freshMeta = SyncMetaCubit();
-    freshMeta.emit(persisted);
-    final restarted = d.engineOver(freshMeta);
-    await d.auth.login('a@example.com', 'password123');
-    freshMeta.reset(); // AuthPage resets cursor/items, preserving lastEmail
-    await restarted.syncNow();
-
-    expect(d.nodes.byId('t1')?.title, 'unsynced');
-    expect(server.store['nodes']?.containsKey('t1'), isTrue);
-  });
-
-  test('a Keep sign-out never resurrects work deleted after a failed pull',
-      () async {
-    final server = _IncompletePullClient();
-    final d = _Device(server);
-    await d.auth.login('a@example.com', 'password123');
-    d.nodes.addNode(
-      Node(id: 't1', title: 'offline only', createdAt: DateTime(2026)),
-    );
-
-    // Keep: local data stays and lastEmail records that this was not a wipe.
-    d.engine.signOut();
-    await d.auth.login('a@example.com', 'password123');
-    d.meta.reset();
-
-    // The first pull never completes, so no cursor/item meta is recorded.
-    server.failPull = true;
-    await d.engine.syncNow();
-    expect(d.engine.status.value, EngineStatus.error);
-
-    // Deleting the only task must survive the retry: the sign-out snapshot
-    // must not be re-applied over a deliberate deletion.
-    d.nodes.deleteNode('t1');
-    server.failPull = false;
-    await d.engine.syncNow();
-
-    expect(d.nodes.byId('t1'), isNull);
-    expect(server.store['nodes']?.containsKey('t1') ?? false, isFalse);
-  });
-
-  test('Remove clears roamed settings so the next account starts empty',
-      () async {
-    final server = FakeSyncClient();
-    final d = _Device(server);
-    await d.auth.login('alice@example.com', 'password123');
-    d.settings.setDayHours(7, 22);
-    d.settings.setTrackingIntervalMinutes(10);
-    await d.engine.syncNow();
-    expect(server.store['settings']?['singleton']?.data['dayStartHour'], 7);
-
-    d.engine.signOut(clearLocalData: true);
-    // Roamed settings are gone; per-device view stays as it was.
-    expect(d.settings.state.dayStartHour, 6);
-    expect(d.settings.state.dayEndHour, 24);
-    expect(d.settings.state.trackingIntervalMinutes, 5);
-    final perDeviceView = d.settings.state.defaultCalendarView;
-
-    // Bob is a fresh account on the same device: nothing of Alice's roams.
-    server.store.clear();
-    await d.auth.login('bob@example.com', 'password123');
-    d.meta.reset();
-    await d.engine.syncNow();
-
-    final bobsSettings = server.store['settings']?['singleton']?.data;
-    expect(bobsSettings?['dayStartHour'], 6);
-    expect(bobsSettings?['dayEndHour'], 24);
-    expect(bobsSettings?['trackingIntervalMinutes'], 5);
-    expect(d.settings.state.defaultCalendarView, perDeviceView);
-  });
-
-  test('a snapshot with an empty collection never tombstones the cloud copy',
-      () async {
-    final server = FakeSyncClient();
-    final d = _Device(server);
-    await d.auth.login('a@example.com', 'password123');
-    for (var i = 0; i < 4; i++) {
-      d.places.addPlace(Place(
-        id: 'p$i',
-        name: 'Place $i',
-        lat: 40.0 + i,
-        lng: -111.0 - i,
-      ));
-    }
-    await d.engine.syncNow();
-    expect(server.store['places']?.length, 4);
-
-    // Local store lost (e.g. failed hydrate) while sync bookkeeping survives.
-    d.places.applyJson(const {'places': <dynamic>[]});
-    d.engine.signOut(clearLocalData: true);
-
-    // Restart over rehydrated meta, re-login: the full pull recovers the
-    // cloud copy instead of tombstoning the four ids this device cannot show.
-    final freshMeta = d.rehydratedMeta();
-    final restarted = d.engineOver(freshMeta);
-    await d.auth.login('a@example.com', 'password123');
-    freshMeta.reset();
-    await restarted.syncNow();
-
-    expect(server.store['places']?.length, 4);
-    expect(d.places.state.length, 4);
-  });
-
   test('an incomplete paged pull never advances the stored cursor', () async {
-    final server = _IncompletePullClient();
-    final d = _Device(server);
+    final server = IncompletePullClient();
+    final d = SyncTestDevice(server);
     await d.signIn();
 
     d.nodes.addNode(Node(id: 't1', title: 'v1', createdAt: DateTime(2026)));
