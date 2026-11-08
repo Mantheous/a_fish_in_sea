@@ -166,4 +166,25 @@ void main() {
     preserveRecordedSessions('reports', local, merged);
     expect(TimeSession.listFromJson(merged['sessions']), hasLength(1));
   });
+
+  for (final localTransfer in [false, true]) {
+    test('event transfer retires stale recordings (local: $localTransfer)', () {
+      final local = _payload([a, b])
+        ..['timerStartedAt'] = c.start.toUtc().toIso8601String();
+      final merged = Map<String, dynamic>.from(local);
+      (localTransfer ? local : merged)['recordingsTransferredTo'] =
+          'destination';
+      preserveRunningTimer(
+        'events',
+        local,
+        merged,
+        preserveLocalSessions: true,
+      );
+      expect(merged['recordingsTransferredTo'], 'destination');
+      expect(merged['sessions'], isEmpty);
+      expect(merged['actualStart'], isNull);
+      expect(merged['actualEnd'], isNull);
+      expect(merged['timerStartedAt'], isNull);
+    });
+  }
 }

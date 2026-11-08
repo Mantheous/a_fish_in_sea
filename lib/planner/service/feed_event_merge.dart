@@ -1,4 +1,5 @@
 import '../model/planner_event.dart';
+import '../model/task_assignee.dart';
 
 /// Keeps user-owned metadata when a fresh feed copy replaces an event.
 PlannerEvent preserveLocalFeedMetadata(
@@ -7,6 +8,7 @@ PlannerEvent preserveLocalFeedMetadata(
 ) => fresh.copyWith(
   reminderMinutesBefore: previous.reminderMinutesBefore,
   tagIds: previous.tagIds,
+  recordingsTransferredTo: previous.recordingsTransferredTo,
 );
 
 /// Merges the canonical copy returned by a remote write with the saved
@@ -44,5 +46,48 @@ PlannerEvent preserveLocalFieldsOnWrite(
       failed: local.failed,
     ),
     local,
+  );
+}
+
+/// Builds the new identity for either calendar-move direction. Recording
+/// history belongs to the event and must reach the destination before the
+/// source is deleted, including legacy intervals and a running timer.
+PlannerEvent eventDraftForCalendarMove({
+  required PlannerEvent base,
+  required String subject,
+  required String? notes,
+  required String? location,
+  required DateTime start,
+  required DateTime end,
+  required bool allDay,
+  required String rule,
+  required String? taskId,
+  required bool isTask,
+  required bool done,
+  required String? placeId,
+  required List<TaskAssignee> assignees,
+  required int? reminderMinutesBefore,
+}) {
+  final now = DateTime.now();
+  return PlannerEvent(
+    id: 'evt:${now.microsecondsSinceEpoch}',
+    subject: subject,
+    notes: notes,
+    location: location,
+    start: start,
+    end: end,
+    allDay: allDay,
+    recurrenceRule: rule,
+    taskId: taskId,
+    isTask: isTask,
+    done: done,
+    completedAt: done ? (base.done ? base.completedAt ?? now : now) : null,
+    placeId: placeId,
+    assignees: List.of(assignees),
+    reminderMinutesBefore: reminderMinutesBefore ?? base.reminderMinutesBefore,
+    sessions: base.sessions,
+    actualStart: base.actualStart,
+    actualEnd: base.actualEnd,
+    timerStartedAt: base.timerStartedAt,
   );
 }
