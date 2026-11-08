@@ -189,6 +189,7 @@ class SyncTestDevice {
     GoogleCalendarService? googleService,
     CanvasService? canvasService,
     PlaidService? plaidService,
+    bool? mobileTrackingAvailable,
   }) {
     auth = AuthCubit(client: () => server);
     meta = SyncMetaCubit();
@@ -229,6 +230,7 @@ class SyncTestDevice {
       settings: settings,
       waterfall: waterfall,
       plaid: plaid,
+      mobileTrackingAvailable: mobileTrackingAvailable,
     );
   }
 

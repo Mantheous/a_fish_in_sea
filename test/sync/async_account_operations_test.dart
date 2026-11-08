@@ -1,3 +1,4 @@
+import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -77,6 +78,7 @@ void main() {
       await tester.pumpWidget(
         MultiBlocProvider(
           providers: [
+            BlocProvider<NodeCubit>.value(value: d.nodes),
             BlocProvider<PlaidCubit>.value(value: d.plaid),
             BlocProvider<TransactionsCubit>.value(value: d.transactions),
           ],

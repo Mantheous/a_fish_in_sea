@@ -40,6 +40,8 @@ class TrackingState extends Equatable {
 
 class TrackingCubit extends HydratedCubit<TrackingState>
     with AccountMutationFence<TrackingState> {
+  String? pendingPointsAccount;
+
   static const int maxPoints = 5000;
   static const int retentionDays = 30;
 

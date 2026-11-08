@@ -1,5 +1,4 @@
 import 'package:a_fish_in_sea/common/undo/undo_bar.dart';
-import 'package:a_fish_in_sea/demo/demo_coordinator.dart';
 import 'package:a_fish_in_sea/demo/demo_mode.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/view/bank_connection_card.dart';
@@ -16,7 +15,6 @@ import 'package:a_fish_in_sea/settings/view/api_tokens_section.dart';
 import 'package:a_fish_in_sea/settings/view/colors_page.dart';
 import 'package:a_fish_in_sea/settings/view/sync_section.dart';
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';

@@ -19,10 +19,12 @@ extension AccountRecovery on SyncEngine {
   ];
 
   void _blockAccountMutations() {
+    LocationService.stopForegroundSampling();
     for (final store in _accountStores) {
       store.accountMutationsBlocked = true;
       store.invalidateAccountOperations();
     }
+    AccountMutationFence.write(_accountStores, tracking.stopRecording);
     UndoCubit.instance?.resetHistory();
   }
 
@@ -81,13 +83,13 @@ extension AccountRecovery on SyncEngine {
     }
   }
 
-  Future<void> _recoverMissingCollections(AccountSnapshot snapshot) async {
+  Future<bool> _recoverMissingCollections(AccountSnapshot snapshot) async {
     final missing = {
       for (final entry in snapshot.collections.entries)
         if (entry.value.isNotEmpty && _extract(entry.key).isEmpty)
           entry.key: entry.value,
     };
-    if (missing.isEmpty) return;
+    if (missing.isEmpty) return false;
     _applyingRemote = true;
     try {
       AccountMutationFence.write(_accountStores, () {
@@ -101,6 +103,7 @@ extension AccountRecovery on SyncEngine {
     // Preserve offline drafts before publishing bookkeeping or allowing a
     // later sign-out to replace their recovery snapshot.
     await _persistCollections();
+    return true;
   }
 
   /// A Keep sign-out leaves live edits authoritative. If a whole collection
@@ -170,6 +173,8 @@ extension AccountRecovery on SyncEngine {
 
   Future<void> _finishPendingRemoval() async {
     if (!meta.state.pendingRemoval) return;
+    if (_mobileTrackingAvailable) await invalidateTrackingSampling();
+    await LocationService.stopBackground();
     // Also cover retries after a failed metadata write in this process.
     await _persistMeta();
     clearLocalAccountData();
@@ -223,8 +228,8 @@ extension AccountRecovery on SyncEngine {
     _accountTransition = transition;
     try {
       await transition;
-      _unblockAccountMutations();
     } finally {
+      _unblockAccountMutations();
       _accountTransition = null;
       accountTransitioning.value = false;
     }
@@ -240,6 +245,7 @@ extension AccountRecovery on SyncEngine {
       await _finishPendingRemoval();
     } else {
       final owner = email.isEmpty ? meta.state.lastEmail ?? '' : email;
+      await _capturePendingTracking(owner);
       meta.reset(
         lastEmail: owner,
         pendingRemoval: clearLocalData,
@@ -281,9 +287,9 @@ extension AccountRecovery on SyncEngine {
     }
     try {
       await _prepareAccountData(email);
-      if (fenced && _accountTransition == null) _unblockAccountMutations();
     } finally {
       if (fenced && _accountTransition == null) {
+        _unblockAccountMutations();
         accountTransitioning.value = false;
       }
     }
@@ -297,6 +303,7 @@ extension AccountRecovery on SyncEngine {
         previous.isNotEmpty &&
         email.isNotEmpty &&
         previous != email) {
+      await _capturePendingTracking(previous);
       meta.reset(
         lastEmail: previous,
         pendingRemoval: true,
@@ -308,6 +315,11 @@ extension AccountRecovery on SyncEngine {
       await _finishPendingRemoval();
     }
     if (email.isEmpty) return;
+    if (!_trackingQueueBound || tracking.pendingPointsAccount != email) {
+      if (_mobileTrackingAvailable) await claimLegacyPendingPoints(email);
+      tracking.pendingPointsAccount = email;
+      _trackingQueueBound = true;
+    }
     final restored = meta.state.accountSnapshots[email];
     final wiped = (meta.state.lastEmail ?? '').trim().toLowerCase() != email;
     final hasBaseline =
@@ -327,15 +339,16 @@ extension AccountRecovery on SyncEngine {
         await _finishPendingRestoration();
         return;
       }
-      final bookkeeping = _restoredBookkeeping(restored);
       // A lost collection needs both the saved offline contents and a full
-      // cloud pull. Compute bookkeeping before restoring so the lost store
-      // still invalidates the incremental cursor. Never-synced Keep sessions
+      // cloud pull. Recovered items keep their saved baseline so an unchanged
+      // cloud copy cannot overwrite offline edits. Reset the cursor separately.
+      // Never-synced Keep sessions
       // skip this branch: failed pulls must not resurrect deliberate deletes.
-      await _recoverMissingCollections(restored);
+      final recovered = await _recoverMissingCollections(restored);
+      final bookkeeping = _restoredBookkeeping(restored);
       meta.reset(
         lastEmail: email,
-        cursor: bookkeeping.cursor,
+        cursor: recovered ? null : bookkeeping.cursor,
         items: bookkeeping.items,
         accountSnapshots: meta.state.accountSnapshots,
       );
@@ -344,6 +357,21 @@ extension AccountRecovery on SyncEngine {
       meta.save(lastEmail: email);
       await _persistMeta();
     }
+  }
+
+  /// Include queued mobile points in the outgoing account's durable snapshot.
+  /// The account-scoped files also retain points from an interrupted drain.
+  Future<void> _capturePendingTracking(String owner) async {
+    if (!_mobileTrackingAvailable) return;
+    await invalidateTrackingSampling();
+    await LocationService.stopBackground();
+    if (owner.isEmpty) return;
+    await claimLegacyPendingPoints(owner);
+    tracking.pendingPointsAccount = owner;
+    final pending = await readPendingPoints(account: owner);
+    AccountMutationFence.write(_accountStores, () {
+      tracking.mergePoints(pending);
+    });
   }
 
   /// Discard the saved baseline too: an existing snapshot must never reseed

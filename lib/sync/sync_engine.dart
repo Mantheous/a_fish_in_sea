@@ -17,6 +17,7 @@ import '../planner/bloc/settings_cubit.dart';
 import '../reporting/bloc/places_cubit.dart';
 import '../reporting/bloc/reporting_cubit.dart';
 import '../reporting/bloc/tracking_cubit.dart';
+import '../reporting/service/location_service.dart';
 import 'auth_cubit.dart';
 import 'sync_client.dart';
 import 'sync_meta_cubit.dart';
@@ -67,6 +68,7 @@ class SyncEngine {
   final SettingsCubit settings;
   final WaterfallCubit waterfall;
   final PlaidCubit plaid;
+  final bool _mobileTrackingAvailable;
 
   final ValueNotifier<EngineStatus> status =
       ValueNotifier(EngineStatus.idle);
@@ -85,6 +87,7 @@ class SyncEngine {
   int _epoch = 0;
   Future<void>? _accountTransition;
   Future<void>? _accountPreparation;
+  bool _trackingQueueBound = false;
   final ValueNotifier<bool> accountTransitioning = ValueNotifier(false);
 
   /// Change-triggered sync: debounced [syncNow] after a local mutation, so
@@ -110,7 +113,11 @@ class SyncEngine {
     required this.settings,
     required this.waterfall,
     required this.plaid,
-  }) {
+    bool? mobileTrackingAvailable,
+  }) : _mobileTrackingAvailable =
+           mobileTrackingAvailable ?? LocationService.supportsBackground {
+    final owner = (meta.state.lastEmail ?? auth.state.email).trim().toLowerCase();
+    tracking.pendingPointsAccount = owner.isEmpty ? null : owner;
     auth.prepareAccount = (email) async {
       await _accountTransition;
       await _prepareAccount(email.trim().toLowerCase());

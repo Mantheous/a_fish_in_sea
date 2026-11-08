@@ -13,7 +13,51 @@ import 'package:hydrated_bloc/hydrated_bloc.dart';
 import 'support/delayed_storage.dart';
 import 'support/sync_test_device.dart';
 
+class _FailingStorage extends DelayedStorage {
+  bool failMetadata = false;
+
+  @override
+  Future<void> write(String key, dynamic value) async {
+    if (failMetadata && key == StableStorageKeys.syncMeta) {
+      throw StateError('Storage unavailable');
+    }
+    await super.write(key, value);
+  }
+}
+
 void main() {
+  for (final removal in [true, false]) {
+    test('failed ${removal ? 'removal' : 'restoration'} releases the mutation '
+        'fence and preserves recovery for a retry', () async {
+      final storage = _FailingStorage();
+      HydratedBloc.storage = storage;
+      final d = SyncTestDevice(FakeSyncClient());
+      addTearDown(d.waterfall.close);
+      await d.signIn();
+      d.nodes.addNode(
+        Node(id: 'draft', title: 'A draft', createdAt: DateTime(2026)),
+      );
+      if (!removal) await d.engine.signOut(clearLocalData: true);
+      storage.failMetadata = true;
+      if (removal) {
+        await expectLater(
+          d.engine.signOut(clearLocalData: true),
+          throwsStateError,
+        );
+      } else {
+        expect(await d.auth.login('a@example.com', 'password123'), isFalse);
+      }
+      expect(d.nodes.accountMutationsBlocked, isFalse);
+      expect(d.tracking.accountMutationsBlocked, isFalse);
+      expect(d.feeds.accountMutationsBlocked, isFalse);
+      expect(d.engine.accountTransitioning.value, isFalse);
+      storage.failMetadata = false;
+      if (removal) await d.engine.signOut(clearLocalData: true);
+      await d.signIn();
+      expect(d.nodes.byId('draft')?.title, 'A draft');
+    });
+  }
+
   testWidgets('removal blocks planner, dialogs, keyboard and Undo through '
       'delayed writes; incoming account waits and receives no outgoing data', (
     tester,

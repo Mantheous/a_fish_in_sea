@@ -28,6 +28,7 @@ void main() {
       Node(id: 'synced', title: 'Cloud task', createdAt: DateTime(2026)),
     );
     await d.engine.syncNow();
+    d.nodes.updateNode(d.nodes.byId('synced')!.copyWith(title: 'Offline edit'));
     d.nodes.addNode(
       Node(id: 'draft', title: 'Offline draft', createdAt: DateTime(2026)),
     );
@@ -38,6 +39,11 @@ void main() {
     await d.signIn();
     d.meta.reset(); // AuthPage resets bookkeeping after signing in.
     await d.engine.syncNow();
+    expect(server.pullCursors.last, isNull);
+    expect(d.nodes.byId('synced')!.title, 'Offline edit');
+    expect(server.store['nodes']!['synced']!.data['title'], 'Offline edit');
+    expect(d.nodes.byId('draft')!.title, 'Offline draft');
+    expect(server.store['nodes']!['draft']!.data['title'], 'Offline draft');
     expect(d.nodes.state.map((n) => n.id), containsAll(['synced', 'draft']));
     expect(server.store['nodes']!['draft']!.deleted, isFalse);
 
@@ -46,6 +52,10 @@ void main() {
     await d.signIn();
     d.meta.reset();
     await d.engine.syncNow();
+    expect(d.nodes.byId('synced')!.title, 'Offline edit');
+    expect(server.store['nodes']!['synced']!.data['title'], 'Offline edit');
+    expect(d.nodes.byId('draft')!.title, 'Offline draft');
+    expect(server.store['nodes']!['draft']!.data['title'], 'Offline draft');
     expect(d.nodes.state.map((n) => n.id), containsAll(['synced', 'draft']));
     expect(server.store['nodes']!.values.every((row) => !row.deleted), isTrue);
   });
