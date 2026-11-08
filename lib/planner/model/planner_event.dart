@@ -34,6 +34,10 @@ class PlannerEvent extends Equatable {
   final DateTime? actualStart;
   final DateTime? actualEnd;
   final DateTime? timerStartedAt;
+
+  /// Recordings were moved to this event. The source keeps this marker so
+  /// another device cannot restore its stale recordings or running timer.
+  final String? recordingsTransferredTo;
   final bool failed;
   final List<TaskAssignee> assignees;
   final List<String> tagIds;
@@ -62,6 +66,7 @@ class PlannerEvent extends Equatable {
     this.actualStart,
     this.actualEnd,
     this.timerStartedAt,
+    this.recordingsTransferredTo,
     this.failed = false,
     this.assignees = const [],
     this.tagIds = const [],
@@ -141,6 +146,7 @@ class PlannerEvent extends Equatable {
     bool clearActualEnd = false,
     DateTime? timerStartedAt,
     bool clearTimerStartedAt = false,
+    String? recordingsTransferredTo,
     bool? failed,
     List<TaskAssignee>? assignees,
     List<String>? tagIds,
@@ -171,6 +177,8 @@ class PlannerEvent extends Equatable {
     timerStartedAt: clearTimerStartedAt
         ? null
         : (timerStartedAt ?? this.timerStartedAt),
+    recordingsTransferredTo:
+        recordingsTransferredTo ?? this.recordingsTransferredTo,
     failed: failed ?? this.failed,
     assignees: assignees ?? this.assignees,
     tagIds: tagIds ?? this.tagIds,
@@ -204,12 +212,17 @@ class PlannerEvent extends Equatable {
         actualStart: _tryTimerDate(json['actualStart']),
         actualEnd: _tryTimerDate(json['actualEnd']),
         timerStartedAt: _tryTimerDate(json['timerStartedAt']),
+        recordingsTransferredTo:
+            transferDestination(json['recordingsTransferredTo']),
         failed: json['failed'] as bool? ?? false,
         assignees: _assigneesFromJson(json['assignees']),
         tagIds: _tagIdsFromJson(json['tagIds']),
         reminderMinutesBefore:
             _reminderFromJson(json['reminderMinutesBefore']),
       );
+
+  static String? transferDestination(Object? raw) =>
+      raw is String && raw.isNotEmpty ? raw : null;
 
   static int? _reminderFromJson(Object? raw) {
     if (raw == null) return null;
@@ -271,6 +284,8 @@ class PlannerEvent extends Equatable {
     'actualStart': actualStart?.toUtc().toIso8601String(),
     'actualEnd': actualEnd?.toUtc().toIso8601String(),
     'timerStartedAt': timerStartedAt?.toUtc().toIso8601String(),
+    if (recordingsTransferredTo != null)
+      'recordingsTransferredTo': recordingsTransferredTo,
     'failed': failed,
     'assignees': assignees.map((a) => a.toJson()).toList(),
     'tagIds': tagIds,
@@ -301,6 +316,7 @@ class PlannerEvent extends Equatable {
     actualStart,
     actualEnd,
     timerStartedAt,
+    recordingsTransferredTo,
     failed,
     assignees,
     tagIds,

@@ -1,4 +1,5 @@
 import 'package:a_fish_in_sea/common/time/time_session.dart';
+import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 
 /// Canonical server timestamp for sync metadata.
 String syncRecordStamp(DateTime timestamp) =>
@@ -21,6 +22,22 @@ void preserveRunningTimer(
   Map<String, dynamic> merged, {
   required bool preserveLocalSessions,
 }) {
+  // A transfer explicitly retires the source recordings. Unlike an absent
+  // timer in an ordinary payload, this is durable ownership information.
+  // Keep it even when a stale device uploads a payload without the marker.
+  if (collection == 'events') {
+    final destination =
+        PlannerEvent.transferDestination(local?['recordingsTransferredTo']) ??
+        PlannerEvent.transferDestination(merged['recordingsTransferredTo']);
+    if (destination != null) {
+      merged['recordingsTransferredTo'] = destination;
+      merged['sessions'] = <dynamic>[];
+      merged['actualStart'] = null;
+      merged['actualEnd'] = null;
+      merged['timerStartedAt'] = null;
+      return;
+    }
+  }
   if (preserveLocalSessions || !merged.containsKey('sessions')) {
     preserveRecordedSessions(collection, local, merged);
   }

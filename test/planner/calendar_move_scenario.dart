@@ -33,6 +33,9 @@ Future<void> verifyCalendarMove(
   bool refreshFails = false,
   bool missingOccurrence = false,
   bool golden = false,
+  GoogleCalendarService? googleService,
+  Future<void> Function(FeedCubit, PlannerEvent)? beforeMove,
+  Future<void> Function(FeedCubit, PlannerEvent)? afterMove,
 }) async {
   final calendar = context.read<CalendarCubit>();
   final start = DateTime(2026, 11, 2, 9);
@@ -62,7 +65,7 @@ Future<void> verifyCalendarMove(
     timerStartedAt: start.add(const Duration(minutes: 40)),
   );
   calendar.addEvent(base);
-  final google = _Google();
+  final google = googleService ?? _Google();
   registerFallbackValue(base);
   final feeds = FeedCubit(
     calendarCubit: calendar,
@@ -183,6 +186,7 @@ Future<void> verifyCalendarMove(
     if (deleteApplied) remoteSourceExists = false;
     if (deleteFails) throw const GoogleCalendarException('Deletion denied');
   });
+  await beforeMove?.call(feeds, base);
   final route = Navigator.of(context).push<void>(
     MaterialPageRoute(
       builder: (routeContext) => BlocProvider.value(
@@ -338,6 +342,7 @@ Future<void> verifyCalendarMove(
       ).called(1);
     }
   }
+  await afterMove?.call(feeds, base);
   await route;
   await feeds.close();
   for (final event in calendar.state.toList()) {

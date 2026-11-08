@@ -8,6 +8,7 @@ PlannerEvent preserveLocalFeedMetadata(
 ) => fresh.copyWith(
   reminderMinutesBefore: previous.reminderMinutesBefore,
   tagIds: previous.tagIds,
+  recordingsTransferredTo: previous.recordingsTransferredTo,
 );
 
 /// Merges the canonical copy returned by a remote write with the saved

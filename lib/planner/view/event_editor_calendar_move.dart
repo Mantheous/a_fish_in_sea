@@ -183,9 +183,21 @@ extension _EventEditorCalendarMove on EventEditorFormState {
       _clearMovedRecordings(calendar, destinationId);
     } else {
       // Deleted or still uncertain: the destination owns the recordings.
-      // Clear a stale source locally so later syncs preserve just one owner,
-      // even when this fetch failed or the editor has already closed.
-      _clearMovedRecordings(calendar, source.id);
+      // Retire the source recordings durably: field clearing alone lets
+      // app sync restore a stale timer from another device. Feed refreshes
+      // retain this marker too, even while the remote deletion is uncertain.
+      final staleSource = calendar.byId(source.id);
+      if (staleSource != null) {
+        calendar.updateEvent(
+          staleSource.copyWith(
+            recordingsTransferredTo: destinationId,
+            sessions: const [],
+            clearActualStart: true,
+            clearActualEnd: true,
+            clearTimerStartedAt: true,
+          ),
+        );
+      }
     }
   }
 
