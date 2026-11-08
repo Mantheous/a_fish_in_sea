@@ -141,6 +141,7 @@ class RecurringPaymentFixture {
     String? amount = '150',
     bool toggleFixed = false,
     TimeScale? period,
+    String? targetMinutes,
   }) async {
     await tester.tap(find.byIcon(Icons.edit_outlined));
     await tester.pumpAndSettle();
@@ -165,6 +166,15 @@ class RecurringPaymentFixture {
       await tester.pumpAndSettle();
       await tester.tap(find.text(period.displayName).last);
       await tester.pumpAndSettle();
+    }
+    if (targetMinutes != null) {
+      final toggle = find.widgetWithText(SwitchListTile, 'Has time target');
+      await tester.ensureVisible(toggle);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      final field = find.widgetWithText(TextField, 'Target minutes');
+      await tester.ensureVisible(field);
+      await tester.enterText(field, targetMinutes);
     }
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();

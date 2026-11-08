@@ -165,6 +165,55 @@ void main() {
     },
   );
 
+  testWidgets(
+    'time-target editor save survives restore and later amount save',
+    (tester) async {
+      final f = RecurringPaymentFixture();
+      await f.pump(tester);
+      // Legacy unmarked time edits must stay protected too.
+      final legacy = f.nodes.instancesOf(f.template.id)[6];
+      f.nodes.writeNodes(
+        upserts: [
+          legacy.copyWith(
+            effort: const EffortFacet(targetMinutes: 45),
+            overriddenFields: {},
+          ),
+        ],
+      );
+      final protectedBefore = {
+        for (final n in f.nodes.state.where((n) => n.isInstance))
+          if (!f.refreshedIds.contains(n.id)) n.id: n,
+      };
+
+      await f.edit(tester, amount: null, targetMinutes: '30');
+
+      const effort = EffortFacet(targetMinutes: 30);
+      expect(f.nodes.byId(f.template.id)!.effort, effort);
+      for (final entry in protectedBefore.entries) {
+        expect(f.nodes.byId(entry.key), entry.value);
+      }
+      _restore(f);
+      await tester.pumpAndSettle();
+      f.before = List.of(f.nodes.state);
+      f.undo.resetHistory();
+      final emissions = <Object>[];
+      f.nodes.stream.listen(emissions.add);
+
+      await f.edit(tester);
+
+      expect(emissions, hasLength(1));
+      f.verify();
+      for (final id in f.refreshedIds) {
+        expect(f.nodes.byId(id)!.effort, effort);
+      }
+      final saved = List.of(f.nodes.state);
+      f.verifyUndo();
+      expect(f.nodes.state, saved);
+      f.verify();
+      await tester.pumpAndSettle();
+    },
+  );
+
   final settings = <String, MoneyFacet Function(MoneyFacet)>{
     'custom period length': (m) => m.copyWith(customPeriodDays: 120),
     'clearing custom period': (m) =>
