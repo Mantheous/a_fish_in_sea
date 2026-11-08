@@ -19,6 +19,7 @@ import '../bloc/node_cubit.dart';
 import '../model/node.dart';
 import '../service/node_calendar.dart';
 import '../service/node_event_link.dart';
+import 'goal_picker.dart';
 import 'node_checkbox.dart';
 import 'node_editor.dart';
 import 'node_finish_sheet.dart';
@@ -423,10 +424,15 @@ class NodeTile extends StatelessWidget {
                 showScheduleSheet(context, nodeId: live.id);
               }
               if (value == 'show-in-goals') _showInGoals(context, live);
+              if (value == 'assign-goal') _assignToGoal(context, live);
             },
             itemBuilder: (context) => const [
               PopupMenuItem(value: 'edit', child: Text('Edit')),
               PopupMenuItem(value: 'schedule', child: Text('Schedule…')),
+              PopupMenuItem(
+                value: 'assign-goal',
+                child: Text('Assign to goal…'),
+              ),
               PopupMenuItem(
                 value: 'show-in-goals',
                 child: Text('Show in goals'),
@@ -506,6 +512,38 @@ class NodeTile extends StatelessWidget {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Attaches this row under a goal without opening the full editor. The
+  /// picker hides the node itself and its descendants, and
+  /// [NodeEventLink.assignNodeToGoal] reports cycle/instance errors.
+  Future<void> _assignToGoal(BuildContext context, Node node) async {
+    final picked = await showGoalPicker(
+      context,
+      excludeNodeId: node.id,
+      title: 'Assign to goal',
+    );
+    if (picked == null || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    String? error;
+    try {
+      error = NodeEventLink.assignNodeToGoal(
+        context.read<NodeCubit>(),
+        node.id,
+        picked.id,
+      );
+    } catch (_) {
+      error = 'Could not assign to that goal.';
+    }
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(error ?? 'Assigned to “${picked.title}”'),
+          duration: const Duration(seconds: 3),
+          persist: false,
+        ),
+      );
   }
 
   /// Jumps to the goal tree with this task revealed: the Nodes page opens

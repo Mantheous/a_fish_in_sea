@@ -1,5 +1,5 @@
 name: Bug report
-description: Something isn't working (verified testers only, see tools/testers.json)
+description: Something isn't working (automatic processing is limited to trusted reporters)
 labels: [bug, agent-pending]
 body:
   - type: input

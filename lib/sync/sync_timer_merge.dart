@@ -6,14 +6,24 @@ String syncRecordStamp(DateTime timestamp) =>
 
 /// Preserves a live timer during server-wins conflict resolution.
 ///
+/// [preserveLocalSessions] is false for an unchanged, already-synced item:
+/// recordings absent from an explicit remote list must stay deleted. Without
+/// a baseline, or with unsent item edits, retain local sessions conservatively.
+/// Legacy remote
+/// payloads without a `sessions` key always preserve local recordings; only
+/// an explicit list can communicate removals.
+///
 /// Offset-less timestamps from older payloads remain readable through
 /// [DateTime.tryParse]; new node/event JSON writes these values in UTC.
 void preserveRunningTimer(
   String collection,
   Map<String, dynamic>? local,
-  Map<String, dynamic> merged,
-) {
-  preserveRecordedSessions(collection, local, merged);
+  Map<String, dynamic> merged, {
+  required bool preserveLocalSessions,
+}) {
+  if (preserveLocalSessions || !merged.containsKey('sessions')) {
+    preserveRecordedSessions(collection, local, merged);
+  }
   if (collection != 'nodes' && collection != 'events') return;
   final localStart = local?['timerStartedAt'];
   if (localStart is! String || localStart.isEmpty) return;
@@ -99,4 +109,15 @@ bool _overlapsAny(TimeSession session, Iterable<TimeSession> others) =>
 DateTime? _payloadDate(Object? raw) {
   if (raw is! String || raw.isEmpty) return null;
   return DateTime.tryParse(raw)?.toLocal();
+}
+
+/// Device-specific preferences never roam in either direction.
+void stripDeviceLocalSyncFields(String collection, Map<String, dynamic> data) {
+  if (collection == 'settings') {
+    data.remove('icalProxyBase');
+    data.remove('ankiConnectHost');
+    data.remove('defaultCalendarView');
+  } else if (collection == 'plaid') {
+    data.remove('wasConnected');
+  }
 }

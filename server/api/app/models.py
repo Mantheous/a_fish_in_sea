@@ -12,7 +12,9 @@ import datetime as dt
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -283,4 +285,91 @@ class ImportItem(Base):
     )  # pending|approved|rejected
     decided_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class AnkiReviewDay(Base):
+    """One deck's review totals for one local calendar day.
+
+    Written by the Anki add-on (POST /api/v1/anki/report), read by the
+    app. Counts are *absolute* totals for the day, not increments: the
+    add-on recomputes a rolling window from `revlog` on every report, and
+    the ingest path keeps the per-key maximum. That makes retries, Anki
+    restarts, and a missed upload harmless without an event queue.
+
+    `day` is a calendar date with no timezone: the add-on buckets by the
+    local day of the review, matching the app's date rules. Nothing here
+    identifies a card or a note — only deck names and counts.
+    """
+
+    __tablename__ = "anki_review_days"
+    __table_args__ = (
+        UniqueConstraint("user_id", "day", "deck"),
+        Index("ix_anki_user_day", "user_id", "day"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    day: Mapped[dt.date] = mapped_column(Date)
+    deck: Mapped[str] = mapped_column(String(255))
+    cards: Mapped[int] = mapped_column(Integer, default=0)
+    reviews: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+
+
+class AnkiReportState(Base):
+    """Last successful add-on report, one row per user.
+
+    Separate from the daily rows so an "add-on connected" status still
+    exists when a report covers only old days, or when a fresh install
+    has no reviews yet.
+    """
+
+    __tablename__ = "anki_report_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), unique=True, index=True
+    )
+    last_report_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+    last_rows: Mapped[int] = mapped_column(Integer, default=0)
+    client: Mapped[str] = mapped_column(String(64), default="")
+
+
+class UsageEvent(Base):
+    """Content-free interaction events from the app (see lib/common/usage).
+
+    Deliberately separate from `sync_items`: telemetry is append-only,
+    best-effort, and never restored into the client. A corrupt row can only
+    lose an event, never user data. User-supplied strings are validated to
+    a closed alphabet in schemas.py, and retention is bounded by the
+    endpoint's prune pass.
+    """
+
+    __tablename__ = "usage_events"
+    __table_args__ = (
+        UniqueConstraint("user_id", "event_id"),
+        Index("ix_usage_user_received", "user_id", "received_at"),
+        Index("ix_usage_user_name_received", "user_id", "name", "received_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    event_id: Mapped[str] = mapped_column(String(64))
+    session_id: Mapped[str] = mapped_column(String(64), default="")
+    kind: Mapped[str] = mapped_column(String(16))
+    name: Mapped[str] = mapped_column(String(64))
+    screen: Mapped[str] = mapped_column(String(64), default="")
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    platform: Mapped[str] = mapped_column(String(32), default="")
+    # Client wall clock (epoch ms) for dwell/session reconstruction; the
+    # server clock below is authoritative for retention and trends.
+    client_at_ms: Mapped[int] = mapped_column(BigInteger, index=True)
+    received_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
     )

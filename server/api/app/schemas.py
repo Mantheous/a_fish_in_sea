@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
+import time
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
@@ -261,3 +264,180 @@ class ImportApproveIn(BaseModel):
 
 class ImportDiscardIn(BaseModel):
     item_ids: list[str] = Field(min_length=1)
+
+# ── Content-free usage events ───────────────────────────────────────────
+# The app records closed-set names and primitives only (see
+# lib/common/usage/usage_event.dart). Validate that contract server-side:
+# an authenticated client must not be able to store free text, and every
+# field is bounded so a bad batch can only lose itself, never the DB.
+
+_USAGE_TOKEN = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,63}$")
+_USAGE_META_KEY = re.compile(r"^[a-z][a-z0-9_]{0,23}$")
+_USAGE_META_VALUE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,39}$")
+_MAX_USAGE_META_KEYS = 8
+_MAX_USAGE_EVENT_BYTES = 2048
+_MAX_USAGE_BATCH_BYTES = 1024 * 1024
+
+
+class UsageEventIn(BaseModel):
+    id: str = Field(
+        min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_.:-]+$"
+    )
+    at: int = Field(ge=0)
+    kind: Literal["app", "screen", "action", "error", "slow", "sync"]
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9_.:-]{0,63}$")
+    screen: str = Field(default="", max_length=64)
+    duration_ms: int | None = Field(default=None, ge=0, le=86_400_000)
+    meta: dict[str, str | int | float | bool] = Field(default_factory=dict)
+
+    @field_validator("screen")
+    @classmethod
+    def _screen(cls, value: str) -> str:
+        if value and not _USAGE_TOKEN.fullmatch(value):
+            raise ValueError("screen must be a closed-set token")
+        return value
+
+    @field_validator("at")
+    @classmethod
+    def _at(cls, value: int) -> int:
+        now_ms = int(time.time() * 1000)
+        # Offline queues may lag; reject only absurd clocks so sorting and
+        # retention stay sane.
+        if value < now_ms - 90 * 86_400_000:
+            raise ValueError("event is older than the retention window")
+        if value > now_ms + 86_400_000:
+            raise ValueError("event timestamp is in the future")
+        return value
+
+    @field_validator("meta")
+    @classmethod
+    def _meta(cls, value: dict) -> dict:
+        if len(value) > _MAX_USAGE_META_KEYS:
+            raise ValueError("too many meta keys")
+        for key, item in value.items():
+            if not _USAGE_META_KEY.fullmatch(key):
+                raise ValueError(f"invalid meta key: {key!r}")
+            if isinstance(item, str) and not _USAGE_META_VALUE.fullmatch(item):
+                raise ValueError(f"meta value for {key!r} must be a short token")
+        if len(json.dumps(value).encode("utf-8")) > _MAX_USAGE_EVENT_BYTES:
+            raise ValueError("meta is too large")
+        return value
+
+
+class UsageBatchIn(BaseModel):
+    events: list[UsageEventIn] = Field(default_factory=list, max_length=500)
+    platform: str = Field(default="", max_length=32)
+    session_id: str = Field(default="", max_length=64)
+
+    @field_validator("platform")
+    @classmethod
+    def _platform(cls, value: str) -> str:
+        if value and not _USAGE_TOKEN.fullmatch(value):
+            raise ValueError("platform must be a closed-set token")
+        return value
+
+    @field_validator("session_id")
+    @classmethod
+    def _session(cls, value: str) -> str:
+        if value and not _USAGE_TOKEN.fullmatch(value):
+            raise ValueError("session_id must be a closed-set token")
+        return value
+
+    @model_validator(mode="after")
+    def _batch_size(self) -> "UsageBatchIn":
+        total = sum(len(json.dumps(e.model_dump()).encode("utf-8")) for e in self.events)
+        if total > _MAX_USAGE_BATCH_BYTES:
+            raise ValueError(f"usage batch exceeds {_MAX_USAGE_BATCH_BYTES} bytes")
+        return self
+
+
+# ── Anki reports (add-on → server) ──────────────────────────────────────
+#
+# The add-on sends absolute per-day, per-deck totals for a rolling window.
+# Validation is deliberately narrow: this is the only writer of the
+# anki_review_days table, so bad input should fail at the door rather than
+# grow an unbounded table. `deck` is display-only (rendered as text), and
+# a day is a plain calendar date with no timezone.
+
+ANKI_MAX_REPORT_DAYS = 12_000
+ANKI_MAX_RANGE_DAYS = 400
+ANKI_MAX_REPORT_BYTES = 4 * 1024 * 1024
+
+
+class AnkiDayIn(BaseModel):
+    day: dt.date
+    deck: str = Field(min_length=1, max_length=255)
+    cards: int = Field(ge=0, le=1_000_000)
+    reviews: int = Field(ge=0, le=10_000_000)
+
+    model_config = {"extra": "ignore"}
+
+    @field_validator("deck")
+    @classmethod
+    def _deck(cls, value: str) -> str:
+        name = value.strip()
+        if not name:
+            raise ValueError("deck must not be blank")
+        return name
+
+
+class AnkiReportIn(BaseModel):
+    version: int = 1
+    client: str = Field(default="", max_length=64)
+    days: list[AnkiDayIn] = Field(
+        default_factory=list, max_length=ANKI_MAX_REPORT_DAYS
+    )
+
+    model_config = {"extra": "ignore"}
+
+    @field_validator("version")
+    @classmethod
+    def _version(cls, value: int) -> int:
+        if value != 1:
+            raise ValueError("unsupported Anki report version")
+        return value
+
+    @field_validator("client")
+    @classmethod
+    def _client(cls, value: str) -> str:
+        # Free-form but bounded; the app only ever renders it as text.
+        return value.strip()
+
+    @model_validator(mode="after")
+    def _size(self) -> "AnkiReportIn":
+        total = sum(len(d.model_dump_json().encode("utf-8")) for d in self.days)
+        if total > ANKI_MAX_REPORT_BYTES:
+            raise ValueError(f"Anki report exceeds {ANKI_MAX_REPORT_BYTES} bytes")
+        return self
+
+
+class AnkiDayOut(BaseModel):
+    day: dt.date
+    deck: str
+    cards: int
+    reviews: int
+
+
+class AnkiDeckOut(BaseModel):
+    name: str
+    cards: int
+    reviews: int
+    last_day: dt.date | None = None
+
+
+class AnkiReviewsOut(BaseModel):
+    days: list[AnkiDayOut]
+    decks: list[AnkiDeckOut]
+    last_report_at: dt.datetime | None = None
+    last_client: str = ""
+
+
+class AnkiSummaryOut(BaseModel):
+    ok: bool = True
+    email: str
+    last_report_at: dt.datetime | None = None
+    last_client: str = ""
+    decks: int = 0
+    days: int = 0
+    cards_7d: int = 0
+    reviews_7d: int = 0

@@ -10,6 +10,8 @@ import 'package:a_fish_in_sea/nodes/service/node_event_sync.dart';
 import '../bloc/node_cubit.dart';
 import 'goal_picker.dart';
 
+part 'timer_edit_date_row.dart';
+
 /// Toggl-style correction for a running or recorded timer.
 ///
 /// - **Running**: edits the start only; the timer keeps recording and the
@@ -108,7 +110,12 @@ Future<void> showEditNodeTimerSheet(
     },
     onReassignGoal: (goalId) {
       try {
-        context.read<NodeCubit>().reassignChunk(nodeId, goalId);
+        NodeEventSync.reassignNodeChunk(
+          context.read<NodeCubit>(),
+          context.read<CalendarCubit>(),
+          nodeId,
+          goalId,
+        );
       } catch (_) {}
     },
   );
@@ -464,29 +471,6 @@ class _TimerEditSheetState extends State<_TimerEditSheet> {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _DateRow extends StatelessWidget {
-  final String label;
-  final String value;
-  final VoidCallback onPick;
-
-  const _DateRow({
-    required this.label,
-    required this.value,
-    required this.onPick,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onPick,
-      child: InputDecorator(
-        decoration: InputDecoration(labelText: label),
-        child: Text(value),
       ),
     );
   }

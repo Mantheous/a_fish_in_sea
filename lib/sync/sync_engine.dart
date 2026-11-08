@@ -5,6 +5,7 @@ import 'package:hydrated_bloc/hydrated_bloc.dart';
 
 import '../common/persistence/account_mutation_fence.dart';
 import '../common/undo/undo_cubit.dart';
+import '../common/usage/usage_log.dart';
 import '../demo/demo_mode.dart';
 import '../finances/bloc/plaid_cubit.dart';
 import '../finances/bloc/transactions_cubit.dart';
@@ -43,9 +44,8 @@ enum EngineStatus { idle, syncing, error }
 ///   server must not remote-control that); only the points roam
 /// - Settings.icalProxyBase (retired override; the app uses the one fixed
 ///   [ServerConfig] server, so the stale key never roams)
-/// - Settings.ankiConnectHost (per-device like the proxy above: a desktop
-///   talks to its own localhost, a phone to a LAN address — roaming one
-///   value would break the other device, so each device keeps its own)
+/// - Settings.ankiConnectHost (retired with the AnkiConnect build; kept
+///   device-local so old payloads round-trip and never roam)
 /// - Settings.defaultCalendarView (a phone wants day, a desktop wants week;
 ///   roaming one value would reset the other device's visible window, so
 ///   each device keeps its own — day hours still roam)
@@ -202,6 +202,7 @@ class SyncEngine {
     if (_running) return;
     if (!auth.state.isSignedIn) return;
     if (_accountTransition != null) return;
+    final usageWatch = Stopwatch()..start();
     final sessionGeneration = auth.sessionGeneration;
     final currentEmail = auth.state.email.trim().toLowerCase();
     final myEpoch = ++_epoch;
@@ -225,15 +226,28 @@ class SyncEngine {
       lastSyncAt = DateTime.now();
       lastError = null;
       status.value = EngineStatus.idle;
+      UsageLog.instance.sync(
+        durationMs: usageWatch.elapsedMilliseconds,
+        ok: true,
+      );
     } on SyncException catch (e) {
       if (_isCurrentSession(myEpoch, sessionGeneration)) {
         lastError = e.message;
         status.value = EngineStatus.error;
+        UsageLog.instance.sync(
+          durationMs: usageWatch.elapsedMilliseconds,
+          ok: false,
+          statusCode: e.statusCode == 0 ? null : e.statusCode,
+        );
       }
     } catch (e) {
       if (_isCurrentSession(myEpoch, sessionGeneration)) {
         lastError = e.toString();
         status.value = EngineStatus.error;
+        UsageLog.instance.sync(
+          durationMs: usageWatch.elapsedMilliseconds,
+          ok: false,
+        );
       }
     } finally {
       if (_epoch == myEpoch) {
@@ -250,17 +264,6 @@ class SyncEngine {
       _epoch == epoch &&
       auth.sessionGeneration == sessionGeneration &&
       auth.state.isSignedIn;
-
-  static void _stripDeviceLocalFields(
-      String collection, Map<String, dynamic> data) {
-    if (collection == 'settings') {
-      data.remove('icalProxyBase');
-      data.remove('ankiConnectHost');
-      data.remove('defaultCalendarView');
-    } else if (collection == 'plaid') {
-      data.remove('wasConnected');
-    }
-  }
 
   // ── Apply pull ──────────────────────────────────────────────────────
 
@@ -296,10 +299,13 @@ class SyncEngine {
         }
         if (m == null) {
           final merged = Map<String, dynamic>.from(r.data);
-          _stripDeviceLocalFields(collection, merged);
+          stripDeviceLocalSyncFields(collection, merged);
           // Fresh bookkeeping (new device, reset meta): same rule as a
           // conflict — a locally running timer is live truth, not stale.
-          preserveRunningTimer(collection, current[r.itemId], merged);
+          preserveRunningTimer(
+            collection, current[r.itemId], merged,
+            preserveLocalSessions: true, // No baseline: retain local work.
+          );
           current[r.itemId] = merged;
           changed = true;
           // Meta tracks what the server holds, not our merged copy: any
@@ -314,15 +320,17 @@ class SyncEngine {
         }
         // Remote changed. No local change -> take server; local change
         // too -> conflict, server wins (documented policy). Both adopt
-        // the merged copy; the running-timer carve-out inside
-        // [preserveRunningTimer] is the only way local state survives
-        // a pull. When the merge resolves to the local copy (e.g. it
-        // kept an earlier timer start), the meta is left alone so the
-        // push phase propagates the merged version back to the server.
+        // the merged copy. Preserve completed sessions only when the item
+        // has unsent edits; otherwise a missing session is a remote deletion.
+        // Live timers remain protected independently. Meta tracks the remote
+        // payload so any preserved local work is pushed back to the server.
         final local = current[r.itemId];
         final merged = Map<String, dynamic>.from(r.data);
-        _stripDeviceLocalFields(collection, merged);
-        preserveRunningTimer(collection, local, merged);
+        stripDeviceLocalSyncFields(collection, merged);
+        preserveRunningTimer(
+          collection, local, merged,
+          preserveLocalSessions: local != null && m.hash != contentHash(local),
+        );
         upsertMeta[k] = ItemMeta(
           hash: contentHash(r.data),
           serverTime: seen,

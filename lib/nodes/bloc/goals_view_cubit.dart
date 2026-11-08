@@ -1,5 +1,6 @@
 import 'package:bloc/bloc.dart';
 
+import '../../common/usage/usage_log.dart';
 import '../service/goal_graph_filter.dart';
 
 /// Which Goals view is showing. The graph is the landing view: it is the
@@ -66,6 +67,9 @@ class GoalsViewCubit extends Cubit<GoalsViewState> {
   /// during teardown cannot throw.
   void save(GoalsViewState next) {
     if (isClosed) return;
+    if (state.mode != next.mode) {
+      UsageLog.instance.action('goals.view.set', meta: {'view': next.mode.name});
+    }
     emit(next);
   }
 }

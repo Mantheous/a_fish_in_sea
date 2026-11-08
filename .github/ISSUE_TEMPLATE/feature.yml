@@ -1,5 +1,5 @@
 name: Feature request
-description: Propose a feature (verified testers only, see tools/testers.json)
+description: Propose a feature (automatic processing is limited to trusted reporters)
 labels: [feature, agent-pending]
 body:
   - type: input

@@ -1,5 +1,5 @@
-/// Manual-stats fallback for platforms that cannot reach AnkiConnect
-/// (web browsers) and for mobile-only users with no desktop Anki.
+/// Manual-stats fallback for when the add-on is not installed (or Anki
+/// has not reported the deck yet), and for entering a count by hand.
 ///
 /// Format is deliberately tiny — one count per line, so a user can paste
 /// from anywhere without exporting files:

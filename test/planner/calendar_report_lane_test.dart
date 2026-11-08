@@ -16,6 +16,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
 import '../goldens/golden_app.dart';
+import 'report_test_keys.dart';
 
 PlannerEvent _event(String id, DateTime start) => PlannerEvent(
   id: id,
@@ -162,7 +163,7 @@ void main() {
         reason: 'the visible day should own a report lane',
       );
       // Report blocks are not tiles in the plan grid any more.
-      expect(find.byKey(const ValueKey('tile:report:r1')), findsNothing);
+      expect(find.byKey(acceptedReportKey('tile', 'r1')), findsNothing);
       expect(find.text('Report r1'), findsOneWidget);
 
       final railRect = tester.getRect(railFinder);
@@ -175,7 +176,7 @@ void main() {
       // 9:00 planned tile beside it.
       expect(find.text('9:05 AM – 9:50 AM · accepted'), findsOneWidget);
       final chipRect = tester.getRect(
-        find.byKey(const ValueKey('report-chip:report:r1')),
+        find.byKey(acceptedReportKey('report-chip', 'r1')),
       );
       expect(tileRect.right, lessThanOrEqualTo(chipRect.left + 2));
       expect(chipRect.top - tileRect.top, closeTo(6.7, 6));
@@ -192,7 +193,7 @@ void main() {
         find.byKey(const ValueKey('tile:e1')),
       );
       final scrolledChip = tester.getRect(
-        find.byKey(const ValueKey('report-chip:report:r1')),
+        find.byKey(acceptedReportKey('report-chip', 'r1')),
       );
       expect(
         scrolledChip.top - scrolledTile.top,
@@ -242,7 +243,7 @@ void main() {
       // column the chip is too narrow for text, so it is found by key.
       final tileRect = tester.getRect(find.byKey(const ValueKey('tile:e1')));
       final chipRect = tester.getRect(
-        find.byKey(const ValueKey('report-chip:report:r1')),
+        find.byKey(acceptedReportKey('report-chip', 'r1')),
       );
       expect(tileRect.right, lessThanOrEqualTo(chipRect.left + 2));
       expect(chipRect.top - tileRect.top, closeTo(6.7, 6));
@@ -375,7 +376,7 @@ void main() {
 
       final tileFinder = find.byKey(const ValueKey('tile:e2'));
       final chipFinder = find.byKey(
-        const ValueKey('report-chip:report:wheel-report'),
+        acceptedReportKey('report-chip', 'wheel-report'),
       );
       final gridTop = timeGridTopIn(
         tester,
@@ -431,7 +432,7 @@ void main() {
       expect(find.byType(SfCalendar), findsOneWidget);
       expect(find.byType(ReportLaneView), findsNothing);
       expect(
-        find.byKey(const ValueKey('tile:report:r1')),
+        find.byKey(acceptedReportKey('tile', 'r1')),
         findsWidgets,
         reason: 'month cells still show report blocks as tiny tiles',
       );
@@ -467,7 +468,7 @@ void main() {
       expect(find.text('Event details'), findsOneWidget);
       // The panel leads with the tapped report, not just the event.
       expect(
-        find.byKey(const ValueKey('selected-report:report:r1')),
+        find.byKey(acceptedReportKey('selected-report', 'r1')),
         findsOneWidget,
       );
       expect(find.text('9:05 AM – 9:50 AM · 45m'), findsOneWidget);
@@ -497,7 +498,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
 
-      await tester.tap(find.byKey(const ValueKey('report-play:report:r1')));
+      await tester.tap(find.byKey(acceptedReportKey('report-play', 'r1')));
       await tester.pump(const Duration(milliseconds: 200));
 
       expect(calendar.byId('e1')?.isTracking, isTrue);
@@ -568,7 +569,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
 
-      await tester.tap(find.byKey(const ValueKey('report-record:report:r1')));
+      await tester.tap(find.byKey(acceptedReportKey('report-record', 'r1')));
       await tester.pump(const Duration(milliseconds: 200));
 
       expect(calendar.byId('e1')?.isTracking, isTrue);
@@ -679,7 +680,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
 
-      final chip = find.byKey(const ValueKey('report-chip:report:r1'));
+      final chip = find.byKey(acceptedReportKey('report-chip', 'r1'));
       expect(chip, findsOneWidget);
       // The painted bar stays proportional to the report…
       expect(tester.getSize(chip).height, lessThan(reportChipMinHitHeight));
@@ -783,7 +784,7 @@ void main() {
         planScroll.position.jumpTo(planScroll.position.maxScrollExtent);
         await tester.pump(const Duration(milliseconds: 200));
 
-        final chip = find.byKey(const ValueKey('report-chip:report:r1'));
+        final chip = find.byKey(acceptedReportKey('report-chip', 'r1'));
         await tester.tap(chip);
         await tester.pump(const Duration(milliseconds: 200));
         await tester.pump(const Duration(milliseconds: 200));
@@ -854,7 +855,7 @@ void main() {
       planScroll.position.jumpTo(planScroll.position.maxScrollExtent);
       await tester.pump(const Duration(milliseconds: 200));
 
-      final chip = find.byKey(const ValueKey('report-chip:report:r1'));
+      final chip = find.byKey(acceptedReportKey('report-chip', 'r1'));
       await tester.tap(chip);
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));

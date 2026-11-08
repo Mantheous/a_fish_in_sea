@@ -105,6 +105,61 @@ void main() {
     },
   );
 
+  for (final collection in ['nodes', 'events']) {
+    for (final remaining in [
+      <({String id, DateTime start, DateTime end})>[],
+      [b],
+    ]) {
+      test('$collection accepts remote deletion from an unchanged item '
+          '(${remaining.length} remaining)', () {
+        final local = _payload([a, b]);
+        final merged = _payload(remaining);
+        final remote = Map<String, dynamic>.from(merged);
+        preserveRunningTimer(
+          collection,
+          local,
+          merged,
+          preserveLocalSessions: false,
+        );
+        expect(merged, remote);
+      });
+    }
+
+    test(
+      '$collection keeps a synced live timer without restoring deleted runs',
+      () {
+        final local = _payload([a])
+          ..['timerStartedAt'] = b.start.toUtc().toIso8601String();
+        final merged = _payload([]);
+        preserveRunningTimer(
+          collection,
+          local,
+          merged,
+          preserveLocalSessions: false,
+        );
+        expect(merged['sessions'], isEmpty);
+        expect(merged['timerStartedAt'], local['timerStartedAt']);
+      },
+    );
+
+    test(
+      '$collection keeps unsent runs and a live timer without a baseline',
+      () {
+        final local = _payload([a])
+          ..['timerStartedAt'] = b.start.toUtc().toIso8601String();
+        final merged = _payload([]);
+        preserveRunningTimer(
+          collection,
+          local,
+          merged,
+          preserveLocalSessions: true,
+        );
+        expect(TimeSession.listFromJson(merged['sessions']).single.id, a.id);
+        expect(merged['timerStartedAt'], local['timerStartedAt']);
+      },
+    );
+  }
+
   test('other collections are untouched', () {
     final local = _payload([a]);
     final merged = _payload([b]);

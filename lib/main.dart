@@ -1,5 +1,13 @@
+import 'dart:async';
+import 'dart:ui' as ui;
+
+import 'package:a_fish_in_sea/anki/anki_reports.dart';
+import 'package:a_fish_in_sea/anki/anki_reports_cubit.dart';
 import 'package:a_fish_in_sea/common/persistence/legacy_minified_keys.dart';
+import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
+import 'package:a_fish_in_sea/common/usage/usage_log.dart';
+import 'package:a_fish_in_sea/common/usage/usage_reporter.dart';
 import 'package:a_fish_in_sea/finances/bloc/plaid_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/transactions_cubit.dart';
 import 'package:a_fish_in_sea/finances/bloc/waterfall_cubit.dart';
@@ -25,6 +33,7 @@ import 'package:a_fish_in_sea/planner/bloc/tasks_view_options_cubit.dart';
 import 'package:a_fish_in_sea/planner/service/canvas_service.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
+import 'package:a_fish_in_sea/planner/service/event_reminders.dart';
 import 'package:a_fish_in_sea/reporting/bloc/places_cubit.dart';
 import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
 import 'package:a_fish_in_sea/reporting/bloc/tracking_cubit.dart';
@@ -44,8 +53,19 @@ import 'package:timezone/data/latest_all.dart' as tzdata;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Content-free error type logging: the log records the exception class
+  // name only (never the message/stack) and is capped on device.
+  FlutterError.onError = (details) {
+    UsageLog.instance.error('flutter', details.exception);
+    FlutterError.presentError(details);
+  };
+  ui.PlatformDispatcher.instance.onError = (error, stack) {
+    UsageLog.instance.error('uncaught', error);
+    return false;
+  };
   tzdata.initializeTimeZones();
   await _initPersistentStorage();
+  await UsageLog.instance.open();
   runApp(const MyApp());
 }
 
@@ -74,6 +94,10 @@ Future<void> _initPersistentStorage() async {
   HydratedBloc.storage = await HydratedStorage.build(
     storageDirectory: await getApplicationDocumentsDirectory(),
   );
+  // The usage log is a separate Hive box outside HydratedBloc (a corrupt
+  // telemetry row must never reset user data). HydratedBloc uses a private
+  // Hive instance, so initialize the global one for `usage_log`.
+  Hive.init((await getApplicationDocumentsDirectory()).path);
 }
 
 class MyApp extends StatelessWidget {
@@ -111,6 +135,32 @@ class MyApp extends StatelessWidget {
         }),
         BlocProvider(create: (_) => SyncMetaCubit()),
         BlocProvider(create: (_) => NodeCubit()),
+        // Live memorization progress from the Anki add-on. Reads the
+        // add-on's daily history, then writes only counts that changed
+        // (silent, so synced data never lands in undo history).
+        BlocProvider(
+          lazy: false,
+          create: (context) {
+            final auth = context.read<AuthCubit>();
+            final settings = context.read<SettingsCubit>();
+            final client = auth.syncClient;
+            return AnkiReportsCubit(
+              fetch: () {
+                final end = localDay(DateTime.now());
+                return fetchAnkiReport(
+                  client,
+                  start: shiftLocalDay(end, -399),
+                  end: end,
+                );
+              },
+              nodes: context.read<NodeCubit>(),
+              isSignedIn: () => auth.state.isSignedIn,
+              firstDayOfWeek: () => settings.state.firstDayOfWeek,
+              authChanges:
+                  auth.stream.map((s) => s.isSignedIn).distinct(),
+            );
+          },
+        ),
         BlocProvider(create: (_) => TransactionsCubit()),
         BlocProvider(create: (_) => PlaidCubit()),
         BlocProvider(
@@ -200,11 +250,13 @@ class _SyncBootstrap extends StatefulWidget {
   State<_SyncBootstrap> createState() => _SyncBootstrapState();
 }
 
-class _SyncBootstrapState extends State<_SyncBootstrap> {
+class _SyncBootstrapState extends State<_SyncBootstrap>
+    with WidgetsBindingObserver {
   // Saved in initState: context.read in dispose() is unsafe once the
   // element is deactivated (crashed test teardown and hot restart).
   SyncEngine? _engine;
   RecurringGoalCoordinator? _goalLinks;
+  UsageReporter? _usage;
 
   /// Feed ids seen on the last node/feed change, so a removed class can
   /// be dropped from the learned assignment data.
@@ -238,14 +290,43 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
     _engine!.boot();
     _engine!.startAutoSync();
     _engine!.startAutoSyncOnChanges();
+    WidgetsBinding.instance.addObserver(this);
+    _usage = UsageReporter(
+      auth: context.read<AuthCubit>(),
+      client: context.read<AuthCubit>().syncClient,
+    )..start();
+    UsageLog.instance.enterScreen(
+      context.read<AuthCubit>().state.isSignedIn ? 'home' : 'auth',
+    );
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _usage?.stop();
     _goalLinks?.dispose();
     _engine?.stopAutoSyncOnChanges();
     _engine?.stopAutoSync();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.detached:
+        _usage?.pause();
+        break;
+      case AppLifecycleState.resumed:
+        _usage?.resume();
+        try {
+          context.read<AnkiReportsCubit>().refresh();
+        } catch (_) {}
+        break;
+      case AppLifecycleState.inactive:
+        break;
+    }
   }
 
   @override
@@ -256,6 +337,17 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
     // safe to run on every change.
     return MultiBlocListener(
       listeners: [
+        BlocListener<AuthCubit, AuthState>(
+          listenWhen: (a, b) => a.isSignedIn != b.isSignedIn,
+          listener: (context, auth) {
+            UsageLog.instance.enterScreen(auth.isSignedIn ? 'home' : 'auth');
+          },
+        ),
+        BlocListener<NavigationCubit, PlannerPage>(
+          listener: (context, page) {
+            UsageLog.instance.enterScreen(page.name);
+          },
+        ),
         BlocListener<NodeCubit, List<Node>>(
           listenWhen: (a, b) => !identical(a, b),
           listener: (context, nodes) {
@@ -265,6 +357,7 @@ class _SyncBootstrapState extends State<_SyncBootstrap> {
       ],
       child: MaterialApp(
         builder: (context, child) => AccountTransitionGate(child: child!),
+        scaffoldMessengerKey: EventReminderService.messengerKey,
         debugShowCheckedModeBanner: false,
         title: 'a fish in sea',
         theme: ThemeData(

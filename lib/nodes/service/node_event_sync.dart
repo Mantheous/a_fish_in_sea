@@ -109,8 +109,8 @@ class NodeEventSync {
   }
 
   /// Mirrors a manual timer correction from a task to every linked event,
-  /// keeping the event-side report cache aligned with the task record.
-  static void setNodeReported(
+  /// keeping the corrected run's identity and any event-only runs intact.
+  static bool setNodeReported(
     NodeCubit nodes,
     CalendarCubit calendar,
     String nodeId,
@@ -118,18 +118,35 @@ class NodeEventSync {
     DateTime end,
   ) {
     final node = nodes.byId(nodeId);
-    if (node == null || node.recordedSessions.length > 1) return;
+    if (node == null || node.recordedSessions.length > 1) return false;
+    final safeEnd = end.isAfter(start)
+        ? end
+        : start.add(const Duration(minutes: 1));
+    final session = node.recordedSessions.singleOrNull;
+    if (session?.start == start && session?.end == safeEnd) return false;
     RevertableHydratedCubit.atomic([nodes, calendar], () {
-      nodes.setReported(nodeId, start, end);
+      if (session == null) {
+        nodes.setReported(nodeId, start, safeEnd);
+      } else {
+        nodes.updateNode(
+          node.copyWith(
+            sessions: [session.copyWith(start: start, end: safeEnd)],
+            actualStart: start,
+            actualEnd: safeEnd,
+            clearTimerStartedAt: true,
+          ),
+        );
+      }
       final saved = nodes.byId(nodeId);
       if (saved == null) return;
-      _mirrorSessions(calendar, saved, replace: true);
+      _mirrorSessions(calendar, saved);
     });
+    return nodes.byId(nodeId) != node;
   }
 
   /// Moves one recorded run on the task and mirrors the task's whole list
   /// onto every linked event.
-  static void setNodeSession(
+  static bool setNodeSession(
     NodeCubit nodes,
     CalendarCubit calendar,
     String nodeId,
@@ -137,13 +154,20 @@ class NodeEventSync {
     DateTime start,
     DateTime end,
   ) {
-    if (nodes.byId(nodeId) == null) return;
+    final node = nodes.byId(nodeId);
+    if (node == null) return false;
+    final session = sessionById(node.recordedSessions, sessionId);
+    if (session == null) return false;
+    final safeEnd = end.isAfter(start)
+        ? end
+        : start.add(const Duration(minutes: 1));
     RevertableHydratedCubit.atomic([nodes, calendar], () {
-      nodes.updateSession(nodeId, sessionId, start, end);
+      nodes.updateSession(nodeId, sessionId, start, safeEnd);
       final saved = nodes.byId(nodeId);
       if (saved == null) return;
       _mirrorSessions(calendar, saved);
     });
+    return nodes.byId(nodeId) != node;
   }
 
   /// Deletes one recorded run on the task and from every linked event,
@@ -163,11 +187,53 @@ class NodeEventSync {
     });
   }
 
+  /// Transfers the task's chunk and its calendar mirrors as one undo step.
+  /// Only the moved session ids leave the source events; independent runs
+  /// on either side remain intact.
+  static void reassignNodeChunk(
+    NodeCubit nodes,
+    CalendarCubit calendar,
+    String fromId,
+    String toId,
+  ) {
+    final from = nodes.byId(fromId);
+    final to = nodes.byId(toId);
+    if (fromId == toId || from == null || to == null) return;
+    if (!from.hasReported && !from.isTracking) return;
+    final movedIds = from.recordedSessions.map((s) => s.id).toSet();
+    RevertableHydratedCubit.atomic([nodes, calendar], () {
+      nodes.reassignChunk(fromId, toId);
+      final updates = [
+        for (final event in _linkedEvents(calendar, from))
+          _eventWithSessions(
+            event,
+            event.recordedSessions
+                .where((s) => !movedIds.contains(s.id))
+                .toList(),
+            replace: true,
+            clearTimerStartedAt: false,
+          ),
+      ];
+      if (updates.isNotEmpty) calendar.updateEvents(updates);
+      final saved = nodes.byId(toId)!;
+      final destinationUpdates = [
+        for (final event in _linkedEvents(calendar, saved))
+          _eventWithSessions(
+            event,
+            saved.recordedSessions,
+            clearTimerStartedAt: false,
+          ),
+      ];
+      if (destinationUpdates.isNotEmpty) {
+        calendar.updateEvents(destinationUpdates);
+      }
+    });
+  }
+
   static void _mirrorSessions(
     CalendarCubit calendar,
     Node saved, {
     String? removeSessionId,
-    bool replace = false,
   }) {
     final updates = [
       for (final event in _linkedEvents(calendar, saved))
@@ -175,7 +241,6 @@ class NodeEventSync {
           event,
           saved.recordedSessions,
           removeSessionId: removeSessionId,
-          replace: replace,
         ),
     ];
     if (updates.isNotEmpty) calendar.updateEvents(updates);
@@ -183,13 +248,14 @@ class NodeEventSync {
 
   /// Unions the task's runs into the event's own list instead of replacing
   /// it: a run recorded directly on the event (for example a failed stop
-  /// that never reached the task) must survive a task-side edit. A manual
-  /// report correction ([replace]) intentionally rewrites the mirror.
+  /// that never reached the task) must survive a task-side edit. Only a
+  /// chunk transfer ([replace]) replaces the list with its remaining runs.
   static PlannerEvent _eventWithSessions(
     PlannerEvent event,
     List<TimeSession> sessions, {
     String? removeSessionId,
     bool replace = false,
+    bool clearTimerStartedAt = true,
   }) {
     var combined = replace ? <TimeSession>[] : event.recordedSessions;
     if (removeSessionId != null) {
@@ -205,7 +271,7 @@ class NodeEventSync {
       clearActualStart: span == null,
       actualEnd: span?.end,
       clearActualEnd: span == null,
-      clearTimerStartedAt: true,
+      clearTimerStartedAt: clearTimerStartedAt,
     );
   }
 

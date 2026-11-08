@@ -4,6 +4,7 @@ import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import '../../common/time/local_date.dart';
 import '../model/node.dart';
 import 'auto_goal_format.dart';
+import 'auto_goal_time.dart';
 
 /// One rolling window for an automated goal: `[start, end)` in local time.
 ///
@@ -202,9 +203,9 @@ AutoGoalReading evaluateAutoGoal(
             if (minutes <= 0) continue;
             actual += minutes;
             matched++;
-            final anchor =
-                node.actualStart ?? node.schedule?.start ?? node.schedule?.due;
-            if (anchor != null) days.add(autoDay(anchor));
+            if (facet.metric == AutoMetric.averageMinutes) {
+              days.addAll(taskDaysInWindow(node, window.start, window.end));
+            }
           }
           if (facet.metric == AutoMetric.averageMinutes && days.isNotEmpty) {
             actual /= days.length;

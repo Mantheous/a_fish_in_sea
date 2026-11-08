@@ -117,6 +117,11 @@ class SyncClient {
   String get _base =>
       resolveAppServerBase(serverBase()).replaceAll(RegExp(r'/+$'), '');
 
+  /// Server root the client resolves to (e.g. `https://host/fish`).
+  /// Settings shows this in the Anki add-on setup snippet so the add-on
+  /// and the app agree on the address without hardcoded hostnames.
+  String get baseUrl => _base;
+
   Map<String, String> _headers({bool json = false}) {
     final h = <String, String>{};
     final token = accessToken();
@@ -191,19 +196,35 @@ class SyncClient {
     }
   }
 
-  // ── Anki (via app server; works on web where direct AnkiConnect is
-  // unreachable, and on any signed-in native device) ───────────────────
+  // ── Anki add-on reports ──────────────────────────────────────────────
 
-  /// One AnkiConnect-shaped call through POST /api/anki/invoke.
-  /// Returns the decoded `{"result": ...}` envelope.
-  Future<dynamic> ankiInvoke(
-    String action, [
-    Map<String, dynamic>? params,
-  ]) =>
-      _postAuthed(
-          '/api/anki/invoke', {'action': action, 'params': params ?? const {}});
+  /// Daily per-deck review totals reported by the Anki add-on.
+  /// `start`/`end` are `YYYY-MM-DD` calendar dates.
+  Future<dynamic> ankiReviews({
+    required String start,
+    required String end,
+  }) =>
+      _getAuthed('/api/v1/anki/reviews', {'start': start, 'end': end});
 
   // ── Auth (no bearer needed) ──────────────────────────────────────────
+
+  Map<String, dynamic> _decodeSignIn(http.Response response) {
+    final body = _decode(response);
+    final access = body is Map ? body['access_token'] : null;
+    final refresh = body is Map ? body['refresh_token'] : null;
+    // A proxy/SPA fallback can answer 200 with HTML or an empty body.
+    // Never report success without the token pair needed to enter the app.
+    if (access is! String ||
+        access.isEmpty ||
+        refresh is! String ||
+        refresh.isEmpty) {
+      throw const SyncException(
+        502,
+        'The server did not complete sign-in. Please try again.',
+      );
+    }
+    return Map<String, dynamic>.from(body as Map);
+  }
 
   Future<Map<String, dynamic>> register(String email, String password) async {
     final r = await _withTimeout(_client.post(
@@ -211,7 +232,7 @@ class SyncClient {
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({'email': email, 'password': password}),
     ));
-    return Map<String, dynamic>.from((_decode(r) ?? const <String, dynamic>{}));
+    return _decodeSignIn(r);
   }
 
   Future<Map<String, dynamic>> login(String email, String password) async {
@@ -220,7 +241,7 @@ class SyncClient {
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({'email': email, 'password': password}),
     ));
-    return Map<String, dynamic>.from((_decode(r) ?? const <String, dynamic>{}));
+    return _decodeSignIn(r);
   }
 
   Future<Map<String, dynamic>> refresh(String refreshToken) async {

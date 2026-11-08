@@ -66,9 +66,9 @@ class NodeGoalAssignment {
     return recurringOwnerForSeries(nodes, calendarGoalSeriesKey(event));
   }
 
-  /// Every cached event in the seed's series (or just the seed when it is
-  /// not part of a series). Mirrors the editor's series-wide apply, so
-  /// assigning a repeating event catches every occurrence.
+  /// Every cached event in the seed's series within the same calendar (or
+  /// just the seed when it is not part of a series). Mirrors the editor's
+  /// series-wide apply, so assignment catches every occurrence.
   static List<PlannerEvent> seriesMembers(
     CalendarCubit calendar,
     PlannerEvent seed,
@@ -77,7 +77,7 @@ class NodeGoalAssignment {
     if (key == null) return [seed];
     return [
       for (final e in calendar.state)
-        if (seriesKeyOf(e) == key) e,
+        if (e.feedId == seed.feedId && seriesKeyOf(e) == key) e,
     ];
   }
 

@@ -1,3 +1,4 @@
+import '../../common/time/time_session.dart';
 import '../../common/undo/revertable_hydrated_cubit.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/service/node_event_link.dart';
@@ -10,7 +11,7 @@ import 'calendar_report.dart';
 ///
 /// Manual entries stay manual and move between day buckets when the drag
 /// crosses midnight. Timer blocks update the backing task (mirroring onto
-/// its linked events) or the event itself when no task backs it. Live
+/// its linked events) or the event itself when it owns the run. Live
 /// blocks are read-only while recording.
 ///
 /// Returns true when a record was changed.
@@ -27,18 +28,32 @@ bool applyReportedInterval({
       ? end
       : start.add(const Duration(minutes: 1));
 
-  final entry = findReportEntryByDisplayId(reporting.state, block.displayId);
-  if (entry != null) {
+  final location = findReportEntryLocationByDisplayId(
+    reporting.state,
+    block.displayId,
+  );
+  if (location != null) {
+    final entry = location.entry;
+    final bucket = DateTime.tryParse(location.day);
+    if (bucket == null) return false;
+    if (entry.start == start && entry.end == safeEnd) return false;
     final updated = entry.copyWith(start: start, end: safeEnd);
-    final oldDay = DateTime(
-      entry.start.year,
-      entry.start.month,
-      entry.start.day,
-    );
-    final newDay = DateTime(start.year, start.month, start.day);
+    final oldDay = bucket;
+    // Overnight reports may be stored under a day other than their start.
+    // Keep that bucket unless the start actually crosses a calendar date.
+    final sameStartDay =
+        entry.start.year == start.year &&
+        entry.start.month == start.month &&
+        entry.start.day == start.day;
+    final newDay = sameStartDay
+        ? oldDay
+        : DateTime(start.year, start.month, start.day);
     if (oldDay == newDay) {
       reporting.upsertEntry(oldDay, updated);
     } else {
+      if (reporting.entriesForDay(newDay).any((e) => e.id == entry.id)) {
+        return false;
+      }
       RevertableHydratedCubit.atomic([reporting], () {
         reporting.deleteEntry(oldDay, entry.id);
         reporting.upsertEntry(newDay, updated);
@@ -47,13 +62,22 @@ bool applyReportedInterval({
     return true;
   }
 
+  if (block.kind == ReportBlockKind.accepted) return false;
+
   final eventId = block.eventId;
   final sessionId = block.sessionId;
   if (eventId != null) {
     final backing = NodeEventLink.backingNodeFor(nodes, calendar, eventId);
-    if (backing != null) {
+    final event = calendar.byId(eventId);
+    // A task created after recording need not own the event's old runs.
+    // Prefer the task only when it actually has the requested session.
+    final nodeSession = sessionById(
+      backing?.recordedSessions ?? const [],
+      sessionId,
+    );
+    if (backing != null && (sessionId == null || nodeSession != null)) {
       if (sessionId != null) {
-        NodeEventSync.setNodeSession(
+        return NodeEventSync.setNodeSession(
           nodes,
           calendar,
           backing.id,
@@ -61,8 +85,11 @@ bool applyReportedInterval({
           start,
           safeEnd,
         );
-      } else {
-        NodeEventSync.setNodeReported(
+      }
+      if (backing.recordedSessions.isNotEmpty ||
+          event == null ||
+          event.recordedSessions.isEmpty) {
+        return NodeEventSync.setNodeReported(
           nodes,
           calendar,
           backing.id,
@@ -70,22 +97,18 @@ bool applyReportedInterval({
           safeEnd,
         );
       }
-      return true;
     }
-    final event = calendar.byId(eventId);
     if (event == null) return false;
-    if (sessionId != null) {
-      calendar.updateSession(eventId, sessionId, start, safeEnd);
-    } else if (event.recordedSessions.length == 1) {
-      // A legacy block without a session id still targets its one run;
-      // writing actuals alone would leave the older list in charge.
-      calendar.updateSession(
-        eventId,
-        event.recordedSessions.single.id,
-        start,
-        safeEnd,
-      );
+    final sessions = event.recordedSessions;
+    final session = sessionId != null
+        ? sessionById(sessions, sessionId)
+        : (sessions.length == 1 ? sessions.single : null);
+    if (sessionId != null && session == null) return false;
+    if (session != null) {
+      if (session.start == start && session.end == safeEnd) return false;
+      calendar.updateSession(eventId, session.id, start, safeEnd);
     } else {
+      if (sessions.length > 1) return false;
       calendar.setReported(eventId, start, safeEnd);
     }
     return true;
@@ -98,7 +121,7 @@ bool applyReportedInterval({
     final node = nodes.byId(nodeId);
     if (node == null) return false;
     if (sessionId != null) {
-      NodeEventSync.setNodeSession(
+      return NodeEventSync.setNodeSession(
         nodes,
         calendar,
         node.id,
@@ -107,7 +130,7 @@ bool applyReportedInterval({
         safeEnd,
       );
     } else if (node.recordedSessions.length == 1) {
-      NodeEventSync.setNodeSession(
+      return NodeEventSync.setNodeSession(
         nodes,
         calendar,
         node.id,
@@ -116,9 +139,14 @@ bool applyReportedInterval({
         safeEnd,
       );
     } else {
-      NodeEventSync.setNodeReported(nodes, calendar, node.id, start, safeEnd);
+      return NodeEventSync.setNodeReported(
+        nodes,
+        calendar,
+        node.id,
+        start,
+        safeEnd,
+      );
     }
-    return true;
   }
   return false;
 }
@@ -136,12 +164,19 @@ bool deleteReportedBlock({
 }) {
   if (block.kind == ReportBlockKind.live) return false;
 
-  final entry = findReportEntryByDisplayId(reporting.state, block.displayId);
-  if (entry != null) {
-    final day = DateTime(entry.start.year, entry.start.month, entry.start.day);
-    reporting.deleteEntry(day, entry.id);
+  final location = findReportEntryLocationByDisplayId(
+    reporting.state,
+    block.displayId,
+  );
+  if (location != null) {
+    final entry = location.entry;
+    final bucket = DateTime.tryParse(location.day);
+    if (bucket == null) return false;
+    reporting.deleteEntry(bucket, entry.id);
     return true;
   }
+
+  if (block.kind == ReportBlockKind.accepted) return false;
 
   final sessionId = block.sessionId;
   final eventId = block.eventId;

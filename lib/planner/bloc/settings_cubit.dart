@@ -5,6 +5,7 @@ import '../../common/persistence/account_mutation_fence.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
 import '../../common/persistence/stable_storage_keys.dart';
+import '../../common/usage/usage_log.dart';
 import '../model/color_prefs.dart';
 
 /// Mobile phones start on the day view; web desktop and desktop start on week.
@@ -49,9 +50,9 @@ class SettingsState extends Equatable {
   /// and roamed inside this cubit's JSON as one additive blob.
   final ColorPrefs colors;
 
-  /// AnkiConnect endpoint for memorization goals. Per-device like
-  /// [icalProxyBase]: a desktop talks to its own localhost, a phone to a
-  /// LAN address — roaming one value would break the other device.
+  /// Retired AnkiConnect endpoint. The add-on now pushes review totals to
+  /// the server, so nothing reads this; it stays in the payload so old
+  /// device-local settings round-trip and never roam between devices.
   final String ankiConnectHost;
 
   const SettingsState({
@@ -129,8 +130,10 @@ class SettingsCubit extends HydratedCubit<SettingsState>
   void setIcalProxyBase(String url) =>
       emit(state.copyWith(icalProxyBase: url.trim()));
 
-  void setDefaultCalendarView(CalendarView view) =>
-      emit(state.copyWith(defaultCalendarView: view));
+  void setDefaultCalendarView(CalendarView view) {
+    UsageLog.instance.action('calendar.view.set', meta: {'view': view.name});
+    emit(state.copyWith(defaultCalendarView: view));
+  }
 
   void setDayStartHour(double hour) {
     final clamped = hour.clamp(0, 24).toDouble();
@@ -238,8 +241,7 @@ class SettingsCubit extends HydratedCubit<SettingsState>
     emit(state.copyWith(colors: const ColorPrefs()));
   }
 
-  /// AnkiConnect endpoint. Blank resets to the local default; validation
-  /// (and its displayable error) lives in the client at sync time.
+  /// Retired AnkiConnect endpoint. Kept for stored-settings tolerance.
   void setAnkiConnectHost(String host) {
     final trimmed = host.trim();
     emit(state.copyWith(
@@ -259,7 +261,7 @@ class SettingsCubit extends HydratedCubit<SettingsState>
   }
 
   /// Sync apply: takes the roamed settings but keeps the per-device
-  /// values (server URL, Anki host, and calendar view differ per device).
+  /// values (server URL, retired Anki host, and calendar view).
   void applySyncedJson(Map<String, dynamic> json) {
     final restored = fromJson(json);
     if (restored == null) return;

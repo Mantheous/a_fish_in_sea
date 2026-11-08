@@ -17,8 +17,8 @@ void main() {
     HydratedBloc.storage = storage;
   });
 
-  group('ankiConnectHost setting', () {
-    test('defaults to local AnkiConnect', () {
+  group('retired AnkiConnect host setting', () {
+    test('defaults to the historical local address', () {
       expect(SettingsCubit().state.ankiConnectHost,
           SettingsCubit.defaultAnkiConnectHost);
     });

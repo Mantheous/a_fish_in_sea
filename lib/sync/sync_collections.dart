@@ -59,7 +59,7 @@ extension SyncCollections on SyncEngine {
           final env = Map<String, dynamic>.from(
             settings.toJson(settings.state),
           );
-          SyncEngine._stripDeviceLocalFields('settings', env);
+          stripDeviceLocalSyncFields('settings', env);
           return {'singleton': env};
         }
       case 'waterfall':
@@ -77,7 +77,7 @@ extension SyncCollections on SyncEngine {
           final map = env == null
               ? <String, dynamic>{}
               : Map<String, dynamic>.from(env);
-          SyncEngine._stripDeviceLocalFields('plaid', map);
+          stripDeviceLocalSyncFields('plaid', map);
           return {'singleton': map};
         }
     }

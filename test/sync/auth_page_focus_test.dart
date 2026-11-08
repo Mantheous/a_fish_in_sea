@@ -3,6 +3,7 @@ import 'package:a_fish_in_sea/sync/sync_client.dart';
 import 'package:a_fish_in_sea/sync/sync_engine.dart';
 import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
 import 'package:a_fish_in_sea/sync/view/auth/auth_page.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -76,6 +77,37 @@ void main() {
     expect(hasFocus(tester, 1), isTrue);
   });
 
+  testWidgets(
+    'password tap accepts input on the focused connection and masks it',
+    (tester) async {
+      await pumpAuthPage(tester);
+      await tester.enterText(find.byType(TextField).first, 'a@example.com');
+      await tester.tap(find.byType(TextField).last);
+      await tester.pump();
+      expect(hasFocus(tester, 1), isTrue);
+
+      // Unlike tester.enterText, this does not focus the field for the test.
+      // Input must reach the connection opened by the tap (refs #292).
+      const password = 'password123';
+      tester.testTextInput.enterText(password);
+      await tester.pump(const Duration(seconds: 2));
+
+      final editable = tester.widget<EditableText>(
+        find.byType(EditableText).last,
+      );
+      expect(editable.controller.text, password);
+      expect(editable.obscureText, isTrue);
+      final rendered = tester
+          .state<EditableTextState>(find.byType(EditableText).last)
+          .renderEditable;
+      expect(
+        rendered.text!.toPlainText(),
+        editable.obscuringCharacter * password.length,
+      );
+      expect(find.text('a@example.com'), findsOneWidget);
+    },
+  );
+
   testWidgets('tapping email accepts typing', (tester) async {
     await pumpAuthPage(tester);
     await tester.tap(find.byType(TextField).first);
@@ -83,6 +115,63 @@ void main() {
     await tester.enterText(find.byType(TextField).first, 'a@example.com');
     await tester.pump();
     expect(find.text('a@example.com'), findsOneWidget);
+  });
+
+  testWidgets('first and repeated mouse clicks focus Password', (
+    tester,
+  ) async {
+    // Match the reported desktop viewport, including the scrollable card.
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await pumpAuthPage(tester);
+    final email = find.byType(TextField).first;
+    final password = find.byType(TextField).last;
+    final box = tester.getRect(password);
+
+    for (final point in [
+      tester.getCenter(find.byIcon(Icons.lock_outline)),
+      box.center,
+      Offset(box.right - 10, box.center.dy),
+    ]) {
+      // Exercise both directions without enterText forcing either field's
+      // focus: browser typing must follow the most recent click (refs #299).
+      await tester.tap(email, kind: PointerDeviceKind.mouse);
+      await tester.pump();
+      expect(hasFocus(tester, 0), isTrue);
+      tester.testTextInput.enterText('newcomer@example.com');
+      await tester.pump();
+      // Repeat the walk's two clicks (refs #304), without enterText or
+      // requestFocus on Password hiding a broken focus transition.
+      for (var click = 0; click < 2; click++) {
+        await tester.tapAt(point, kind: PointerDeviceKind.mouse);
+        await tester.pump();
+        expect(hasFocus(tester, 1), isTrue);
+        expect(hasFocus(tester, 0), isFalse);
+        expect(tester.takeException(), isNull);
+      }
+      tester.testTextInput.enterText('password123');
+      await tester.pump(const Duration(seconds: 2));
+      final editable = tester.widget<EditableText>(
+        find.byType(EditableText).last,
+      );
+      expect(editable.controller.text, 'password123');
+      expect(editable.obscureText, isTrue);
+      expect(
+        tester
+            .state<EditableTextState>(find.byType(EditableText).last)
+            .renderEditable
+            .text!
+            .toPlainText(),
+        editable.obscuringCharacter * 'password123'.length,
+      );
+      expect(
+        tester.widget<TextField>(email).controller!.text,
+        'newcomer@example.com',
+      );
+      expect(tester.takeException(), isNull);
+    }
   });
 
   testWidgets('Next moves from email to password, Done validates',

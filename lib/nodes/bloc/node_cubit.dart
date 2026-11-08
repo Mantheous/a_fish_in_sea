@@ -1,10 +1,12 @@
 import 'package:a_fish_in_sea/common/persistence/stable_storage_keys.dart';
 import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/common/undo/revertable_hydrated_cubit.dart';
+import 'package:a_fish_in_sea/common/usage/usage_log.dart';
 import 'package:a_fish_in_sea/finances/model/budget.dart';
 import 'package:a_fish_in_sea/finances/model/expense.dart';
 import 'package:a_fish_in_sea/finances/model/recurring_rule.dart';
 import 'package:a_fish_in_sea/finances/model/time_scale.dart';
+import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:a_fish_in_sea/goals/model/goal.dart';
 import 'package:a_fish_in_sea/planner/model/assignment_rule.dart';
 import 'package:a_fish_in_sea/planner/model/assignment_template.dart';
@@ -22,8 +24,11 @@ import '../service/node_feed_import.dart';
 import '../service/node_event_detach.dart';
 import '../service/node_batch_graph.dart';
 import '../service/node_progress.dart';
+import '../service/node_recurrence_instance.dart';
 import '../service/node_recurrence_schedule.dart';
+import '../service/recurring_payment_amount.dart';
 import '../service/node_tree_ops.dart';
+import '../service/node_transaction_settlement.dart';
 
 /// Unified goals/tasks store. One DAG of [Node]s replaces Goal + Task +
 /// Budget + Expense; transactions and calendar events stay separate and
@@ -590,7 +595,16 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
       final error = validateParents(updated, updated.parentIds);
       if (error != null) return error;
     }
-    emitChange(state.map((n) => n.id == updated.id ? updated : n).toList());
+    final amounts = recurringPaymentAmountUpdates(
+      current,
+      updated,
+      state,
+      today: localDay(DateTime.now()),
+    );
+    emitChange([
+      for (final n in state)
+        amounts[n.id] ?? (n.id == updated.id ? updated : n),
+    ]);
     return null;
   }
 
@@ -712,50 +726,13 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     final copies = <Node>[];
     for (final n in state) {
       if (!closure.contains(n.id)) continue;
-      final parents = [
-        for (final p in n.parentIds) remap[p] ?? p,
-        if (n.id == sourceId && attachToParentId != null) attachToParentId,
-      ];
-      copies.add(
-        Node(
-          id: remap[n.id]!,
-          title: n.id == sourceId ? '${n.title} (copy)' : n.title,
-          notes: n.notes,
-          parentIds: parents,
-          status: NodeStatus.open,
-          createdAt: at,
-          isUnbounded: n.isUnbounded,
-          isFavorite: n.isFavorite,
-          schedule: n.schedule,
-          money: n.money?.copyWith(
-            status: MoneyStatus.projected,
-            clearActual: true,
-          ),
-          effort: n.effort,
-          // A copy is a fresh goal: same deck and target, but the review
-          // count starts over (like money actuals, which are cleared too).
-          anki: n.anki?.copyWith(
-            clearReviewsActual: true,
-            clearLastSyncedAt: true,
-          ),
-          recurrence: n.recurrence,
-          auto: n.auto,
-          extraMetrics: n.extraMetrics,
-          classFacet: n.classFacet,
-          classNodeId: n.classNodeId,
-          rule: n.rule,
-          instanceOfId: n.instanceOfId == null
-              ? null
-              : (remap[n.instanceOfId] ?? n.instanceOfId),
-          overriddenFields: Set.of(n.overriddenFields),
-          sourceEventId: null,
-          calendarEventId: null,
-          feedId: n.feedId,
-          classId: n.classId,
-          classLabel: n.classLabel,
-          assignees: n.assignees,
-        ),
-      );
+      copies.add(copySubtreeNode(
+        n,
+        sourceId: sourceId,
+        remap: remap,
+        at: at,
+        attachToParentId: attachToParentId,
+      ));
     }
     emitChange([...state, ...copies]);
     return null;
@@ -877,6 +854,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
   void toggleDone(String id, {DateTime? now}) {
     final node = byId(id);
     if (node == null) return;
+    UsageLog.instance.action('node.done', meta: {'done': !node.isDone});
     final at = now ?? DateTime.now();
     updateNode(
       node.isDone
@@ -1419,6 +1397,14 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     ]);
   }
 
+  /// Bank settlement is a system write and must not add an undo entry.
+  void applyTransactionChanges(Map<Transaction, Transaction> changes) {
+    if (changes.isEmpty) return;
+    emitSilent([
+      for (final node in state) settleNodeTransactions(node, changes),
+    ]);
+  }
+
   /// Report finances by assigning a transaction, mirroring the
   /// ExpenseCubit reconciliation policy: exact match goes concrete,
   /// smaller subdivides with a remainder, larger logs the actual
@@ -1588,7 +1574,7 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     while (!cursor.isAfter(end)) {
       final id = _instanceId(templateId, cursor, recurrence.frequency);
       if (!known.contains(id)) {
-        fresh.add(_spawnInstance(template, id, cursor));
+        fresh.add(spawnRecurringInstance(template, id, cursor));
         known.add(id);
       }
       cursor = NodeRecurrenceSchedule.next(anchor, cursor, recurrence);
@@ -1628,86 +1614,6 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     _pendingBatchedInstances.clear();
     if (fresh.isNotEmpty) emitSilent([...state, ...fresh]);
     return total;
-  }
-
-  Node _spawnInstance(Node template, String id, DateTime date) {
-    final block = template.schedule;
-    Duration? length;
-    if (block?.start != null && block?.end != null) {
-      final d = block!.end!.difference(block.start!);
-      if (d.inMinutes > 0) length = d;
-    }
-    final day = localDay(date);
-    ScheduleFacet? schedule;
-    if (block != null) {
-      final dueTime = block.due;
-      final due = dueTime == null
-          ? day
-          : DateTime(
-              day.year,
-              day.month,
-              day.day,
-              dueTime.hour,
-              dueTime.minute,
-            );
-      DateTime? start;
-      DateTime? end;
-      if (length != null) {
-        final base = block.start;
-        start = base == null
-            ? day
-            : DateTime(day.year, day.month, day.day, base.hour, base.minute);
-        end = start.add(length);
-      }
-      schedule = ScheduleFacet(
-        due: due,
-        start: start,
-        end: end,
-        allDay: block.allDay,
-        isFixed: block.isFixed,
-      );
-    } else {
-      schedule = ScheduleFacet(due: day);
-    }
-    MoneyFacet? money = template.money;
-    if (money != null) {
-      money = MoneyFacet(
-        targetAmount: money.targetAmount,
-        direction: money.direction,
-        status: MoneyStatus.projected,
-        period: money.period,
-        customPeriodDays: money.customPeriodDays,
-        isRecurring: false,
-        autoRollover: money.autoRollover,
-        rolloverAmount: 0.0,
-        isFixed: money.isFixed,
-      );
-    }
-    return Node(
-      id: id,
-      title: template.title,
-      notes: template.notes,
-      parentIds: [template.id],
-      createdAt: date,
-      schedule: schedule,
-      money: money,
-      effort: template.effort,
-      // Instances inherit the deck and target but start unreviewed: the
-      // template's cached count belongs to its own period, not the new
-      // instance's.
-      anki: template.anki?.copyWith(
-        clearReviewsActual: true,
-        clearLastSyncedAt: true,
-      ),
-      instanceOfId: template.id,
-      sourceEventId: template.sourceEventId,
-      calendarEventId: template.calendarEventId,
-      feedId: template.feedId,
-      classId: template.classId,
-      classLabel: template.classLabel,
-      classNodeId: template.classNodeId,
-      assignees: template.assignees,
-    );
   }
 
   // ── Legacy importers (one-time adoption, permanent API) ─────────────
@@ -2302,9 +2208,6 @@ class NodeCubit extends RevertableHydratedCubit<List<Node>> {
     'nodes': state.map((n) => n.toJson()).toList(),
   };
 }
-
-List<String> nodeLinkedTxnIds(Node node) =>
-    node.money?.linkedTransactionIds ?? const [];
 
 bool _sameAssignees(List<dynamic> a, List<dynamic> b) {
   if (a.length != b.length) return false;

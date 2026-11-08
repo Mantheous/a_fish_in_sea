@@ -1,5 +1,11 @@
+import 'package:a_fish_in_sea/common/undo/undo_cubit.dart';
+import 'package:a_fish_in_sea/finances/model/time_scale.dart';
+import 'package:a_fish_in_sea/finances/model/transaction.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/nodes/model/node.dart';
+import 'package:a_fish_in_sea/nodes/service/auto_goal.dart';
+import 'package:a_fish_in_sea/nodes/service/goal_graph_filter.dart';
+import 'package:a_fish_in_sea/nodes/service/node_budget_progress.dart';
 import 'package:a_fish_in_sea/nodes/service/node_progress.dart';
 import 'package:a_fish_in_sea/nodes/service/node_tree_ops.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,6 +24,7 @@ Node node(
   String? sourceEventId,
   String? calendarEventId,
   String? instanceOfId,
+  bool? taskFlag,
 }) =>
     Node(
       id: id,
@@ -31,6 +38,7 @@ Node node(
       sourceEventId: sourceEventId,
       calendarEventId: calendarEventId,
       instanceOfId: instanceOfId,
+      taskFlag: taskFlag,
     );
 
 void main() {
@@ -224,6 +232,90 @@ void main() {
   });
 
   group('duplicateSubtree', () {
+    test('copied class owns its reopened work; original stays complete', () {
+      final cubit = NodeCubit();
+      addTearDown(cubit.close);
+      final originalClass = node('class').copyWith(
+        classFacet: const ClassFacet(),
+        auto: const AutoFacet(metric: AutoMetric.allDone),
+      );
+      final task = node('task', parents: ['class'], status: NodeStatus.done)
+          .copyWith(classNodeId: 'class');
+      cubit.addNode(originalClass);
+      cubit.addNode(task);
+      AutoGoalReading reading(Node cls) => evaluateAutoGoal(
+          cls, now: DateTime(2026, 9, 1), nodes: cubit.state);
+      expect(reading(originalClass).satisfied, isTrue);
+
+      expect(cubit.duplicateSubtree('class', idSuffix: 't'), isNull);
+      final copy = cubit.byId('class_copy_t')!;
+      final copiedTask = cubit.byId('task_copy_t')!;
+      expect(copiedTask.classNodeId, copy.id);
+      expect(copiedTask.parentIds, [copy.id]);
+      expect(copiedTask.isOpen, isTrue);
+      expect(reading(copy).totalCount, 1);
+      expect(reading(copy).doneCount, 0);
+      expect(reading(copy).satisfied, isFalse);
+      expect(reading(originalClass).totalCount, 1);
+      expect(reading(originalClass).doneCount, 1);
+      expect(reading(originalClass).progress, 1);
+      expect(reading(originalClass).satisfied, isTrue);
+      expect(cubit.byId('class'), originalClass);
+      expect(cubit.byId('task'), task);
+    });
+
+    for (final membership in <String?>['internal', 'external', null]) {
+      test('remaps only internal membership $membership, keeping provenance', () {
+        final original = node('task').copyWith(
+          classNodeId: membership,
+          feedId: 'feed', classId: 'course', classLabel: 'Course',
+        );
+        final copy = copySubtreeNode(original, sourceId: 'task',
+          remap: {'task': 'task-copy', 'internal': 'class-copy'},
+          at: DateTime(2026, 9, 1));
+        expect(copy.classNodeId,
+            membership == 'internal' ? 'class-copy' : membership);
+        expect(copy.feedId, original.feedId);
+        expect(copy.classId, original.classId);
+        expect(copy.classLabel, original.classLabel);
+      });
+    }
+
+    for (final flag in <bool?>[true, false, null]) {
+      test('preserves nullable task setting $flag on root and child', () {
+        final cubit = NodeCubit();
+        addTearDown(cubit.close);
+        cubit.addNode(node('goal', taskFlag: flag));
+        cubit.addNode(node('child', parents: ['goal'], taskFlag: flag));
+
+        expect(cubit.duplicateSubtree('goal', idSuffix: 't'), isNull);
+        const filter = GoalGraphFilter(kind: GoalKindFilter.task);
+        for (final id in ['goal', 'child']) {
+          final original = cubit.byId(id)!;
+          final copy = cubit.byId('${id}_copy_t')!;
+          expect(copy.schedule, isNull);
+          expect(copy.taskFlag, flag);
+          expect(copy.isTask, flag ?? false);
+          expect(filter.matches(copy, DateTime(2026, 9, 1)), flag ?? false);
+          expect(original.taskFlag, flag);
+        }
+      });
+    }
+
+    test('preserves explicit task off and inferred task on dated copies', () {
+      final cubit = NodeCubit();
+      addTearDown(cubit.close);
+      for (final flag in <bool?>[false, null]) {
+        final id = 'dated_$flag';
+        cubit.addNode(node(id, taskFlag: flag,
+            schedule: ScheduleFacet(due: DateTime(2026, 9, 15))));
+        expect(cubit.duplicateSubtree(id, idSuffix: 't'), isNull);
+        final copy = cubit.byId('${id}_copy_t')!;
+        expect(copy.taskFlag, flag);
+        expect(copy.isTask, flag ?? true);
+      }
+    });
+
     test('deep-copies the closure, keeps shared parents, strips links',
         () {
       final cubit = NodeCubit();
@@ -233,7 +325,8 @@ void main() {
           parents: ['goal', 'other'],
           schedule: ScheduleFacet(due: DateTime(2026, 9, 15)),
           money: const MoneyFacet(
-              targetAmount: 50, actualAmount: 50)));
+              targetAmount: 50, actualAmount: 50,
+              linkedTransactionIds: ['purchase'])));
       cubit.addNode(node('grand', parents: ['child']));
       cubit.addNode(node('linked',
           parents: ['goal'],
@@ -256,6 +349,7 @@ void main() {
       );
       expect(childCopy.money?.status, MoneyStatus.projected);
       expect(childCopy.money?.actualAmount, isNull);
+      expect(childCopy.money?.linkedTransactionIds, isEmpty);
       expect(cubit.byId('grand_copy_t')?.parentIds, ['child_copy_t']);
       // Event links are stripped on copies; completion reset.
       final linkedCopy = cubit.byId('linked_copy_t')!;
@@ -264,6 +358,52 @@ void main() {
       expect(linkedCopy.isOpen, isTrue);
       // Originals untouched.
       expect(cubit.byId('child')?.parentIds, ['goal', 'other']);
+      expect(cubit.byId('child')?.money?.linkedTransactionIds, ['purchase']);
+    });
+
+    test('copied purchase history never doubles the shared budget spending', () {
+      final cubit = NodeCubit();
+      final undo = UndoCubit();
+      addTearDown(cubit.close);
+      addTearDown(undo.close);
+      final budget = node('budget', money: const MoneyFacet(
+        targetAmount: 500, period: TimeScale.monthly));
+      cubit.addNode(budget);
+      cubit.addNode(node('child', parents: ['budget'],
+          money: const MoneyFacet(targetAmount: 50)));
+      final purchase = Transaction(
+        id: 'purchase', accountId: 'checking', amount: -50,
+        date: DateTime(2026, 9, 12), name: 'Groceries',
+        assignedNodeId: 'child',
+      );
+      cubit.linkTransaction(nodeId: 'child', transactionId: purchase.id,
+          transactionAmount: purchase.amount);
+      final original = cubit.byId('child')!;
+      double spending() => moneyActualForActivePeriod(
+          budget, cubit.state, [purchase], now: DateTime(2026, 9, 15));
+      expect(spending(), 50);
+      undo.resetHistory();
+
+      expect(cubit.duplicateSubtree('child', idSuffix: 't'), isNull);
+      final copy = cubit.byId('child_copy_t')!;
+      expect(copy.parentIds, ['budget']);
+      expect(copy.money?.targetAmount, 50);
+      expect(copy.money?.status, MoneyStatus.projected);
+      expect(copy.money?.actualAmount, isNull);
+      expect(copy.money?.linkedTransactionIds, isEmpty);
+      expect(cubit.byId('child'), original);
+      expect(purchase.assignedNodeId, original.id);
+      expect(spending(), 50);
+      expect(undo.state.undoStack, hasLength(1));
+
+      undo.undo();
+      expect(cubit.byId(copy.id), isNull);
+      expect(cubit.byId('child'), original);
+      expect(spending(), 50);
+      undo.redo();
+      expect(cubit.byId(copy.id)?.money?.linkedTransactionIds, isEmpty);
+      expect(cubit.byId('child'), original);
+      expect(spending(), 50);
     });
 
     test('rejects missing nodes and self-subtree attachment', () {

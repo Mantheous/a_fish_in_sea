@@ -81,7 +81,7 @@ void main() {
       expect(projection.shown.map((e) => e.id), ['e1', 'allday-1']);
       expect(projection.reportBlocksByDay.keys, [day]);
       expect(projection.reportBlocksByDay[day], hasLength(1));
-      expect(projection.reportById.keys, ['report:r1']);
+      expect(projection.reportById.keys, ['report:accepted:2026-10-05:r1']);
       expect(projection.reportColorById, hasLength(1));
       expect(projection.shown.any((e) => isReportDisplayId(e.id)), isFalse);
     });
@@ -103,7 +103,7 @@ void main() {
       expect(projection.shown.map((e) => e.id), [
         'e1',
         'allday-1',
-        'report:r1',
+        'report:accepted:2026-10-05:r1',
       ]);
       expect(projection.reportBlocksByDay, isEmpty);
     });

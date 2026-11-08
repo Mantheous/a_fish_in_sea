@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../common/undo/undo_bar.dart';
 import '../../navigation/view/app_drawer.dart';
 import '../../nodes/view/node_editor.dart';
+import '../../nodes/view/quick_record_sheet.dart';
 import '../bloc/tasks_tab_cubit.dart';
 import '../bloc/tasks_view_options_cubit.dart';
 import '../service/task_bulk_actions.dart';
@@ -118,6 +119,11 @@ class _TasksPageState extends State<TasksPage> {
               actions: _selecting
                   ? const [UndoRedoActions()]
                   : [
+                      IconButton(
+                        tooltip: 'Record a new task',
+                        icon: const Icon(Icons.fiber_manual_record),
+                        onPressed: () => showQuickRecordSheet(context),
+                      ),
                       Builder(
                         builder: (buttonContext) {
                           var active = false;

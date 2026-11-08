@@ -16,7 +16,11 @@ class TransactionsCubit extends RevertableHydratedCubit<List<Transaction>> {
 
   /// Bulk import transactions from Plaid, updating existing IDs and
   /// superseding pending IDs when Plaid posts their replacement transaction.
-  void syncFromPlaid(List<Transaction> plaidTransactions) {
+  /// Returns changed existing rows, including validated pending replacements,
+  /// so callers can carry reconciliation links into the imported state.
+  Map<Transaction, Transaction> syncFromPlaid(
+    List<Transaction> plaidTransactions,
+  ) {
     final existingById = {
       for (final transaction in state) transaction.id: transaction,
     };
@@ -56,6 +60,16 @@ class TransactionsCubit extends RevertableHydratedCubit<List<Transaction>> {
     }
 
     if (changed) emit(mergedById.values.toList());
+    final replacementIds = {
+      for (final entry in predecessorByReplacementId.entries)
+        entry.value.id: entry.key,
+    };
+    return {
+      for (final before in existingById.values)
+        if (mergedById[replacementIds[before.id] ?? before.id]
+            case final after?)
+          if (before != after) before: after,
+    };
   }
 
   Transaction _mergePlaidTransaction(

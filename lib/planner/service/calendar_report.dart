@@ -1,8 +1,12 @@
 import '../../common/time/time_session.dart';
 import '../../nodes/model/node.dart';
 import '../../reporting/model/reported_entry.dart';
+import '../../reporting/reporting_logic.dart' show dayKey;
 import '../model/event_reschedule.dart';
 import '../model/planner_event.dart';
+
+part 'calendar_report_sessions.dart';
+part 'calendar_report_identity.dart';
 
 enum ReportBlockKind { live, timer, accepted }
 
@@ -121,21 +125,6 @@ ReportedEntry? findReportEntryForEvent(
   return fallback;
 }
 
-/// Finds the manual entry a report display id points at
-/// (`report:<entryId>`). Timer and live ids carry their event id instead,
-/// so those lookups come back null here.
-ReportedEntry? findReportEntryByDisplayId(
-  Map<String, List<ReportedEntry>> reportsByDay,
-  String displayId,
-) {
-  for (final entries in reportsByDay.values) {
-    for (final entry in entries) {
-      if ('$reportDisplayIdPrefix${entry.id}' == displayId) return entry;
-    }
-  }
-  return null;
-}
-
 /// Builds a new manual report entry seeded from a task-event's planned
 /// (or already timer-logged) time. The id reuses the auto-report scheme
 /// (`rep:<eventId>`) so saving it via [ReportingCubit.upsertEntry] cleanly
@@ -168,20 +157,20 @@ List<ReportBlock> buildReportBlocks({
   DateTime? now,
 }) {
   final at = now ?? DateTime.now();
-  final accepted = <ReportedEntry>[];
-  for (final entries in reportsByDay.values) {
-    for (final entry in entries) {
-      if (!entry.auto) accepted.add(entry);
+  final accepted = <(String, ReportedEntry)>[];
+  for (final day in reportsByDay.entries) {
+    for (final entry in day.value) {
+      if (!entry.auto) accepted.add((day.key, entry));
     }
   }
-  final acceptedByEvent = <String, List<ReportedEntry>>{};
-  final extras = <ReportedEntry>[];
-  for (final entry in accepted) {
+  final acceptedByEvent = <String, List<(String, ReportedEntry)>>{};
+  final extras = <(String, ReportedEntry)>[];
+  for (final (day, entry) in accepted) {
     final eventId = entry.eventId;
     if (eventId == null) {
-      extras.add(entry);
+      extras.add((day, entry));
     } else {
-      acceptedByEvent.putIfAbsent(eventId, () => []).add(entry);
+      acceptedByEvent.putIfAbsent(eventId, () => []).add((day, entry));
     }
   }
 
@@ -213,8 +202,8 @@ List<ReportBlock> buildReportBlocks({
   // mirrored onto every linked event for cache alignment, so each run must
   // be attributed to the event it actually happened during — Toggl-style,
   // every entry sits on its own row — and rendered exactly once. Session
-  // ids are stable across mirrors (TimeSession.idFor), so they dedupe the
-  // copies while genuinely distinct runs stay separate.
+  // ids are stable across mirrors (TimeSession.idFor), but unrelated tasks
+  // can have identical ids, so ownership and deduplication also need the task.
   final eventById = {for (final e in visibleEvents) e.id: e};
   final eventsByNode = <String, List<PlannerEvent>>{};
   void linkEvent(String? nodeId, PlannerEvent event) {
@@ -232,14 +221,27 @@ List<ReportBlock> buildReportBlocks({
       if (event != null) linkEvent(node.id, event);
     }
   }
-  final sessionOwner = <String, String>{};
+  String? taskOwner(PlannerEvent event) =>
+      event.taskId ?? nodesByEvent[event.id]?.first.id;
+  (bool, String, String) sessionKey(PlannerEvent event, String sessionId) {
+    final nodeId = taskOwner(event);
+    // Node and event ids also have separate namespaces.
+    return (nodeId != null, nodeId ?? event.id, sessionId);
+  }
+
+  final sessionOwner = <(bool, String, String), String>{};
   final liveOwner = <String, String>{};
   for (final node in nodes) {
     final candidates = eventsByNode[node.id];
     if (candidates == null || candidates.isEmpty) continue;
     for (final session in node.sessions) {
       final owner = _ownerEventId(candidates, session.start, session.end);
-      if (owner != null) sessionOwner.putIfAbsent(session.id, () => owner);
+      if (owner != null) {
+        sessionOwner.putIfAbsent(
+          sessionKey(eventById[owner]!, session.id),
+          () => owner,
+        );
+      }
     }
     final started = node.timerStartedAt;
     if (started != null) {
@@ -253,12 +255,13 @@ List<ReportBlock> buildReportBlocks({
     if (event.allDay) continue;
     final candidates = eventsByNode[event.taskId] ?? const <PlannerEvent>[];
     for (final session in event.sessions) {
-      if (sessionOwner.containsKey(session.id)) continue;
-      sessionOwner[session.id] =
+      final key = sessionKey(event, session.id);
+      if (sessionOwner.containsKey(key)) continue;
+      sessionOwner[key] =
           _ownerEventId(candidates, session.start, session.end) ?? event.id;
     }
   }
-  final emittedSessionIds = <String>{};
+  final emittedSessionIds = <(bool, String, String)>{};
   final emittedLiveNodeIds = <String>{};
 
   final blocks = <ReportBlock>[];
@@ -329,11 +332,13 @@ List<ReportBlock> buildReportBlocks({
       // and can each land on a different event.
       final owned = [
         for (final session in sessions)
-          if ((sessionOwner[session.id] ?? event.id) == event.id) session,
+          if ((sessionOwner[sessionKey(event, session.id)] ?? event.id) ==
+              event.id)
+            session,
       ];
       final hasMultiple = sessions.length > 1;
       for (final session in owned) {
-        if (!emittedSessionIds.add(session.id)) continue;
+        if (!emittedSessionIds.add(sessionKey(event, session.id))) continue;
         blocks.add(
           ReportBlock(
             displayId: hasMultiple
@@ -349,24 +354,24 @@ List<ReportBlock> buildReportBlocks({
           ),
         );
       }
-      if (owned.isNotEmpty) continue;
-      // Every run belongs to a sibling event (the task's other plan block):
-      // this block's lane stays empty, Toggl-style — the entry sits on the
-      // row it happened during. Accepted entries stay hidden too, since the
-      // task already has real recorded time.
-      continue;
     }
-    if (liveStart != null) continue;
+    // A saved report belongs to its day bucket, even if its interval was
+    // moved across midnight. Only recordings for that day replace it.
+    final recordedDays = {
+      for (final session in sessions) dayKey(session.start),
+      if (liveStart != null) dayKey(liveStart),
+    };
 
     final matches = acceptedByEvent[event.id];
     if (matches != null) {
-      for (final entry in matches) {
+      for (final (day, entry) in matches) {
+        if (recordedDays.contains(day)) continue;
         final end = entry.end.isAfter(entry.start)
             ? entry.end
             : entry.start.add(const Duration(hours: 1));
         blocks.add(
           ReportBlock(
-            displayId: '$reportDisplayIdPrefix${entry.id}',
+            displayId: reportAcceptedDisplayIdFor(day, entry.id),
             title: entry.title,
             start: entry.start,
             end: end,
@@ -432,13 +437,13 @@ List<ReportBlock> buildReportBlocks({
     }
   }
 
-  for (final entry in extras) {
+  for (final (day, entry) in extras) {
     final end = entry.end.isAfter(entry.start)
         ? entry.end
         : entry.start.add(const Duration(hours: 1));
     blocks.add(
       ReportBlock(
-        displayId: '$reportDisplayIdPrefix${entry.id}',
+        displayId: reportAcceptedDisplayIdFor(day, entry.id),
         title: entry.title,
         start: entry.start,
         end: end,
@@ -451,89 +456,6 @@ List<ReportBlock> buildReportBlocks({
 
   blocks.sort((a, b) => a.start.compareTo(b.start));
   return blocks;
-}
-
-/// Every distinct recorded run on an event and the tasks linked to it.
-///
-/// Task-event pairs mirror the same sessions, so ids dedupe the copies.
-/// When any side carries an explicit session list, legacy aggregate
-/// intervals are ignored: those spans would otherwise show up as an extra
-/// block after the first multi-session stop.
-List<TimeSession> _recordedSessions(PlannerEvent event, List<Node> linked) {
-  final explicit = <String, TimeSession>{};
-  for (final session in event.sessions) {
-    explicit[session.id] = session;
-  }
-  for (final node in linked) {
-    for (final session in node.sessions) {
-      explicit[session.id] = session;
-    }
-  }
-  if (explicit.isNotEmpty) return _sortedSessions(explicit.values);
-
-  final legacy = <String, TimeSession>{};
-  for (final session in event.recordedSessions) {
-    legacy[session.id] = session;
-  }
-  for (final node in linked) {
-    for (final session in node.recordedSessions) {
-      legacy[session.id] = session;
-    }
-  }
-  return _sortedSessions(legacy.values);
-}
-
-List<TimeSession> _sortedSessions(Iterable<TimeSession> sessions) =>
-    sessions.toList()..sort((a, b) => a.start.compareTo(b.start));
-
-/// Which of a task's plan events a recording belongs to.
-///
-/// Toggl-style attribution: an entry sits on the row it happened during, so
-/// a task planned twice (say Monday 9am and Wednesday 2pm) shows Monday's
-/// run on Monday and Wednesday's on Wednesday instead of stacking both on
-/// one of them. Picks the event with the largest overlap, then the nearest
-/// one; ties break on earliest start, then id, so the choice is stable
-/// across rebuilds.
-String? _ownerEventId(
-  List<PlannerEvent> candidates,
-  DateTime start,
-  DateTime end,
-) {
-  if (candidates.isEmpty) return null;
-  PlannerEvent? best;
-  var bestOverlap = -1;
-  var bestGap = -1;
-  for (final event in candidates) {
-    final overlap = _overlapSeconds(event, start, end);
-    final gap = _gapSeconds(event, start, end);
-    final better =
-        best == null ||
-        overlap > bestOverlap ||
-        (overlap == bestOverlap && gap < bestGap) ||
-        (overlap == bestOverlap &&
-            gap == bestGap &&
-            (event.start.isBefore(best.start) ||
-                (event.start == best.start &&
-                    event.id.compareTo(best.id) < 0)));
-    if (better) {
-      best = event;
-      bestOverlap = overlap;
-      bestGap = gap;
-    }
-  }
-  return best?.id;
-}
-
-int _overlapSeconds(PlannerEvent event, DateTime start, DateTime end) {
-  final from = start.isAfter(event.start) ? start : event.start;
-  final to = end.isBefore(event.end) ? end : event.end;
-  return to.isAfter(from) ? to.difference(from).inSeconds : 0;
-}
-
-int _gapSeconds(PlannerEvent event, DateTime start, DateTime end) {
-  if (!end.isBefore(event.start) && !start.isAfter(event.end)) return 0;
-  if (end.isBefore(event.start)) return event.start.difference(end).inSeconds;
-  return start.difference(event.end).inSeconds.abs();
 }
 
 /// Event ids that already carry a report, including the sibling events of

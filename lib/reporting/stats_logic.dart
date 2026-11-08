@@ -35,6 +35,7 @@ import '../../planner/model/planner_event.dart';
 import '../../planner/service/calendar_report.dart';
 import 'model/reported_entry.dart';
 import 'reporting_logic.dart';
+import 'stats_class_scope.dart';
 
 /// Waking hours used for the "not accounted for" number. Local time.
 const int statsWakingStartMinute = 7 * 60;
@@ -531,6 +532,7 @@ void _addRecordedSpans(
   Map<String, PlannerEvent> eventById,
   List<_Span> out,
   StatsRange range,
+  StatsClassScope classes,
 ) {
   for (final block in blocks) {
     if (block.kind == ReportBlockKind.accepted) continue;
@@ -542,29 +544,16 @@ void _addRecordedSpans(
     final owner = eventId == null
         ? nodeById[reportOwnerIdForDisplayId(block.displayId)]
         : (event == null
-              ? null
+              ? nodeByEvent[eventId]
               : _backingNodeFor(event, nodeById, nodeByEvent));
-    // A class-node membership unifies manual and imported work under one
-    // class key; provenance ids remain the fallback for unbound work.
-    final classNode =
-        owner?.classNodeId == null ? null : nodeById[owner!.classNodeId];
-    final scope =
-        owner?.classNodeId ??
-        owner?.feedId ??
-        owner?.classId ??
-        event?.classLabel;
+    final scope = classes.resolve(owner, event?.classLabel, feedId: event?.feedId);
     out.add(
       _Span(
         start: block.start,
         end: block.end,
-        groupKey: scope ?? 'unassigned',
-        label:
-            classNode?.title ??
-            owner?.classLabel ??
-            event?.classLabel ??
-            'No class',
-        classLabel:
-            classNode?.title ?? owner?.classLabel ?? event?.classLabel,
+        groupKey: scope.key,
+        label: scope.label,
+        classLabel: scope.classLabel,
         title: owner?.title ?? event?.subject ?? block.title,
         templateKey: owner?.isHomework == true
             ? assignmentTemplateKey(owner!.title)
@@ -584,6 +573,7 @@ _Span? _entrySpan(
   Map<String, Node> nodeByEvent,
   Map<String, PlannerEvent> eventById,
   StatsRange range,
+  StatsClassScope classes,
 ) {
   // Missed events are the absence of work, and unconfirmed auto entries
   // are guesses: neither counts as recorded time.
@@ -592,27 +582,17 @@ _Span? _entrySpan(
   final eventId = entry.eventId;
   final event = eventId == null ? null : eventById[eventId];
   final owner = event == null
-      ? null
+      ? nodeByEvent[eventId]
       : _backingNodeFor(event, nodeById, nodeByEvent);
-  final classNode =
-      owner?.classNodeId == null ? null : nodeById[owner!.classNodeId];
-  final scope =
-      owner?.classNodeId ??
-      owner?.feedId ??
-      owner?.classId ??
-      event?.classLabel;
+  final scope = classes.resolve(owner, event?.classLabel, feedId: event?.feedId);
   return _Span(
     start: entry.start,
     end: entry.end.isAfter(entry.start)
         ? entry.end
         : entry.start.add(const Duration(minutes: 1)),
-    groupKey: scope ?? 'unassigned',
-    label:
-        classNode?.title ??
-        owner?.classLabel ??
-        event?.classLabel ??
-        'No class',
-    classLabel: classNode?.title ?? owner?.classLabel ?? event?.classLabel,
+    groupKey: scope.key,
+    label: scope.label,
+    classLabel: scope.classLabel,
     title: entry.title,
     nodeId: 'entry:${entry.eventId ?? entry.start.microsecondsSinceEpoch}',
     tracked: true,
@@ -639,6 +619,7 @@ AssignmentTimeReport buildAssignmentTimeReport({
 }) {
   final nodeById = {for (final n in nodes) n.id: n};
   final eventById = {for (final e in events) e.id: e};
+  final classes = StatsClassScope(nodeById);
   final nodeByEvent = <String, Node>{};
   for (final node in nodes) {
     for (final eventId in [node.calendarEventId, node.sourceEventId]) {
@@ -650,29 +631,21 @@ AssignmentTimeReport buildAssignmentTimeReport({
   for (final slice in plannedSlices) {
     if (slice.allDay || slice.durationMin <= 0) continue;
     if (!range.contains(slice.start)) continue;
-    final linked = slice.taskId == null ? null : nodeById[slice.taskId];
+    final event = eventById[slice.eventId];
+    final linked = nodeById[slice.taskId] ?? nodeByEvent[slice.eventId] ??
+        (event == null ? null : _backingNodeFor(event, nodeById, nodeByEvent));
     final isAssignment = linked != null && linked.isHomework;
-    final classNode =
-        linked?.classNodeId == null ? null : nodeById[linked!.classNodeId];
-    final label = classNode?.title ??
-        ((slice.classLabel?.trim().isNotEmpty ?? false)
-            ? slice.classLabel!.trim()
-            : (linked?.classLabel ?? 'No class'));
-    // Same scope key the learned effort index uses, so a class total and
-    // a per-type total describe the same thing.
-    final scope = linked == null
-        ? (slice.classLabel?.trim() ?? 'unassigned')
-        : (linked.classNodeId ?? linked.feedId ?? linked.classId ?? label);
+    final scope = classes.resolve(linked, slice.classLabel, feedId: event?.feedId);
     plannedSpans.add(
       _Span(
         start: slice.start,
         end: slice.end,
-        groupKey: scope,
-        label: label,
-        classLabel: classNode?.title ?? linked?.classLabel ?? slice.classLabel,
+        groupKey: scope.key,
+        label: scope.label,
+        classLabel: scope.classLabel,
         title: linked?.title ?? slice.title,
         templateKey: isAssignment ? assignmentTemplateKey(linked.title) : null,
-        nodeId: slice.taskId ?? slice.eventId,
+        nodeId: linked?.id ?? slice.eventId,
         estimateMinutes: linked == null
             ? 0
             : resolveAssignmentEstimate(
@@ -701,6 +674,7 @@ AssignmentTimeReport buildAssignmentTimeReport({
     eventById,
     trackedSpans,
     range,
+    classes,
   );
   // A timer supersedes a manual report for the same event; the copy button
   // and lane already hide the entry in that case.
@@ -726,7 +700,7 @@ AssignmentTimeReport buildAssignmentTimeReport({
             timedEventIds.contains(eventId))) {
       continue;
     }
-    final span = _entrySpan(entry, nodeById, nodeByEvent, eventById, range);
+    final span = _entrySpan(entry, nodeById, nodeByEvent, eventById, range, classes);
     if (span != null) trackedSpans.add(span);
   }
 

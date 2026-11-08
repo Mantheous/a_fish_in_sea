@@ -75,9 +75,13 @@ class ReportLaneOverlay extends StatelessWidget {
     if (days.isEmpty) return const SizedBox.shrink();
     // Only the viewport matters here: it sets the clip and the lane origin.
     // It is stable while the grid scrolls, so this builder stays idle then.
-    return ValueListenableBuilder<Rect?>(
-      valueListenable: tracker.viewportLocalListenable,
-      builder: (context, viewport, _) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        tracker.viewportLocalListenable,
+        tracker.contentHeightListenable,
+      ]),
+      builder: (context, _) {
+        final viewport = tracker.viewportLocal;
         // The grid's rect in this overlay's own coordinate space. Null
         // until the calendar has laid its time grid out once.
         if (viewport == null) return const SizedBox.shrink();
@@ -86,8 +90,9 @@ class ReportLaneOverlay extends StatelessWidget {
           return const SizedBox.shrink();
         }
         final cellWidth = gridWidth / days.length;
+        final minutes = (endHour - startHour) * 60;
         final gridHeight =
-            ((endHour - startHour).clamp(1, 24) * 60) * pixelsPerMinute;
+            tracker.contentHeightListenable.value ?? minutes * pixelsPerMinute;
         // Only the vertical band matters: the overlay spans the calendar
         // area itself, so a sideways offset from a neighbouring calendar
         // page can never move the lanes.
@@ -105,7 +110,7 @@ class ReportLaneOverlay extends StatelessWidget {
                 day: days[index],
                 startHour: startHour,
                 endHour: endHour,
-                pixelsPerMinute: pixelsPerMinute,
+                pixelsPerMinute: gridHeight / minutes,
                 colorFor: colorFor,
                 selectedId: selectedId,
                 snapMinutes: snapMinutes,
@@ -137,7 +142,13 @@ class ReportLaneOverlay extends StatelessWidget {
                     child: Listener(
                       behavior: HitTestBehavior.translucent,
                       onPointerSignal: tracker.onPlanPointerSignal,
-                      child: Stack(clipBehavior: Clip.none, children: lanes),
+                      child: GestureDetector(
+                        onVerticalDragStart: tracker.onPlanVerticalDragStart,
+                        onVerticalDragUpdate: tracker.onPlanVerticalDrag,
+                        onVerticalDragEnd: tracker.onPlanVerticalDragEnd,
+                        onVerticalDragCancel: tracker.onPlanVerticalDragCancel,
+                        child: Stack(clipBehavior: Clip.none, children: lanes),
+                      ),
                     ),
                   ),
                   builder: (context, child) => Stack(
