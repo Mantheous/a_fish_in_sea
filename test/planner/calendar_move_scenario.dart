@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:a_fish_in_sea/common/time/time_session.dart';
 import 'package:a_fish_in_sea/nodes/bloc/node_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
@@ -24,6 +26,9 @@ Future<void> verifyCalendarMove(
   bool legacy = false,
   bool createFails = false,
   bool deleteFails = false,
+  bool deleteApplied = false,
+  bool deleteCheckFails = false,
+  bool dismissDuringCreate = false,
   bool repeating = false,
   bool refreshFails = false,
   bool missingOccurrence = false,
@@ -112,23 +117,32 @@ Future<void> verifyCalendarMove(
       ),
   ];
   PlannerEvent? remoteCreated;
+  final creationStarted = Completer<void>();
+  final finishCreation = Completer<void>();
+  var remoteSourceExists = true;
+  var allowDeleteCheck = !deleteCheckFails;
   when(
     () => google.fetchEvents(
       calendarId: any(named: 'calendarId'),
       feedId: any(named: 'feedId'),
     ),
   ).thenAnswer((call) async {
-    if (deleteFails) {
-      return call.namedArguments[#feedId] == source
-          ? [
-              base.copyWith(
-                sessions: const [],
-                clearActualStart: true,
-                clearActualEnd: true,
-                clearTimerStartedAt: true,
-              ),
-            ]
-          : [remoteCreated!];
+    if (deleteFails || dismissDuringCreate) {
+      if (call.namedArguments[#feedId] == source) {
+        if (!allowDeleteCheck) {
+          throw const GoogleCalendarException('Refresh unavailable');
+        }
+        return [
+          if (remoteSourceExists)
+            base.copyWith(
+              sessions: const [],
+              clearActualStart: true,
+              clearActualEnd: true,
+              clearTimerStartedAt: true,
+            ),
+        ];
+      }
+      return [remoteCreated!];
     }
     if (refreshFails) throw const GoogleCalendarException('Refresh denied');
     return expanded;
@@ -144,6 +158,10 @@ Future<void> verifyCalendarMove(
     final draft = call.namedArguments[#event] as PlannerEvent;
     expectRecording(draft);
     if (createFails) throw const GoogleCalendarException('Creation denied');
+    if (dismissDuringCreate) {
+      creationStarted.complete();
+      await finishCreation.future;
+    }
     return remoteCreated = PlannerEvent(
       id: repeating ? 'series-master' : 'destination',
       subject: draft.subject,
@@ -162,6 +180,7 @@ Future<void> verifyCalendarMove(
   ).thenAnswer((_) async {
     // The destination already contains every recording before remote deletion.
     expectRecording(calendar.state.singleWhere((e) => e.id != base.id));
+    if (deleteApplied) remoteSourceExists = false;
     if (deleteFails) throw const GoogleCalendarException('Deletion denied');
   });
   final route = Navigator.of(context).push<void>(
@@ -202,6 +221,13 @@ Future<void> verifyCalendarMove(
   }
   await tester.ensureVisible(find.text('Save'));
   await tester.tap(find.text('Save'));
+  if (dismissDuringCreate) {
+    await tester.pump();
+    expect(creationStarted.isCompleted, isTrue);
+    Navigator.of(context).pop();
+    await tester.pumpAndSettle();
+    finishCreation.complete();
+  }
   await tester.pumpAndSettle();
   if (createFails || refreshFails || missingOccurrence) {
     expect(calendar.byId(base.id), base);
@@ -226,18 +252,23 @@ Future<void> verifyCalendarMove(
     );
     Navigator.of(context).pop();
     await tester.pumpAndSettle();
-  } else if (deleteFails) {
-    void expectOriginalOwnsRecordings() {
-      expectRecording(calendar.byId(base.id)!);
-      final copy = calendar.state.singleWhere((e) => e.id != base.id);
-      expect(copy.feedId, destination);
-      expect(copy.sessions, isEmpty);
-      expect(copy.recordedSessions, isEmpty);
-      expect(copy.actualStart, isNull);
-      expect(copy.actualEnd, isNull);
-      expect(copy.timerStartedAt, isNull);
+  } else if (deleteFails || dismissDuringCreate) {
+    final copy = calendar.state.singleWhere((e) => e.id != base.id);
+    expect(copy.feedId, destination);
+    final ownerId = dismissDuringCreate || (!deleteApplied && !deleteCheckFails)
+        ? base.id
+        : copy.id;
+    void expectOneRecordingOwner() {
+      expectRecording(calendar.byId(ownerId)!);
+      for (final other in calendar.state.where((e) => e.id != ownerId)) {
+        expect(other.sessions, isEmpty);
+        expect(other.recordedSessions, isEmpty);
+        expect(other.actualStart, isNull);
+        expect(other.actualEnd, isNull);
+        expect(other.timerStartedAt, isNull);
+      }
       expect(calendar.state.where((e) => e.isTracking).map((e) => e.id), [
-        base.id,
+        ownerId,
       ]);
       List<(ReportBlockKind, String?, DateTime, DateTime)> report(
         List<PlannerEvent> events,
@@ -252,14 +283,31 @@ Future<void> verifyCalendarMove(
       expect(report(calendar.eventsOnDay(start)), report([base]));
     }
 
-    expect(find.textContaining('Deletion denied'), findsOneWidget);
-    expectOriginalOwnsRecordings();
-    await feeds.syncFeed(source!);
+    if (deleteFails) {
+      expect(find.textContaining('Deletion denied'), findsOneWidget);
+    } else {
+      expect(calendar.byId(base.id), base);
+    }
+    expectOneRecordingOwner();
+    allowDeleteCheck = true;
+    if (source != null) await feeds.syncFeed(source);
     if (destination != null) await feeds.syncFeed(destination);
-    expectOriginalOwnsRecordings();
-    verify(
-      () => google.deleteEvent(calendarId: source, eventId: 'remote-original'),
-    ).called(1);
+    expectOneRecordingOwner();
+    if (dismissDuringCreate) {
+      expect(calendar.byId(base.id), base);
+      verifyNever(
+        () => google.deleteEvent(
+          calendarId: any(named: 'calendarId'),
+          eventId: any(named: 'eventId'),
+        ),
+      );
+    } else {
+      if (deleteApplied) expect(calendar.byId(base.id), isNull);
+      verify(
+        () =>
+            google.deleteEvent(calendarId: source!, eventId: 'remote-original'),
+      ).called(1);
+    }
   } else {
     expect(calendar.byId(base.id), isNull);
     final moved = calendar.state.singleWhere(

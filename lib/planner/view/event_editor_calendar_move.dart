@@ -59,7 +59,9 @@ extension _EventEditorCalendarMove on EventEditorFormState {
       _syncTaskLink(local);
       await EventReminderService.scheduleReminder(local);
       final error = await feedCubit.pushEventDelete(base);
-      if (error != null) _clearMovedRecordings(calendarCubit, local.id);
+      if (error != null) {
+        await _reconcileMoveDelete(feedCubit, calendarCubit, base, local.id);
+      }
       if (!mounted) return;
       _setMoveSaving(false);
       if (error != null) {
@@ -98,7 +100,12 @@ extension _EventEditorCalendarMove on EventEditorFormState {
       feed: destFeed,
       event: draft,
     );
-    if (!mounted) return;
+    if (!mounted) {
+      if (result.error == null) {
+        _clearMovedRecordings(calendarCubit, result.created?.id ?? draft.id);
+      }
+      return;
+    }
     if (result.error != null) {
       _setMoveSaving(false);
       messenger.showSnackBar(SnackBar(content: Text(result.error!)));
@@ -120,7 +127,9 @@ extension _EventEditorCalendarMove on EventEditorFormState {
     );
     if (base.isFromFeed) {
       final deleteError = await feedCubit.pushEventDelete(base);
-      if (deleteError != null) _clearMovedRecordings(calendarCubit, newId);
+      if (deleteError != null) {
+        await _reconcileMoveDelete(feedCubit, calendarCubit, base, newId);
+      }
       if (!mounted) return;
       _setMoveSaving(false);
       if (deleteError != null) {
@@ -154,8 +163,33 @@ extension _EventEditorCalendarMove on EventEditorFormState {
     widget.onFinished?.call();
   }
 
-  /// A failed source deletion keeps the original recordings authoritative.
-  /// Clear only the new copy, even if the editor closed during the request.
+  /// A failed response does not prove Google rejected the deletion. Keep
+  /// the durable destination recordings throughout the confirmation fetch.
+  Future<void> _reconcileMoveDelete(
+    FeedCubit feeds,
+    CalendarCubit calendar,
+    PlannerEvent source,
+    String destinationId,
+  ) async {
+    final feedId = source.feedId!;
+    // syncFeed queues rather than awaits a fetch if another sync is active.
+    final canConfirm =
+        feeds.byId(feedId)?.enabled == true && !feeds.isSyncing.value;
+    await feeds.syncFeed(feedId);
+    if (calendar.byId(destinationId) == null) return;
+    if (canConfirm &&
+        feeds.byId(feedId)?.lastError == null &&
+        calendar.byId(source.id) != null) {
+      _clearMovedRecordings(calendar, destinationId);
+    } else {
+      // Deleted or still uncertain: the destination owns the recordings.
+      // Clear a stale source locally so later syncs preserve just one owner,
+      // even when this fetch failed or the editor has already closed.
+      _clearMovedRecordings(calendar, source.id);
+    }
+  }
+
+  /// Clear only the duplicate after retaining the recording on its owner.
   void _clearMovedRecordings(CalendarCubit calendar, String eventId) {
     final copy = calendar.byId(eventId);
     if (copy == null) return;

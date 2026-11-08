@@ -48,6 +48,26 @@ void main() {
         destination: destination,
         deleteFails: true,
       );
+      for (final checkFails in [false, true]) {
+        await verifyCalendarMove(
+          $.tester,
+          context,
+          source: 'a',
+          destination: destination,
+          deleteFails: true,
+          deleteApplied: true,
+          deleteCheckFails: checkFails,
+        );
+      }
+    }
+    for (final source in [null, 'a']) {
+      await verifyCalendarMove(
+        $.tester,
+        context,
+        source: source,
+        destination: 'b',
+        dismissDuringCreate: true,
+      );
     }
     await verifyCalendarMove(
       $.tester,
