@@ -18,7 +18,7 @@ MoneyFacet? recurringInstanceMoney(MoneyFacet? money) => money == null
 
 /// One scan of existing copies, with no generation or intermediate writes.
 /// Require exact generated defaults to protect legacy unmarked edits. Carry
-/// template title/notes changes into matching future copies when they happen,
+/// template title/notes/fixed changes into matching future copies as they happen,
 /// so later amount saves still recognize them without ignoring custom text
 /// or relying on template history that would be lost after a restart.
 Map<String, Node> recurringPaymentAmountUpdates(
@@ -32,6 +32,7 @@ Map<String, Node> recurringPaymentAmountUpdates(
     return {};
   }
   final amountChanged = before.money!.targetAmount != after.money!.targetAmount;
+  final fixedChanged = before.money!.isFixed != after.money!.isFixed;
   final titleChanged = before.title != after.title;
   final notesChanged = before.notes != after.notes;
   if (before.isInstance) {
@@ -45,7 +46,7 @@ Map<String, Node> recurringPaymentAmountUpdates(
         after.id: after.copyWith(overriddenFields: overrides),
     };
   }
-  if ((!amountChanged && !titleChanged && !notesChanged) ||
+  if ((!amountChanged && !fixedChanged && !titleChanged && !notesChanged) ||
       !before.isTemplate ||
       !after.isTemplate) {
     return {};
@@ -62,8 +63,11 @@ Map<String, Node> recurringPaymentAmountUpdates(
           title: titleChanged ? after.title : node.title,
           notes: notesChanged ? after.notes : node.notes,
           clearNotes: notesChanged && after.notes == null,
-          money: amountChanged
-              ? node.money!.copyWith(targetAmount: after.money!.targetAmount)
+          money: amountChanged || fixedChanged
+              ? node.money!.copyWith(
+                  targetAmount: after.money!.targetAmount,
+                  isFixed: after.money!.isFixed,
+                )
               : node.money,
         ),
   };

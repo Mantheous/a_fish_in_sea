@@ -27,7 +27,11 @@ class RecurringPaymentFixture {
   late Set<String> refreshedIds;
   late double oldBalance;
 
-  Future<void> pump(WidgetTester tester, {String? notes}) async {
+  Future<void> pump(
+    WidgetTester tester, {
+    String? notes,
+    bool isFixed = false,
+  }) async {
     final storage = _Storage();
     when(() => storage.read(any())).thenReturn(null);
     when(() => storage.write(any(), any())).thenAnswer((_) async {});
@@ -67,7 +71,7 @@ class RecurringPaymentFixture {
       notes: notes,
       createdAt: start,
       schedule: ScheduleFacet(due: start),
-      money: const MoneyFacet(targetAmount: 100),
+      money: MoneyFacet(targetAmount: 100, isFixed: isFixed),
       recurrence: NodeRecurrence(
         frequency: TimeScale.monthly,
         endDate: DateTime(now.year, now.month + 10, 1),
@@ -131,12 +135,24 @@ class RecurringPaymentFixture {
     await tester.pumpAndSettle();
   }
 
-  Future<void> edit(WidgetTester tester) async {
+  Future<void> edit(
+    WidgetTester tester, {
+    String? amount = '150',
+    bool toggleFixed = false,
+  }) async {
     await tester.tap(find.byIcon(Icons.edit_outlined));
     await tester.pumpAndSettle();
-    final amount = find.widgetWithText(TextField, 'Target amount');
-    await tester.ensureVisible(amount);
-    await tester.enterText(amount, '150');
+    if (amount != null) {
+      final field = find.widgetWithText(TextField, 'Target amount');
+      await tester.ensureVisible(field);
+      await tester.enterText(field, amount);
+    }
+    if (toggleFixed) {
+      final fixed = find.widgetWithText(SwitchListTile, 'Fixed amount');
+      await tester.ensureVisible(fixed);
+      await tester.tap(fixed);
+      await tester.pumpAndSettle();
+    }
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
   }

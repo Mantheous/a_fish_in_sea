@@ -80,6 +80,47 @@ void main() {
     },
   );
 
+  for (final initialFixed in [false, true]) {
+    testWidgets(
+      'fixed amount toggle from $initialFixed survives restore and amount save',
+      (tester) async {
+        final f = RecurringPaymentFixture();
+        await f.pump(tester, isFixed: initialFixed);
+        final protectedBefore = {
+          for (final n in f.nodes.state.where((n) => n.isInstance))
+            if (!f.refreshedIds.contains(n.id)) n.id: n,
+        };
+
+        await f.edit(tester, amount: null, toggleFixed: true);
+
+        expect(f.nodes.byId(f.template.id)!.money!.isFixed, !initialFixed);
+        for (final entry in protectedBefore.entries) {
+          expect(f.nodes.byId(entry.key), entry.value);
+        }
+        for (final id in f.refreshedIds) {
+          expect(f.nodes.byId(id)!.money!.isFixed, !initialFixed);
+          expect(f.nodes.byId(id)!.money!.targetAmount, 100);
+        }
+        _restore(f);
+        await tester.pumpAndSettle();
+        f.before = List.of(f.nodes.state);
+        f.undo.resetHistory();
+        final emissions = <Object>[];
+        f.nodes.stream.listen(emissions.add);
+
+        await f.edit(tester);
+
+        expect(emissions, hasLength(1));
+        f.verify();
+        final saved = List.of(f.nodes.state);
+        f.verifyUndo();
+        expect(f.nodes.state, saved);
+        f.verify();
+        await tester.pumpAndSettle();
+      },
+    );
+  }
+
   for (final initialNotes in [null, 'Original payment notes']) {
     testWidgets(
       'template notes change from $initialNotes keeps forecasts fresh',
