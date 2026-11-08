@@ -233,7 +233,8 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
 
   bool isEventEditable(PlannerEvent event) {
     if (!event.isFromFeed) return true;
-    return isRemoteEditable(event);
+    return isRemoteEditable(event) ||
+        isLocallySchedulableAssignment(event, byId(event.feedId!));
   }
 
   Feed? _googleFeedFor(PlannerEvent event) {
@@ -678,27 +679,11 @@ class FeedCubit extends RevertableHydratedCubit<List<Feed>> {
         final old = previous[event.id];
         if (old != null) {
           if (old.isTask) {
-            return preserveLocalFeedMetadata(
-              event.copyWith(
-                isTask: old.isTask,
-                done: old.done,
-                completedAt: old.completedAt,
-                clearCompletedAt: !old.done || old.completedAt == null,
-                taskId: old.taskId,
-                clearTaskId: old.taskId == null,
-                placeId: old.placeId,
-                clearPlaceId: old.placeId == null,
-                assignees: old.assignees,
-                sessions: old.sessions,
-                actualStart: old.actualStart,
-                clearActualStart: old.actualStart == null,
-                actualEnd: old.actualEnd,
-                clearActualEnd: old.actualEnd == null,
-                timerStartedAt: old.timerStartedAt,
-                clearTimerStartedAt: old.timerStartedAt == null,
-                failed: old.failed,
-              ),
+            return preserveLocalTaskState(
+              event,
               old,
+              preserveWorkTime: isLocallySchedulableAssignment(old, feed) &&
+                  old.workTimeScheduled,
             );
           }
           // The task flag is local-only (Google never stores it), so a

@@ -1440,20 +1440,26 @@ class _CalendarPageState extends State<CalendarPage> {
   bool _isMovable(PlannerEvent event) {
     if (isReportDisplayId(event.id)) return false;
     if (isNodeBlockId(event.id)) return true;
-    if (!event.isFromFeed) return event.recurrenceRule.isEmpty;
-    if (!mounted) return false;
-    return context.read<FeedCubit>().isRemoteEditable(event);
+    if (event.isFromFeed &&
+        (!mounted || !context.read<FeedCubit>().isEventEditable(event))) {
+      return false;
+    }
+    return isDraggableEvent(
+      event,
+      remoteEditable: mounted && context.read<FeedCubit>().isRemoteEditable(event),
+    );
   }
 
-  /// Set-based variant used by tiles: O(1) instead of an O(F) `byId` scan
-  /// per tile per frame.
+  /// Set-based variant used by tiles to avoid looking up feeds per tile.
   bool _isMovableFast(PlannerEvent event, Set<String> remoteEditableFeedIds) {
     if (isReportDisplayId(event.id)) return false;
     if (isNodeBlockId(event.id)) return true;
-    if (!event.isFromFeed) return event.recurrenceRule.isEmpty;
-    final feedId = event.feedId;
-    if (feedId == null || event.sourceUid == null) return false;
-    return remoteEditableFeedIds.contains(feedId);
+    if (event.isFromFeed && event.isTask) return _isMovable(event);
+    return isDraggableEvent(
+      event,
+      remoteEditable: event.sourceUid != null &&
+          remoteEditableFeedIds.contains(event.feedId),
+    );
   }
 
   /// Toggl-style play/stop badge pinned to the tile's top-right corner.
@@ -1679,7 +1685,7 @@ class _CalendarPageState extends State<CalendarPage> {
       message: _movedText(updated),
       onUndo: undoCubit.undo,
     );
-    if (!previous.isFromFeed) return;
+    if (!context.read<FeedCubit>().isRemoteEditable(previous)) return;
     // Optimistic: the new time is already applied above so the drop
     // feels instant. Push in the background; on failure revert.
     final error = await context.read<FeedCubit>().pushEventUpdate(updated);

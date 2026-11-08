@@ -26,8 +26,12 @@ import '../model/recurrence.dart';
 import '../model/task_assignee.dart';
 import '../service/calendar_report.dart';
 import '../service/event_reminders.dart';
+import '../service/event_editor_task_link.dart';
+import '../service/feed_event_merge.dart' show isLocallySchedulableAssignment;
 import 'event_calendar_policy.dart';
 import 'event_editor_actions.dart';
+import 'event_editor_task_fields.dart';
+import 'event_editor_text_field.dart';
 import 'event_colors.dart';
 import 'event_time_sections.dart';
 import 'people_field.dart';
@@ -593,6 +597,14 @@ class EventEditorFormState extends State<EventEditorForm> {
     // reset the calendar dropdown via its ValueKey and made the editor feel
     // glitchy. Only the picker below watches feeds now.
     final existing = widget.existing;
+    final sourceOwnedText = existing != null &&
+        existing.isFromFeed &&
+        !context.read<FeedCubit>().isRemoteEditable(existing);
+    final importedAssignment = existing != null &&
+        isLocallySchedulableAssignment(
+          existing,
+          context.read<FeedCubit>().byId(existing.feedId ?? ''),
+        );
     return SafeArea(
       top: false,
       child: Stack(
@@ -634,17 +646,15 @@ class EventEditorFormState extends State<EventEditorForm> {
                   canChangeCalendar: (feeds) => existing == null
                       ? true
                       : canChangeEventCalendar(existing,
-                          editable: feeds.isEventEditable(existing)),
+                          editable: !existing.isFromFeed || feeds.isRemoteEditable(existing)),
                   onChanged: (value) =>
                       setState(() => _saveTargetFeedId = value),
                 ),
-                TextField(
+                EventEditorTextField(
                   controller: _subject,
+                  label: 'Title',
+                  sourceOwned: sourceOwnedText,
                   autofocus: widget.autofocusTitle,
-                  decoration: const InputDecoration(
-                    labelText: 'Title',
-                    border: OutlineInputBorder(),
-                  ),
                 ),
                 const SizedBox(height: 12),
                 Row(
@@ -734,12 +744,10 @@ class EventEditorFormState extends State<EventEditorForm> {
                     _emitDraft();
                   },
                 ),            const SizedBox(height: 12),
-                TextField(
+                EventEditorTextField(
                   controller: _location,
-                  decoration: const InputDecoration(
-                    labelText: 'Location',
-                    border: OutlineInputBorder(),
-                  ),
+                  label: 'Location',
+                  sourceOwned: sourceOwnedText,
                 ),
                 const SizedBox(height: 12),
                 _PlaceField(
@@ -758,40 +766,28 @@ class EventEditorFormState extends State<EventEditorForm> {
                   },
                 ),
                 const SizedBox(height: 12),
-                TextField(
+                EventEditorTextField(
                   controller: _notes,
-                  decoration: const InputDecoration(
-                    labelText: 'Notes',
-                    border: OutlineInputBorder(),
-                  ),
+                  label: 'Notes',
+                  sourceOwned: sourceOwnedText,
                   maxLines: 2,
                 ),
                 const SizedBox(height: 4),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Task'),
-                  subtitle: const Text(
-                    'Tasks can be marked complete and show in the Tasks list',
-                  ),
-                  value: _isTask,
-                  onChanged: (value) {
+                EventEditorTaskFields(
+                  isTask: _isTask,
+                  done: _done,
+                  onTaskChanged: (value) {
                     setState(() {
                       _isTask = value;
                       if (!value) _done = false;
                     });
                     _emitDraft();
                   },
+                  onDoneChanged: (value) {
+                    setState(() => _done = value);
+                    _emitDraft();
+                  },
                 ),
-                if (_isTask)
-                  CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Completed'),
-                    value: _done,
-                    onChanged: (value) {
-                      setState(() => _done = value ?? false);
-                      _emitDraft();
-                    },
-                  ),
               ],
             ),
           ),
@@ -802,7 +798,7 @@ class EventEditorFormState extends State<EventEditorForm> {
             child: EventEditorActions(
               title: widget.title,
               hasExistingEvent: existing != null,
-              allowDelete: widget.allowDelete,
+              allowDelete: widget.allowDelete && !importedAssignment,
               saving: _saving,
               onDelete: () => _delete(context),
               onCancel: widget.onCancelled,
@@ -1155,7 +1151,7 @@ class EventEditorFormState extends State<EventEditorForm> {
     final base = calendarCubit.byId(widget.existing!.id) ?? widget.existing!;
     final ruleForMove =
         _customRepeat ? base.recurrenceRule : config.ruleFor(start);
-    if (canChangeEventCalendar(base, editable: feedCubit.isEventEditable(base))) {
+    if (canChangeEventCalendar(base, editable: !base.isFromFeed || feedCubit.isRemoteEditable(base))) {
       final destFeedId = feedCubit.byId(_saveTargetFeedId ?? '')?.kind ==
               FeedKind.google
           ? _saveTargetFeedId
@@ -1196,6 +1192,10 @@ class EventEditorFormState extends State<EventEditorForm> {
     }
     final rule = _customRepeat ? base.recurrenceRule : config.ruleFor(start);
     final updated = base.copyWith(
+      workTimeScheduled: base.workTimeScheduled ||
+          (base.isFromFeed && feedCubit.isEventEditable(base) &&
+              !feedCubit.isRemoteEditable(base) &&
+              (start != base.start || end != base.end || _allDay != base.allDay)),
       subject: subject,
       notes: notes,
       clearNotes: notes == null,
@@ -1253,8 +1253,11 @@ class EventEditorFormState extends State<EventEditorForm> {
       widget.onFinished?.call();
       return;
     }
-    calendarCubit.updateEvent(updated);
-    _syncTaskLink(updated);
+    NodeCubit? nodes;
+    try {
+      nodes = context.read<NodeCubit>();
+    } catch (_) {}
+    saveLocalEditorEvent(nodes, calendarCubit, updated);
     await EventReminderService.scheduleReminder(updated);
     widget.onFinished?.call();
   }
@@ -1898,9 +1901,6 @@ class EventEditorFormState extends State<EventEditorForm> {
         silent: true);
   }
 
-  /// Mirrors a locally saved event's task flag into [NodeCubit]: creates or
-  /// refreshes the backing node when marked, removes backing nodes when
-  /// un-marked.
   void _syncTaskLink(PlannerEvent saved) {
     NodeCubit nodes;
     try {
@@ -1908,53 +1908,12 @@ class EventEditorFormState extends State<EventEditorForm> {
     } catch (_) {
       return;
     }
-    final calendar = context.read<CalendarCubit>();
-    if (!saved.isTask) {
-      final seeded = _seededSourceNode(nodes, saved.id, saved.taskId);
-      if (seeded != null) {
-        // The Task switch describes the event, not the assignment it was
-        // scheduled from: turning it off must not delete that task. The
-        // block the user just picked is still that task's plan, so the
-        // task list keeps showing it as scheduled.
-        nodes.setScheduleBlock(seeded.id, saved.start, saved.end);
-        return;
-      }
-      nodes.removeNodesForEvent(saved.id);
-      return;
-    }
-    if (saved.isFromFeed) {
-      nodes.ensureNodeForFeedEvent(saved);
-      nodes.setDoneForEvent(
-        saved.id,
-        done: saved.done,
-        completedAt: saved.completedAt,
-        taskId: saved.taskId,
-      );
-      return;
-    }
-    final nodeId = nodes.upsertLinkedNodeForEvent(saved);
-    calendar.setTaskLink(saved.id, nodeId);
-    nodes.setDoneForEvent(
-      saved.id,
-      done: saved.done,
-      completedAt: saved.completedAt,
-      taskId: saved.taskId ?? nodeId,
+    syncEditorTaskLink(
+      nodes,
+      context.read<CalendarCubit>(),
+      saved,
+      syncFeedWorkTime: !context.read<FeedCubit>().isRemoteEditable(saved),
     );
-  }
-
-  /// The pre-existing task that seeded this event ("Add to calendar"),
-  /// when it is still linked to it. Never the synthetic `node:<id>`
-  /// backing that [NodeCubit.upsertLinkedNodeForEvent] creates for an
-  /// event marked as a task itself — that one is disposable.
-  static Node? _seededSourceNode(
-    NodeCubit nodes,
-    String eventId,
-    String? linkedId,
-  ) {
-    if (linkedId == null || linkedId == 'node:$eventId') return null;
-    final node = nodes.byId(linkedId);
-    if (node == null || node.calendarEventId != eventId) return null;
-    return node;
   }
 
   /// Re-applies the editor's task flag after a Google push + re-sync, which
@@ -1971,7 +1930,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       return;
     }
     if (!_isTask) {
-      if (_seededSourceNode(nodes, syncedId, _sourceTaskId) != null) {
+      if (seededSourceNode(nodes, syncedId, _sourceTaskId) != null) {
         // Scheduling an assignment must not delete it, even when the user
         // saved the calendar block as a plain event.
         return;
@@ -1982,7 +1941,7 @@ class EventEditorFormState extends State<EventEditorForm> {
     NodeEventLink.markEventAsNode(calendar, nodes, syncedId);
     // The block the user picked is the source task's plan as well. Google
     // holds the time; the task keeps its own due date.
-    final seeded = _seededSourceNode(nodes, syncedId, _sourceTaskId);
+    final seeded = seededSourceNode(nodes, syncedId, _sourceTaskId);
     final synced = calendar.byId(syncedId);
     if (seeded != null && synced != null) {
       nodes.setScheduleBlock(seeded.id, synced.start, synced.end);
@@ -2740,15 +2699,7 @@ class EventDetailView extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: Text(
-                pushesToGoogle
-                    ? event.isRecurringInstance
-                        ? 'Part of a repeating series on ${feed?.name ?? 'Google'} — '
-                            'dragging moves just this occurrence, editing '
-                            'lets you pick this occurrence or the whole series.'
-                        : 'Synced with ${feed?.name ?? 'Google'} — edits save '
-                            'back to Google Calendar.'
-                    : 'Synced from ${feed?.name ?? 'your class'} — changes there '
-                        'will overwrite local edits on the next sync.',
+                eventSyncDescription(event, feed, pushesToGoogle: pushesToGoogle),
                 style: theme.textTheme.bodySmall,
               ),
             ),

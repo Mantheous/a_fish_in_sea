@@ -22,6 +22,9 @@ class PlannerEvent extends Equatable {
   final int? colorValue;
   final String? taskId;
   final bool isTask;
+
+  /// True once the user chooses work times instead of following feed dates.
+  final bool workTimeScheduled;
   final bool done;
   final DateTime? completedAt;
   final String? placeId;
@@ -55,6 +58,7 @@ class PlannerEvent extends Equatable {
     this.colorValue,
     this.taskId,
     this.isTask = false,
+    this.workTimeScheduled = false,
     this.done = false,
     this.completedAt,
     this.placeId,
@@ -129,6 +133,7 @@ class PlannerEvent extends Equatable {
     String? taskId,
     bool clearTaskId = false,
     bool? isTask,
+    bool? workTimeScheduled,
     bool? done,
     DateTime? completedAt,
     bool clearCompletedAt = false,
@@ -162,6 +167,7 @@ class PlannerEvent extends Equatable {
     colorValue: clearColorValue ? null : (colorValue ?? this.colorValue),
     taskId: clearTaskId ? null : (taskId ?? this.taskId),
     isTask: isTask ?? this.isTask,
+    workTimeScheduled: workTimeScheduled ?? this.workTimeScheduled,
     done: done ?? this.done,
     completedAt: clearCompletedAt ? null : (completedAt ?? this.completedAt),
     placeId: clearPlaceId ? null : (placeId ?? this.placeId),
@@ -195,6 +201,7 @@ class PlannerEvent extends Equatable {
         colorValue: json['colorValue'] as int?,
         taskId: json['taskId'] as String?,
         isTask: json['isTask'] as bool? ?? false,
+        workTimeScheduled: json['workTimeScheduled'] == true,
         done: json['done'] as bool? ?? false,
         completedAt: json['completedAt'] == null
             ? null
@@ -264,6 +271,7 @@ class PlannerEvent extends Equatable {
     'colorValue': colorValue,
     'taskId': taskId,
     'isTask': isTask,
+    'workTimeScheduled': workTimeScheduled,
     'done': done,
     'completedAt': completedAt?.toIso8601String(),
     'placeId': placeId,
@@ -294,6 +302,7 @@ class PlannerEvent extends Equatable {
     colorValue,
     taskId,
     isTask,
+    workTimeScheduled,
     done,
     completedAt,
     placeId,
