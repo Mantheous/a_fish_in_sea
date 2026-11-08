@@ -88,6 +88,8 @@ class PlaidCubit extends HydratedCubit<PlaidState>
   /// Connect via Plaid Link (iOS, Android, Web) or sandbox auto-connect on
   /// desktop platforms where Link is unavailable.
   Future<void> connectBank() async {
+    final generation = accountGeneration;
+    if (!isCurrentAccount(generation)) return;
     if (DemoMode.isActive) {
       // Mock Link: no credentials, no browser — straight to a connected
       // mock bank so the whole reconcile flow is tourable.
@@ -96,7 +98,7 @@ class PlaidCubit extends HydratedCubit<PlaidState>
         clearError: true,
       ));
       await Future<void>.delayed(const Duration(milliseconds: 600));
-      if (!DemoMode.isActive) return;
+      if (!DemoMode.isActive || !isCurrentAccount(generation)) return;
       _demoConnected();
       return;
     }
@@ -108,7 +110,9 @@ class PlaidCubit extends HydratedCubit<PlaidState>
     try {
       if (PlaidLinkHandler.isSupported) {
         final linkToken = await _service.createLinkToken();
+        if (!isCurrentAccount(generation)) return;
         final result = await PlaidLinkHandler.open(linkToken);
+        if (!isCurrentAccount(generation)) return;
         if (!result.succeeded || result.publicToken == null) {
           // Link ended without connecting: report the exit reason instead
           // of silently reverting to the Connect button (the user often
@@ -123,18 +127,23 @@ class PlaidCubit extends HydratedCubit<PlaidState>
         }
         final exchange =
             await _service.exchangePublicToken(result.publicToken!);
+        if (!isCurrentAccount(generation)) return;
         await _onConnected(itemId: exchange['item_id'] as String?);
       } else {
         await _service.sandboxAutoConnect();
+        if (!isCurrentAccount(generation)) return;
         final info = await _service.getInfo();
+        if (!isCurrentAccount(generation)) return;
         await _onConnected(itemId: info['item_id'] as String?);
       }
     } on PlaidServiceException catch (e) {
+      if (!isCurrentAccount(generation)) return;
       emit(state.copyWith(
         status: PlaidConnectionStatus.error,
         errorMessage: e.message,
       ));
     } catch (e) {
+      if (!isCurrentAccount(generation)) return;
       emit(state.copyWith(
         status: PlaidConnectionStatus.error,
         errorMessage: e.toString(),
@@ -144,13 +153,15 @@ class PlaidCubit extends HydratedCubit<PlaidState>
 
   /// Sandbox-only shortcut without Link UI (desktop dev).
   Future<void> sandboxAutoConnect() async {
+    final generation = accountGeneration;
+    if (!isCurrentAccount(generation)) return;
     if (DemoMode.isActive) {
       emit(state.copyWith(
         status: PlaidConnectionStatus.connecting,
         clearError: true,
       ));
       await Future<void>.delayed(const Duration(milliseconds: 600));
-      if (!DemoMode.isActive) return;
+      if (!DemoMode.isActive || !isCurrentAccount(generation)) return;
       _demoConnected();
       return;
     }
@@ -160,14 +171,18 @@ class PlaidCubit extends HydratedCubit<PlaidState>
     ));
     try {
       await _service.sandboxAutoConnect();
+      if (!isCurrentAccount(generation)) return;
       final info = await _service.getInfo();
+      if (!isCurrentAccount(generation)) return;
       await _onConnected(itemId: info['item_id'] as String?);
     } on PlaidServiceException catch (e) {
+      if (!isCurrentAccount(generation)) return;
       emit(state.copyWith(
         status: PlaidConnectionStatus.error,
         errorMessage: e.message,
       ));
     } catch (e) {
+      if (!isCurrentAccount(generation)) return;
       emit(state.copyWith(
         status: PlaidConnectionStatus.error,
         errorMessage: e.toString(),
@@ -176,6 +191,8 @@ class PlaidCubit extends HydratedCubit<PlaidState>
   }
 
   Future<void> disconnect() async {
+    final generation = accountGeneration;
+    if (!isCurrentAccount(generation)) return;
     if (DemoMode.isActive) {
       // Demo-local: drop the mock connection (reconnect re-seeds it).
       emit(state.copyWith(clearConnection: true));
@@ -186,21 +203,27 @@ class PlaidCubit extends HydratedCubit<PlaidState>
     } catch (_) {
       // Best-effort; clear local state regardless.
     }
+    if (!isCurrentAccount(generation)) return;
     emit(state.copyWith(clearConnection: true));
   }
 
   Future<void> _onConnected({String? itemId}) async {
+    final generation = accountGeneration;
+    if (!isCurrentAccount(generation)) return;
     emit(state.copyWith(
       status: PlaidConnectionStatus.connected,
       itemId: itemId,
     ));
     await fetchBalance();
+    if (!isCurrentAccount(generation)) return;
     await fetchAccounts();
   }
 
   // ── Data fetching ───────────────────────────────────────────────────
 
   Future<void> fetchBalance() async {
+    final generation = accountGeneration;
+    if (!isCurrentAccount(generation)) return;
     if (DemoMode.isActive) {
       if (!state.isConnected) return;
       emit(state.copyWith(currentBalance: _demoBalance()));
@@ -208,6 +231,7 @@ class PlaidCubit extends HydratedCubit<PlaidState>
     }
     try {
       final data = await _service.getBalance();
+      if (!isCurrentAccount(generation)) return;
       final accounts = data['accounts'] as List<dynamic>? ?? [];
       double totalBalance = 0;
       for (final account in accounts) {
@@ -224,6 +248,8 @@ class PlaidCubit extends HydratedCubit<PlaidState>
   }
 
   Future<void> fetchAccounts() async {
+    final generation = accountGeneration;
+    if (!isCurrentAccount(generation)) return;
     if (DemoMode.isActive) {
       if (!state.isConnected) return;
       emit(state.copyWith(accounts: DemoData.plaidAccounts()));
@@ -231,19 +257,25 @@ class PlaidCubit extends HydratedCubit<PlaidState>
     }
     try {
       final accounts = await _service.getAccounts();
+      if (!isCurrentAccount(generation)) return;
       emit(state.copyWith(accounts: accounts));
     } catch (_) {}
   }
 
   Future<List<Map<String, dynamic>>> fetchTransactions() async {
+    final generation = accountGeneration;
+    if (!isCurrentAccount(generation)) return [];
     if (DemoMode.isActive) {
       if (!state.isConnected) return [];
       await Future<void>.delayed(const Duration(milliseconds: 400));
+      if (!isCurrentAccount(generation)) return [];
       return DemoData.plaidTransactions(DateTime.now());
     }
     try {
-      return await _service.getTransactions();
+      final transactions = await _service.getTransactions();
+      return isCurrentAccount(generation) ? transactions : [];
     } catch (e) {
+      if (!isCurrentAccount(generation)) return [];
       emit(state.copyWith(errorMessage: 'Failed to fetch transactions: $e'));
       return [];
     }
@@ -251,6 +283,8 @@ class PlaidCubit extends HydratedCubit<PlaidState>
 
   /// Restore connection if the server still has a token for this user.
   Future<void> checkExistingConnection() async {
+    final generation = accountGeneration;
+    if (!isCurrentAccount(generation)) return;
     if (DemoMode.isActive) {
       // Seeded connected at entry; stay that way unless the user
       // disconnected mid-demo (then stay disconnected — their call).
@@ -258,6 +292,7 @@ class PlaidCubit extends HydratedCubit<PlaidState>
     }
     try {
       final info = await _service.getInfo();
+      if (!isCurrentAccount(generation)) return;
       // New servers answer `connected` without echoing the access token
       // (it must never leave the server); old servers echo `access_token`.
       // Either shape — or a known item id — means still connected.

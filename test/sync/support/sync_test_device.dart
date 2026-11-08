@@ -7,6 +7,7 @@ import 'package:a_fish_in_sea/planner/bloc/calendar_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/bloc/settings_cubit.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
+import 'package:a_fish_in_sea/planner/service/canvas_service.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
 import 'package:a_fish_in_sea/reporting/bloc/places_cubit.dart';
 import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
@@ -24,13 +25,15 @@ import 'package:mocktail/mocktail.dart';
 class MockStorage extends Mock implements Storage {}
 
 class TestPlaidCubit extends PlaidCubit {
-  TestPlaidCubit()
+  TestPlaidCubit({PlaidService? service})
     : super(
-        service: PlaidService(
-          baseUrl: 'https://plaid.test',
-          userId: 'test-user',
-          client: MockClient((_) async => http.Response('{}', 200)),
-        ),
+        service:
+            service ??
+            PlaidService(
+              baseUrl: 'https://plaid.test',
+              userId: 'test-user',
+              client: MockClient((_) async => http.Response('{}', 200)),
+            ),
       );
 
   void seedConnected(String itemId) {
@@ -180,7 +183,13 @@ class SyncTestDevice {
   late final ReportingCubit reporting;
   late final TrackingCubit tracking;
 
-  SyncTestDevice(this.server) {
+  SyncTestDevice(
+    this.server, {
+    IcalService? icalService,
+    GoogleCalendarService? googleService,
+    CanvasService? canvasService,
+    PlaidService? plaidService,
+  }) {
     auth = AuthCubit(client: () => server);
     meta = SyncMetaCubit();
     nodes = NodeCubit();
@@ -188,13 +197,16 @@ class SyncTestDevice {
     feeds = FeedCubit(
       calendarCubit: events,
       nodeCubit: nodes,
-      icalService: IcalService(),
-      googleService: GoogleCalendarService(baseUrl: () => '', userId: () => ''),
+      icalService: icalService ?? IcalService(),
+      googleService:
+          googleService ??
+          GoogleCalendarService(baseUrl: () => '', userId: () => ''),
+      canvasService: canvasService,
       proxyBase: () => '',
     );
     settings = SettingsCubit();
     transactions = TransactionsCubit();
-    plaid = TestPlaidCubit();
+    plaid = TestPlaidCubit(service: plaidService);
     places = PlacesCubit();
     reporting = ReportingCubit();
     tracking = TrackingCubit();

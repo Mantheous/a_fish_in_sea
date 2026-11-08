@@ -18,6 +18,38 @@ void main() {
     HydratedBloc.storage = storage;
   });
 
+  test('Keep recovers a lost task collection including its offline draft '
+      'across subsequent sign-outs', () async {
+    final server = FakeSyncClient();
+    final d = SyncTestDevice(server);
+    addTearDown(d.waterfall.close);
+    await d.signIn();
+    d.nodes.addNode(
+      Node(id: 'synced', title: 'Cloud task', createdAt: DateTime(2026)),
+    );
+    await d.engine.syncNow();
+    d.nodes.addNode(
+      Node(id: 'draft', title: 'Offline draft', createdAt: DateTime(2026)),
+    );
+    expect(server.store['nodes'], isNot(contains('draft')));
+    await d.engine.signOut();
+    d.nodes.applyJson(const {'nodes': <dynamic>[]}); // Lost local store.
+
+    await d.signIn();
+    d.meta.reset(); // AuthPage resets bookkeeping after signing in.
+    await d.engine.syncNow();
+    expect(d.nodes.state.map((n) => n.id), containsAll(['synced', 'draft']));
+    expect(server.store['nodes']!['draft']!.deleted, isFalse);
+
+    await d.engine.signOut();
+    d.nodes.applyJson(const {'nodes': <dynamic>[]});
+    await d.signIn();
+    d.meta.reset();
+    await d.engine.syncNow();
+    expect(d.nodes.state.map((n) => n.id), containsAll(['synced', 'draft']));
+    expect(server.store['nodes']!.values.every((row) => !row.deleted), isTrue);
+  });
+
   test(
     'Keep then loss of four places re-pulls without tombstoning them',
     () async {

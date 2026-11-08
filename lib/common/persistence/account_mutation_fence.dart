@@ -5,6 +5,16 @@ import 'package:hydrated_bloc/hydrated_bloc.dart';
 mixin AccountMutationFence<T> on HydratedCubit<T> {
   bool accountMutationsBlocked = false;
   int _accountWriteDepth = 0;
+  int _accountGeneration = 0;
+
+  /// Capture before asynchronous work and check again before applying its
+  /// result. Opening the write fence never revives an outgoing operation.
+  int get accountGeneration => _accountGeneration;
+
+  bool isCurrentAccount(int generation) =>
+      generation == _accountGeneration && !accountMutationsBlocked && !isClosed;
+
+  void invalidateAccountOperations() => _accountGeneration++;
 
   @override
   void emit(T state) {

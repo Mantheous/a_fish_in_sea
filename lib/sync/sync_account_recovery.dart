@@ -21,6 +21,7 @@ extension AccountRecovery on SyncEngine {
   void _blockAccountMutations() {
     for (final store in _accountStores) {
       store.accountMutationsBlocked = true;
+      store.invalidateAccountOperations();
     }
     UndoCubit.instance?.resetHistory();
   }
@@ -78,6 +79,28 @@ extension AccountRecovery on SyncEngine {
     } finally {
       _applyingRemote = false;
     }
+  }
+
+  Future<void> _recoverMissingCollections(AccountSnapshot snapshot) async {
+    final missing = {
+      for (final entry in snapshot.collections.entries)
+        if (entry.value.isNotEmpty && _extract(entry.key).isEmpty)
+          entry.key: entry.value,
+    };
+    if (missing.isEmpty) return;
+    _applyingRemote = true;
+    try {
+      AccountMutationFence.write(_accountStores, () {
+        for (final entry in missing.entries) {
+          _apply(entry.key, entry.value);
+        }
+      });
+    } finally {
+      _applyingRemote = false;
+    }
+    // Preserve offline drafts before publishing bookkeeping or allowing a
+    // later sign-out to replace their recovery snapshot.
+    await _persistCollections();
   }
 
   /// A Keep sign-out leaves live edits authoritative. If a whole collection
@@ -305,6 +328,11 @@ extension AccountRecovery on SyncEngine {
         return;
       }
       final bookkeeping = _restoredBookkeeping(restored);
+      // A lost collection needs both the saved offline contents and a full
+      // cloud pull. Compute bookkeeping before restoring so the lost store
+      // still invalidates the incremental cursor. Never-synced Keep sessions
+      // skip this branch: failed pulls must not resurrect deliberate deletes.
+      await _recoverMissingCollections(restored);
       meta.reset(
         lastEmail: email,
         cursor: bookkeeping.cursor,
