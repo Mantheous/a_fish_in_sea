@@ -33,6 +33,20 @@ Future<Map<String, dynamic>> readTrackingConfig() async {
   }
 }
 
+/// Older active recordings stored only the interval. Presence of either
+/// ownership key identifies a newer config, including a revoked null session.
+Future<int?> readLegacyTrackingInterval() async {
+  final config = await readTrackingConfig();
+  final interval = config['intervalMinutes'];
+  if (interval is! num ||
+      !interval.isFinite ||
+      config.containsKey('account') ||
+      config.containsKey('session')) {
+    return null;
+  }
+  return interval.toInt().clamp(1, 15);
+}
+
 Future<void> writeTrackingConfig(
   int intervalMinutes, {
   String? account,

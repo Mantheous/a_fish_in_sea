@@ -276,10 +276,11 @@ extension AccountRecovery on SyncEngine {
   }
 
   Future<void> _prepareAccountFenced(String email) async {
+    final owner = (meta.state.lastEmail ?? auth.state.email).trim().toLowerCase();
     final fenced =
         meta.state.pendingRemoval ||
         meta.state.pendingRestoration ||
-        meta.state.lastEmail != email ||
+        owner != email ||
         _accountStores.any((store) => store.accountMutationsBlocked);
     if (fenced) {
       _blockAccountMutations();

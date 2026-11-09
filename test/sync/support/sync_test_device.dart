@@ -190,6 +190,7 @@ class SyncTestDevice {
     CanvasService? canvasService,
     PlaidService? plaidService,
     bool? mobileTrackingAvailable,
+    Future<bool> Function(int, {String? account})? startBackgroundTracking,
   }) {
     auth = AuthCubit(client: () => server);
     meta = SyncMetaCubit();
@@ -231,6 +232,7 @@ class SyncTestDevice {
       waterfall: waterfall,
       plaid: plaid,
       mobileTrackingAvailable: mobileTrackingAvailable,
+      startBackgroundTracking: startBackgroundTracking,
     );
   }
 

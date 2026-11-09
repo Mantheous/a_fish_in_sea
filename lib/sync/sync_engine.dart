@@ -17,6 +17,7 @@ import '../planner/bloc/settings_cubit.dart';
 import '../reporting/bloc/places_cubit.dart';
 import '../reporting/bloc/reporting_cubit.dart';
 import '../reporting/bloc/tracking_cubit.dart';
+import '../reporting/service/account_tracking.dart';
 import '../reporting/service/location_service.dart';
 import 'auth_cubit.dart';
 import 'sync_client.dart';
@@ -69,6 +70,7 @@ class SyncEngine {
   final WaterfallCubit waterfall;
   final PlaidCubit plaid;
   final bool _mobileTrackingAvailable;
+  final Future<bool> Function(int, {String? account}) _startBackgroundTracking;
 
   final ValueNotifier<EngineStatus> status =
       ValueNotifier(EngineStatus.idle);
@@ -114,8 +116,11 @@ class SyncEngine {
     required this.waterfall,
     required this.plaid,
     bool? mobileTrackingAvailable,
+    Future<bool> Function(int, {String? account})? startBackgroundTracking,
   }) : _mobileTrackingAvailable =
-           mobileTrackingAvailable ?? LocationService.supportsBackground {
+           mobileTrackingAvailable ?? LocationService.supportsBackground,
+       _startBackgroundTracking =
+           startBackgroundTracking ?? LocationService.startBackground {
     final owner = (meta.state.lastEmail ?? auth.state.email).trim().toLowerCase();
     tracking.pendingPointsAccount = owner.isEmpty ? null : owner;
     auth.prepareAccount = (email) async {
@@ -143,8 +148,14 @@ class SyncEngine {
     'plaid',
   ];
 
-  /// Boot: one sync if signed in. Call once from the widget tree.
+  /// Boot: resume retained legacy recording, then sync if signed in.
   Future<void> boot() async {
+    if (_mobileTrackingAvailable) {
+      await resumeLegacyTrackingRecording(
+        tracking,
+        startBackground: _startBackgroundTracking,
+      );
+    }
     if (auth.state.isSignedIn) {
       await syncNow();
     }
