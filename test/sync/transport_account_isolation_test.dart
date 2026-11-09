@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:a_fish_in_sea/finances/service/plaid_service.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
+import 'package:a_fish_in_sea/planner/service/canvas_service.dart';
 import 'package:a_fish_in_sea/planner/service/google_calendar_service.dart';
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
 import 'package:a_fish_in_sea/sync/sync_client.dart';
@@ -48,6 +49,7 @@ class _Transport {
   late final SyncClient sync;
   late final AuthCubit auth;
   late final PlaidService bank;
+  late final CanvasService canvas;
   late final GoogleCalendarService google;
 
   _Transport() {
@@ -110,6 +112,14 @@ class _Transport {
       sessionGeneration: () => auth.sessionGeneration,
       client: client,
     );
+    canvas = CanvasService(
+      baseUrl: () => 'https://app.test',
+      userId: () => 'device',
+      authToken: () => auth.state.accessToken,
+      refreshAccessToken: () => auth.refreshAccessToken(),
+      sessionGeneration: () => auth.sessionGeneration,
+      client: client,
+    );
     addTearDown(auth.close);
     addTearDown(client.close);
   }
@@ -145,7 +155,13 @@ void main() {
     start: DateTime.utc(2030, 1, 1, 9),
     end: DateTime.utc(2030, 1, 1, 10),
   );
+  final canvasOperations = <String, Future<dynamic> Function(_Transport)>{
+    'Canvas connect': (t) =>
+        t.canvas.connect(token: 'a-canvas-token', host: 'a.instructure.com'),
+    'Canvas disconnect': (t) => t.canvas.disconnect(),
+  };
   final operations = <String, Future<dynamic> Function(_Transport)>{
+    ...canvasOperations,
     'sync upload': (t) => t.sync.push(_changes(1)),
     'sync delete': (t) => t.sync.apiDelete('/api/v1/tokens/7'),
     'bank exchange': (t) => t.bank.exchangePublicToken('a-public-token'),
@@ -167,6 +183,11 @@ void main() {
   final sessionError = anyOf(
     isA<SyncException>(),
     isA<PlaidServiceException>(),
+    isA<CanvasException>().having(
+      (e) => e.message,
+      'message',
+      'Account changed',
+    ),
     isA<GoogleCalendarException>(),
   );
 
@@ -307,6 +328,36 @@ void main() {
         expect(t.auth.sessionGeneration, generation);
       },
     );
+  }
+
+  for (final operation in canvasOperations.entries) {
+    for (final retry in [false, true]) {
+      test('${operation.key}: delayed ${retry ? 'retry' : 'initial'} success '
+          'is rejected after B signs in', () async {
+        final t = _Transport();
+        await t.login('a');
+        final response = Completer<http.Response>();
+        final started = Completer<void>();
+        t.onWrite = (_) {
+          if (retry && t.writes.length == 1) return Future.value(_expired());
+          started.complete();
+          return response.future;
+        };
+        final write = operation.value(t);
+        final aborted = expectLater(write, throwsA(isA<CanvasException>()));
+        await started.future;
+        t.auth.logout();
+        await t.login('b');
+        response.complete(_ok());
+        await aborted;
+        expect(t.writes.map((r) => r.headers['Authorization']), [
+          'Bearer a-access',
+          if (retry) 'Bearer a-fresh',
+        ]);
+        expect(t.refreshes, hasLength(retry ? 1 : 0));
+        expect(t.auth.state.accessToken, 'b-access');
+      });
+    }
   }
 
   test('same-account refresh permits all upload batches', () async {

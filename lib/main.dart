@@ -219,6 +219,8 @@ class MyApp extends StatelessWidget {
                   context.read<AuthCubit>().state.accessToken,
               refreshAccessToken: () =>
                   context.read<AuthCubit>().refreshAccessToken(),
+              sessionGeneration: () =>
+                  context.read<AuthCubit>().sessionGeneration,
             ),
           ),
         ),
