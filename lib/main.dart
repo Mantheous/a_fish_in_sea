@@ -38,6 +38,7 @@ import 'package:a_fish_in_sea/reporting/bloc/places_cubit.dart';
 import 'package:a_fish_in_sea/reporting/bloc/reporting_cubit.dart';
 import 'package:a_fish_in_sea/reporting/bloc/tracking_cubit.dart';
 import 'package:a_fish_in_sea/sync/auth_cubit.dart';
+import 'package:a_fish_in_sea/sync/view/account_transition_gate.dart';
 import 'package:a_fish_in_sea/sync/sync_client.dart';
 import 'package:a_fish_in_sea/sync/sync_engine.dart';
 import 'package:a_fish_in_sea/sync/sync_meta_cubit.dart';
@@ -125,11 +126,13 @@ class MyApp extends StatelessWidget {
             accessToken: () => ref?.state.accessToken,
             refreshAccessToken: () =>
                 ref?.refreshAccessToken() ?? Future.value(null),
+            sessionGeneration: () => ref?.sessionGeneration ?? 0,
           );
           ref = AuthCubit(client: () => client);
           SyncAuth.tokenProvider = () => ref?.state.accessToken;
           SyncAuth.refreshProvider =
               () => ref?.refreshAccessToken() ?? Future.value(null);
+          SyncAuth.sessionGenerationProvider = () => ref?.sessionGeneration ?? 0;
           return ref;
         }),
         BlocProvider(create: (_) => SyncMetaCubit()),
@@ -194,6 +197,8 @@ class MyApp extends StatelessWidget {
                   context.read<AuthCubit>().state.accessToken,
               refreshAccessToken: () =>
                   context.read<AuthCubit>().refreshAccessToken(),
+              sessionGeneration: () =>
+                  context.read<AuthCubit>().sessionGeneration,
             ),
             proxyBase: () =>
                 context.read<SettingsCubit>().state.icalProxyBase,
@@ -214,6 +219,8 @@ class MyApp extends StatelessWidget {
                   context.read<AuthCubit>().state.accessToken,
               refreshAccessToken: () =>
                   context.read<AuthCubit>().refreshAccessToken(),
+              sessionGeneration: () =>
+                  context.read<AuthCubit>().sessionGeneration,
             ),
           ),
         ),
@@ -355,6 +362,7 @@ class _SyncBootstrapState extends State<_SyncBootstrap>
         ),
       ],
       child: MaterialApp(
+        builder: (context, child) => AccountTransitionGate(child: child!),
         scaffoldMessengerKey: EventReminderService.messengerKey,
         debugShowCheckedModeBanner: false,
         title: 'a fish in sea',

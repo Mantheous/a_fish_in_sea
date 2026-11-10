@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:equatable/equatable.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
+import '../../common/persistence/account_mutation_fence.dart';
 
 import '../../common/persistence/stable_storage_keys.dart';
 import '../model/tracked_point.dart';
@@ -37,7 +38,10 @@ class TrackingState extends Equatable {
   List<Object?> get props => [isRecording, startedAt, points];
 }
 
-class TrackingCubit extends HydratedCubit<TrackingState> {
+class TrackingCubit extends HydratedCubit<TrackingState>
+    with AccountMutationFence<TrackingState> {
+  String? pendingPointsAccount;
+
   static const int maxPoints = 5000;
   static const int retentionDays = 30;
 

@@ -26,6 +26,9 @@ class SyncAuth {
   /// Refresh hook for services built inside cubits (e.g. [PlaidService])
   /// that cannot take a context-backed closure. Set once in main.dart.
   static Future<String?> Function()? refreshProvider;
+
+  /// Account lifetime for services using the global token/refresh hooks.
+  static int Function()? sessionGenerationProvider;
 }
 
 /// Scoped long-lived token for third-party apps / AI agents.
@@ -96,6 +99,9 @@ class SyncClient {
   final String Function() serverBase;
   final String? Function() accessToken;
   final Future<String?> Function() refreshAccessToken;
+
+  /// Identity lifetime, unchanged by an ordinary token refresh.
+  final int Function()? sessionGeneration;
   final http.Client _client;
 
   /// Failsafe so a blackholed socket can never wedge [SyncEngine] or the
@@ -109,6 +115,7 @@ class SyncClient {
     required this.serverBase,
     required this.accessToken,
     required this.refreshAccessToken,
+    this.sessionGeneration,
     http.Client? client,
     Duration? timeout,
   })  : _client = client ?? http.Client(),
@@ -155,17 +162,8 @@ class SyncClient {
   /// POST with one automatic token refresh on 401. Returns decoded JSON.
   Future<dynamic> _postAuthed(String path, Map<String, dynamic> body) async {
     final uri = Uri.parse('$_base$path');
-    var r = await _withTimeout(_client.post(uri,
+    return _sendAuthed(() => _client.post(uri,
         headers: _headers(json: true), body: jsonEncode(body)));
-    if (r.statusCode == 401) {
-      final fresh = await refreshAccessToken();
-      if (fresh == null || fresh.isEmpty) {
-        throw SyncException(401, 'Signed out');
-      }
-      r = await _withTimeout(_client.post(uri,
-          headers: _headers(json: true), body: jsonEncode(body)));
-    }
-    return _decode(r);
   }
 
   Future<dynamic> _getAuthed(String path, [Map<String, String>? query]) async {
@@ -173,13 +171,30 @@ class SyncClient {
     if (query != null && query.isNotEmpty) {
       uri = uri.replace(queryParameters: {...uri.queryParameters, ...query});
     }
-    var r = await _withTimeout(_client.get(uri, headers: _headers()));
+    return _sendAuthed(() => _client.get(uri, headers: _headers()));
+  }
+
+  void _checkSession(int? generation) {
+    if (sessionGeneration?.call() != generation) {
+      throw const SyncException(401, 'Account changed');
+    }
+  }
+
+  Future<dynamic> _sendAuthed(
+    Future<http.Response> Function() request,
+  ) async {
+    final generation = sessionGeneration?.call();
+    _checkSession(generation);
+    var r = await _withTimeout(request());
+    _checkSession(generation);
     if (r.statusCode == 401) {
       final fresh = await refreshAccessToken();
+      _checkSession(generation);
       if (fresh == null || fresh.isEmpty) {
-        throw SyncException(401, 'Signed out');
+        throw const SyncException(401, 'Signed out');
       }
-      r = await _withTimeout(_client.get(uri, headers: _headers()));
+      r = await _withTimeout(request());
+      _checkSession(generation);
     }
     return _decode(r);
   }
@@ -275,11 +290,13 @@ class SyncClient {
     String? since,
     List<String>? collections,
   }) async {
+    final generation = sessionGeneration?.call();
     final all = <SyncRecord>[];
     var cursor = since;
     String? pageCursor;
     String serverTime = '';
     while (true) {
+      _checkSession(generation);
       final query = <String, String>{'limit': '1000'};
       if (pageCursor != null) {
         query['cursor'] = pageCursor;
@@ -327,10 +344,12 @@ class SyncClient {
   /// they show up in Settings → Sync.
   Future<({List<SyncRecord> applied, Set<String> guarded})> push(
       List<Map<String, dynamic>> changes) async {
+    final generation = sessionGeneration?.call();
     const chunk = 400;
     final applied = <SyncRecord>[];
     final guarded = <String>{};
     for (var i = 0; i < changes.length; i += chunk) {
+      _checkSession(generation);
       final slice = changes.sublist(i, min(i + chunk, changes.length));
       final body = Map<String, dynamic>.from(
         await _postAuthed('/api/v1/sync/push', {'changes': slice}) ??
@@ -402,16 +421,8 @@ class SyncClient {
 
   /// DELETE with the shared 401→refresh handling. Returns decoded JSON.
   Future<dynamic> apiDelete(String path) async {
-    var uri = Uri.parse('$_base$path');
-    var r = await _withTimeout(_client.delete(uri, headers: _headers()));
-    if (r.statusCode == 401) {
-      final fresh = await refreshAccessToken();
-      if (fresh == null || fresh.isEmpty) {
-        throw SyncException(401, 'Signed out');
-      }
-      r = await _withTimeout(_client.delete(uri, headers: _headers()));
-    }
-    return _decode(r);
+    final uri = Uri.parse('$_base$path');
+    return _sendAuthed(() => _client.delete(uri, headers: _headers()));
   }
 
   // ── Server-side feed snapshots ───────────────────────────────────────

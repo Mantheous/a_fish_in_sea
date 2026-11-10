@@ -5,8 +5,8 @@ void registerTimerSyncTests() {
     'a running timer survives a conflicting pull (server-wins except timers)',
     () async {
       final server = FakeSyncClient();
-      final a = _Device(server);
-      final b = _Device(server);
+      final a = SyncTestDevice(server);
+      final b = SyncTestDevice(server);
       await a.signIn();
       await b.signIn();
 
@@ -39,8 +39,8 @@ void registerTimerSyncTests() {
 
   test('conflicting running timers keep the earliest start', () async {
     final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
+    final a = SyncTestDevice(server);
+    final b = SyncTestDevice(server);
     await a.signIn();
     await b.signIn();
 
@@ -74,8 +74,8 @@ void registerTimerSyncTests() {
 
   test('remote edit propagates to a device with no local changes', () async {
     final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
+    final a = SyncTestDevice(server);
+    final b = SyncTestDevice(server);
     await a.signIn();
     await b.signIn();
 
@@ -93,8 +93,8 @@ void registerTimerSyncTests() {
 
   test('a remote stop lands even under a conflicting local edit', () async {
     final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
+    final a = SyncTestDevice(server);
+    final b = SyncTestDevice(server);
     await a.signIn();
     await b.signIn();
 
@@ -132,8 +132,8 @@ void registerTimerSyncTests() {
     'a newer local run keeps an older run recorded on another device',
     () async {
       final server = FakeSyncClient();
-      final a = _Device(server);
-      final b = _Device(server);
+      final a = SyncTestDevice(server);
+      final b = SyncTestDevice(server);
       await a.signIn();
       await b.signIn();
 
@@ -171,8 +171,8 @@ void registerTimerSyncTests() {
 
   test('old remote actuals never stop a restarted timer', () async {
     final server = FakeSyncClient();
-    final a = _Device(server);
-    final b = _Device(server);
+    final a = SyncTestDevice(server);
+    final b = SyncTestDevice(server);
     await a.signIn();
     await b.signIn();
 
@@ -207,13 +207,13 @@ void registerTimerSyncTests() {
   registerRecordingDeletionTests();
 }
 
-Map<String, dynamic> _recordingItem(_Device device, String collection) =>
+Map<String, dynamic> _recordingItem(SyncTestDevice device, String collection) =>
     collection == 'nodes'
     ? device.nodes.byId('recorded')!.toJson()
     : device.events.state.single.toJson();
 
 void _writeRecordingItem(
-  _Device device,
+  SyncTestDevice device,
   String collection,
   Map<String, dynamic> data,
 ) {
@@ -284,8 +284,8 @@ void registerRecordingDeletionTests() {
         test('$collection clean-device deletion converges '
             '(${remaining.length} remaining, live timer: $live)', () async {
           final server = FakeSyncClient();
-          final a = _Device(server);
-          final b = _Device(server);
+          final a = SyncTestDevice(server);
+          final b = SyncTestDevice(server);
           await a.signIn();
           await b.signIn();
           final data = seed();
@@ -328,8 +328,8 @@ void registerRecordingDeletionTests() {
         test('$collection legacy omission preserves recordings '
             '(unsent edits: $dirty, legacy span: $aggregate)', () async {
           final server = FakeSyncClient();
-          final a = _Device(server);
-          final b = _Device(server);
+          final a = SyncTestDevice(server);
+          final b = SyncTestDevice(server);
           await a.signIn();
           await b.signIn();
           _writeRecordingItem(a, collection, seed());

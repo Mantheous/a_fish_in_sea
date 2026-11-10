@@ -20,6 +20,9 @@ class PlaidService {
   /// into a 401 "Invalid token" until something else refreshes.
   final Future<String?> Function()? refreshAccessToken;
 
+  /// Account lifetime; defaults to [SyncAuth.sessionGenerationProvider].
+  final int Function()? sessionGeneration;
+
   /// Bounds every request so a blackholed socket fails fast instead of
   /// hanging the caller forever.
   final Duration timeout;
@@ -30,6 +33,7 @@ class PlaidService {
     required this.userId,
     this.authToken,
     this.refreshAccessToken,
+    this.sessionGeneration,
     http.Client? client,
     Duration? timeout,
   })  : baseUrl = baseUrl ?? _defaultBaseUrl(),
@@ -123,15 +127,19 @@ class PlaidService {
 
   Future<http.Response> _get(String path) async {
     try {
+      final generation = _currentSession;
       var response = await _client
           .get(Uri.parse('$baseUrl$path'), headers: _headers)
           .timeout(timeout);
+      _checkSession(generation);
       if (response.statusCode == 401 &&
           await _refreshAppSession(response)) {
+        _checkSession(generation);
         response = await _client
             .get(Uri.parse('$baseUrl$path'), headers: _headers)
             .timeout(timeout);
       }
+      _checkSession(generation);
       _checkResponse(response);
       return response;
     } catch (e) {
@@ -144,6 +152,7 @@ class PlaidService {
     Map<String, String>? body,
   }) async {
     try {
+      final generation = _currentSession;
       var response = await _client
           .post(
             Uri.parse('$baseUrl$path'),
@@ -151,8 +160,10 @@ class PlaidService {
             body: body,
           )
           .timeout(timeout);
+      _checkSession(generation);
       if (response.statusCode == 401 &&
           await _refreshAppSession(response)) {
+        _checkSession(generation);
         response = await _client
             .post(
               Uri.parse('$baseUrl$path'),
@@ -161,10 +172,20 @@ class PlaidService {
             )
             .timeout(timeout);
       }
+      _checkSession(generation);
       _checkResponse(response);
       return response;
     } catch (e) {
       throw _mapRequestError(e);
+    }
+  }
+
+  int? get _currentSession =>
+      (sessionGeneration ?? SyncAuth.sessionGenerationProvider)?.call();
+
+  void _checkSession(int? generation) {
+    if (_currentSession != generation) {
+      throw const PlaidServiceException('Account changed', 401);
     }
   }
 

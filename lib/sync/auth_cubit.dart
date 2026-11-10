@@ -64,11 +64,16 @@ class AuthCubit extends HydratedCubit<AuthState> {
   final SyncClient Function() _client;
 
   /// Changes whenever the authenticated identity is replaced or revoked.
-  /// SyncEngine uses this to discard responses started in an older session.
+  /// The engine and transports discard work started in an older session.
   int _sessionGeneration = 0;
   int get sessionGeneration => _sessionGeneration;
 
   int _authAttempt = 0;
+
+  /// SyncEngine finishes durable account isolation before the signed-in
+  /// state makes the application shell visible. Authentication fails closed
+  /// if the device cannot persist that transition.
+  Future<void> Function(String email)? prepareAccount;
 
   AuthCubit({required SyncClient Function() client})
       : _client = client,
@@ -99,6 +104,10 @@ class AuthCubit extends HydratedCubit<AuthState> {
     try {
       final tokens = await call();
       if (attempt != _authAttempt) return false;
+      await prepareAccount?.call(email);
+      if (attempt != _authAttempt) return false;
+      // Requests started while sign-in was pending still used the old tokens.
+      _sessionGeneration++;
       emit(AuthState(
         status: AuthStatus.signedIn,
         email: email,

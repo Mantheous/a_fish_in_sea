@@ -189,11 +189,16 @@ Future<void> syncPlaidTransactions(BuildContext context) async {
   final transactionsCubit = context.read<TransactionsCubit>();
   final nodeCubit = context.read<NodeCubit>();
   final startedInDemo = DemoMode.isActive;
+  final generation = plaidCubit.accountGeneration;
+  if (!plaidCubit.isCurrentAccount(generation)) return;
 
   final rawTransactions = await plaidCubit.fetchTransactions();
   // A quick demo exit mid-fetch must not land mock bank rows in real
   // storage (same guard as the demo paths in PlaidCubit/FeedCubit).
-  if (DemoMode.isActive != startedInDemo) return;
+  if (DemoMode.isActive != startedInDemo ||
+      !plaidCubit.isCurrentAccount(generation)) {
+    return;
+  }
   final transactions =
       rawTransactions.map((json) => Transaction.fromPlaid(json)).toList();
 
@@ -201,6 +206,7 @@ Future<void> syncPlaidTransactions(BuildContext context) async {
     transactionsCubit.syncFromPlaid(transactions),
   );
   await plaidCubit.fetchBalance();
+  if (!plaidCubit.isCurrentAccount(generation)) return;
 
   if (context.mounted) {
     ScaffoldMessenger.of(context).showSnackBar(

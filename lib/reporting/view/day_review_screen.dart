@@ -5,7 +5,6 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 
-import '../../common/time/local_date.dart';
 import '../../common/undo/undo_bar.dart';
 import '../../nodes/bloc/node_cubit.dart';
 import '../../nodes/service/node_event_link.dart';
@@ -19,7 +18,8 @@ import '../model/reported_entry.dart';
 import '../model/tracked_point.dart';
 import '../reporting_logic.dart';
 import '../service/day_plan.dart';
-import '../service/location_service.dart';
+import '../service/account_tracking.dart';
+import 'day_picker.dart';
 import '../service/tracked_position.dart';
 
 import 'day_review_map.dart';
@@ -27,11 +27,10 @@ import 'places_sheet.dart';
 import 'reported_entry_editor.dart';
 
 export '../service/day_plan.dart' show daySlices;
+export 'day_picker.dart' show DayPicker;
 export 'reported_entry_editor.dart' show showReportedEditor;
 
 final _reviewTimeFormat = DateFormat('h:mm a');
-final _reviewDayFormat = DateFormat('EEE, MMM d');
-final _reviewDayYearFormat = DateFormat('EEE, MMM d, yyyy');
 
 class DayReviewScreen extends StatefulWidget {
   const DayReviewScreen({super.key});
@@ -80,17 +79,10 @@ class _DayReviewScreenState extends State<DayReviewScreen> {
     if (_runningReport) return;
     setState(() => _runningReport = true);
     try {
-      final pending = await takePendingPoints();
-      if (!mounted) {
-        // The take already removed the batch from disk: put it back so the
-        // next merge still picks it up instead of losing it.
-        if (pending.isNotEmpty) await requeuePendingPoints(pending);
-        return;
-      }
-      if (pending.isNotEmpty) {
-        context.read<TrackingCubit>().mergePoints(pending);
-      }
-      if (!mounted) return;
+      final tracking = context.read<TrackingCubit>();
+      final generation = tracking.accountGeneration;
+      await mergePendingTrackingPoints(tracking, canMerge: () => mounted);
+      if (!mounted || !tracking.isCurrentAccount(generation)) return;
       final calendar = context.read<CalendarCubit>();
       final feeds = context.read<FeedCubit>();
       final places = context.read<PlacesCubit>().state;
@@ -273,57 +265,6 @@ class _DayReviewScreenState extends State<DayReviewScreen> {
         );
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Test point added at the scrub time.')),
-    );
-  }
-}
-
-class DayPicker extends StatelessWidget {
-  final DateTime day;
-  final ValueChanged<DateTime> onChanged;
-
-  const DayPicker({super.key, required this.day, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    final today = DateTime.now();
-    final isToday = isSameDay(day, today);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-      child: Row(
-        children: [
-          IconButton(
-            icon: const Icon(Icons.chevron_left),
-            onPressed: () =>
-                onChanged(shiftLocalDay(day, -1)),
-          ),
-          Expanded(
-            child: InkWell(
-              onTap: () async {
-                final picked = await showDatePicker(
-                  context: context,
-                  initialDate: day,
-                  firstDate: DateTime(2020),
-                  lastDate: DateTime(2100),
-                );
-                if (picked != null) onChanged(picked);
-              },
-              child: Text(
-                isToday
-                    ? 'Today · ${_reviewDayFormat.format(day)}'
-                    : _reviewDayYearFormat.format(day),
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.chevron_right),
-            onPressed: isToday
-                ? null
-                : () => onChanged(shiftLocalDay(day, 1)),
-          ),
-        ],
-      ),
     );
   }
 }

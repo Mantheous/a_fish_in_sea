@@ -1,7 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:hydrated_bloc/hydrated_bloc.dart';
 
+import '../common/persistence/account_mutation_fence.dart';
+import '../common/undo/undo_cubit.dart';
 import '../common/usage/usage_log.dart';
 import '../demo/demo_mode.dart';
 import '../finances/bloc/plaid_cubit.dart';
@@ -14,10 +17,15 @@ import '../planner/bloc/settings_cubit.dart';
 import '../reporting/bloc/places_cubit.dart';
 import '../reporting/bloc/reporting_cubit.dart';
 import '../reporting/bloc/tracking_cubit.dart';
+import '../reporting/service/account_tracking.dart';
+import '../reporting/service/location_service.dart';
 import 'auth_cubit.dart';
 import 'sync_client.dart';
 import 'sync_meta_cubit.dart';
 import 'sync_timer_merge.dart';
+
+part 'sync_account_recovery.dart';
+part 'sync_collections.dart';
 
 enum EngineStatus { idle, syncing, error }
 
@@ -61,6 +69,8 @@ class SyncEngine {
   final SettingsCubit settings;
   final WaterfallCubit waterfall;
   final PlaidCubit plaid;
+  final bool _mobileTrackingAvailable;
+  final Future<bool> Function(int, {String? account}) _startBackgroundTracking;
 
   final ValueNotifier<EngineStatus> status =
       ValueNotifier(EngineStatus.idle);
@@ -77,6 +87,10 @@ class SyncEngine {
   Timer? _timer;
   bool _running = false;
   int _epoch = 0;
+  Future<void>? _accountTransition;
+  Future<void>? _accountPreparation;
+  bool _trackingQueueBound = false;
+  final ValueNotifier<bool> accountTransitioning = ValueNotifier(false);
 
   /// Change-triggered sync: debounced [syncNow] after a local mutation, so
   /// edits (starting/completing a task or event) reach the server without
@@ -101,7 +115,25 @@ class SyncEngine {
     required this.settings,
     required this.waterfall,
     required this.plaid,
-  });
+    bool? mobileTrackingAvailable,
+    Future<bool> Function(int, {String? account})? startBackgroundTracking,
+  }) : _mobileTrackingAvailable =
+           mobileTrackingAvailable ?? LocationService.supportsBackground,
+       _startBackgroundTracking =
+           startBackgroundTracking ?? LocationService.startBackground {
+    final owner = (meta.state.lastEmail ?? auth.state.email).trim().toLowerCase();
+    tracking.pendingPointsAccount = owner.isEmpty ? null : owner;
+    auth.prepareAccount = (email) async {
+      await _accountTransition;
+      await _prepareAccount(email.trim().toLowerCase());
+    };
+    // A persisted removal may have stopped before any domain write. Hide
+    // those collections before the application shell can be constructed.
+    if (meta.state.pendingRemoval || meta.state.pendingRestoration) {
+      _blockAccountMutations();
+      if (meta.state.pendingRemoval) clearLocalAccountData();
+    }
+  }
 
   static const List<String> collections = [
     'nodes',
@@ -116,8 +148,14 @@ class SyncEngine {
     'plaid',
   ];
 
-  /// Boot: one sync if signed in. Call once from the widget tree.
+  /// Boot: resume retained legacy recording, then sync if signed in.
   Future<void> boot() async {
+    if (_mobileTrackingAvailable) {
+      await resumeLegacyTrackingRecording(
+        tracking,
+        startBackground: _startBackgroundTracking,
+      );
+    }
     if (auth.state.isSignedIn) {
       await syncNow();
     }
@@ -176,134 +214,21 @@ class SyncEngine {
     _mutationDebounce = null;
   }
 
-  /// Clears all local domain cubits and bank session state. Used on sign-out
-  /// and when switching to a different account so one user's local data can
-  /// never be merged/pushed into another user's cloud account.
-  void clearLocalAccountData() {
-    nodes.applyJson(const {'nodes': <dynamic>[]});
-    events.applyJson(const {'events': <dynamic>[]});
-    feeds.applyJson(const {'feeds': <dynamic>[]});
-    transactions.applySyncedJson(const {'transactions': <dynamic>[]});
-    places.applyJson(const {'places': <dynamic>[]});
-    reporting.applyJson(const {'days': <String, dynamic>{}});
-    tracking.applySyncedPoints(const <Map<String, dynamic>>[]);
-    waterfall.applySyncedConfig(const {'startingBalance': 0.0});
-    plaid.clearLocalSession();
-    protectedDeletions.value = const [];
-  }
-
-  Map<String, AccountSnapshot> _withSnapshotFor(String email) {
-    final next = Map<String, AccountSnapshot>.of(meta.state.accountSnapshots);
-    if (email.isNotEmpty) {
-      final prev = next[email];
-      final hasActiveMeta =
-          meta.state.cursor != null || meta.state.items.isNotEmpty;
-      next[email] = AccountSnapshot(
-        cursor: hasActiveMeta ? meta.state.cursor : prev?.cursor,
-        items: hasActiveMeta
-            ? Map<String, ItemMeta>.of(meta.state.items)
-            : (prev?.items ?? const {}),
-        collections: {
-          for (final c in collections) c: _extract(c),
-        },
-      );
-    }
-    return next;
-  }
-
-  AccountSnapshot? _restoreLocalAccountIfPresent(
-    String email,
-    Map<String, AccountSnapshot> snapshots,
-  ) {
-    final snap = snapshots[email];
-    if (snap == null) return null;
-    for (final entry in snap.collections.entries) {
-      _apply(entry.key, entry.value);
-    }
-    return snap;
-  }
-
-  /// Epoch-fences any in-flight sync, revokes the session, disconnects Plaid,
-  /// and records the signed-out account's email + snapshot in [SyncMetaCubit]
-  /// (keeping on-device data intact by default so unsynced local work is never
-  /// lost even across app restarts, while isolating it if a different account
-  /// signs in next).
-  void signOut({bool clearLocalData = false}) {
-    _epoch++;
-    _running = false;
-    status.value = EngineStatus.idle;
-    lastError = null;
-    final previousEmail = auth.state.email.trim().toLowerCase();
-    final updatedSnapshots =
-        previousEmail.isNotEmpty ? _withSnapshotFor(previousEmail) : null;
-    auth.logout();
-    plaid.clearLocalSession();
-    if (clearLocalData) {
-      clearLocalAccountData();
-      meta.reset(clearLastEmail: true, accountSnapshots: updatedSnapshots);
-    } else {
-      meta.reset(
-        lastEmail:
-            previousEmail.isEmpty ? meta.state.lastEmail : previousEmail,
-        accountSnapshots: updatedSnapshots,
-      );
-    }
-  }
-
   /// Full pull-then-push. Reentrant calls collapse into the running one.
   Future<void> syncNow() async {
     if (DemoMode.isActive) return;
     if (_running) return;
     if (!auth.state.isSignedIn) return;
+    if (_accountTransition != null) return;
     final usageWatch = Stopwatch()..start();
     final sessionGeneration = auth.sessionGeneration;
     final currentEmail = auth.state.email.trim().toLowerCase();
-    final prevEmail = meta.state.lastEmail?.trim().toLowerCase();
-    if (prevEmail != null &&
-        prevEmail.isNotEmpty &&
-        currentEmail.isNotEmpty &&
-        prevEmail != currentEmail) {
-      final updatedSnapshots = _withSnapshotFor(prevEmail);
-      clearLocalAccountData();
-      final restored =
-          _restoreLocalAccountIfPresent(currentEmail, updatedSnapshots);
-      meta.reset(
-        clearLastEmail: true,
-        lastEmail: currentEmail,
-        cursor: restored?.cursor,
-        items: restored?.items,
-        accountSnapshots: updatedSnapshots,
-      );
-    } else if (currentEmail.isNotEmpty) {
-      final restored = meta.state.accountSnapshots[currentEmail];
-      if (meta.state.cursor == null &&
-          meta.state.items.isEmpty &&
-          restored != null &&
-          (restored.cursor != null || restored.items.isNotEmpty)) {
-        // Returning to a previously-synced account with no active baseline
-        // (e.g. after app restart): reseed its item meta so the normal pull
-        // conflict path runs instead of overwriting local edits. Live cubits
-        // stay authoritative for the same account — only backfill
-        // collections that are currently empty (e.g. storage was evicted),
-        // never overwrite live data with the sign-out-time snapshot.
-        for (final entry in restored.collections.entries) {
-          if (_extract(entry.key).isEmpty && entry.value.isNotEmpty) {
-            _apply(entry.key, entry.value);
-          }
-        }
-        meta.save(
-          cursor: restored.cursor,
-          upsert: restored.items,
-          lastEmail: currentEmail,
-        );
-      } else if (prevEmail != currentEmail) {
-        meta.save(lastEmail: currentEmail);
-      }
-    }
     final myEpoch = ++_epoch;
     _running = true;
     status.value = EngineStatus.syncing;
     try {
+      await _prepareAccount(currentEmail);
+      if (!_isCurrentSession(myEpoch, sessionGeneration)) return;
       final pull =
           await client.pull(since: meta.state.cursor, collections: collections);
       if (!_isCurrentSession(myEpoch, sessionGeneration)) return;
@@ -357,79 +282,6 @@ class SyncEngine {
       _epoch == epoch &&
       auth.sessionGeneration == sessionGeneration &&
       auth.state.isSignedIn;
-
-  // ── Extract (cubit -> {itemId: data}) ────────────────────────────────
-
-  Map<String, Map<String, dynamic>> _extract(String collection) {
-    List<dynamic> listOf(Map<String, dynamic>? env, String key) {
-      final l = env?[key];
-      return l is List ? l : const [];
-    }
-
-    Map<String, dynamic> asMap(dynamic e) =>
-        Map<String, dynamic>.from(e as Map);
-
-    Map<String, Map<String, dynamic>> idMap(List<dynamic> list) => {
-          for (final e in list)
-            if (asMap(e)['id'] is String)
-              (asMap(e)['id'] as String): asMap(e)
-        };
-
-    switch (collection) {
-      case 'nodes':
-        return idMap(listOf(nodes.toJson(nodes.state), 'nodes'));
-      case 'events':
-        return idMap(listOf(events.toJson(events.state), 'events'));
-      case 'feeds':
-        return idMap(listOf(feeds.toJson(feeds.state), 'feeds'));
-      case 'transactions':
-        return idMap(
-            listOf(transactions.toJson(transactions.state), 'transactions'));
-      case 'places':
-        return idMap(listOf(places.toJson(places.state), 'places'));
-      case 'reported_entries': {
-        final days = reporting.toJson(reporting.state)['days'];
-        final out = <String, Map<String, dynamic>>{};
-        if (days is Map) {
-          for (final entry in days.entries) {
-            final day = entry.key.toString();
-            final items = entry.value is List ? entry.value as List : const [];
-            out[day] = {
-              'day': day,
-              'entries': [
-                for (final e in items) Map<String, dynamic>.from(e as Map)
-              ],
-            };
-          }
-        }
-        return out;
-      }
-      case 'tracked_points': {
-        return idMap(
-            listOf(tracking.toJson(tracking.state), 'points'));
-      }
-      case 'settings': {
-        final env = Map<String, dynamic>.from(settings.toJson(settings.state));
-        stripDeviceLocalSyncFields('settings', env);
-        return {'singleton': env};
-      }
-      case 'waterfall': {
-        final env = waterfall.toJson(waterfall.state);
-        return {
-          'singleton':
-              env == null ? <String, dynamic>{} : Map<String, dynamic>.from(env)
-        };
-      }
-      case 'plaid': {
-        final env = plaid.toJson(plaid.state);
-        final map =
-            env == null ? <String, dynamic>{} : Map<String, dynamic>.from(env);
-        stripDeviceLocalSyncFields('plaid', map);
-        return {'singleton': map};
-      }
-    }
-    return {};
-  }
 
   // ── Apply pull ──────────────────────────────────────────────────────
 
@@ -515,60 +367,6 @@ class SyncEngine {
     // record's changed set, and the next push sends no tombstones for them.
     if (upsertMeta.isNotEmpty || removeMeta.isNotEmpty) {
       meta.save(upsert: upsertMeta, remove: removeMeta);
-    }
-  }
-
-  // ── Apply merged maps back into cubits (no undo records) ────────────
-
-  void _apply(String collection, Map<String, Map<String, dynamic>> items) {
-    switch (collection) {
-      case 'nodes':
-        nodes.applyJson({
-          'nodes': items.values.toList(),
-        });
-        break;
-      case 'events':
-        events.applyJson({
-          'events': items.values.toList(),
-        });
-        break;
-      case 'feeds':
-        feeds.applyJson({
-          'feeds': items.values.toList(),
-        });
-        break;
-      case 'transactions':
-        transactions.applySyncedJson({
-          'transactions': items.values.toList(),
-        });
-        break;
-      case 'places':
-        places.applyJson({
-          'places': items.values.toList(),
-        });
-        break;
-      case 'reported_entries':
-        reporting.applyJson({
-          'days': {
-            for (final e in items.entries) e.key: e.value['entries'],
-          },
-        });
-        break;
-      case 'tracked_points':
-        tracking.applySyncedPoints(items.values.toList());
-        break;
-      case 'settings':
-        final data = items['singleton'];
-        if (data != null) settings.applySyncedJson(data);
-        break;
-      case 'waterfall':
-        final data = items['singleton'];
-        if (data != null) waterfall.applySyncedConfig(data);
-        break;
-      case 'plaid':
-        final data = items['singleton'];
-        if (data != null) plaid.applySyncedIdentity(data);
-        break;
     }
   }
 

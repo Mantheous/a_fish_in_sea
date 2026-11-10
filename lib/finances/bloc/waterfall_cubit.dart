@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:equatable/equatable.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:hydrated_bloc/hydrated_bloc.dart';
+import '../../common/persistence/account_mutation_fence.dart';
 import 'package:a_fish_in_sea/common/persistence/stable_storage_keys.dart';
 import 'package:a_fish_in_sea/common/time/local_date.dart';
 import 'package:a_fish_in_sea/finances/model/granularity.dart';
@@ -102,7 +103,8 @@ class WaterfallState extends Equatable {
 /// on rebuild (convergent: existing instances are never rewritten), so
 /// projections are first-class nodes — visible in the queue, the ledger,
 /// and the calendar — not virtual rows.
-class WaterfallCubit extends HydratedCubit<WaterfallState> {
+class WaterfallCubit extends HydratedCubit<WaterfallState>
+    with AccountMutationFence<WaterfallState> {
   final NodeCubit nodeCubit;
   final TransactionsCubit transactionsCubit;
   final PlaidCubit plaidCubit;

@@ -1,6 +1,7 @@
 import 'package:equatable/equatable.dart';
 import 'package:flutter/foundation.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
+import '../../common/persistence/account_mutation_fence.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 
 import '../../common/persistence/stable_storage_keys.dart';
@@ -116,7 +117,8 @@ class SettingsState extends Equatable {
       ];
 }
 
-class SettingsCubit extends HydratedCubit<SettingsState> {
+class SettingsCubit extends HydratedCubit<SettingsState>
+    with AccountMutationFence<SettingsState> {
   static const String defaultAnkiConnectHost = 'http://127.0.0.1:8765';
 
   SettingsCubit()
@@ -245,6 +247,17 @@ class SettingsCubit extends HydratedCubit<SettingsState> {
     emit(state.copyWith(
         ankiConnectHost:
             trimmed.isEmpty ? defaultAnkiConnectHost : trimmed));
+  }
+
+  /// Sign-out / account switch: drop the roamed settings so the next
+  /// account starts from defaults. Per-device values (server URL, Anki host,
+  /// and calendar view) stay as they were.
+  void resetSynced() {
+    emit(SettingsState(
+      icalProxyBase: state.icalProxyBase,
+      defaultCalendarView: state.defaultCalendarView,
+      ankiConnectHost: state.ankiConnectHost,
+    ));
   }
 
   /// Sync apply: takes the roamed settings but keeps the per-device

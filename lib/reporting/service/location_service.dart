@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 
@@ -8,131 +7,11 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../model/tracked_point.dart';
+import 'location_pending_points.dart';
 
-const String _configFileName = 'tracking_config.json';
-const String _pendingFileName = 'tracking_pending_points.json';
-
-Future<Directory> _docsDir() => getApplicationDocumentsDirectory();
-
-Future<File> _configFile() async => File('${(await _docsDir()).path}/$_configFileName');
-
-Future<File> _pendingFile() async =>
-    File('${(await _docsDir()).path}/$_pendingFileName');
-
-Future<void> writeTrackingConfig(int intervalMinutes) async {
-  if (kIsWeb) return;
-  try {
-    await (await _configFile())
-        .writeAsString(jsonEncode({'intervalMinutes': intervalMinutes}));
-  } catch (_) {}
-}
-
-Future<int> readTrackingInterval({int fallback = 5}) async {
-  try {
-    final raw = await (await _configFile()).readAsString();
-    final json = jsonDecode(raw) as Map<String, dynamic>;
-    return ((json['intervalMinutes'] as num?)?.toInt() ?? fallback)
-        .clamp(1, 15);
-  } catch (_) {
-    return fallback;
-  }
-}
-
-Future<void> appendPendingPoint(TrackedPoint point) async {
-  try {
-    final file = await _pendingFile();
-    var list = <dynamic>[];
-    if (await file.exists()) {
-      try {
-        list = jsonDecode(await file.readAsString()) as List<dynamic>;
-      } catch (_) {}
-    }
-    list.add(point.toJson());
-    await file.writeAsString(jsonEncode(list));
-  } catch (_) {}
-}
-
-Future<List<TrackedPoint>> takePendingPoints() async {
-  try {
-    final file = await _pendingFile();
-    // Recover batches orphaned by a crash between the rename below and the
-    // delete after it, so they are merged instead of lost.
-    final stale = await _drainStaleClaims(file.parent);
-    if (!await file.exists()) return stale;
-    // Claim the batch with an atomic rename: a background append racing this
-    // take lands in a fresh file instead of being deleted with the batch.
-    final claimed =
-        File('${file.path}.${DateTime.now().microsecondsSinceEpoch}.taking');
-    try {
-      await file.rename(claimed.path);
-    } catch (_) {
-      return stale;
-    }
-    final decoded = await _readClaimedBatch(claimed);
-    return [...stale, ...decoded];
-  } catch (_) {
-    return const [];
-  }
-}
-
-/// Puts a claimed batch back into the pending file (e.g. the merging widget
-/// unmounted mid-take). Prepended so chronological order survives the next
-/// take; [mergePoints] sorts again on the way in.
-Future<void> requeuePendingPoints(List<TrackedPoint> points) async {
-  if (points.isEmpty) return;
-  try {
-    final file = await _pendingFile();
-    var existing = <dynamic>[];
-    if (await file.exists()) {
-      try {
-        final decoded = jsonDecode(await file.readAsString());
-        if (decoded is List) existing = decoded;
-      } catch (_) {}
-    }
-    final mine = points.map((p) => p.toJson()).toList();
-    await file.writeAsString(jsonEncode([...mine, ...existing]));
-  } catch (_) {}
-}
-
-Future<List<TrackedPoint>> _readClaimedBatch(File claimed) async {
-  try {
-    final decoded = jsonDecode(await claimed.readAsString());
-    if (decoded is! List) return const [];
-    final out = <TrackedPoint>[];
-    for (final e in decoded) {
-      try {
-        if (e is Map) {
-          out.add(TrackedPoint.fromJson(Map<String, dynamic>.from(e)));
-        }
-      } catch (_) {}
-    }
-    return out;
-  } catch (_) {
-    return const [];
-  } finally {
-    try {
-      await claimed.delete();
-    } catch (_) {}
-  }
-}
-
-Future<List<TrackedPoint>> _drainStaleClaims(Directory dir) async {
-  final out = <TrackedPoint>[];
-  try {
-    await for (final e in dir.list()) {
-      if (e is! File) continue;
-      final name = e.path.split(Platform.pathSeparator).last;
-      if (!name.startsWith('$_pendingFileName.') || !name.endsWith('.taking')) {
-        continue;
-      }
-      out.addAll(await _readClaimedBatch(e));
-    }
-  } catch (_) {}
-  return out;
-}
+export 'location_pending_points.dart';
 
 Future<TrackedPoint?> samplePosition() async {
   try {
@@ -174,9 +53,15 @@ void trackingServiceEntryPoint(ServiceInstance service) async {
   DartPluginRegistrant.ensureInitialized();
   Timer? timer;
 
+  final config = await readTrackingConfig();
+  final session = config['session'];
+  if (session is! String) {
+    service.stopSelf();
+    return;
+  }
+
   Future<void> tick() async {
-    final point = await samplePosition();
-    if (point != null) await appendPendingPoint(point);
+    await samplePendingPoint(session, samplePosition);
     service.invoke('tick', {'at': DateTime.now().toIso8601String()});
   }
 
@@ -230,6 +115,7 @@ class LocationService {
   }
 
   static Timer? _foregroundTimer;
+  static int _samplingGeneration = 0;
 
   static void startForegroundSampling({
     required int intervalMinutes,
@@ -242,6 +128,7 @@ class LocationService {
   }
 
   static void stopForegroundSampling() {
+    _samplingGeneration++;
     _foregroundTimer?.cancel();
     _foregroundTimer = null;
   }
@@ -330,12 +217,25 @@ class LocationService {
     }
   }
 
-  static Future<bool> startBackground(int intervalMinutes) async {
+  static Future<bool> startBackground(
+    int intervalMinutes, {
+    String? account,
+  }) async {
+    final generation = _samplingGeneration;
     if (!supportsBackground) return false;
     try {
-      await writeTrackingConfig(intervalMinutes);
       if (_isAndroid && !await ensureNotificationsAllowed()) return false;
       await bootstrapBackgroundService();
+      if (generation != _samplingGeneration) return false;
+      await writeTrackingConfig(
+        intervalMinutes,
+        account: account,
+        session: '${DateTime.now().microsecondsSinceEpoch}:$generation',
+      );
+      if (generation != _samplingGeneration) {
+        await invalidateTrackingSampling();
+        return false;
+      }
       return await FlutterBackgroundService().startService();
     } catch (_) {
       return false;

@@ -1,9 +1,11 @@
 import 'package:hydrated_bloc/hydrated_bloc.dart';
 
+import '../persistence/account_mutation_fence.dart';
 import 'change_record.dart';
 import 'undo_cubit.dart';
 
 abstract class RevertableHydratedCubit<T> extends HydratedCubit<T>
+    with AccountMutationFence<T>
     implements Revertable {
   RevertableHydratedCubit(super.initialState) {
     RevertableRegistry.register(this);
@@ -136,6 +138,7 @@ abstract class RevertableHydratedCubit<T> extends HydratedCubit<T>
   }
 
   void emitChange(T newState) {
+    if (accountMutationsBlocked) return;
     final undo = UndoCubit.instance;
     // Fast path: no undo history to record (e.g. tests), or recording
     // suspended inside [atomic] — skip the record. Sync pulls apply merged
