@@ -11,8 +11,9 @@ only (MCP)** on, name it “Muse”, and optionally choose **Read only**. Copy
 the server URL and the one-time key into Muse's remote MCP connector
 (API key / Bearer authentication). Revoke the key in the same Settings
 section to disconnect immediately. The key grants events read/write plus
-calendar names (`events:write`, `feeds:read`), or `events:read` and
-`feeds:read` for a read-only key. It cannot read finances or create keys.
+calendar names (`calendar:write`), or `calendar:read` for a read-only key.
+These scopes work only on MCP: they cannot access raw sync/CRUD endpoints,
+private feed URLs, finances, or key creation.
 
 Before exposing the endpoint, install `requirements.txt` and set
 `MCP_ALLOWED_HOSTS` to include the public proxy hostname, and

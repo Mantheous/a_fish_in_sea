@@ -127,6 +127,10 @@ class _ApiTokensSectionState extends State<ApiTokensSection> {
 
   static String _scopeLabel(ApiToken token) {
     if (token.scopes.contains('sync')) return 'full sync access';
+    if (token.scopes.contains('calendar:write')) {
+      return 'calendar (read + write)';
+    }
+    if (token.scopes.contains('calendar:read')) return 'calendar (read only)';
     if (token.scopes.length == 1 && token.scopes.first == 'anki:write') {
       return 'Anki add-on (write-only)';
     }
@@ -212,7 +216,7 @@ class _TokenSpec {
   });
 
   List<String> get scopes => calendar
-      ? [readOnly ? 'events:read' : 'events:write', 'feeds:read']
+      ? [readOnly ? 'calendar:read' : 'calendar:write']
       : const ['sync'];
 }
 

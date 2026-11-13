@@ -62,22 +62,22 @@ def create_calendar_mcp() -> FastMCP:
 
     @mcp.tool(annotations=Read)
     async def list_calendars(cursor: Cursor = 0) -> dict:
-        """List personal and imported calendars, without private feed URLs. Needs feeds:read."""
+        """List personal and imported calendars, without private feed URLs. Requires a calendar key."""
         return await _run(data.list_calendars, cursor)
 
     @mcp.tool(annotations=Read)
     async def list_events(start: str, end: str, timezone: Timezone,
                           cursor: Cursor = 0,
                           limit: Annotated[int, Field(ge=1, le=100)] = 100) -> dict:
-        """List synced records overlapping [start,end), up to 366 days. Follow next_cursor; recurrence rules are not expanded. Needs events:read."""
+        """List synced records overlapping [start,end), up to 366 days. Follow next_cursor; recurrence rules are not expanded. Requires a calendar key."""
         return await _run(data.list_events, start, end, timezone, cursor, limit)
 
     @mcp.tool(annotations=Read)
     async def get_event(event_id: str, timezone: Timezone) -> dict:
-        """Read one event and its revision before changing it. Needs events:read."""
+        """Read one event and its revision before changing it. Requires a calendar key."""
         user, session = _identity.get()
         try:
-            check_token_scope(user, "events:read", "events:write")
+            check_token_scope(user, "calendar:read", "calendar:write", "events:read", "events:write")
             return data.record(await data.event_row(session, user, event_id), timezone)
         except HTTPException as exc:
             raise ToolError(str(exc.detail)) from None
@@ -86,20 +86,20 @@ def create_calendar_mcp() -> FastMCP:
 
     @mcp.tool(annotations=Write)
     async def create_event(event: data.EventFields, timezone: Timezone) -> dict:
-        """Create a personal event. subject/start/end required; dates need UTC offsets. Needs events:write."""
+        """Create a personal event. subject/start/end required; dates need UTC offsets. Requires calendar write access."""
         return await _run(data.create_event, event, timezone)
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,
                                          idempotentHint=False, openWorldHint=False))
     async def update_event(event_id: str, revision: Revision,
                             changes: data.EventFields, timezone: Timezone) -> dict:
-        """Patch a standalone personal event, preserving other fields. Use revision from get_event. Needs events:write."""
+        """Patch a standalone personal event, preserving other fields. Use revision from get_event. Requires calendar write access."""
         return await _run(data.change_event, event_id, revision, timezone, changes)
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,
                                          idempotentHint=False, openWorldHint=False))
     async def delete_event(event_id: str, revision: Revision, timezone: Timezone) -> dict:
-        """Delete one standalone personal event using a sync tombstone. Use revision from get_event. Needs events:write."""
+        """Delete one standalone personal event using a sync tombstone. Use revision from get_event. Requires calendar write access."""
         return await _run(data.change_event, event_id, revision, timezone, None)
 
     return mcp
@@ -123,7 +123,7 @@ class CalendarMcpAuth:
         async with session_factory()() as session:
             try:
                 user = await get_current_user(headers.get("authorization"), session)
-                check_token_scope(user, "events:read", "events:write")
+                check_token_scope(user, "calendar:read", "calendar:write", "events:read", "events:write")
             except HTTPException as exc:
                 response = JSONResponse({"detail": exc.detail}, status_code=exc.status_code,
                     headers={"WWW-Authenticate": "Bearer", "Cache-Control": "no-store"})

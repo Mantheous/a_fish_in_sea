@@ -15,7 +15,8 @@ from app.main import create_app  # noqa: E402
 
 @pytest.fixture
 def client():
-    with TestClient(create_app(), base_url="http://localhost") as c:
+    with TestClient(create_app(), base_url="http://localhost",
+                    headers={"X-Forwarded-For": f"mcp-test-{uuid.uuid4().hex}"}) as c:
         yield c
 
 
@@ -28,7 +29,7 @@ def account(client):
 
 def key(client, jwt, scopes=None, review=False):
     r = client.post("/api/v1/tokens", headers=jwt, json={
-        "name": "Muse", "scopes": scopes or ["events:write", "feeds:read"], "review": review})
+        "name": "Muse", "scopes": scopes or ["calendar:write"], "review": review})
     assert r.status_code == 201
     return {"Authorization": f"Bearer {r.json()['token']}"}, r.json()["id"]
 
@@ -119,7 +120,7 @@ def test_roundtrip_patch_conflict_delete_and_account_isolation(client):
 def test_readonly_scopes_and_secret_free_feeds(client):
     jwt = account(client)
     writer, _ = key(client, jwt)
-    reader, _ = key(client, jwt, ["events:read", "feeds:read"])
+    reader, _ = key(client, jwt, ["calendar:read"])
     narrow, _ = key(client, jwt, ["events:read"])
     created = tool(client, writer, "create_event", event=event(), **TZ)
     assert len(tool(client, reader, "list_events", **RANGE)["events"]) == 1
@@ -134,6 +135,9 @@ def test_readonly_scopes_and_secret_free_feeds(client):
     assert "private-token" not in json.dumps(calendars)
     assert calendars["calendars"][1]["writable"] is False
     assert client.get("/api/v1/items/transactions", headers=writer).status_code == 403
+    assert client.get("/api/v1/items/feeds", headers=writer).status_code == 403
+    assert client.put("/api/v1/items/events/raw-bypass", headers=writer,
+                      json={"data": event()}).status_code == 403
     assert client.post("/api/v1/tokens", headers=writer, json={"name": "escalate"}).status_code == 403
 
 
@@ -185,6 +189,22 @@ def test_all_day_event_overlaps_afternoon_and_timezone_dst(client):
     assert got["event"]["start"].endswith("-06:00")
 
 
+def test_empty_scan_page_has_continuation_and_body_is_bounded(client):
+    jwt = account(client)
+    token, _ = key(client, jwt)
+    changes = [{"collection": "events", "item_id": f"e{i}", "data": event(
+        start="2026-11-14T09:00:00-07:00", end="2026-11-14T10:00:00-07:00")} for i in range(500)]
+    changes.append({"collection": "events", "item_id": "last", "data": event()})
+    assert client.post("/api/v1/sync/push", headers=jwt, json={"changes": changes}).status_code == 200
+    first = tool(client, token, "list_events", **RANGE)
+    assert first["events"] == [] and first["next_cursor"] is not None
+    last = tool(client, token, "list_events", cursor=first["next_cursor"], **RANGE)
+    assert last["events"][0]["event_id"] == "last" and last["next_cursor"] is None
+    r = rpc(client, token, "tools/call", {"name": "create_event", "arguments": {
+        "event": event(notes="x" * 300000), **TZ}})
+    assert r.status_code == 413
+
+
 @pytest.mark.asyncio
 async def test_official_mcp_client_connects():
     import httpx
@@ -193,7 +213,8 @@ async def test_official_mcp_client_connects():
 
     app = create_app()
     async with app.router.lifespan_context(app):
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://localhost") as http:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://localhost",
+                                      headers={"X-Forwarded-For": f"sdk-test-{uuid.uuid4().hex}"}) as http:
             r = await http.post("/api/v1/auth/register", json={
                 "email": f"sdk-{uuid.uuid4().hex}@example.com", "password": "password123"})
             http.headers["Authorization"] = f"Bearer {r.json()['access_token']}"

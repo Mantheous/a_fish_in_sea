@@ -67,7 +67,7 @@ async def event_row(session: AsyncSession, user: User, event_id: str) -> SyncIte
 
 async def list_events(session: AsyncSession, user: User, start: str, end: str,
                       timezone: str, cursor: int, limit: int) -> dict:
-    check_token_scope(user, "events:read", "events:write")
+    check_token_scope(user, "calendar:read", "calendar:write", "events:read", "events:write")
     ZoneInfo(timezone)
     lo, hi = instant(start, timezone), instant(end, timezone)
     if hi <= lo or hi - lo > dt.timedelta(days=366):
@@ -104,7 +104,7 @@ async def list_events(session: AsyncSession, user: User, start: str, end: str,
 
 
 async def list_calendars(session: AsyncSession, user: User, cursor: int) -> dict:
-    check_token_scope(user, "feeds:read", "feeds:write")
+    check_token_scope(user, "calendar:read", "calendar:write", "feeds:read", "feeds:write")
     rows = list((await session.execute(select(SyncItem).where(
         SyncItem.user_id == user.id, SyncItem.collection == "feeds",
         SyncItem.deleted.is_(False), SyncItem.id > cursor,
@@ -133,7 +133,7 @@ def require_editable(row: SyncItem):
 
 async def create_event(session: AsyncSession, user: User, fields: EventFields,
                        timezone: str) -> dict:
-    check_token_scope(user, "events:write")
+    check_token_scope(user, "calendar:write", "events:write")
     data = fields.model_dump()
     if any(data[k] is None for k in ("subject", "start", "end")):
         raise ValueError("subject, start, and end are required")
@@ -149,7 +149,7 @@ async def create_event(session: AsyncSession, user: User, fields: EventFields,
 
 async def change_event(session: AsyncSession, user: User, event_id: str,
                        revision: int, timezone: str, fields: EventFields | None) -> dict:
-    check_token_scope(user, "events:write")
+    check_token_scope(user, "calendar:write", "events:write")
     ZoneInfo(timezone)
     row = await event_row(session, user, event_id)
     require_editable(row)
