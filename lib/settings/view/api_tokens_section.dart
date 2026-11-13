@@ -61,6 +61,7 @@ class _ApiTokensSectionState extends State<ApiTokensSection> {
       final created = await _client.createApiToken(
         name: spec.name,
         review: spec.review,
+        scopes: spec.scopes,
       );
       if (!mounted) return;
       await _load();
@@ -68,8 +69,11 @@ class _ApiTokensSectionState extends State<ApiTokensSection> {
       await showDialog<void>(
         context: context,
         barrierDismissible: false,
-        builder: (dialogContext) =>
-            _ShowTokenDialog(secret: created.token, name: created.info.name),
+        builder: (dialogContext) => _ShowTokenDialog(
+          secret: created.token,
+          name: created.info.name,
+          mcpUrl: spec.calendar ? '${_client.baseUrl}/mcp/' : null,
+        ),
       );
     } on SyncException catch (e) {
       if (!mounted) return;
@@ -107,9 +111,9 @@ class _ApiTokensSectionState extends State<ApiTokensSection> {
     try {
       await _client.revokeApiToken(token.id);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Token revoked.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Token revoked.')));
       await _load();
     } on SyncException catch (e) {
       if (!mounted) return;
@@ -146,8 +150,10 @@ class _ApiTokensSectionState extends State<ApiTokensSection> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Could not load tokens: $_error',
-              style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          Text(
+            'Could not load tokens: $_error',
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
             onPressed: _busy ? null : _load,
@@ -196,7 +202,18 @@ class _ApiTokensSectionState extends State<ApiTokensSection> {
 class _TokenSpec {
   final String name;
   final bool review;
-  const _TokenSpec({required this.name, required this.review});
+  final bool calendar;
+  final bool readOnly;
+  const _TokenSpec({
+    required this.name,
+    required this.review,
+    required this.calendar,
+    required this.readOnly,
+  });
+
+  List<String> get scopes => calendar
+      ? [readOnly ? 'events:read' : 'events:write', 'feeds:read']
+      : const ['sync'];
 }
 
 class _CreateTokenDialog extends StatefulWidget {
@@ -209,6 +226,8 @@ class _CreateTokenDialog extends StatefulWidget {
 class _CreateTokenDialogState extends State<_CreateTokenDialog> {
   final _name = TextEditingController();
   bool _review = false;
+  bool _calendar = true;
+  bool _readOnly = false;
 
   @override
   void dispose() {
@@ -220,35 +239,61 @@ class _CreateTokenDialogState extends State<_CreateTokenDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Create API token'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TextField(
-            controller: _name,
-            autofocus: true,
-            maxLength: 120,
-            decoration: const InputDecoration(
-              labelText: 'Name (e.g. Claude on laptop)',
-              border: OutlineInputBorder(),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: _name,
+              autofocus: true,
+              maxLength: 120,
+              decoration: const InputDecoration(
+                labelText: 'Name (e.g. Muse)',
+                border: OutlineInputBorder(),
+              ),
             ),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Needs approval'),
-            subtitle: const Text(
-              'On: this token drafts into the import inbox instead of '
-              'writing directly. Use for untrusted writers.',
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Calendar only (MCP)'),
+              subtitle: const Text('For Muse and other calendar assistants.'),
+              value: _calendar,
+              onChanged: (v) => setState(() {
+                _calendar = v;
+                if (v) _review = false;
+              }),
             ),
-            value: _review,
-            onChanged: (v) => setState(() => _review = v),
-          ),
-          const Text(
-            'Tokens get full sync access (read + write everything). '
-            'Copy the secret right away — it is shown only once.',
-            style: TextStyle(fontSize: 12),
-          ),
-        ],
+            if (_calendar)
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Read only'),
+                subtitle: const Text(
+                  'Allow reading events without changing them.',
+                ),
+                value: _readOnly,
+                onChanged: (v) => setState(() => _readOnly = v),
+              ),
+            if (!_calendar)
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Needs approval'),
+                subtitle: const Text(
+                  'On: this token drafts into the import inbox instead of '
+                  'writing directly. Use for untrusted writers.',
+                ),
+                value: _review,
+                onChanged: (v) => setState(() => _review = v),
+              ),
+            Text(
+              _calendar
+                  ? 'Access to events and calendar names. Copy the key and MCP '
+                        'URL on the next screen. Revoke here at any time.'
+                  : 'Full sync access (read + write everything). '
+                        'Copy the secret right away — it is shown only once.',
+              style: const TextStyle(fontSize: 12),
+            ),
+          ],
+        ),
       ),
       actions: [
         TextButton(
@@ -257,7 +302,12 @@ class _CreateTokenDialogState extends State<_CreateTokenDialog> {
         ),
         FilledButton(
           onPressed: () => Navigator.of(context).pop(
-            _TokenSpec(name: _name.text.trim(), review: _review),
+            _TokenSpec(
+              name: _name.text.trim(),
+              review: _review,
+              calendar: _calendar,
+              readOnly: _readOnly,
+            ),
           ),
           child: const Text('Create'),
         ),
@@ -269,34 +319,56 @@ class _CreateTokenDialogState extends State<_CreateTokenDialog> {
 class _ShowTokenDialog extends StatelessWidget {
   final String secret;
   final String name;
-  const _ShowTokenDialog({required this.secret, required this.name});
+  final String? mcpUrl;
+  const _ShowTokenDialog({
+    required this.secret,
+    required this.name,
+    this.mcpUrl,
+  });
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Copy your token'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (name.isNotEmpty) Text('“$name” — copy it now.'),
-          if (name.isEmpty) const Text('Copy it now.'),
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(8),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (name.isNotEmpty) Text('“$name” — copy it now.'),
+            if (name.isEmpty) const Text('Copy it now.'),
+            const SizedBox(height: 8),
+            if (mcpUrl != null) ...[
+              const Text('MCP server URL (Streamable HTTP)'),
+              SelectableText(mcpUrl!),
+              TextButton.icon(
+                onPressed: () =>
+                    Clipboard.setData(ClipboardData(text: mcpUrl!)),
+                icon: const Icon(Icons.copy),
+                label: const Text('Copy server URL'),
+              ),
+              const Text(
+                'In Muse, use API key / Bearer authentication. '
+                'Use this key as the token (Authorization: Bearer <key>).',
+              ),
+              const SizedBox(height: 8),
+            ],
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: SelectableText(secret),
             ),
-            child: SelectableText(secret),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'This is the only time the secret is shown. '
-            'If you lose it, revoke this token and create a new one.',
-            style: TextStyle(fontSize: 12),
-          ),
-        ],
+            const SizedBox(height: 8),
+            const Text(
+              'This is the only time the secret is shown. '
+              'If you lose it, revoke this token and create a new one.',
+              style: TextStyle(fontSize: 12),
+            ),
+          ],
+        ),
       ),
       actions: [
         TextButton(
@@ -307,9 +379,9 @@ class _ShowTokenDialog extends StatelessWidget {
           onPressed: () async {
             await Clipboard.setData(ClipboardData(text: secret));
             if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Token copied.')),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('Token copied.')));
               Navigator.of(context).pop();
             }
           },

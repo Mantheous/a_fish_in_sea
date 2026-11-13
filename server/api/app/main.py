@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
+from .calendar_mcp import CalendarMcpAuth, create_calendar_mcp
 from .db import init_db
 from .oauth_store import validate_fernet_key
 from .routers import auth, anki, canvas, feedback, fetch, google, imports, items, plaid, proxy, syllabus, sync, tokens, usage
@@ -85,12 +86,16 @@ WEB_BUILD_DIR = (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    yield
+    async with app.state.calendar_mcp.session_manager.run():
+        yield
 
 
 def create_app() -> FastAPI:
     s = get_settings()
     app = FastAPI(title="a_fish_in_sea sync API", version="0.1.0", lifespan=lifespan)
+    calendar_mcp = create_calendar_mcp()
+    app.state.calendar_mcp = calendar_mcp
+    app.mount("/mcp", CalendarMcpAuth(calendar_mcp.streamable_http_app()))
 
     origins = (
         ["*"]
