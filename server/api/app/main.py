@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
+from .calendar_mcp import CalendarMcpAuth, create_calendar_mcp
 from .db import init_db
 from .oauth_store import validate_fernet_key
 from .routers import auth, anki, canvas, feedback, fetch, google, imports, items, plaid, proxy, syllabus, sync, tokens, usage
@@ -85,12 +86,21 @@ WEB_BUILD_DIR = (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    yield
+    # SDK session managers are single-use. Construct per lifespan so app
+    # restarts (and TestClient reuse) always have a fresh task group.
+    calendar_mcp = create_calendar_mcp()
+    app.state.calendar_mcp_app = CalendarMcpAuth(calendar_mcp.streamable_http_app())
+    async with calendar_mcp.session_manager.run():
+        yield
 
 
 def create_app() -> FastAPI:
     s = get_settings()
     app = FastAPI(title="a_fish_in_sea sync API", version="0.1.0", lifespan=lifespan)
+    async def calendar_mcp_endpoint(scope, receive, send):
+        await app.state.calendar_mcp_app(scope, receive, send)
+
+    app.mount("/mcp", calendar_mcp_endpoint)
 
     origins = (
         ["*"]

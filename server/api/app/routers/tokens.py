@@ -18,7 +18,7 @@ router = APIRouter(prefix="/tokens", tags=["tokens"])
 # /items/* granularity. "anki:write" is the narrow ingest scope for the
 # Anki add-on: it can post review totals but cannot read app data.
 # Anything else is rejected so invented scopes can never gain meaning.
-_VALID_SCOPES = {"sync", "anki:write"} | {
+_VALID_SCOPES = {"sync", "anki:write", "calendar:read", "calendar:write"} | {
     f"{c}:{op}" for c in COLLECTIONS for op in ("read", "write")
 }
 
