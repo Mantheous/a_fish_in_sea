@@ -1,5 +1,42 @@
 # Sync API (FastAPI) — the one app server
 
+## Calendar MCP (Muse and other remote clients)
+
+The server exposes authenticated **Streamable HTTP** at `/mcp/`, or
+`https://<your-host>/fish/mcp/` through the existing Tailnet proxy. Use an
+`Authorization: Bearer afm_…` header; keys in URLs are not accepted.
+
+In the app, open **Settings → API tokens → Create token**. Leave **Calendar
+only (MCP)** on, name it “Muse”, and optionally choose **Read only**. Copy
+the server URL and the one-time key into Muse's remote MCP connector
+(API key / Bearer authentication). Revoke the key in the same Settings
+section to disconnect immediately. The key grants events read/write plus
+calendar names (`calendar:write`), or `calendar:read` for a read-only key.
+These scopes work only on MCP: they cannot access raw sync/CRUD endpoints,
+private feed URLs, finances, or key creation.
+
+Before exposing the endpoint, install `requirements.txt` and set
+`MCP_ALLOWED_HOSTS` to include the public proxy hostname, and
+`MCP_ALLOWED_ORIGINS` to its HTTPS origin (see `.env.example`). Restart
+the API process after installing/updating server code. Existing JWT and
+scoped API keys also work; review-only keys retain their import-inbox
+restriction and cannot use this direct calendar interface.
+
+Tools: `list_calendars`, `list_events`, `get_event`, `create_event`,
+`update_event`, `delete_event`. Changes use the existing sync rows and
+appear on devices after sync. Updates patch only supported calendar fields
+and require the revision from `get_event`; stale revisions are rejected.
+Deleting one event writes a tombstone. Imported, recurring and goal-linked
+events are readable but must be edited in the app/source to preserve links.
+Creation makes standalone personal events; no upstream Google writes occur.
+
+Use the device's IANA timezone (e.g. `America/Denver`) on event tools, and
+explicit UTC offsets for new dates. Older offset-free device timestamps are
+interpreted in that timezone. `list_events` reads synced event records,
+without expanding recurrence rules; follow `next_cursor` until null, even
+when a page is empty. Feed URLs, OAuth credentials and other collections
+are never exposed by these tools.
+
 Offline-first sync backend for web + mobile + MCP agents. One generic
 envelope table (`sync_items`) covers all 13 client domains so the whole
 app migrates in a single schema; validation stays lenient (unknown fields

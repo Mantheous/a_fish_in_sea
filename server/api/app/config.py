@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     refresh_token_days: int = 30
 
     cors_origins: str = "*"  # comma-separated or "*"
+    # Explicit hosts/origins for MCP DNS-rebinding protection. Include the
+    # public reverse-proxy hostname when exposing the endpoint remotely.
+    mcp_allowed_hosts: str = "localhost,localhost:*,127.0.0.1,127.0.0.1:*,[::1],[::1]:*"
+    mcp_allowed_origins: str = "http://localhost,http://localhost:*,http://127.0.0.1,http://127.0.0.1:*"
 
     # Token encryption for Plaid/Google OAuth secrets stored per-user.
     # Fernet key (base64). If empty, tokens are stored plaintext (dev only).
