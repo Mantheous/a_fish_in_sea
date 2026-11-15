@@ -65,9 +65,9 @@ void main() {
           done: done,
           completedAt: original.completedAt,
         );
-        calendar.addEvent(saved);
+        calendar.addEvent(saved.copyWith(start: due, end: due, allDay: true));
 
-        syncEditorTaskLink(nodes, calendar, saved, syncFeedWorkTime: true);
+        saveLocalEditorEvent(nodes, calendar, saved);
 
         expect(
           nodes.byId(original.id),

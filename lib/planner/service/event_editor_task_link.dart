@@ -10,10 +10,23 @@ void saveLocalEditorEvent(
   CalendarCubit calendar,
   PlannerEvent saved,
 ) {
+  final previous = calendar.byId(saved.id);
+  // A feed window and an independently scheduled task block may differ.
+  // Only an interval edit makes this event the task's chosen work time.
+  final workTimeChanged =
+      previous != null &&
+      (saved.start != previous.start ||
+          saved.end != previous.end ||
+          saved.allDay != previous.allDay);
   RevertableHydratedCubit.atomic([calendar, if (nodes != null) nodes], () {
     calendar.updateEvent(saved);
     if (nodes != null) {
-      syncEditorTaskLink(nodes, calendar, saved, syncFeedWorkTime: true);
+      syncEditorTaskLink(
+        nodes,
+        calendar,
+        saved,
+        syncFeedWorkTime: workTimeChanged,
+      );
     }
   });
 }

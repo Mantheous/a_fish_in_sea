@@ -17,6 +17,8 @@ import 'package:syncfusion_flutter_calendar/calendar.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+import 'imported_assignment_unchanged_save_scenario.dart';
+
 Future<void> verifyImportedAssignment(
   WidgetTester tester, {
   bool golden = false,
@@ -231,6 +233,7 @@ END:VCALENDAR
     client.close();
   }
   expect(tester.takeException(), isNull);
+  await verifyUnchangedAssignmentSave(tester);
 }
 
 Future<void> _pickTime(
