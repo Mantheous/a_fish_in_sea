@@ -13,10 +13,23 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import '../goldens/golden_app.dart' show pumpGoldenPage;
+import 'imported_assignment_refresh_scenario.dart';
 import 'imported_assignment_unchanged_save_scenario.dart';
 
 void main() {
   for (final kind in [FeedKind.canvas, FeedKind.learningSuite]) {
+    testWidgets(
+      '${kind.name} refresh while phone editor is open preserves both plans',
+      (tester) async {
+        const host = ValueKey('phone-editor-host');
+        await pumpGoldenPage(tester, const SizedBox(key: host));
+        await verifyAssignmentRefreshDuringEdit(
+          tester,
+          tester.element(find.byKey(host)),
+          kind: kind,
+        );
+      },
+    );
     testWidgets(
       '${kind.name} normalized controls preserve independent plans on Save',
       (tester) async {

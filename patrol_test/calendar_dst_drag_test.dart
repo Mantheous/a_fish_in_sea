@@ -1,5 +1,6 @@
 import 'package:a_fish_in_sea/main.dart';
 import 'package:a_fish_in_sea/navigation/view/home_page.dart';
+import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydrated_bloc/hydrated_bloc.dart';
@@ -7,6 +8,7 @@ import 'package:mocktail/mocktail.dart';
 import 'package:patrol/patrol.dart';
 
 import '../test/planner/dst_drag_scenario.dart';
+import '../test/planner/imported_assignment_refresh_scenario.dart';
 import '../test/planner/imported_assignment_scenario.dart';
 
 class MockStorage extends Mock implements Storage {}
@@ -38,6 +40,13 @@ void main() {
     await $(HomePage).waitUntilVisible(timeout: const Duration(seconds: 30));
     await $.pumpAndSettle();
     expect(find.byType(HomePage), findsOneWidget);
+    for (final kind in [FeedKind.canvas, FeedKind.learningSuite]) {
+      await verifyAssignmentRefreshDuringEdit(
+        $.tester,
+        $.tester.element(find.byType(HomePage)),
+        kind: kind,
+      );
+    }
     await $(Icons.menu).tap();
     await $('Calendar').tap();
     await $.pumpAndSettle();

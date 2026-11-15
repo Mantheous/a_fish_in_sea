@@ -5,7 +5,7 @@ import '../model/event_reschedule.dart';
 import '../model/planner_event.dart';
 
 /// Picker defaults and snapping do not schedule an untouched assignment.
-({DateTime start, DateTime end}) eventEditorInterval({
+({DateTime start, DateTime end, bool allDay}) eventEditorInterval({
   required DateTime date,
   required TimeOfDay startTime,
   required TimeOfDay endTime,
@@ -14,7 +14,11 @@ import '../model/planner_event.dart';
   PlannerEvent? untouchedAssignment,
 }) {
   if (untouchedAssignment != null) {
-    return (start: untouchedAssignment.start, end: untouchedAssignment.end);
+    return (
+      start: untouchedAssignment.start,
+      end: untouchedAssignment.end,
+      allDay: untouchedAssignment.allDay,
+    );
   }
   final start = allDay
       ? DateTime(date.year, date.month, date.day)
@@ -41,5 +45,5 @@ import '../model/planner_event.dart';
           snapMinutes,
         );
   if (!end.isAfter(start)) end = start.add(const Duration(hours: 1));
-  return (start: start, end: end);
+  return (start: start, end: end, allDay: allDay);
 }

@@ -507,8 +507,13 @@ class EventEditorFormState extends State<EventEditorForm> {
     if (changed) setState(() {});
   }
 
-  ({DateTime start, DateTime end}) _interval() {
-    final existing = widget.existing;
+  ({DateTime start, DateTime end, bool allDay}) _interval() {
+    final opening = widget.existing;
+    // The phone modal retains its opening event through background refreshes.
+    // Untouched assignment times must follow the latest stored source copy.
+    final existing = opening == null
+        ? null
+        : context.read<CalendarCubit>().byId(opening.id) ?? opening;
     final untouchedAssignment = !_workTimeTouched &&
         existing != null &&
         isLocallySchedulableAssignment(
@@ -529,7 +534,7 @@ class EventEditorFormState extends State<EventEditorForm> {
     final onDraftChanged = widget.onDraftChanged;
     if (onDraftChanged == null) return;
     if (!mounted) return;
-    final (:start, :end) = _interval();
+    final (:start, :end, :allDay) = _interval();
     final config = RepeatConfig(
       kind: _repeatKind,
       weekDays: _weekDays,
@@ -550,7 +555,7 @@ class EventEditorFormState extends State<EventEditorForm> {
               : _location.text.trim(),
           start: start,
           end: end,
-          allDay: _allDay,
+          allDay: allDay,
           recurrenceRule:
               _customRepeat ? '' : config.ruleFor(start),
           classLabel: widget.initialClassLabel,
@@ -582,7 +587,7 @@ class EventEditorFormState extends State<EventEditorForm> {
         clearLocation: location == null,
         start: start,
         end: end,
-        allDay: _allDay,
+        allDay: allDay,
         isTask: _isTask,
         done: _isTask && _done,
         placeId: _placeId,
@@ -1050,7 +1055,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       );
       return;
     }
-    final (:start, :end) = _interval();
+    final (:start, :end, :allDay) = _interval();
     final config = RepeatConfig(
       kind: _repeatKind,
       weekDays: _weekDays,
@@ -1072,7 +1077,7 @@ class EventEditorFormState extends State<EventEditorForm> {
         location: location,
         start: start,
         end: end,
-        allDay: _allDay,
+        allDay: allDay,
         recurrenceRule: rule,
         taskId: _sourceTaskId,
         isTask: _isTask,
@@ -1191,7 +1196,7 @@ class EventEditorFormState extends State<EventEditorForm> {
           (_workTimeTouched &&
               base.isFromFeed && feedCubit.isEventEditable(base) &&
               !feedCubit.isRemoteEditable(base) &&
-              (start != base.start || end != base.end || _allDay != base.allDay)),
+              (start != base.start || end != base.end || allDay != base.allDay)),
       subject: subject,
       notes: notes,
       clearNotes: notes == null,
@@ -1199,7 +1204,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       clearLocation: location == null,
       start: start,
       end: end,
-      allDay: _allDay,
+      allDay: allDay,
       recurrenceRule: rule,
       isTask: _isTask,
       done: done,
@@ -1222,7 +1227,7 @@ class EventEditorFormState extends State<EventEditorForm> {
         location: location,
         start: start,
         end: end,
-        allDay: _allDay,
+        allDay: allDay,
       )) {
         calendarCubit.updateEvent(updated);
         _syncTaskLink(updated);
