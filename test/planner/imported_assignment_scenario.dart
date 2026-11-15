@@ -234,6 +234,12 @@ END:VCALENDAR
   }
   expect(tester.takeException(), isNull);
   await verifyUnchangedAssignmentSave(tester);
+  await verifyUnchangedAssignmentSave(tester, allDay: false);
+  await verifyUnchangedAssignmentSave(
+    tester,
+    kind: FeedKind.learningSuite,
+    sourceDays: 3,
+  );
 }
 
 Future<void> _pickTime(

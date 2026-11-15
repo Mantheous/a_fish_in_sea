@@ -19,7 +19,6 @@ import '../bloc/calendar_cubit.dart';
 import '../bloc/calendar_draft_cubit.dart';
 import '../bloc/feed_cubit.dart';
 import '../bloc/settings_cubit.dart';
-import '../model/event_reschedule.dart';
 import '../model/feed.dart';
 import '../model/planner_event.dart';
 import '../model/recurrence.dart';
@@ -30,6 +29,7 @@ import '../service/event_editor_task_link.dart';
 import '../service/feed_event_merge.dart' show isLocallySchedulableAssignment;
 import 'event_calendar_policy.dart';
 import 'event_editor_actions.dart';
+import 'event_editor_interval.dart';
 import 'event_editor_task_fields.dart';
 import 'event_editor_text_field.dart';
 import 'event_colors.dart';
@@ -248,6 +248,7 @@ class EventEditorFormState extends State<EventEditorForm> {
   bool _loadingMaster = false;
   bool _masterFailed = false;
   bool _repeatTouched = false;
+  bool _workTimeTouched = false;
   Timer? _draftDebounce;
 
   bool get _isSeriesInstance =>
@@ -506,28 +507,29 @@ class EventEditorFormState extends State<EventEditorForm> {
     if (changed) setState(() {});
   }
 
+  ({DateTime start, DateTime end}) _interval() {
+    final existing = widget.existing;
+    final untouchedAssignment = !_workTimeTouched &&
+        existing != null &&
+        isLocallySchedulableAssignment(
+          existing,
+          context.read<FeedCubit>().byId(existing.feedId ?? ''),
+        );
+    return eventEditorInterval(
+      date: _date,
+      startTime: _startTime,
+      endTime: _endTime,
+      allDay: _allDay,
+      snapMinutes: context.read<SettingsCubit>().state.snapMinutes,
+      untouchedAssignment: untouchedAssignment ? existing : null,
+    );
+  }
+
   void _emitDraft() {
     final onDraftChanged = widget.onDraftChanged;
     if (onDraftChanged == null) return;
     if (!mounted) return;
-    final snap = context.read<SettingsCubit>().state.snapMinutes;
-    final start = _allDay
-        ? DateTime(_date.year, _date.month, _date.day)
-        : snapToInterval(
-            DateTime(_date.year, _date.month, _date.day, _startTime.hour,
-                _startTime.minute),
-            snap,
-          );
-    var end = _allDay
-        ? shiftLocalDay(start, 1)
-        : snapToInterval(
-            DateTime(_date.year, _date.month, _date.day, _endTime.hour,
-                _endTime.minute),
-            snap,
-          );
-    if (end.isBefore(start) || end.isAtSameMomentAs(start)) {
-      end = start.add(const Duration(hours: 1));
-    }
+    final (:start, :end) = _interval();
     final config = RepeatConfig(
       kind: _repeatKind,
       weekDays: _weekDays,
@@ -683,7 +685,10 @@ class EventEditorFormState extends State<EventEditorForm> {
                             materialTapTargetSize:
                                 MaterialTapTargetSize.shrinkWrap,
                             onChanged: (value) {
-                              setState(() => _allDay = value);
+                              setState(() {
+                                if (_allDay != value) _workTimeTouched = true;
+                                _allDay = value;
+                              });
                               _emitDraft();
                             },
                           ),
@@ -701,6 +706,7 @@ class EventEditorFormState extends State<EventEditorForm> {
                           value: _startTime,
                           onChanged: (value) {
                             setState(() {
+                              if (_startTime != value) _workTimeTouched = true;
                               _startTime = value;
                               if (_toMinutes(_endTime) <= _toMinutes(_startTime)) {
                                 _endTime = TimeOfDay(
@@ -719,7 +725,10 @@ class EventEditorFormState extends State<EventEditorForm> {
                           label: 'End',
                           value: _endTime,
                           onChanged: (value) {
-                            setState(() => _endTime = value);
+                            setState(() {
+                              if (_endTime != value) _workTimeTouched = true;
+                              _endTime = value;
+                            });
                             _emitDraft();
                           },
                         ),
@@ -824,7 +833,10 @@ class EventEditorFormState extends State<EventEditorForm> {
             lastDate: DateTime(2100),
           );
           if (picked != null) {
-            setState(() => _date = picked);
+            setState(() {
+              if (_date != picked) _workTimeTouched = true;
+              _date = picked;
+            });
             _emitDraft();
           }
         },
@@ -1038,24 +1050,7 @@ class EventEditorFormState extends State<EventEditorForm> {
       );
       return;
     }
-    final snap = context.read<SettingsCubit>().state.snapMinutes;
-    final start = _allDay
-        ? DateTime(_date.year, _date.month, _date.day)
-        : snapToInterval(
-            DateTime(_date.year, _date.month, _date.day, _startTime.hour,
-                _startTime.minute),
-            snap,
-          );
-    var end = _allDay
-        ? shiftLocalDay(start, 1)
-        : snapToInterval(
-            DateTime(_date.year, _date.month, _date.day, _endTime.hour,
-                _endTime.minute),
-            snap,
-          );
-    if (end.isBefore(start) || end.isAtSameMomentAs(start)) {
-      end = start.add(const Duration(hours: 1));
-    }
+    final (:start, :end) = _interval();
     final config = RepeatConfig(
       kind: _repeatKind,
       weekDays: _weekDays,
@@ -1193,7 +1188,8 @@ class EventEditorFormState extends State<EventEditorForm> {
     final rule = _customRepeat ? base.recurrenceRule : config.ruleFor(start);
     final updated = base.copyWith(
       workTimeScheduled: base.workTimeScheduled ||
-          (base.isFromFeed && feedCubit.isEventEditable(base) &&
+          (_workTimeTouched &&
+              base.isFromFeed && feedCubit.isEventEditable(base) &&
               !feedCubit.isRemoteEditable(base) &&
               (start != base.start || end != base.end || _allDay != base.allDay)),
       subject: subject,

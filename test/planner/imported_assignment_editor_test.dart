@@ -4,6 +4,7 @@ import 'package:a_fish_in_sea/planner/bloc/feed_cubit.dart';
 import 'package:a_fish_in_sea/planner/model/feed.dart';
 import 'package:a_fish_in_sea/planner/model/planner_event.dart';
 import 'package:a_fish_in_sea/planner/service/ical_service.dart';
+import 'package:a_fish_in_sea/planner/view/calendar_page.dart';
 import 'package:a_fish_in_sea/planner/view/event_editor.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -12,8 +13,26 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import '../goldens/golden_app.dart' show pumpGoldenPage;
+import 'imported_assignment_unchanged_save_scenario.dart';
 
 void main() {
+  for (final kind in [FeedKind.canvas, FeedKind.learningSuite]) {
+    testWidgets(
+      '${kind.name} normalized controls preserve independent plans on Save',
+      (tester) async {
+        await pumpGoldenPage(
+          tester,
+          CalendarPage(initialDisplayDate: DateTime(2030, 1, 2)),
+        );
+        await verifyUnchangedAssignmentSave(
+          tester,
+          kind: kind,
+          allDay: kind == FeedKind.learningSuite,
+          sourceDays: 3,
+        );
+      },
+    );
+  }
   for (final schedule in [false, true]) {
     testWidgets(
       'imported text stays read-only through Save and refresh (schedule: $schedule)',
