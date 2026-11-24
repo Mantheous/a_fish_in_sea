@@ -133,6 +133,23 @@ void main() {
       expect(restored?.map((e) => e.id), ['e1']);
     });
 
+    test('CalendarCubit preserves an unsupported recurrence rule', () {
+      final cubit = CalendarCubit();
+      final event = PlannerEvent(
+        id: 'legacy-weekly',
+        subject: 'Lecture',
+        start: _day,
+        end: _day.add(const Duration(hours: 1)),
+        recurrenceRule: 'FREQ=WEEKLY',
+      );
+      final restored = cubit.fromJson({
+        'events': [event.toJson()],
+      });
+
+      expect(restored, [event]);
+      expect(cubit.toJson(restored!), cubit.toJson([event]));
+    });
+
     test('CalendarCubit loads pre-tracking events and bad tracking dates', () {
       final cubit = CalendarCubit();
       final legacy =

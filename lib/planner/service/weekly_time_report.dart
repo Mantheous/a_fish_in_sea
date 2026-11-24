@@ -117,9 +117,13 @@ WeeklyTimeReport buildWeeklyTimeReport({
   final out = <WeeklyTimeEntry>[];
   final consumedNodeIds = <String>{};
   // One task's session is mirrored onto its events (calendar sync copies
-  // the node's whole session list). Session ids dedupe the copies while
-  // genuinely distinct runs on the same task stay separate.
-  final emittedSessions = <String>{};
+  // the node's whole session list). Dedupe by owner-qualified identity —
+  // node/event namespace, owner id, session id — the same rule
+  // buildReportBlocks uses. A bare session id would drop genuine runs from
+  // unrelated owners that happen to share an id (e.g. two tasks recorded
+  // over the same 9:00-9:30 slot).
+  final emittedSessions = <(bool, String, String)>{};
+  final emittedLive = <String>{};
   final coveredEventIds = <String>{};
   final eventIds = {for (final e in events) e.id};
 
@@ -191,7 +195,7 @@ WeeklyTimeReport buildWeeklyTimeReport({
         // The task's other plan events carry the same live timer; emit it
         // once, but still cover this day so an accepted manual entry
         // for the same occurrence cannot double-count the running work.
-        if (emittedSessions.add(liveKey)) {
+        if (emittedLive.add(liveKey)) {
           addIfOverlaps(
             title: event.subject,
             goal: goal,
@@ -210,7 +214,11 @@ WeeklyTimeReport buildWeeklyTimeReport({
         recordedDays.add(dayKey(session.start));
         if (!overlaps(session.start, session.end)) continue;
         represented = true;
-        if (!emittedSessions.add(session.id)) continue;
+        final ownerIsNode = backing != null;
+        final ownerId = backing?.id ?? event.id;
+        if (!emittedSessions.add((ownerIsNode, ownerId, session.id))) {
+          continue;
+        }
         addIfOverlaps(
           title: event.subject,
           goal: goal,
@@ -273,7 +281,7 @@ WeeklyTimeReport buildWeeklyTimeReport({
       );
     }
     for (final session in node.recordedSessions) {
-      if (!emittedSessions.add(session.id)) continue;
+      if (!emittedSessions.add((true, node.id, session.id))) continue;
       addIfOverlaps(
         title: node.title,
         goal: (id: goal.id, title: goal.title),

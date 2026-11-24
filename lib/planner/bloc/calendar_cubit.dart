@@ -388,12 +388,24 @@ class CalendarCubit extends RevertableHydratedCubit<List<PlannerEvent>> {
       }
       return [start];
     }
-    return SfCalendar.getRecurrenceDateTimeCollection(
-      event.recurrenceRule,
-      event.start,
-      specificStartDate: windowStart,
-      specificEndDate: windowEnd,
-    );
+    try {
+      return SfCalendar.getRecurrenceDateTimeCollection(
+        event.recurrenceRule,
+        event.start,
+        specificStartDate: windowStart,
+        specificEndDate: windowEnd,
+      );
+    } catch (_) {
+      // Imported or legacy rules can be valid RFC 5545 but unsupported by
+      // SfCalendar (for example FREQ=WEEKLY without BYDAY). Keep the original
+      // event and rule intact; show its start as a single occurrence rather
+      // than letting one bad rule blank the first frame.
+      final start = event.start;
+      if (start.isBefore(windowStart) || start.isAfter(windowEnd)) {
+        return const [];
+      }
+      return [start];
+    }
   }
 
   List<PlannerEvent> eventsOnDay(DateTime day) {

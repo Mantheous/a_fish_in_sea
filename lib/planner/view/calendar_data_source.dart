@@ -130,7 +130,17 @@ class PlannerCalendarDataSource extends CalendarDataSource {
   String? getLocation(int index) => _events[index].location;
 
   @override
-  String getRecurrenceRule(int index) => _events[index].recurrenceRule;
+  String getRecurrenceRule(int index) {
+    final rule = _events[index].recurrenceRule;
+    // Syncfusion 29.2.11 dispatches any rule containing WEEKLY to a weekly
+    // expander that asserts when no BYDAY clause carries a weekday code
+    // (recurrence_helper.dart:331/344), blanking the Calendar frame. Guard
+    // only that exact shape. The app's editor subset (RepeatConfig.tryParse)
+    // rejects many rules the widget supports — INTERVAL > 1, monthly ordinal
+    // BYDAY/BYSETPOS — so it must not decide what the renderer may show.
+    // Display-only: the stored event and rule are never changed.
+    return _weeklyWithoutByDay(rule) ? '' : rule;
+  }
 
   @override
   Object? getId(int index) => _events[index].id;
@@ -142,6 +152,26 @@ class PlannerCalendarDataSource extends CalendarDataSource {
     if (hit != null) return hit;
     return resolveEventColor(event, feedColors, prefs);
   }
+}
+
+/// Mirrors Syncfusion's own crash condition: the rule reaches the weekly
+/// expander, but `_findWeeklyRule` finds no BYDAY clause, or that first clause
+/// has none of SU/MO/TU/WE/TH/FR/SA. The dispatcher checks `DAILY` before
+/// `WEEKLY`, so a rule carrying both is handled by the daily expander and must
+/// pass through untouched. Case and `;` splitting match the engine, so every
+/// other rule — including imported grammar the editor cannot parse — is left
+/// alone. Display-only: this never mutates the stored event or rule.
+bool _weeklyWithoutByDay(String rule) {
+  if (rule.contains('DAILY') || !rule.contains('WEEKLY')) return false;
+  const weekdayCodes = <String>['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+  for (final part in rule.split(';')) {
+    if (!part.contains('BYDAY')) continue;
+    // `_findWeeklyRule` breaks at the first BYDAY clause; later duplicates are
+    // never read. `FREQ=WEEKLY;BYDAY=;BYDAY=MO` still asserts on the empty
+    // first clause, so decide from that clause alone.
+    return !weekdayCodes.any(part.contains);
+  }
+  return true;
 }
 
 /// Syncfusion converts each custom appointment by calling
