@@ -263,8 +263,37 @@ List<ReportBlock> buildReportBlocks({
   }
   final emittedSessionIds = <(bool, String, String)>{};
   final emittedLiveNodeIds = <String>{};
+  // Identity includes the storage bucket: a recurring entry id legitimately
+  // appears once per day. Only a repeated (day, entry id) pair is a duplicate.
+  final emittedAcceptedIds = <String>{};
 
   final blocks = <ReportBlock>[];
+  void emitAccepted(PlannerEvent event, Set<String> recordedDays) {
+    final matches = acceptedByEvent[event.id];
+    if (matches == null) return;
+    for (final (day, entry) in matches) {
+      if (recordedDays.contains(day)) continue;
+      final displayId = reportAcceptedDisplayIdFor(day, entry.id);
+      if (!emittedAcceptedIds.add(displayId)) continue;
+      final end = entry.end.isAfter(entry.start)
+          ? entry.end
+          : entry.start.add(const Duration(hours: 1));
+      blocks.add(
+        ReportBlock(
+          displayId: displayId,
+          title: entry.title,
+          start: entry.start,
+          end: end,
+          kind: ReportBlockKind.accepted,
+          eventId: event.id,
+          entryId: entry.id,
+          status: entry.status,
+          recordable: true,
+        ),
+      );
+    }
+  }
+
   for (final event in visibleEvents) {
     if (event.allDay) continue;
     final linked = <Node>[];
@@ -362,28 +391,32 @@ List<ReportBlock> buildReportBlocks({
       if (liveStart != null) dayKey(liveStart),
     };
 
-    final matches = acceptedByEvent[event.id];
-    if (matches != null) {
-      for (final (day, entry) in matches) {
-        if (recordedDays.contains(day)) continue;
-        final end = entry.end.isAfter(entry.start)
-            ? entry.end
-            : entry.start.add(const Duration(hours: 1));
-        blocks.add(
-          ReportBlock(
-            displayId: reportAcceptedDisplayIdFor(day, entry.id),
-            title: entry.title,
-            start: entry.start,
-            end: end,
-            kind: ReportBlockKind.accepted,
-            eventId: event.id,
-            entryId: entry.id,
-            status: entry.status,
-            recordable: true,
-          ),
-        );
-      }
+    emitAccepted(event, recordedDays);
+  }
+  // A manual report can be filed against an all-day task event (the copy
+  // action seeds one at 09:00-10:00). All-day rows never enter the timed
+  // pass, so emit only their saved entry here: no planned or mirrored
+  // timer/live block is invented from the all-day span. The linked task's
+  // own runs still come from the node-only pass below. A run on the same
+  // bucket day replaces the manual entry, matching the timed-event rule.
+  for (final event in visibleEvents) {
+    if (!event.allDay) continue;
+    final linked = <Node>[];
+    final seen = <String>{};
+    for (final node in [
+      ...(nodesByEvent[event.id] ?? const <Node>[]),
+      if (event.taskId != null && nodesById[event.taskId] != null)
+        nodesById[event.taskId]!,
+    ]) {
+      if (seen.add(node.id)) linked.add(node);
     }
+    final recordedDays = <String>{
+      for (final node in linked)
+        for (final session in node.recordedSessions) dayKey(session.start),
+      for (final node in linked)
+        if (node.timerStartedAt != null) dayKey(node.timerStartedAt!),
+    };
+    emitAccepted(event, recordedDays);
   }
   // Node-only pass: tasks recorded off the calendar (no linked visible
   // event) still produce report blocks, so tracking/reported time shows
