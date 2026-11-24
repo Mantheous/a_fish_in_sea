@@ -100,6 +100,26 @@ void main() {
       expect(onSaturday.map((e) => e.id), ['other']);
     });
 
+    test('eventsOnDay survives an unsupported persisted weekly rule', () {
+      final cubit = CalendarCubit();
+      final start = DateTime(2026, 11, 24, 9);
+      final recurring = event(
+        'persisted-weekly',
+        start,
+        // Valid RFC 5545, but Syncfusion requires BYDAY for weekly rules.
+        rule: 'FREQ=WEEKLY',
+      );
+      cubit.addEvent(recurring);
+
+      expect(
+        () => cubit.eventsOnDay(start),
+        returnsNormally,
+        reason: 'one imported rule must not break the Home first frame',
+      );
+      expect(cubit.eventsOnDay(start), contains(recurring));
+      expect(cubit.state, contains(recurring));
+    });
+
     test('feedEventsInRange only returns feed events', () {
       final cubit = CalendarCubit();
       cubit.addEvent(event('mine', DateTime(2026, 9, 4, 9)));
